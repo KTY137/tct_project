@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Daten / Messdaten / große Dateien
+*.h5
+*.hdf5
+*.csv
+*.dat
+*.root
+*.npy
+*.npz
+
+# Logs
+*.log
+logs/
+
+# Builds / temporäre Dateien
+build/
+dist/
+tmp/
+temp/
+data/
+vendor/
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / Configs mit Passwörtern
+.env
+secrets.*
+config.local.*
