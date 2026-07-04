@@ -184,6 +184,10 @@ class _ScopeReader(QObject):
 
     def read_once(self) -> None:
         if not self._scope.connected:
+            # Don't leave a blank plot unexplained — surface it once.  The panel
+            # de-duplicates identical messages, so a live-view tick loop only
+            # notifies a single time until the state changes.
+            self.failed.emit("Oscilloscope not connected.")
             return
         try:
             t1, v1 = self._scope.read_channel(1)
@@ -232,9 +236,9 @@ class _ScopeReader(QObject):
 
 class ScopePanel(QWidget):
     # Queued requests into the reader thread (auto-queued: different thread).
-    _acquire_requested   = Signal()   # -> reader._once_timer.start() (C++ Qt slot)
-    _live_start_requested = Signal()   # -> reader._live_timer.start() (C++ Qt slot)
-    _live_stop_requested  = Signal()   # -> reader._live_timer.stop()  (C++ Qt slot)
+    _acquire_requested   = Signal()   # -> reader._once_timer.start()
+    _live_start_requested = Signal()   # -> reader._live_timer.start()
+    _live_stop_requested  = Signal()   # -> reader._live_timer.stop()
     _test_requested       = Signal()
     _settings_requested   = Signal()
     _sync_requested       = Signal(float, float, float)
@@ -273,17 +277,18 @@ class ScopePanel(QWidget):
         self._sync_timer.timeout.connect(self._flush_scope_sync)
 
         # ── Acquisition worker thread ─────────────────────────────────
-        # IMPORTANT: _acquire_requested and live start/stop are connected to C++
-        # Qt timer slots, not Python methods. C++ slots are always delivered
-        # reliably across threads in PySide6 without @Slot() decorator issues.
+        # All scope I/O runs in this worker so slow VISA transfers never freeze
+        # the GUI.  The timers live in the worker thread; a QTimer can only be
+        # started/stopped from its own thread, so we drive them via queued
+        # signals connected to timer.start/stop (the standard PySide6 pattern).
         self._reader = _ScopeReader(scope)
         self._reader_thread = QThread(self)
         self._reader.moveToThread(self._reader_thread)
-        # C++ Qt slot connections — guaranteed cross-thread delivery:
+        # Cross-thread timer control (queued to the worker thread):
         self._acquire_requested.connect(self._reader._once_timer.start)
         self._live_start_requested.connect(self._reader._live_timer.start)
         self._live_stop_requested.connect(self._reader._live_timer.stop)
-        # Python method connections for control/diagnostic operations:
+        # Control / diagnostic operations (queued to the worker thread):
         self._test_requested.connect(self._reader.test_connection)
         self._settings_requested.connect(self._reader.read_settings)
         self._sync_requested.connect(self._reader.sync_scope)

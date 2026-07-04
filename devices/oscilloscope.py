@@ -33,6 +33,12 @@ _VENDOR_CMDS: dict[str, dict[str, str]] = {
     "tektronix": {
         "data_src":  "DATA:SOURCE CH{ch}",
         "data_enc":  "DATA:ENCDG RIBINARY",
+        # Force 1 byte/sample so the signed-byte (datatype="b") decode below is
+        # always correct.  Without this the scope may still be in 2-byte mode
+        # (DATA:WIDTH 2) from a prior session, and CURVE? then returns twice as
+        # many bytes that get misread as garbage — a blank/nonsense waveform.
+        # Matches the Tektronix reference example (wfmoutpre:byt_n 1).
+        "data_width":"DATA:WIDTH 1",
         "data_start":"DATA:START 1",
         "data_stop": "DATA:STOP 1000000",
         "wfm_query": "CURVE?",
@@ -41,6 +47,7 @@ _VENDOR_CMDS: dict[str, dict[str, str]] = {
     "keysight": {
         "data_src":  ":WAVeform:SOURce CHANnel{ch}",
         "data_enc":  ":WAVeform:FORMat WORD",
+        "data_width":"",
         "data_start":"",
         "data_stop": "",
         "wfm_query": ":WAVeform:DATA?",
@@ -49,6 +56,7 @@ _VENDOR_CMDS: dict[str, dict[str, str]] = {
     "rigol": {
         "data_src":  ":WAVeform:SOURce CHAN{ch}",
         "data_enc":  ":WAVeform:FORMat BYTE",
+        "data_width":"",
         "data_start":"",
         "data_stop": "",
         "wfm_query": ":WAVeform:DATA?",
@@ -60,6 +68,7 @@ _VENDOR_CMDS: dict[str, dict[str, str]] = {
     "lecroy": {
         "data_src":  "",           # handled specially in read_channel
         "data_enc":  "COMM_FORMAT DEF9,WORD,BIN;COMM_ORDER LO",
+        "data_width":"",
         "data_start":"",
         "data_stop": "",
         "wfm_query": "C{ch}:WF? DAT1",
@@ -296,6 +305,8 @@ class Oscilloscope(BaseDevice):
                 self._write(cmds["data_src"].format(ch=channel))
             if cmds["data_enc"]:
                 self._write(cmds["data_enc"])
+            if cmds.get("data_width"):
+                self._write(cmds["data_width"])
             if cmds["data_start"]:
                 self._write(cmds["data_start"])
             if cmds["data_stop"]:
