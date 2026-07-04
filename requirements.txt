@@ -8,7 +8,11 @@ PySide6>=6.5
 pyqtgraph>=0.13
 
 # Numerics + data
-numpy>=1.24
+# Upper-bounded to <2 on purpose: the vendored FLIR PySpin 3.2 wheel is built
+# against the numpy 1.x C-ABI and fails to import under numpy 2.x with
+# "_ARRAY_API not found / numpy.core.multiarray failed to import". numpy 1.26.x
+# is the last 1.x release and is compatible with scipy/pyqtgraph/PySide6/h5py here.
+numpy>=1.24,<2
 scipy>=1.11
 h5py>=3.8
 PyYAML>=6.0
@@ -28,7 +32,10 @@ python-vxi11>=0.9     # only needed for 'gpib' / 'gpibSerial' connection types
 # ─────────────────────────────────────────────────────────────────────
 # NOT on PyPI — install separately for the corresponding REAL hardware.
 # The app runs fully in simulation mode without these.
-#   • FLIR Spinnaker SDK + PySpin  (camera backend)   -> spinnaker-python wheel
+#   • FLIR PySpin (camera binding): the vendored wheel in vendor/spinnaker/ is
+#     installed automatically by setup.ps1 when the interpreter is 64-bit
+#     CPython 3.10 (the wheel is cp310/win_amd64). A real camera ALSO needs the
+#     Spinnaker SDK runtime installer (drivers + VS redistributables):
 #     https://www.flir.com/products/spinnaker-sdk/
 #   • PSI DRS4 evaluation-board driver (drs4 scope backend)
 #     https://www.psi.ch/en/drs/software-download
