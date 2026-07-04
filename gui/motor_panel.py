@@ -6,19 +6,22 @@ import logging
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QWidget, QGroupBox, QGridLayout, QHBoxLayout, QVBoxLayout,
-    QLabel, QDoubleSpinBox, QPushButton, QSizePolicy,
+    QLabel, QDoubleSpinBox, QPushButton, QSizePolicy, QSplitter,
 )
 
 from devices.motor_base import MotorStageBase
+from gui.stage_view import StageView
 from PySide6.QtCore import QObject
 
 
 class _PositionPoller(QObject):
     """
     Runs get_position() in a dedicated QThread so serial I/O never blocks
-    the GUI thread.  Emits position_updated with the (x, y, z) strings.
+    the GUI thread.  Emits position_updated with the (x, y, z) floats in mm;
+    the panel formats the labels and drives the stage visualisation from the
+    same numbers (one source of truth).
     """
-    position_updated = Signal(str, str, str)
+    position_updated = Signal(float, float, float)
 
     def __init__(self, motor: MotorStageBase) -> None:
         super().__init__()
@@ -48,11 +51,7 @@ class _PositionPoller(QObject):
             return
         try:
             pos = self._motor.get_position()
-            self.position_updated.emit(
-                f"X: {pos.x_mm:.4f} mm",
-                f"Y: {pos.y_mm:.4f} mm",
-                f"Z: {pos.z_mm:.4f} mm",
-            )
+            self.position_updated.emit(pos.x_mm, pos.y_mm, pos.z_mm)
         except Exception as exc:
             logging.getLogger(__name__).debug("position poll failed: %s", exc)
 
@@ -114,7 +113,8 @@ class MotorPanel(QWidget):
     # ------------------------------------------------------------------ #
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        controls = QWidget()
+        root = QVBoxLayout(controls)
 
         # ── Position display ─────────────────────────────────────────
         pos_box = QGroupBox("Position")
@@ -206,8 +206,20 @@ class MotorPanel(QWidget):
         helper_layout.addWidget(btn_use_pos)
         helper_layout.addWidget(btn_set_start)
         root.addWidget(helper_box)
+        root.addStretch(1)
 
-        self.setLayout(root)
+        # ── Stage cockpit: controls (left) + live setup view (right) ──
+        self._stage_view = StageView(getattr(self._motor, "limits", None))
+        split = QSplitter(Qt.Horizontal)
+        split.addWidget(controls)
+        split.addWidget(self._stage_view)
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        split.setSizes([360, 560])
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(split)
 
     # ------------------------------------------------------------------ #
     # Slots                                                               #
@@ -292,10 +304,11 @@ class MotorPanel(QWidget):
             QApplication.restoreOverrideCursor()
         QMessageBox.information(self, "Motor Connection Test", msg)
 
-    def _on_position_updated(self, x: str, y: str, z: str) -> None:
-        self._lbl_x.setText(x)
-        self._lbl_y.setText(y)
-        self._lbl_z.setText(z)
+    def _on_position_updated(self, x: float, y: float, z: float) -> None:
+        self._lbl_x.setText(f"X: {x:.4f} mm")
+        self._lbl_y.setText(f"Y: {y:.4f} mm")
+        self._lbl_z.setText(f"Z: {z:.4f} mm")
+        self._stage_view.set_position(x, y, z)
 
     def _update_position(self) -> None:
         """Legacy stub — polling now handled by _PositionPoller in a QThread."""

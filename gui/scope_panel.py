@@ -1,9 +1,18 @@
-"""Oscilloscope / DUT waveform panel."""
+"""Oscilloscope / DUT waveform panel.
+
+Cockpit-style multi-channel scope view: a large pyqtgraph plot dominates, with a
+right-hand column of per-channel colour cards (enable / role / live readout), an
+inline trigger badge, a movable cursor with live readout, and the display-scale
+controls.  Up to four channels (CH1–CH4) can be acquired; the channel whose role
+is "DUT" is fed to :func:`analyse_waveform`, the "Reference" channel to the laser
+normalisation display.
+"""
 from __future__ import annotations
 
 import logging
 import math
 import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +22,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QGroupBox, QLabel, QPushButton, QCheckBox, QSlider, QLineEdit,
     QComboBox, QDoubleSpinBox, QDialog, QDialogButtonBox, QMessageBox,
+    QSplitter, QScrollArea, QFrame, QSizePolicy,
 )
 
 try:
@@ -20,6 +30,19 @@ try:
     _HAS_PG = True
 except ImportError:
     _HAS_PG = False
+
+# Optional prettification libs — the panel degrades gracefully without them.
+try:
+    import qtawesome as qta
+    _HAS_QTA = True
+except ImportError:
+    _HAS_QTA = False
+
+try:
+    from superqt import QToggleSwitch, QLabeledDoubleRangeSlider
+    _HAS_SUPERQT = True
+except ImportError:
+    _HAS_SUPERQT = False
 
 from devices.oscilloscope import Oscilloscope
 from analysis.waveform_analysis import analyse_waveform
@@ -32,6 +55,26 @@ _COL_ONSET    = (80,  200, 80)   # green  – onset
 _COL_TRAILING = (200, 80,  80)   # red    – trailing / end of drift
 _COL_CFD      = (255, 200, 0)    # yellow – CFD threshold
 _COL_INTWIN   = (60,  60,  160)  # blue   – integration window fill
+
+# Per-channel defaults: colour (RGB), default role, enabled, human label.
+_CHAN_DEFAULTS: dict[int, tuple[tuple[int, int, int], str, bool, str]] = {
+    1: ((255, 215,  0),  "Reference", True,  "Ref photodiode"),
+    2: ((0,   200, 255), "DUT",       True,  "DUT"),
+    3: ((255, 105, 180), "—",         False, "CH3"),
+    4: ((0,   230, 118), "—",         False, "CH4"),
+}
+_ROLES = ("—", "DUT", "Reference")
+
+
+def _icon(name: str, color: str | None = None):
+    """qtawesome icon or None when the lib is missing (buttons fall back to text)."""
+    if not _HAS_QTA:
+        return None
+    try:
+        return qta.icon(name, color=color) if color else qta.icon(name)
+    except Exception:
+        return None
+
 
 # ─────────────────────────────────────────────────────────────────────
 # Engineering-notation helpers (auto ns/µs/mV…)
@@ -79,6 +122,16 @@ def _nearest_125(value: float, seq: list[float]) -> int:
     value = max(value, seq[0])
     return min(range(len(seq)),
                key=lambda i: abs(math.log10(seq[i]) - math.log10(value)))
+
+
+@dataclass
+class _ChannelState:
+    """UI/model state for one scope channel."""
+    number: int
+    color: tuple[int, int, int]
+    role: str = "—"           # "—" | "DUT" | "Reference"
+    enabled: bool = False
+    label: str = ""
 
 
 class _TriggerDialog(QDialog):
@@ -153,8 +206,75 @@ def _save_trigger_to_yaml(path: str | None, source: str, level: float, slope: st
         pass
 
 
+class _ChannelCard(QFrame):
+    """Compact per-channel control: colour swatch, enable, role, live readout."""
+
+    changed = Signal()   # enable or role changed
+
+    def __init__(self, state: _ChannelState, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._state = state
+        self.setObjectName("channelCard")
+        self.setFrameShape(QFrame.StyledPanel)
+        r, g, b = state.color
+        self.setStyleSheet(
+            f"#channelCard {{ border-left: 4px solid rgb({r},{g},{b}); "
+            f"border-radius: 6px; }}"
+        )
+        lay = QGridLayout(self)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setHorizontalSpacing(8)
+        lay.setVerticalSpacing(2)
+
+        swatch = QLabel()
+        swatch.setFixedSize(12, 12)
+        swatch.setStyleSheet(f"background: rgb({r},{g},{b}); border-radius: 6px;")
+        title = QLabel(f"<b>CH{state.number}</b>")
+        title.setToolTip(state.label)
+
+        if _HAS_SUPERQT:
+            self._enable = QToggleSwitch()
+            self._enable.setChecked(state.enabled)
+            self._enable.toggled.connect(self._on_toggle)
+        else:
+            self._enable = QCheckBox("on")
+            self._enable.setChecked(state.enabled)
+            self._enable.toggled.connect(self._on_toggle)
+
+        self._role = QComboBox()
+        self._role.addItems(_ROLES)
+        self._role.setCurrentText(state.role)
+        self._role.currentTextChanged.connect(self._on_role)
+
+        self._readout = QLabel("—")
+        self._readout.setStyleSheet("color:#888; font-size: 11px;")
+
+        lay.addWidget(swatch,       0, 0)
+        lay.addWidget(title,        0, 1)
+        lay.addWidget(self._enable, 0, 2, Qt.AlignRight)
+        lay.addWidget(QLabel("Role:"), 1, 0, 1, 1)
+        lay.addWidget(self._role,   1, 1, 1, 2)
+        lay.addWidget(self._readout, 2, 0, 1, 3)
+        lay.setColumnStretch(1, 1)
+
+    def _on_toggle(self, checked: bool) -> None:
+        self._state.enabled = bool(checked)
+        self.changed.emit()
+
+    def _on_role(self, role: str) -> None:
+        self._state.role = role
+        self.changed.emit()
+
+    def set_readout(self, text: str) -> None:
+        self._readout.setText(text)
+
+    @property
+    def state(self) -> _ChannelState:
+        return self._state
+
+
 class _ScopeReader(QObject):
-    """Acquires both channels in a dedicated QThread.
+    """Acquires the enabled channels in a dedicated QThread.
 
     VISA transfers take 10s of ms (or seconds when the scope stalls); running
     them on the GUI thread froze the window on every live-view tick.  Timer
@@ -162,7 +282,7 @@ class _ScopeReader(QObject):
     I/O happens in the reader thread; ``Oscilloscope.io_lock`` serialises it
     against the scan thread.
     """
-    acquired = Signal(object, object, object, object)   # t1, v1, t2, v2
+    acquired = Signal(object)          # dict[int, (t, v)]
     failed   = Signal(str)
     test_done = Signal(str)
     settings_done = Signal(object, str)   # settings dict, error text
@@ -172,6 +292,9 @@ class _ScopeReader(QObject):
     def __init__(self, scope: Oscilloscope) -> None:
         super().__init__()
         self._scope = scope
+        # Which channels to read.  Assignment of a new set is atomic in CPython,
+        # so the GUI thread can update this without a lock.
+        self._enabled: frozenset[int] = frozenset({1, 2})
         # Live acquisition timer — started/stopped via C++ Qt slots.
         self._live_timer = QTimer(self)
         self._live_timer.setInterval(300)
@@ -182,6 +305,9 @@ class _ScopeReader(QObject):
         self._once_timer.setInterval(0)
         self._once_timer.timeout.connect(self.read_once)
 
+    def set_enabled_channels(self, channels: frozenset[int]) -> None:
+        self._enabled = channels
+
     def read_once(self) -> None:
         if not self._scope.connected:
             # Don't leave a blank plot unexplained — surface it once.  The panel
@@ -189,13 +315,14 @@ class _ScopeReader(QObject):
             # notifies a single time until the state changes.
             self.failed.emit("Oscilloscope not connected.")
             return
+        results: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         try:
-            t1, v1 = self._scope.read_channel(1)
-            t2, v2 = self._scope.read_channel(2)
+            for ch in sorted(self._enabled):
+                results[ch] = self._scope.read_channel(ch)
         except Exception as exc:
             self.failed.emit(str(exc))
             return
-        self.acquired.emit(t1, v1, t2, v2)
+        self.acquired.emit(results)
 
     def test_connection(self) -> None:
         try:
@@ -253,11 +380,16 @@ class ScopePanel(QWidget):
         # Waveform-analysis parameters from devices.yaml (analysis: block) so
         # the live readout uses the same window/termination as the scans.
         self._analysis_kwargs = dict(analysis_kwargs or {})
-        self._last_t1: np.ndarray | None = None
-        self._last_v1: np.ndarray | None = None
-        self._last_t2: np.ndarray | None = None
-        self._last_v2: np.ndarray | None = None
+        # Per-channel state + last acquired data.
+        self._channels: dict[int, _ChannelState] = {
+            n: _ChannelState(number=n, color=col, role=role, enabled=en, label=lab)
+            for n, (col, role, en, lab) in _CHAN_DEFAULTS.items()
+        }
+        self._last: dict[int, tuple[np.ndarray, np.ndarray]] = {}
+        self._curves: dict[int, "pg.PlotDataItem"] = {}
+        self._cards: dict[int, _ChannelCard] = {}
         self._trigger_dialog: _TriggerDialog | None = None
+        self._cursor_on = False
         # Display scale state (seconds / volts per division) + pan fractions.
         self._tdiv_seq = _seq_125(1e-9, 1.0)      # 1 ns … 1 s
         self._vdiv_seq = _seq_125(1e-3, 10.0)     # 1 mV … 10 V
@@ -301,6 +433,7 @@ class ScopePanel(QWidget):
         self._reader.trigger_done.connect(self._on_trigger_done)
         self._reader_thread.finished.connect(self._reader.deleteLater)
         self._reader_thread.start()
+        self._sync_reader_channels()
 
     # ------------------------------------------------------------------ #
     # UI construction                                                      #
@@ -308,120 +441,242 @@ class ScopePanel(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
+        root.setContentsMargins(4, 4, 4, 4)
 
-        # ── Waveform plot ────────────────────────────────────────────
-        if _HAS_PG:
-            self._plot = pg.PlotWidget(title="Waveforms")
-            self._plot.setLabel("left",   "Amplitude", units="V")
-            # units="s" lets pyqtgraph auto-pick ns/µs/ms (the old "ns" label
-            # produced nonsense like "kns").  Data is plotted in seconds.
-            self._plot.setLabel("bottom", "Time",      units="s")
-            # Scale/offset come from the sliders below — disable free mouse zoom
-            # so the divisions stay authoritative (right-click menu still works).
-            self._plot.setMouseEnabled(x=False, y=False)
-            self._plot.getPlotItem().setMenuEnabled(True)
-            self._curve_ref = self._plot.plot(
-                pen=pg.mkPen("y", width=1), name="CH1 ref photodiode")
-            self._curve_dut = self._plot.plot(
-                pen=pg.mkPen("c", width=2), name="CH2 DUT")
-            self._plot.addLegend()
+        split = QSplitter(Qt.Horizontal)
+        split.addWidget(self._build_plot())
+        split.addWidget(self._build_side_column())
+        split.setStretchFactor(0, 1)   # plot dominates
+        split.setStretchFactor(1, 0)
+        split.setSizes([820, 400])
+        root.addWidget(split, 1)
 
-            # Vertical marker lines (hidden until first acquire)
-            def _vline(color: tuple) -> pg.InfiniteLine:
-                line = pg.InfiniteLine(
-                    angle=90,
-                    movable=False,
-                    pen=pg.mkPen(color=color, width=1, style=Qt.PenStyle.DashLine),
-                )
-                line.setVisible(False)
-                self._plot.addItem(line)
-                return line
+        root.addLayout(self._build_acquire_row())
 
-            self._line_onset    = _vline(_COL_ONSET)
-            self._line_trailing = _vline(_COL_TRAILING)
-            self._line_cfd      = _vline(_COL_CFD)
+    def _build_plot(self) -> QWidget:
+        if not _HAS_PG:
+            return QLabel("(install pyqtgraph for live waveforms)")
+        self._plot = pg.PlotWidget()
+        self._plot.setLabel("left",   "Amplitude", units="V")
+        # units="s" lets pyqtgraph auto-pick ns/µs/ms.  Data is plotted in seconds.
+        self._plot.setLabel("bottom", "Time",      units="s")
+        self._plot.showGrid(x=True, y=True, alpha=0.25)
+        # Scale/offset come from the sliders — disable free mouse zoom so the
+        # divisions stay authoritative (right-click menu still works).
+        self._plot.setMouseEnabled(x=False, y=False)
+        self._plot.getPlotItem().setMenuEnabled(True)
+        # No plot title / legend: the coloured channel cards on the right ARE the
+        # legend, which keeps the graph area clean (Tektronix/LeCroy style).
 
-            # Integration window shaded region
-            self._int_region = pg.LinearRegionItem(
-                values=(20e-9, 150e-9),  # seconds, updated on acquire
-                brush=pg.mkBrush(60, 60, 160, 40),
-                pen=pg.mkPen(_COL_INTWIN, width=1),
-                movable=False,
+        for n, st in self._channels.items():
+            curve = self._plot.plot(
+                pen=pg.mkPen(st.color, width=2 if st.role == "DUT" else 1),
+                name=f"CH{n} {st.label}",
             )
-            self._int_region.setVisible(False)
-            self._plot.addItem(self._int_region)
+            curve.setVisible(st.enabled)
+            self._curves[n] = curve
 
-            root.addWidget(self._plot)
-        else:
-            root.addWidget(QLabel("(install pyqtgraph for live waveforms)"))
+        # DUT markers (hidden until first acquire)
+        def _vline(color: tuple) -> pg.InfiniteLine:
+            line = pg.InfiniteLine(
+                angle=90, movable=False,
+                pen=pg.mkPen(color=color, width=1, style=Qt.PenStyle.DashLine),
+            )
+            line.setVisible(False)
+            self._plot.addItem(line)
+            return line
 
-        # ── Analysis readout ─────────────────────────────────────────
+        self._line_onset    = _vline(_COL_ONSET)
+        self._line_trailing = _vline(_COL_TRAILING)
+        self._line_cfd      = _vline(_COL_CFD)
+
+        self._int_region = pg.LinearRegionItem(
+            values=(20e-9, 150e-9), brush=pg.mkBrush(60, 60, 160, 40),
+            pen=pg.mkPen(_COL_INTWIN, width=1), movable=False,
+        )
+        self._int_region.setVisible(False)
+        self._plot.addItem(self._int_region)
+
+        # Cursor crosshair (hidden until toggled)
+        self._cursor_v = pg.InfiniteLine(angle=90, movable=False,
+                                         pen=pg.mkPen((150, 150, 150), width=1))
+        self._cursor_h = pg.InfiniteLine(angle=0, movable=False,
+                                         pen=pg.mkPen((150, 150, 150), width=1))
+        for ln in (self._cursor_v, self._cursor_h):
+            ln.setVisible(False)
+            self._plot.addItem(ln)
+        self._cursor_label = pg.TextItem(color=(200, 200, 200), anchor=(0, 1))
+        self._cursor_label.setVisible(False)
+        self._plot.addItem(self._cursor_label)
+        self._cursor_proxy = pg.SignalProxy(
+            self._plot.scene().sigMouseMoved, rateLimit=60, slot=self._on_mouse_moved)
+        return self._plot
+
+    def _build_side_column(self) -> QWidget:
+        col = QWidget()
+        v = QVBoxLayout(col)
+        v.setContentsMargins(4, 0, 0, 0)
+        v.setSpacing(8)
+
+        # Trigger badge
+        self._btn_trigger = QPushButton()
+        ico = _icon("mdi.flash", "#f0a020")
+        if ico is not None:
+            self._btn_trigger.setIcon(ico)
+        self._btn_trigger.setToolTip("Open the trigger settings (source / level / slope)")
+        self._btn_trigger.clicked.connect(self._open_trigger)
+        self._refresh_trigger_badge()
+        v.addWidget(self._btn_trigger)
+
+        # Channel cards
+        ch_box = QGroupBox("Channels")
+        ch_lay = QVBoxLayout(ch_box)
+        ch_lay.setSpacing(6)
+        for n, st in self._channels.items():
+            card = _ChannelCard(st)
+            card.changed.connect(self._on_channel_changed)
+            self._cards[n] = card
+            ch_lay.addWidget(card)
+        v.addWidget(ch_box)
+
+        # DUT analysis stats
+        v.addWidget(self._build_stats_box())
+
+        # Cursor readout
+        self._lbl_cursor = QLabel("Cursor: off")
+        self._lbl_cursor.setStyleSheet("color:#888;")
+        v.addWidget(self._lbl_cursor)
+
+        # Display / scale controls
+        if _HAS_PG:
+            v.addWidget(self._build_scale_box())
+
+        v.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(col)
+        scroll.setMinimumWidth(360)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        return scroll
+
+    def _build_stats_box(self) -> QGroupBox:
         stats_box = QGroupBox("DUT Analysis")
         grid = QGridLayout(stats_box)
         grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(3, 1)
+        grid.setVerticalSpacing(3)
 
-        def _stat(row: int, col: int, label: str) -> QLabel:
-            grid.addWidget(QLabel(label), row, col)
+        # Single column (label left, value right): fits the narrow side column
+        # without clipping.  Colour-code the value the same cyan as the DUT trace.
+        def _stat(row: int, label: str) -> QLabel:
+            grid.addWidget(QLabel(label), row, 0)
             lbl = QLabel("—")
-            grid.addWidget(lbl, row, col + 1)
+            lbl.setStyleSheet("font-weight: 700; color: #33c8ff;")
+            lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            grid.addWidget(lbl, row, 1)
             return lbl
 
-        self._lbl_amp      = _stat(0, 0, "Amplitude:")
-        self._lbl_chg      = _stat(1, 0, "Charge:")
-        self._lbl_rms      = _stat(2, 0, "Baseline RMS:")
-        self._lbl_drift    = _stat(0, 2, "Drift time:")
-        self._lbl_rise     = _stat(1, 2, "Rise time:")
-        self._lbl_cfd      = _stat(2, 2, "CFD time:")
-        root.addWidget(stats_box)
+        self._lbl_amp      = _stat(0, "Amplitude")
+        self._lbl_chg      = _stat(1, "Charge")
+        self._lbl_rms      = _stat(2, "Baseline RMS")
+        self._lbl_drift    = _stat(3, "Drift time")
+        self._lbl_rise     = _stat(4, "Rise time")
+        self._lbl_cfd      = _stat(5, "CFD time")
 
-        # ── Marker visibility toggles ────────────────────────────────
+        # Marker visibility toggles
+        marker_row = QHBoxLayout()
+        self._chk_onset    = QCheckBox("Onset")
+        self._chk_trailing = QCheckBox("Trailing")
+        self._chk_cfd      = QCheckBox("CFD")
+        self._chk_intwin   = QCheckBox("Int. win.")
+        for chk in (self._chk_onset, self._chk_trailing, self._chk_cfd, self._chk_intwin):
+            chk.setChecked(True)
+            marker_row.addWidget(chk)
         if _HAS_PG:
-            marker_row = QHBoxLayout()
-            self._chk_onset    = QCheckBox("Onset (green)")
-            self._chk_trailing = QCheckBox("Trailing (red)")
-            self._chk_cfd      = QCheckBox("CFD (yellow)")
-            self._chk_intwin   = QCheckBox("Int. window (blue)")
-            for chk in (self._chk_onset, self._chk_trailing,
-                        self._chk_cfd, self._chk_intwin):
-                chk.setChecked(True)
-                marker_row.addWidget(chk)
             self._chk_onset.toggled.connect(self._line_onset.setVisible)
             self._chk_trailing.toggled.connect(self._line_trailing.setVisible)
             self._chk_cfd.toggled.connect(self._line_cfd.setVisible)
             self._chk_intwin.toggled.connect(self._int_region.setVisible)
-            root.addLayout(marker_row)
+        grid.addLayout(marker_row, 6, 0, 1, 2)
+        return stats_box
 
-        # ── Display / Scale controls ─────────────────────────────────
-        if _HAS_PG:
-            root.addWidget(self._build_scale_box())
-
-        # ── Acquire controls ─────────────────────────────────────────
+    def _build_acquire_row(self) -> QHBoxLayout:
         ctrl = QHBoxLayout()
-        btn_trigger = QPushButton("⚡ Trigger Settings")
-        btn_trigger.setToolTip("Open the trigger settings window (source / level / slope)")
-        btn_trigger.clicked.connect(self._open_trigger)
-        ctrl.addWidget(btn_trigger)
-        self._btn_single = QPushButton("Single Acquire")
+        self._btn_single = QPushButton("Single")
+        ico = _icon("mdi.camera")
+        if ico is not None:
+            self._btn_single.setIcon(ico)
         self._btn_single.clicked.connect(self._acquire_requested)
-        self._btn_live = QPushButton("Live ▶")
+
+        self._btn_live = QPushButton("Live")
+        ico = _icon("mdi.play")
+        if ico is not None:
+            self._btn_live.setIcon(ico)
         self._btn_live.setCheckable(True)
         self._btn_live.toggled.connect(self._toggle_live)
-        btn_export = QPushButton("💾 Export CSV")
+
+        self._btn_cursor = QPushButton("Cursor")
+        ico = _icon("mdi.crosshairs")
+        if ico is not None:
+            self._btn_cursor.setIcon(ico)
+        self._btn_cursor.setCheckable(True)
+        self._btn_cursor.toggled.connect(self._toggle_cursor)
+
+        btn_export = QPushButton("Export CSV")
+        ico = _icon("mdi.content-save")
+        if ico is not None:
+            btn_export.setIcon(ico)
         btn_export.setToolTip("Save the currently displayed waveforms to a CSV file")
         btn_export.clicked.connect(self._export_csv)
-        btn_test = QPushButton("🔌 Test Connection")
+
+        btn_test = QPushButton("Test")
+        ico = _icon("mdi.lan-connect")
+        if ico is not None:
+            btn_test.setIcon(ico)
         btn_test.setToolTip("Query *IDN? and show the reply — confirms the VISA/USB link")
         btn_test.clicked.connect(self._test_connection)
+
         btn_visa = QPushButton("List VISA…")
         btn_visa.setToolTip("List VISA resource strings (find the scope's USB address)")
         btn_visa.clicked.connect(self._list_visa)
-        ctrl.addWidget(self._btn_single)
-        ctrl.addWidget(self._btn_live)
-        ctrl.addWidget(btn_export)
-        ctrl.addWidget(btn_test)
-        ctrl.addWidget(btn_visa)
-        root.addLayout(ctrl)
+
+        for b in (self._btn_single, self._btn_live, self._btn_cursor,
+                  btn_export, btn_test, btn_visa):
+            ctrl.addWidget(b)
+        ctrl.addStretch(1)
+        return ctrl
+
+    # ------------------------------------------------------------------ #
+    # Channel handling                                                     #
+    # ------------------------------------------------------------------ #
+
+    def _enabled_channels(self) -> frozenset[int]:
+        return frozenset(n for n, st in self._channels.items() if st.enabled)
+
+    def _dut_channel(self) -> int | None:
+        for n, st in self._channels.items():
+            if st.enabled and st.role == "DUT":
+                return n
+        return None
+
+    def _sync_reader_channels(self) -> None:
+        self._reader.set_enabled_channels(self._enabled_channels())
+
+    def _on_channel_changed(self) -> None:
+        # Enable/role changed — update curve visibility, reader set, re-render.
+        for n, st in self._channels.items():
+            if n in self._curves:
+                self._curves[n].setVisible(st.enabled)
+                self._curves[n].setPen(pg.mkPen(
+                    st.color, width=2 if st.role == "DUT" else 1))
+        self._sync_reader_channels()
+        if self._last:
+            self._render(self._last)
+
+    # ------------------------------------------------------------------ #
+    # Buttons / dialogs                                                    #
+    # ------------------------------------------------------------------ #
 
     def _test_connection(self) -> None:
         self._test_requested.emit()
@@ -440,6 +695,13 @@ class ScopePanel(QWidget):
             QApplication.restoreOverrideCursor()
         QMessageBox.information(self, "VISA Resources", text)
 
+    def _refresh_trigger_badge(self) -> None:
+        src = getattr(self._scope, "trig_source", "EXT")
+        lvl = float(getattr(self._scope, "trig_level_V", -0.41))
+        slope = getattr(self._scope, "trig_slope", "FALL")
+        arrow = "↑" if str(slope).upper().startswith("R") else "↓"
+        self._btn_trigger.setText(f"  Trig: {src} {arrow} {lvl:g} V")
+
     def _open_trigger(self) -> None:
         if self._trigger_dialog is None:
             self._trigger_dialog = _TriggerDialog(
@@ -453,6 +715,33 @@ class ScopePanel(QWidget):
                              dialog: _TriggerDialog | None = None) -> None:
         self._pending_trigger = (src, lvl, slope, dialog)
         self._trigger_requested.emit(src, lvl, slope)
+
+    # ------------------------------------------------------------------ #
+    # Cursor                                                               #
+    # ------------------------------------------------------------------ #
+
+    def _toggle_cursor(self, on: bool) -> None:
+        self._cursor_on = on
+        if _HAS_PG:
+            for ln in (self._cursor_v, self._cursor_h):
+                ln.setVisible(on)
+            self._cursor_label.setVisible(on)
+        self._lbl_cursor.setText("Cursor: on — move over plot" if on else "Cursor: off")
+
+    def _on_mouse_moved(self, evt) -> None:
+        if not self._cursor_on or not _HAS_PG:
+            return
+        pos = evt[0]
+        vb = self._plot.getPlotItem().vb
+        if not self._plot.sceneBoundingRect().contains(pos):
+            return
+        mp = vb.mapSceneToView(pos)
+        t, y = mp.x(), mp.y()
+        self._cursor_v.setPos(t)
+        self._cursor_h.setPos(y)
+        self._cursor_label.setPos(t, y)
+        self._cursor_label.setText(f" {_eng_format(t, 's')}\n {y * 1e3:.2f} mV")
+        self._lbl_cursor.setText(f"Cursor: t={_eng_format(t, 's')}, V={y*1e3:.2f} mV")
 
     # ------------------------------------------------------------------ #
     # Display / scale controls                                            #
@@ -513,11 +802,8 @@ class ScopePanel(QWidget):
         self._chk_sync.setChecked(True)
         row.addWidget(btn_auto)
         row.addWidget(btn_read)
-        row.addWidget(self._chk_sync)
-        row.addStretch()
-        rw = QWidget()
-        rw.setLayout(row)
-        g.addWidget(rw, 4, 0, 1, 3)
+        g.addLayout(row, 4, 0, 1, 3)
+        g.addWidget(self._chk_sync, 5, 0, 1, 3)
         return box
 
     def _on_tdiv_slider(self, idx: int) -> None:
@@ -597,7 +883,7 @@ class ScopePanel(QWidget):
 
     def _autoscale(self) -> None:
         spans = []
-        for t, v in ((self._last_t1, self._last_v1), (self._last_t2, self._last_v2)):
+        for t, v in self._last.values():
             if t is not None and len(t):
                 spans.append((float(t.min()), float(t.max()),
                               float(v.min()), float(v.max())))
@@ -634,55 +920,73 @@ class ScopePanel(QWidget):
     # Acquisition                                                          #
     # ------------------------------------------------------------------ #
 
-    def _on_acquired(self, t1, v1, t2, v2) -> None:
+    def _on_acquired(self, results: dict) -> None:
         """GUI-thread slot: reader delivered fresh waveforms — pure widget work."""
         try:
-            self._last_t1, self._last_v1 = t1, v1
-            self._last_t2, self._last_v2 = t2, v2
-
-            if _HAS_PG:
-                self._curve_ref.setData(t1, v1)   # seconds — axis auto-units
-                self._curve_dut.setData(t2, v2)
-                if self._auto_first:
-                    self._auto_first = False
-                    self._autoscale()
-
-            result = analyse_waveform(t2, v2, **self._analysis_kwargs)
-
-            # ── Text readout ─────────────────────────────────────────
-            self._lbl_amp.setText(f"{result.amplitude_V * 1000:.2f} mV")
-            self._lbl_chg.setText(f"{result.charge_pC:.3f} pC")
-            self._lbl_rms.setText(f"{result.baseline_rms_V * 1000:.3f} mV")
-            self._lbl_drift.setText(
-                f"{result.drift_time_s * 1e9:.2f} ns"
-                if result.drift_time_s is not None else "—"
-            )
-            self._lbl_rise.setText(
-                f"{result.rise_time_s * 1e9:.2f} ns"
-                if result.rise_time_s is not None else "—"
-            )
-            self._lbl_cfd.setText(
-                f"{result.cfd_time_s * 1e9:.2f} ns"
-                if result.cfd_time_s is not None else "—"
-            )
-
-            # ── Waveform markers ─────────────────────────────────────
-            if _HAS_PG:
-                if result.onset_time_s is not None:
-                    self._line_onset.setValue(result.onset_time_s)
-                    self._line_onset.setVisible(self._chk_onset.isChecked())
-                if result.trailing_time_s is not None:
-                    self._line_trailing.setValue(result.trailing_time_s)
-                    self._line_trailing.setVisible(self._chk_trailing.isChecked())
-                if result.cfd_time_s is not None:
-                    self._line_cfd.setValue(result.cfd_time_s)
-                    self._line_cfd.setVisible(self._chk_cfd.isChecked())
-                # Integration window — same one analyse_waveform used.
-                win = self._analysis_kwargs.get("integration_window_s", (20e-9, 150e-9))
-                self._int_region.setRegion(tuple(win))
-                self._int_region.setVisible(self._chk_intwin.isChecked())
+            self._last = results
+            if _HAS_PG and self._auto_first and results:
+                self._auto_first = False
+                self._render(results)
+                self._autoscale()
+            else:
+                self._render(results)
         except Exception as exc:
             self._on_acquire_failed(str(exc))
+
+    def _render(self, results: dict) -> None:
+        """Draw curves, per-channel readouts, DUT analysis + markers."""
+        if _HAS_PG:
+            for n, curve in self._curves.items():
+                data = results.get(n)
+                if data is not None and self._channels[n].enabled:
+                    curve.setData(data[0], data[1])
+                    curve.setVisible(True)
+                else:
+                    curve.setVisible(False)
+
+        # Per-channel readouts (peak amplitude)
+        for n, card in self._cards.items():
+            data = results.get(n)
+            if data is not None and len(data[1]):
+                amp_mV = float(np.max(np.abs(data[1]))) * 1e3
+                card.set_readout(f"peak {amp_mV:.2f} mV")
+            else:
+                card.set_readout("—" if not self._channels[n].enabled else "no data")
+
+        # DUT analysis
+        dut = self._dut_channel()
+        dut_data = results.get(dut) if dut is not None else None
+        if dut_data is None or not len(dut_data[1]):
+            for lbl in (self._lbl_amp, self._lbl_chg, self._lbl_rms,
+                        self._lbl_drift, self._lbl_rise, self._lbl_cfd):
+                lbl.setText("—")
+            return
+
+        t2, v2 = dut_data
+        result = analyse_waveform(t2, v2, **self._analysis_kwargs)
+        self._lbl_amp.setText(f"{result.amplitude_V * 1000:.2f} mV")
+        self._lbl_chg.setText(f"{result.charge_pC:.3f} pC")
+        self._lbl_rms.setText(f"{result.baseline_rms_V * 1000:.3f} mV")
+        self._lbl_drift.setText(f"{result.drift_time_s * 1e9:.2f} ns"
+                                if result.drift_time_s is not None else "—")
+        self._lbl_rise.setText(f"{result.rise_time_s * 1e9:.2f} ns"
+                               if result.rise_time_s is not None else "—")
+        self._lbl_cfd.setText(f"{result.cfd_time_s * 1e9:.2f} ns"
+                              if result.cfd_time_s is not None else "—")
+
+        if _HAS_PG:
+            if result.onset_time_s is not None:
+                self._line_onset.setValue(result.onset_time_s)
+                self._line_onset.setVisible(self._chk_onset.isChecked())
+            if result.trailing_time_s is not None:
+                self._line_trailing.setValue(result.trailing_time_s)
+                self._line_trailing.setVisible(self._chk_trailing.isChecked())
+            if result.cfd_time_s is not None:
+                self._line_cfd.setValue(result.cfd_time_s)
+                self._line_cfd.setVisible(self._chk_cfd.isChecked())
+            win = self._analysis_kwargs.get("integration_window_s", (20e-9, 150e-9))
+            self._int_region.setRegion(tuple(win))
+            self._int_region.setVisible(self._chk_intwin.isChecked())
 
     def _on_acquire_failed(self, msg: str) -> None:
         # Surface the failure (once per distinct error) instead of swallowing.
@@ -695,7 +999,11 @@ class ScopePanel(QWidget):
             self._live_start_requested.emit()
         else:
             self._live_stop_requested.emit()
-        self._btn_live.setText("Live ⏹" if checked else "Live ▶")
+        self._btn_live.setText("Stop" if checked else "Live")
+        if _HAS_QTA:
+            ico = _icon("mdi.stop" if checked else "mdi.play")
+            if ico is not None:
+                self._btn_live.setIcon(ico)
 
     def _on_test_done(self, msg: str) -> None:
         QMessageBox.information(self, "Oscilloscope Test", msg)
@@ -730,7 +1038,9 @@ class ScopePanel(QWidget):
         src, lvl, slope, dialog = pending
         if dialog is not None:
             dialog.show_trigger_result(src, lvl, slope, err or None)
-        if err:
+        if not err:
+            self._refresh_trigger_badge()
+        else:
             notify(f"Trigger apply failed: {err}", "warn")
 
     def shutdown(self) -> None:
@@ -748,24 +1058,27 @@ class ScopePanel(QWidget):
         super().closeEvent(event)
 
     def _export_csv(self) -> None:
-        """Save the last acquired waveforms to a CSV file."""
-        if self._last_t2 is None:
+        """Save the last acquired waveforms (all enabled channels) to CSV."""
+        if not self._last:
             return
         from PySide6.QtWidgets import QFileDialog
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export Waveform", "", "CSV (*.csv)"
-        )
+        path, _ = QFileDialog.getSaveFileName(self, "Export Waveform", "", "CSV (*.csv)")
         if not path:
             return
         try:
             import csv
+            chans = sorted(self._last.keys())
+            # Use the first channel's time base as the reference column.
+            t_ref = self._last[chans[0]][0]
             with open(path, "w", newline="") as fh:
                 writer = csv.writer(fh)
-                writer.writerow(["time_ns", "ch1_ref_V", "ch2_dut_V"])
-                t1 = self._last_t1 if self._last_t1 is not None else self._last_t2
-                v1 = self._last_v1 if self._last_v1 is not None else np.zeros_like(self._last_t2)
-                for t, a, b in zip(self._last_t2 * 1e9, v1, self._last_v2):
-                    writer.writerow([f"{t:.4f}", f"{a:.6f}", f"{b:.6f}"])
+                writer.writerow(["time_ns"] + [f"ch{n}_V" for n in chans])
+                for i in range(len(t_ref)):
+                    row = [f"{t_ref[i] * 1e9:.4f}"]
+                    for n in chans:
+                        v = self._last[n][1]
+                        row.append(f"{v[i]:.6f}" if i < len(v) else "")
+                    writer.writerow(row)
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Export Error", str(exc))

@@ -6,6 +6,10 @@
 # GUI + plotting
 PySide6>=6.5
 pyqtgraph>=0.13
+qtawesome>=1.3        # vector icons (Material Design Icons) for toolbars/buttons
+superqt>=0.6         # nicer widgets: toggle switches, labeled/range sliders
+PyOpenGL>=3.1        # 3D stage/setup view (pyqtgraph.opengl GLViewWidget)
+PySide6-QtAds>=4.1   # dockable/floating panels (multi-monitor cockpit layout)
 
 # Numerics + data
 # Upper-bounded to <2 on purpose: the vendored FLIR PySpin 3.2 wheel is built
