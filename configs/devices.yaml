@@ -9,6 +9,32 @@ oscilloscope:
   trigger_slope: FALL
   trigger_source: CH1
   timeout_ms: 10000
+# ── Alternative oscilloscope backend: Tektronix MSO5204B FastFrame ──────────
+# Vendored Dustin toolkit (vendor/dustin_scope/MSO5204B). Streams many
+# triggered frames per burst (CURVEStream?) for high acquisition rates.
+# To use it, replace the oscilloscope block above with the one below.
+# Commented out so the default behaviour is unchanged.
+# oscilloscope:
+#   backend: tek_fastframe
+#   model: MSO5204B          # vendored subfolder (only MSO5204B is wrapped)
+#   simulation: false
+#   visa_address: TCPIP::192.168.1.79::INSTR
+#   trigger_channel: CH4
+#   trigger_level_V: -0.0116
+#   trigger_type: EDGE
+#   trigger_mode: NORMAL
+#   timescale_s: 10e-9
+#   vertical_scale_V: 0.008
+#   waveform_position: 0
+#   waveform_channel: CH4
+#   acquisition_mode: SAMPLE
+#   sample_rate_hz: 10e9
+#   record_length: 1000
+#   num_frames: 20000        # frames per FastFrame burst
+#   num_waveforms: 1         # bursts to acquire per call
+#   average_number: 512      # hardware averages for acquire_averaged()
+#   avg_timeout_s: 30.0
+#   timeout_ms: 10000
 motor_stage:
   backend: grbl
   model: cr10s

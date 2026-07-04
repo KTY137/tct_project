@@ -296,12 +296,10 @@ class TCTMainWindow(QMainWindow):
         # page is wrapped in a QScrollArea so panels scroll instead of cropping.
         self._tabs = DetachableTabWidget()
 
-        # Tab 1: Motor + Intensity side-by-side
-        ctrl_tab = QWidget()
-        ctrl_layout = QHBoxLayout(ctrl_tab)
-        ctrl_layout.addWidget(self._motor_panel, stretch=1)
-        ctrl_layout.addWidget(self._intensity_panel, stretch=1)
-        self._tabs.addTab(_scrollable(ctrl_tab), "Motor / Intensity Monitor")
+        # Motor stage and the reference-intensity monitor are independent,
+        # independently-detachable tabs (the panels are self-contained widgets).
+        self._tabs.addTab(_scrollable(self._motor_panel), "Motor Stage")
+        self._tabs.addTab(_scrollable(self._intensity_panel), "Reference Monitor")
         self._tabs.addTab(_scrollable(self._camera_panel), "Camera")
         self._tabs.addTab(_scrollable(self._scope_panel), "Oscilloscope")
         self._tabs.addTab(_scrollable(self._laser_panel), "Laser / Trigger")

@@ -33,6 +33,14 @@ influxdb-client>=1.36 # optional slow-control sink
 #   'prologix' uses a built-in socket client — no dep.
 python-vxi11>=0.9     # only needed for 'gpib' / 'gpibSerial' connection types
 
+# Tektronix FastFrame oscilloscope backend (vendored package in
+# ./vendor/dustin_scope). Only needed when oscilloscope.backend = tek_fastframe;
+# these are imported transitively at load time by the vendored
+# translater.py / acquire.py modules.
+matplotlib>=3.7       # vendored translater.py imports pyplot at module scope
+pandas>=2.0           # vendored translater.py binary_to_csv helper
+tqdm>=4.65            # vendored acquire.py progress bars
+
 # ─────────────────────────────────────────────────────────────────────
 # NOT on PyPI — install separately for the corresponding REAL hardware.
 # The app runs fully in simulation mode without these.

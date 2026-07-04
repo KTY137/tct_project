@@ -46,6 +46,7 @@ except ImportError:
 
 from devices.oscilloscope import Oscilloscope
 from analysis.waveform_analysis import analyse_waveform
+from gui.scope_measurements import MeasurementPanel
 from gui.status_bus import notify
 
 logger = logging.getLogger(__name__)
@@ -510,6 +511,21 @@ class ScopePanel(QWidget):
         self._plot.addItem(self._cursor_label)
         self._cursor_proxy = pg.SignalProxy(
             self._plot.scene().sigMouseMoved, rateLimit=60, slot=self._on_mouse_moved)
+
+        # Draggable cursor PAIRS for Δt (two vertical) and ΔV (two horizontal).
+        def _pair(angle: int, color: tuple):
+            a = pg.InfiniteLine(angle=angle, movable=True,
+                                pen=pg.mkPen(color, width=1, style=Qt.PenStyle.DashLine))
+            b = pg.InfiniteLine(angle=angle, movable=True,
+                                pen=pg.mkPen(color, width=1, style=Qt.PenStyle.DashLine))
+            for ln in (a, b):
+                ln.setVisible(False)
+                ln.sigPositionChanged.connect(self._update_cursor_readout)
+                self._plot.addItem(ln)
+            return a, b
+
+        self._cur_t1, self._cur_t2 = _pair(90, (0, 200, 255))   # Δt (time)
+        self._cur_v1, self._cur_v2 = _pair(0, (255, 200, 0))    # ΔV (volts)
         return self._plot
 
     def _build_side_column(self) -> QWidget:
@@ -541,6 +557,10 @@ class ScopePanel(QWidget):
 
         # DUT analysis stats
         v.addWidget(self._build_stats_box())
+
+        # Automatic measurements (bench-scope "Measure" menu)
+        self._meas_panel = MeasurementPanel()
+        v.addWidget(self._meas_panel)
 
         # Cursor readout
         self._lbl_cursor = QLabel("Cursor: off")
@@ -616,12 +636,11 @@ class ScopePanel(QWidget):
         self._btn_live.setCheckable(True)
         self._btn_live.toggled.connect(self._toggle_live)
 
-        self._btn_cursor = QPushButton("Cursor")
-        ico = _icon("mdi.crosshairs")
-        if ico is not None:
-            self._btn_cursor.setIcon(ico)
-        self._btn_cursor.setCheckable(True)
-        self._btn_cursor.toggled.connect(self._toggle_cursor)
+        self._cursor_mode = QComboBox()
+        self._cursor_mode.addItems(["Cursor Off", "Track", "Δt (time)", "ΔV (volts)"])
+        self._cursor_mode.setToolTip("Track rides the mouse; Δt/ΔV place a draggable "
+                                     "pair and read the difference (Δt also shows 1/Δt)")
+        self._cursor_mode.currentIndexChanged.connect(self._on_cursor_mode)
 
         btn_export = QPushButton("Export CSV")
         ico = _icon("mdi.content-save")
@@ -641,7 +660,7 @@ class ScopePanel(QWidget):
         btn_visa.setToolTip("List VISA resource strings (find the scope's USB address)")
         btn_visa.clicked.connect(self._list_visa)
 
-        for b in (self._btn_single, self._btn_live, self._btn_cursor,
+        for b in (self._btn_single, self._btn_live, self._cursor_mode,
                   btn_export, btn_test, btn_visa):
             ctrl.addWidget(b)
         ctrl.addStretch(1)
@@ -720,13 +739,51 @@ class ScopePanel(QWidget):
     # Cursor                                                               #
     # ------------------------------------------------------------------ #
 
-    def _toggle_cursor(self, on: bool) -> None:
-        self._cursor_on = on
-        if _HAS_PG:
-            for ln in (self._cursor_v, self._cursor_h):
-                ln.setVisible(on)
-            self._cursor_label.setVisible(on)
-        self._lbl_cursor.setText("Cursor: on — move over plot" if on else "Cursor: off")
+    def _on_cursor_mode(self, idx: int) -> None:
+        """0=Off, 1=Track, 2=Δt (vertical pair), 3=ΔV (horizontal pair)."""
+        if not _HAS_PG:
+            return
+        self._cursor_on = (idx == 1)
+        track = idx == 1
+        for ln in (self._cursor_v, self._cursor_h):
+            ln.setVisible(track)
+        self._cursor_label.setVisible(track)
+
+        dt = idx == 2
+        dv = idx == 3
+        # Seed pair positions from the current view so they start on-screen.
+        xr = self._plot.viewRange()[0]; yr = self._plot.viewRange()[1]
+        if dt:
+            self._cur_t1.setPos(xr[0] + 0.35 * (xr[1] - xr[0]))
+            self._cur_t2.setPos(xr[0] + 0.65 * (xr[1] - xr[0]))
+        if dv:
+            self._cur_v1.setPos(yr[0] + 0.35 * (yr[1] - yr[0]))
+            self._cur_v2.setPos(yr[0] + 0.65 * (yr[1] - yr[0]))
+        self._cur_t1.setVisible(dt); self._cur_t2.setVisible(dt)
+        self._cur_v1.setVisible(dv); self._cur_v2.setVisible(dv)
+        if idx == 0:
+            self._lbl_cursor.setText("Cursor: off")
+        elif track:
+            self._lbl_cursor.setText("Cursor: track — move over plot")
+        else:
+            self._update_cursor_readout()
+
+    def _update_cursor_readout(self) -> None:
+        """Readout for the Δt / ΔV draggable pairs."""
+        if not _HAS_PG:
+            return
+        if self._cur_t1.isVisible():
+            t1, t2 = self._cur_t1.value(), self._cur_t2.value()
+            dt = abs(t2 - t1)
+            freq = (1.0 / dt) if dt > 0 else float("inf")
+            self._lbl_cursor.setText(
+                f"Δt = {_eng_format(dt, 's')}   (1/Δt = {_eng_format(freq, 'Hz')})\n"
+                f"t1={_eng_format(t1, 's')}  t2={_eng_format(t2, 's')}")
+        elif self._cur_v1.isVisible():
+            v1, v2 = self._cur_v1.value(), self._cur_v2.value()
+            self._lbl_cursor.setText(
+                f"ΔV = {_eng_format(abs(v2 - v1), 'V')}\n"
+                f"v1={_eng_format(v1, 'V')}  v2={_eng_format(v2, 'V')}")
 
     def _on_mouse_moved(self, evt) -> None:
         if not self._cursor_on or not _HAS_PG:
@@ -960,9 +1017,11 @@ class ScopePanel(QWidget):
             for lbl in (self._lbl_amp, self._lbl_chg, self._lbl_rms,
                         self._lbl_drift, self._lbl_rise, self._lbl_cfd):
                 lbl.setText("—")
+            self._meas_panel.update_values(None, None)
             return
 
         t2, v2 = dut_data
+        self._meas_panel.update_values(t2, v2)
         result = analyse_waveform(t2, v2, **self._analysis_kwargs)
         self._lbl_amp.setText(f"{result.amplitude_V * 1000:.2f} mV")
         self._lbl_chg.setText(f"{result.charge_pC:.3f} pC")

@@ -40,6 +40,12 @@ _KNOWN_KEYS: dict[str, set[str]] = {
         # drs4 backend
         "frequency_ghz", "voltage_range", "trigger_edge", "trigger_delay_ns",
         "time_correction", "t0_ns", "t0_threshold_V", "timeout_s",
+        # tek_fastframe backend (vendored Dustin MSO5204B toolkit)
+        "model", "trigger_channel", "trigger_type", "trigger_mode",
+        "timescale_s", "vertical_scale_V", "waveform_position",
+        "waveform_channel", "acquisition_mode", "sample_rate_hz",
+        "record_length", "num_frames", "num_waveforms",
+        "average_number", "avg_timeout_s",
     },
     "motor_stage": {
         "backend", "model", "simulation", "serial_port", "baudrate",
@@ -198,6 +204,17 @@ def _check_scope(scope: dict[str, Any], issues: list[ConfigIssue]) -> None:
                 WARNING, sec,
                 "'trigger_slope' is the visa-backend key; the drs4 backend "
                 "reads 'trigger_edge' — your setting is ignored."))
+    elif backend == "tek_fastframe":
+        if not scope.get("simulation") and not scope.get("visa_address"):
+            issues.append(ConfigIssue(ERROR, sec,
+                                      "backend: tek_fastframe without visa_address "
+                                      "(set simulation: true or an address)"))
+        stray = _DRS4_ONLY_SCOPE_KEYS & set(scope)
+        if stray:
+            issues.append(ConfigIssue(
+                WARNING, sec,
+                f"keys {sorted(stray)} apply to the drs4 backend and are "
+                "ignored with backend: tek_fastframe."))
 
 
 def _check_bias(bias: dict[str, Any], issues: list[ConfigIssue]) -> None:

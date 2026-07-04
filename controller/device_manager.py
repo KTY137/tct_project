@@ -24,6 +24,7 @@ from devices.intensity_scope_ch import ScopeChannelMonitor
 from devices.intensity_simulated import SimulatedIntensityMonitor
 from devices.oscilloscope import Oscilloscope
 from devices.oscilloscope_drs4 import DRS4Oscilloscope
+from devices.oscilloscope_tek_fastframe import TekFastFrameOscilloscope
 from devices.waveform_generator import WaveformGenerator
 from devices.camera_blackfly import BlackflyCamera
 from devices.laser_manual import LaserManualMetadata
@@ -111,11 +112,33 @@ class DeviceManager:
              else logger.warning)("Config check: %s", issue)
 
         # ── Oscilloscope ─────────────────────────────────────────────
-        # backend: "visa"  → VISA/PyVISA oscilloscope (default)
-        # backend: "drs4"  → PSI DRS4 evaluation board
+        # backend: "visa"          → VISA/PyVISA oscilloscope (default)
+        # backend: "drs4"          → PSI DRS4 evaluation board
+        # backend: "tek_fastframe" → Tektronix MSO5204B FastFrame burst
+        #                            (vendored Dustin toolkit)
         scope_cfg = cfg.get("oscilloscope", {})
         scope_backend = scope_cfg.get("backend", "visa").lower()
-        if scope_backend == "drs4":
+        if scope_backend == "tek_fastframe":
+            self.scope = TekFastFrameOscilloscope(
+                visa_address      = scope_cfg.get("visa_address", ""),
+                timeout_ms        = scope_cfg.get("timeout_ms",        10000),
+                trigger_channel   = scope_cfg.get("trigger_channel",   "CH4"),
+                trigger_level_V   = scope_cfg.get("trigger_level_V",   -0.0116),
+                trigger_type      = scope_cfg.get("trigger_type",      "EDGE"),
+                trigger_mode      = scope_cfg.get("trigger_mode",      "NORMAL"),
+                timescale_s       = scope_cfg.get("timescale_s",       10e-9),
+                vertical_scale_V  = scope_cfg.get("vertical_scale_V",  0.008),
+                waveform_position = scope_cfg.get("waveform_position", 0.0),
+                waveform_channel  = scope_cfg.get("waveform_channel",  "CH4"),
+                acquisition_mode  = scope_cfg.get("acquisition_mode",  "SAMPLE"),
+                sample_rate_hz    = scope_cfg.get("sample_rate_hz",    10e9),
+                record_length     = scope_cfg.get("record_length",     1000),
+                num_frames        = scope_cfg.get("num_frames",        20000),
+                average_number    = scope_cfg.get("average_number",    512),
+                avg_timeout_s     = scope_cfg.get("avg_timeout_s",     30.0),
+                simulation        = scope_cfg.get("simulation",        True),
+            )
+        elif scope_backend == "drs4":
             self.scope = DRS4Oscilloscope(
                 frequency_ghz    = scope_cfg.get("frequency_ghz",   5.0),
                 voltage_range    = scope_cfg.get("voltage_range",    0),
