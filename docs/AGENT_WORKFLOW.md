@@ -10,6 +10,16 @@ C:\Users\nukei\Desktop\agent_env
 Use `agent_env` for Claude/Codex bridge requests, structured reports, and local
 recovery memory.
 
+Fallback rules live at:
+
+```text
+C:\Users\nukei\Desktop\agent_env\docs\FALLBACK.md
+```
+
+Codex may continue when Claude is rate-limited. Claude may continue from memory
+if Codex is unavailable. In both cases, unresolved TODOs must be written to local
+memory before ending the session.
+
 Important local-only memory files:
 
 ```text
