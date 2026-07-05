@@ -124,13 +124,19 @@ baseline RMS, drift/rise/CFD/onset times), `charge_calibration.py`
 - `tests/` — pytest, headless, simulated backends only: state machine, config
   validator, GRBL mock, scope preamble, waveform analysis, bias & calibration.
 
-## vendor/ and neighbours
+## Local-only reference material
 
-- `vendor/e4control/` — vendored bias-supply transports (third-party, do not
-  refactor). `vendor/spinnaker/` wheel installed by `setup.ps1` (cp310 only).
-- `reference/` — reference material only, never modified (`Printrun`,
-  `e4control`, Dustin oscilloscope scripts, Spinnaker SDK).
-- `lab_assets/` — lab photos and source/manual PDFs.
+- `reference/` — local-only reference material, intentionally ignored by Git
+  (`Printrun`, `e4control`, Dustin oscilloscope scripts, Spinnaker SDK).
+- `lab_assets/` — local-only lab photos and source/manual PDFs, intentionally
+  ignored by Git.
+- `sources/git_history/` — local recovery bundles for the old nested repos,
+  intentionally ignored by Git.
+- `TCT_app/devices/bias_supply_e4control.py` can import from a local
+  `reference/e4control` checkout at connect time. Keep that dependency optional
+  so simulation and tests work without local reference material.
+
+Details: `docs/REFERENCE_MATERIAL.md`.
 
 ## Known constraints
 
@@ -153,6 +159,8 @@ baseline RMS, drift/rise/CFD/onset times), `charge_calibration.py`
 - 2026-07-05 — Flattened project layout around the app: app root moved to
   `TCT_app/`; reference material moved to `reference/`; lab images/manuals moved
   to `lab_assets/`.
+- 2026-07-05 — Marked third-party and lab reference folders as local-only ignored
+  material; documented the clean-root policy in `docs/REFERENCE_MATERIAL.md`.
 - 2026-07-04 — Initial bookkeep created from source inspection (main, tct_gui,
   state_machine, scan_controller, device_manager, base device, hdf5_writer,
   SCAN_DATA_FORMAT.md). Some sections marked TODO for deepening.

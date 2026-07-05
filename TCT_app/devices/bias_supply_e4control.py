@@ -1,7 +1,8 @@
 """
-Bias supply backend using the e4control library (local reference/e4control).
+Bias supply backend using an optional local e4control checkout.
 
-e4control is a device-control library collection included in this repository.
+e4control is a device-control library collection kept as local-only reference
+material when available; it is intentionally not tracked in the main Git repo.
 This backend wraps e4control's K2410 (or K487/K617) device class so the rest
 of the TCT application can use it transparently through the BiasSupplyBase
 interface.
@@ -44,9 +45,8 @@ from .bias_supply_base import BiasSupplyBase, BiasReading
 logger = logging.getLogger(__name__)
 
 # Candidate roots that contain the importable ``e4control`` package, tried in
-# order.  The first is the vendored copy bundled inside the app (preferred — it
-# makes TCT_app self-contained); the second is the root-level reference checkout,
-# kept as a back-compat fallback.
+# order.  The first supports an optional local vendored copy; the second is the
+# root-level local-only reference checkout.
 _E4C_ROOTS = [
     Path(__file__).parent.parent / "vendor",                       # TCT_app/vendor
     Path(__file__).parents[2] / "reference" / "e4control",
@@ -91,9 +91,8 @@ class E4ControlBiasSupply(BiasSupplyBase):
     """
     Bias supply backend that delegates to a local e4control device class.
 
-    The e4control library is NOT pip-installed; it lives at reference/e4control
-    and is imported from there at connect time when the vendored app copy is
-    unavailable.
+    The e4control library is NOT pip-installed by the app. When used, it is
+    imported from a local vendor or reference checkout at connect time.
     """
 
     def __init__(

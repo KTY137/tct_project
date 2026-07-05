@@ -30,12 +30,12 @@ The actual application lives at **`TCT_app/`**:
 | `analysis/` | Offline analysis (e.g. `laser_normalization.py`) |
 | `configs/devices.yaml` | Device configuration (validated by `config_validator.py`) |
 | `tests/` | pytest suite — runs headless against simulated devices |
-| `vendor/e4control/` | Vendored bias-supply transports — treat as third-party, do not refactor |
 | `SCAN_DATA_FORMAT.md` | The HDF5 data-format contract — read before touching data layout |
 
-Sibling folders under `reference/` are **reference material only** — read them
-for protocol/driver examples, never modify them. Lab photos and manuals live
-under `lab_assets/`.
+Sibling folders under `reference/` and `lab_assets/` are **local-only reference
+material**. They are intentionally ignored by Git to avoid publishing third-party
+or lab-owned IP. See `docs/REFERENCE_MATERIAL.md` before depending on anything
+from those folders.
 
 **Important:** the GUI stack is **PySide6** (+ pyqtgraph, QtAds, superqt), *not* PyQt6.
 Never mix PyQt6 imports into this codebase.
