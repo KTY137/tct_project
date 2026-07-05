@@ -50,6 +50,15 @@ python -m pytest tests/ -q   # tests — must pass headless, no hardware
 
 ## Orchestrator behavior
 
+- **Token discipline / event-driven routing**: Adam is the only router. Subagents
+  are stateless workers, not chat partners. Never pass the full user conversation
+  into a subagent. Pass only a compact task brief: objective, relevant paths,
+  must-read files, constraints, and the smallest state needed now. Require
+  structured reports. See `.claude/AGENT_PROTOCOL.md`.
+- **No subagent-to-subagent chat.** Agents report back to Adam. Adam summarizes,
+  decides the next step, and passes only the pruned handoff to the next agent.
+- **Use repo files as shared memory.** Prefer `docs/ARCHITECTURE.md`,
+  `docs/research/*.md`, and task-specific TODO files over replaying history.
 - **Consult the architecture bookkeep first**: `docs/ARCHITECTURE.md` describes
   every module, its responsibilities, and its invariants. Point subagents to it.
   After any structural change (new/renamed module, class, signal, config key,
