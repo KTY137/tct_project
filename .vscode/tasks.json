@@ -35,6 +35,43 @@
         "panel": "dedicated",
         "group": "agent-env"
       }
+    },
+    {
+      "label": "agent-env: token monitor",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "-m",
+        "agent_env.token_monitor",
+        "--project",
+        "project_tct",
+        "--watch",
+        "--interval-s",
+        "30"
+      ],
+      "options": {
+        "cwd": "C:\\Users\\nukei\\Desktop\\agent_env"
+      },
+      "isBackground": true,
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
+      "problemMatcher": {
+        "owner": "agent-env-token-monitor",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "TOKEN_MONITOR_START",
+          "endsPattern": "TOKEN_MONITOR_READY"
+        }
+      },
+      "presentation": {
+        "reveal": "never",
+        "panel": "dedicated",
+        "group": "agent-env"
+      }
     }
   ]
 }
