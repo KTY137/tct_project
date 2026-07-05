@@ -59,6 +59,9 @@ python -m pytest tests/ -q   # tests — must pass headless, no hardware
   decides the next step, and passes only the pruned handoff to the next agent.
 - **Use repo files as shared memory.** Prefer `docs/ARCHITECTURE.md`,
   `docs/research/*.md`, and task-specific TODO files over replaying history.
+- **Recovery memory lives outside this repo** at
+  `C:\Users\nukei\Desktop\agent_env\memory\`. Check `todos.local.md` after token
+  limits, crashes, or interrupted subagent work. See `docs/AGENT_WORKFLOW.md`.
 - **Consult the architecture bookkeep first**: `docs/ARCHITECTURE.md` describes
   every module, its responsibilities, and its invariants. Point subagents to it.
   After any structural change (new/renamed module, class, signal, config key,

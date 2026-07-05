@@ -57,7 +57,9 @@ lab_assets/
 sources/git_history/
 
 # IDE / OS noise
-.vscode/
+.vscode/*
+!.vscode/
+!.vscode/tasks.json
 .idea/
 .vs/
 .DS_Store

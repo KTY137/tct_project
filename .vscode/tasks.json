@@ -1,0 +1,40 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "agent-env: Claude bridge",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "-m",
+        "agent_env.file_bridge",
+        "watch",
+        "--repo-root",
+        "${workspaceFolder}"
+      ],
+      "options": {
+        "cwd": "C:\\Users\\nukei\\Desktop\\agent_env"
+      },
+      "isBackground": true,
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
+      "problemMatcher": {
+        "owner": "agent-env",
+        "pattern": {
+          "regexp": "^$"
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "AGENT_BRIDGE_START",
+          "endsPattern": "AGENT_BRIDGE_READY"
+        }
+      },
+      "presentation": {
+        "reveal": "never",
+        "panel": "dedicated",
+        "group": "agent-env"
+      }
+    }
+  ]
+}
