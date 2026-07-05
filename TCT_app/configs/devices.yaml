@@ -41,7 +41,7 @@ motor_stage:
   simulation: false
   serial_port: COM4
   feed_rate_mm_min: 1500
-  marlin: true
+  marlin: false
   baudrate: 115200
   steps_per_mm:
     x: 80.0

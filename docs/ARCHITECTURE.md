@@ -156,6 +156,10 @@ Details: `docs/REFERENCE_MATERIAL.md`.
 
 ## Changelog
 
+- 2026-07-05 - Restored the missing `TCT_app/data/` package used by
+  `device_manager` and `scan_controller`; added smoke coverage for the HDF5
+  writer and disabled Influx sink.
+
 - 2026-07-05 — Flattened project layout around the app: app root moved to
   `TCT_app/`; reference material moved to `reference/`; lab images/manuals moved
   to `lab_assets/`.
