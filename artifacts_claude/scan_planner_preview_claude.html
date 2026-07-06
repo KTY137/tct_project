@@ -1,0 +1,626 @@
+<title>TCT Scan Routine Planner — Design Preview</title>
+<style>
+  :root {
+    /* neutrals + accent (from TCT style.py — light) */
+    --bg:#eef1f6; --panel:#ffffff; --panel-2:#f6f8fb; --sunk:#eaeef4;
+    --border:#d6dbe3; --border-strong:#c2c9d4;
+    --text:#1f2a37; --muted:#65708083; --muted-solid:#657080;
+    --accent:#0d8ba6; --accent-strong:#0a6b80;
+    --good:#1f9d57; --warn:#b7791f; --crit:#c0392b;
+    /* axis rail palette (light) */
+    --bias:#C67F14; --z:#6455C9; --x:#1690A2; --y:#BB4680;
+    --laser:#8E4FCE; --delay:#2A8C6C; --hazard:#CE3F35;
+
+    --font-ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+    --r-sm:6px; --r-md:9px; --r-lg:13px; --r-pill:999px;
+    --shadow: 0 1px 2px rgba(16,24,40,.04), 0 6px 20px -8px rgba(16,24,40,.14);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#171b21; --panel:#222831; --panel-2:#1d232b; --sunk:#1a1f26;
+      --border:#333b46; --border-strong:#3f4854;
+      --text:#e6e9ee; --muted:#9aa4b2aa; --muted-solid:#9aa4b2;
+      --accent:#33c8ff; --accent-strong:#12a7e0;
+      --good:#3bd07f; --warn:#E8A33D; --crit:#ef6b60;
+      --bias:#E8A33D; --z:#8E82EC; --x:#36B7C9; --y:#E27AAE;
+      --laser:#B482EC; --delay:#4FBE99; --hazard:#F2635A;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -12px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg:#eef1f6; --panel:#ffffff; --panel-2:#f6f8fb; --sunk:#eaeef4;
+    --border:#d6dbe3; --border-strong:#c2c9d4;
+    --text:#1f2a37; --muted:#65708083; --muted-solid:#657080;
+    --accent:#0d8ba6; --accent-strong:#0a6b80;
+    --good:#1f9d57; --warn:#b7791f; --crit:#c0392b;
+    --bias:#C67F14; --z:#6455C9; --x:#1690A2; --y:#BB4680;
+    --laser:#8E4FCE; --delay:#2A8C6C; --hazard:#CE3F35;
+    --shadow: 0 1px 2px rgba(16,24,40,.04), 0 6px 20px -8px rgba(16,24,40,.14);
+  }
+  :root[data-theme="dark"] {
+    --bg:#171b21; --panel:#222831; --panel-2:#1d232b; --sunk:#1a1f26;
+    --border:#333b46; --border-strong:#3f4854;
+    --text:#e6e9ee; --muted:#9aa4b2aa; --muted-solid:#9aa4b2;
+    --accent:#33c8ff; --accent-strong:#12a7e0;
+    --good:#3bd07f; --warn:#E8A33D; --crit:#ef6b60;
+    --bias:#E8A33D; --z:#8E82EC; --x:#36B7C9; --y:#E27AAE;
+    --laser:#B482EC; --delay:#4FBE99; --hazard:#F2635A;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px -12px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--font-ui); font-size:14px; line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .app { max-width:1180px; margin:0 auto; padding:20px 20px 48px; }
+
+  /* ---- top bar ---- */
+  .topbar { display:flex; align-items:center; gap:14px; padding:6px 2px 18px; }
+  .mark {
+    width:34px; height:34px; border-radius:9px; flex:none;
+    background:
+      radial-gradient(circle at 50% 50%, var(--accent) 0 3px, transparent 4px),
+      repeating-radial-gradient(circle at 50% 50%, transparent 0 5px, color-mix(in srgb, var(--accent) 55%, transparent) 5px 6px);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 40%, var(--border));
+  }
+  .titlewrap { display:flex; flex-direction:column; gap:1px; margin-right:auto; }
+  .eyebrow {
+    font-family:var(--font-mono); font-size:10.5px; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--muted-solid); font-weight:600;
+  }
+  .title { font-size:19px; font-weight:640; letter-spacing:-.01em; }
+  .chip-sim {
+    font-family:var(--font-mono); font-size:10.5px; letter-spacing:.1em;
+    padding:4px 9px; border-radius:var(--r-pill); font-weight:600;
+    color:var(--delay); background:color-mix(in srgb, var(--delay) 14%, transparent);
+    border:1px solid color-mix(in srgb, var(--delay) 40%, transparent);
+  }
+  .icon-btn {
+    display:inline-flex; align-items:center; justify-content:center; gap:7px;
+    height:34px; padding:0 12px; border-radius:var(--r-md);
+    background:var(--panel); color:var(--text);
+    border:1px solid var(--border); cursor:pointer; font-family:var(--font-ui);
+    font-size:13px; font-weight:520;
+  }
+  .icon-btn:hover { border-color:var(--border-strong); background:var(--panel-2); }
+
+  /* ---- layout ---- */
+  .grid { display:grid; grid-template-columns: 1fr 336px; gap:18px; align-items:start; }
+  .card {
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:var(--r-lg); box-shadow:var(--shadow);
+  }
+  .card-hd {
+    display:flex; align-items:center; gap:10px;
+    padding:13px 16px; border-bottom:1px solid var(--border);
+  }
+  .card-hd h2 { font-size:13px; font-weight:600; margin:0; letter-spacing:.01em; }
+  .card-hd .sub { font-family:var(--font-mono); font-size:11px; color:var(--muted-solid); margin-left:auto; }
+
+  /* ---- recipe tree ---- */
+  .tree { padding:10px 12px 14px; }
+  .loop { position:relative; }
+  .loop-body {
+    margin-left:15px; padding-left:14px;
+    border-left:2px solid var(--rail, var(--border));
+  }
+  .node {
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    padding:8px 11px; margin:5px 0; border-radius:var(--r-md);
+    border:1px solid transparent; position:relative;
+  }
+  .node:hover { background:var(--panel-2); }
+
+  /* loop head */
+  .loop-head {
+    background:color-mix(in srgb, var(--rail) 9%, var(--panel));
+    border-color:color-mix(in srgb, var(--rail) 28%, var(--border));
+    border-left:3px solid var(--rail); cursor:pointer;
+  }
+  .loop-head:hover { background:color-mix(in srgb, var(--rail) 14%, var(--panel)); }
+  .caret { color:var(--rail); font-size:11px; width:12px; flex:none; transition:transform .15s ease; }
+  .loop.collapsed > .loop-head .caret { transform:rotate(-90deg); }
+  .loop.collapsed > .loop-body { display:none; }
+  .tag {
+    font-family:var(--font-mono); font-size:10px; font-weight:700; letter-spacing:.08em;
+    padding:3px 7px; border-radius:5px; text-transform:uppercase;
+    color:var(--rail); background:color-mix(in srgb, var(--rail) 16%, transparent);
+  }
+  .axis-name { font-weight:600; color:color-mix(in srgb, var(--rail) 62%, var(--text)); }
+  .vals { display:flex; gap:6px; flex-wrap:wrap; }
+  .mchip {
+    font-family:var(--font-mono); font-size:11.5px; color:var(--text);
+    padding:2px 7px; border-radius:5px; background:var(--sunk);
+    border:1px solid var(--border); font-variant-numeric:tabular-nums;
+    display:inline-flex; align-items:center; gap:3px; cursor:default;
+  }
+  /* editable value inside a chip */
+  .numedit {
+    font-family:var(--font-mono); font-size:11.5px; color:var(--accent); font-weight:600;
+    background:transparent; border:none; padding:0 1px; text-align:right;
+    border-bottom:1px dashed color-mix(in srgb, var(--accent) 50%, transparent);
+    font-variant-numeric:tabular-nums; cursor:text; min-width:2ch;
+  }
+  .numedit:hover { background:color-mix(in srgb, var(--accent) 8%, transparent); }
+  .numedit:focus {
+    outline:none; border-bottom:1px solid var(--accent);
+    background:color-mix(in srgb, var(--accent) 10%, transparent);
+  }
+  .count {
+    margin-left:auto; font-family:var(--font-mono); font-size:11px; font-weight:600;
+    padding:3px 9px; border-radius:var(--r-pill); color:var(--rail);
+    background:color-mix(in srgb, var(--rail) 14%, transparent);
+    border:1px solid color-mix(in srgb, var(--rail) 34%, transparent);
+    font-variant-numeric:tabular-nums; white-space:nowrap;
+  }
+
+  /* action leaf */
+  .leaf .glyph { color:var(--muted-solid); font-size:13px; width:16px; text-align:center; flex:none; }
+  .leaf .lbl { color:var(--text); font-weight:500; }
+  .leaf .meta { font-family:var(--font-mono); font-size:11px; color:var(--muted-solid); margin-left:auto; }
+
+  /* guard */
+  .guard { border-left:3px solid var(--good); background:color-mix(in srgb, var(--good) 7%, var(--panel)); }
+  .guard .glyph { color:var(--good); }
+  .guard .lbl { color:color-mix(in srgb, var(--good) 55%, var(--text)); font-weight:600; }
+  .guard .meta { color:var(--muted-solid); }
+
+  /* danger */
+  .danger { border-left:3px solid var(--hazard); background:color-mix(in srgb, var(--hazard) 8%, var(--panel)); }
+  .danger .glyph { color:var(--hazard); }
+  .danger .lbl { color:color-mix(in srgb, var(--hazard) 58%, var(--text)); font-weight:600; }
+  .danger .meta { color:var(--muted-solid); }
+  .confirm-pill {
+    font-family:var(--font-mono); font-size:10px; font-weight:700; letter-spacing:.04em;
+    padding:3px 8px; border-radius:var(--r-pill); margin-left:auto;
+    color:var(--hazard); background:color-mix(in srgb, var(--hazard) 15%, transparent);
+    border:1px solid color-mix(in srgb, var(--hazard) 42%, transparent);
+  }
+  .danger .meta + .confirm-pill { margin-left:10px; }
+
+  /* legend */
+  .legend { display:flex; flex-wrap:wrap; gap:7px 14px; padding:12px 16px; border-top:1px solid var(--border); }
+  .legend .li { display:inline-flex; align-items:center; gap:7px; font-size:12px; color:var(--muted-solid); }
+  .legend .sw { width:11px; height:11px; border-radius:3px; }
+
+  /* ---- aside ---- */
+  aside { position:sticky; top:16px; display:flex; flex-direction:column; gap:14px; }
+  .runcard .card-hd h2 { letter-spacing:.14em; text-transform:uppercase; font-size:11px; color:var(--muted-solid); font-family:var(--font-mono); }
+  .stats { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--border); border-bottom:1px solid var(--border); }
+  .stat { background:var(--panel); padding:12px 14px; display:flex; flex-direction:column; gap:3px; }
+  .stat .k { font-size:11px; color:var(--muted-solid); letter-spacing:.02em; }
+  .stat .v { font-family:var(--font-mono); font-size:16px; font-weight:600; font-variant-numeric:tabular-nums; letter-spacing:-.01em; }
+  .stat.wide { grid-column:1 / -1; }
+  .stat .v.warnv { color:var(--warn); }
+  .stat .v.biasv { color:var(--bias); }
+
+  .warns { display:flex; flex-direction:column; gap:8px; padding:13px 14px; }
+  .warn-row { display:flex; gap:9px; align-items:flex-start; font-size:12.5px; line-height:1.4; }
+  .warn-row .dot { width:8px; height:8px; border-radius:50%; margin-top:5px; flex:none; }
+  .warn-row.w .dot { background:var(--warn); }
+  .warn-row.g .dot { background:var(--good); }
+  .warn-row.c .dot { background:var(--crit); }
+  .warn-row .txt { color:var(--text); }
+  .warn-row .txt b { font-weight:600; }
+
+  .hv-status {
+    display:flex; align-items:center; gap:9px; margin:0 14px 4px;
+    padding:9px 12px; border-radius:var(--r-md); font-size:12.5px; font-weight:500;
+    background:color-mix(in srgb, var(--warn) 12%, transparent);
+    border:1px solid color-mix(in srgb, var(--warn) 34%, transparent);
+    color:color-mix(in srgb, var(--warn) 50%, var(--text));
+  }
+  .hv-status .lock { font-size:13px; }
+  .hv-status.armed {
+    background:color-mix(in srgb, var(--good) 13%, transparent);
+    border-color:color-mix(in srgb, var(--good) 38%, transparent);
+    color:color-mix(in srgb, var(--good) 52%, var(--text));
+  }
+
+  .actions { display:grid; grid-template-columns:1fr 1fr; gap:9px; padding:6px 14px 16px; }
+  .btn {
+    height:38px; border-radius:var(--r-md); border:1px solid var(--border);
+    background:var(--panel-2); color:var(--text); cursor:pointer;
+    font-family:var(--font-ui); font-size:13px; font-weight:560; letter-spacing:.01em;
+    display:inline-flex; align-items:center; justify-content:center; gap:7px;
+    transition:filter .12s ease, background .12s ease, transform .05s ease;
+  }
+  .btn:hover { border-color:var(--border-strong); background:var(--sunk); }
+  .btn:active { transform:translateY(1px); }
+  .btn.arm {
+    grid-column:1 / -1; color:#fff; border-color:transparent;
+    background:linear-gradient(180deg, var(--bias), color-mix(in srgb, var(--bias) 80%, #000));
+  }
+  .btn.arm.done {
+    background:linear-gradient(180deg, var(--good), color-mix(in srgb, var(--good) 78%, #000));
+  }
+  .btn.start {
+    grid-column:1 / -1; color:#fff; border-color:transparent;
+    background:linear-gradient(180deg, var(--accent), var(--accent-strong));
+  }
+  .btn.start:disabled {
+    background:var(--sunk); color:var(--muted-solid); cursor:not-allowed;
+    border:1px solid var(--border); filter:none;
+  }
+  .btn:hover:not(:disabled) { filter:brightness(1.05); }
+
+  /* ---- modal ---- */
+  .scrim {
+    position:fixed; inset:0; background:rgba(10,14,20,.55);
+    display:none; align-items:center; justify-content:center; padding:20px; z-index:50;
+    backdrop-filter:blur(2px);
+  }
+  .scrim.open { display:flex; }
+  .modal {
+    width:min(440px, 100%); background:var(--panel); border-radius:var(--r-lg);
+    border:1px solid var(--border); box-shadow:0 24px 60px -12px rgba(0,0,0,.5); overflow:hidden;
+  }
+  .modal-hd {
+    display:flex; align-items:center; gap:11px; padding:16px 18px;
+    background:color-mix(in srgb, var(--hazard) 12%, var(--panel));
+    border-bottom:1px solid color-mix(in srgb, var(--hazard) 30%, var(--border));
+  }
+  .modal-hd .mg { font-size:20px; }
+  .modal-hd h3 { margin:0; font-size:15px; font-weight:650; color:color-mix(in srgb, var(--hazard) 45%, var(--text)); }
+  .modal-bd { padding:16px 18px; font-size:13.5px; line-height:1.55; color:var(--text); }
+  .modal-bd .em { font-family:var(--font-mono); color:var(--bias); font-weight:600; }
+  .modal-ft { display:flex; gap:10px; justify-content:flex-end; padding:0 18px 18px; }
+  .modal-ft .btn { height:36px; padding:0 16px; }
+  .modal-ft .btn.confirm { color:#fff; border-color:transparent; background:linear-gradient(180deg, var(--hazard), color-mix(in srgb, var(--hazard) 78%, #000)); }
+
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:4px; }
+  @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+
+  @media (max-width: 860px) {
+    .grid { grid-template-columns:1fr; }
+    aside { position:static; }
+  }
+</style>
+
+<div class="app">
+  <div class="topbar">
+    <div class="mark" aria-hidden="true"></div>
+    <div class="titlewrap">
+      <span class="eyebrow">TCT Control · Recipe</span>
+      <span class="title">Scan Routine Planner</span>
+    </div>
+    <span class="chip-sim">● SIMULATION</span>
+    <button class="icon-btn" id="theme" type="button">◐ Theme</button>
+  </div>
+
+  <div class="grid">
+    <!-- ============ RECIPE TREE ============ -->
+    <section class="card">
+      <div class="card-hd">
+        <h2>Recipe</h2>
+        <span class="sub">edge-TCT · CCE(V) map · values are editable</span>
+      </div>
+
+      <div class="tree">
+        <!-- preflight guard -->
+        <div class="node guard">
+          <span class="glyph">🛡</span>
+          <span class="lbl">Preflight</span>
+          <span class="meta">interlocks · laser safe · stage homed</span>
+        </div>
+
+        <!-- BIAS loop -->
+        <div class="loop" style="--rail:var(--bias)">
+          <div class="node loop-head" data-toggle>
+            <span class="caret">▾</span>
+            <span class="tag">Loop</span>
+            <span class="axis-name">bias · ch0</span>
+            <div class="vals">
+              <span class="mchip"><input class="numedit" id="bs" value="0" inputmode="decimal"> → <input class="numedit" id="be" value="-300" inputmode="decimal"> V</span>
+              <span class="mchip">step <input class="numedit" id="bst" value="-50" inputmode="decimal"> V</span>
+            </div>
+            <span class="count" id="biasCount">7 steps</span>
+          </div>
+          <div class="loop-body">
+
+            <div class="node danger">
+              <span class="glyph">⚡</span>
+              <span class="lbl">Ramp HV</span>
+              <span class="meta">to setpoint · 5 V steps · 100 ms</span>
+              <span class="confirm-pill">⚠ CONFIRM</span>
+            </div>
+
+            <div class="node guard">
+              <span class="glyph">🛡</span>
+              <span class="lbl">Check leakage</span>
+              <span class="meta">abort + ramp down if I &gt; 2 µA</span>
+            </div>
+
+            <!-- X loop -->
+            <div class="loop" style="--rail:var(--x)">
+              <div class="node loop-head" data-toggle>
+                <span class="caret">▾</span>
+                <span class="tag">Loop</span>
+                <span class="axis-name">stage&nbsp;x</span>
+                <div class="vals">
+                  <span class="mchip"><input class="numedit" id="xs" value="-1.0" inputmode="decimal"> → <input class="numedit" id="xe" value="1.0" inputmode="decimal"> mm</span>
+                  <span class="mchip">step <input class="numedit" id="xst" value="0.1" inputmode="decimal"> mm</span>
+                </div>
+                <span class="count" id="xCount">21 pts</span>
+              </div>
+              <div class="loop-body">
+
+                <!-- Y loop -->
+                <div class="loop" style="--rail:var(--y)">
+                  <div class="node loop-head" data-toggle>
+                    <span class="caret">▾</span>
+                    <span class="tag">Loop</span>
+                    <span class="axis-name">stage&nbsp;y</span>
+                    <div class="vals">
+                      <span class="mchip"><input class="numedit" id="ys" value="-1.0" inputmode="decimal"> → <input class="numedit" id="ye" value="1.0" inputmode="decimal"> mm</span>
+                      <span class="mchip">step <input class="numedit" id="yst" value="0.1" inputmode="decimal"> mm</span>
+                      <span class="mchip">snake</span>
+                    </div>
+                    <span class="count" id="yCount">21 pts</span>
+                  </div>
+                  <div class="loop-body">
+                    <div class="node danger">
+                      <span class="glyph">✛</span>
+                      <span class="lbl">Move stage</span>
+                      <span class="meta">→ (x, y, z)</span>
+                      <span class="confirm-pill">⚠ CONFIRM</span>
+                    </div>
+                    <div class="node leaf">
+                      <span class="glyph">⏱</span><span class="lbl">Settle</span>
+                      <span class="meta">50 ms</span>
+                    </div>
+                    <div class="node leaf">
+                      <span class="glyph">◠</span><span class="lbl">Acquire waveform</span>
+                      <span class="meta">64 avg · CH2 · 10× probe</span>
+                    </div>
+                    <div class="node leaf">
+                      <span class="glyph">ƒ</span><span class="lbl">Extract</span>
+                      <span class="meta">amplitude · charge · ToT</span>
+                    </div>
+                    <div class="node leaf">
+                      <span class="glyph">▤</span><span class="lbl">Save point</span>
+                      <span class="meta">→ HDF5</span>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span class="li"><span class="sw" style="background:var(--bias)"></span>Bias</span>
+        <span class="li"><span class="sw" style="background:var(--z)"></span>Z</span>
+        <span class="li"><span class="sw" style="background:var(--x)"></span>X</span>
+        <span class="li"><span class="sw" style="background:var(--y)"></span>Y</span>
+        <span class="li"><span class="sw" style="background:var(--laser)"></span>Laser</span>
+        <span class="li"><span class="sw" style="background:var(--delay)"></span>Delay</span>
+        <span class="li"><span class="sw" style="background:var(--hazard)"></span>Hazard</span>
+      </div>
+    </section>
+
+    <!-- ============ BEFORE YOU RUN ============ -->
+    <aside>
+      <section class="card runcard">
+        <div class="card-hd"><h2>Before you run</h2></div>
+
+        <div class="stats">
+          <div class="stat"><span class="k">Total points</span><span class="v" id="stTotal">—</span></div>
+          <div class="stat"><span class="k">Est. runtime</span><span class="v" id="stTime">—</span></div>
+          <div class="stat"><span class="k">Est. data</span><span class="v" id="stData">—</span></div>
+          <div class="stat"><span class="k">Stage travel</span><span class="v" id="stTravel">—</span></div>
+          <div class="stat wide"><span class="k">HV range</span><span class="v biasv" id="stHV">—</span></div>
+        </div>
+
+        <div class="warns" id="warns">
+          <div class="warn-row w" id="wData" hidden><span class="dot"></span><span class="txt" id="wDataTxt"></span></div>
+          <div class="warn-row w" id="wStep" hidden><span class="dot"></span><span class="txt"><b>Coarse bias step</b> — large steps past −200 V; consider −25 V near breakdown.</span></div>
+        </div>
+
+        <div class="hv-status" id="hvStatus">
+          <span class="lock">🔒</span><span id="hvText">HV disarmed — Start is locked</span>
+        </div>
+
+        <div class="actions">
+          <button class="btn" id="validate" type="button">Validate</button>
+          <button class="btn" id="dryrun" type="button">Dry Run</button>
+          <button class="btn arm" id="arm" type="button">⚡ Arm HV</button>
+          <button class="btn start" id="start" type="button" disabled>▶ Start run</button>
+        </div>
+      </section>
+    </aside>
+  </div>
+</div>
+
+<!-- Arm HV confirm modal -->
+<div class="scrim" id="scrim">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+    <div class="modal-hd"><span class="mg">⚠</span><h3 id="mTitle">Arm high voltage</h3></div>
+    <div class="modal-bd" id="mBody">
+      This authorizes the run to ramp <span class="em">bias_ch0</span> to <span class="em" id="mTarget">−300 V</span>.
+      Nothing moves yet — the stage and HV energize only when you press <b>Start</b>, and every
+      ramp still steps through the driver's software limits. Confirm you understand the hazard.
+    </div>
+    <div class="modal-ft">
+      <button class="btn" id="mCancel" type="button">Cancel</button>
+      <button class="btn confirm" id="mConfirm" type="button">Arm HV</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ---------- theme ----------
+  const root = document.documentElement;
+  const prefersDark = matchMedia('(prefers-color-scheme: dark)').matches;
+  document.getElementById('theme').addEventListener('click', () => {
+    const cur = root.getAttribute('data-theme') || (prefersDark ? 'dark' : 'light');
+    root.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+  });
+
+  // ---------- collapse / expand (ignore clicks on value fields) ----------
+  document.querySelectorAll('[data-toggle]').forEach(h => {
+    h.addEventListener('click', e => {
+      if (e.target.closest('input')) return;           // editing, not toggling
+      h.closest('.loop').classList.toggle('collapsed');
+    });
+  });
+
+  // ---------- plan model: read the editable values ----------
+  const $ = id => document.getElementById(id);
+  const num = id => parseFloat($(id).value.replace(',', '.'));
+  const readPlan = () => ({
+    bs: num('bs'), be: num('be'), bst: num('bst'),
+    xs: num('xs'), xe: num('xe'), xst: num('xst'),
+    ys: num('ys'), ye: num('ye'), yst: num('yst'),
+  });
+  const nSteps = (a, b, s) => {
+    if (!isFinite(a) || !isFinite(b) || !isFinite(s) || s === 0) return 0;
+    return Math.floor(Math.abs(b - a) / Math.abs(s) + 1e-9) + 1;
+  };
+
+  // ---------- formatting ----------
+  const fmtDur = s => {
+    s = Math.round(s);
+    const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+    return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${Math.max(m,1)}m`;
+  };
+  const fmtData = mb => mb >= 1024 ? (mb / 1024).toFixed(1) + ' GB' : Math.round(mb) + ' MB';
+  const fmtTravel = mm => mm >= 1000 ? (mm / 1000).toFixed(2) + ' m' : Math.round(mm) + ' mm';
+
+  // ---------- safety latches (mirror the real Python semantics) ----------
+  let armed = false, dryOk = false;
+  const startBtn = $('start'), armBtn = $('arm'), dryBtn = $('dryrun');
+  const hvStatus = $('hvStatus'), hvText = $('hvText');
+
+  function disarm(reason) {
+    armed = false; dryOk = false;
+    startBtn.disabled = true;
+    startBtn.textContent = '▶ Start run'; startBtn.style.filter = '';
+    armBtn.classList.remove('done'); armBtn.textContent = '⚡ Arm HV';
+    dryBtn.textContent = 'Dry Run';
+    hvStatus.classList.remove('armed');
+    hvStatus.querySelector('.lock').textContent = '🔒';
+    hvText.textContent = reason || 'HV disarmed — Start is locked';
+    const old = document.getElementById('valRows'); if (old) old.remove();
+    const dr = document.getElementById('dryRow'); if (dr) dr.remove();
+  }
+
+  // ---------- live recompute of counts + Before-you-run ----------
+  function recompute(fromEdit) {
+    const p = readPlan();
+    const nb = nSteps(p.bs, p.be, p.bst);
+    const nx = nSteps(p.xs, p.xe, p.xst);
+    const ny = nSteps(p.ys, p.ye, p.yst);
+    $('biasCount').textContent = nb + ' steps';
+    $('xCount').textContent = nx + ' pts';
+    $('yCount').textContent = ny + ' pts';
+
+    const total = nb * nx * ny;
+    $('stTotal').textContent = total.toLocaleString('en-US');
+
+    // runtime: ~1.44 s/pt (settle 50ms + 64 avg + move) + per-bias ramp/hold
+    const rampS = nb * (Math.abs(p.bst) / 5 * 0.1 + 1.0);
+    $('stTime').textContent = fmtDur(total * 1.44 + rampS);
+
+    // data: ~0.7 MB per saved point (2ch waveforms + analysis + frame)
+    const mb = total * 0.7;
+    $('stData').textContent = fmtData(mb);
+    $('stData').classList.toggle('warnv', mb > 1536);
+    $('wData').hidden = !(mb > 1536);
+    if (mb > 1536) $('wDataTxt').innerHTML =
+      `<b>Est. data ${fmtData(mb)}</b> — verify free space on the run disk before starting.`;
+
+    // stage travel: x outer, y inner snake → per bias: nx y-sweeps + x range
+    const travel = nb * (nx * Math.abs(p.ye - p.ys) + Math.abs(p.xe - p.xs));
+    $('stTravel').textContent = fmtTravel(travel);
+
+    // HV range chip + arm-dialog target
+    const hi = Math.max(p.bs, p.be), lo = Math.min(p.bs, p.be);
+    $('stHV').textContent = `${hi} … ${lo} V · bias_ch0`;
+    $('mTarget').textContent = `${p.be} V`;
+
+    // coarse-step advisory
+    $('wStep').hidden = !(Math.abs(p.bst) >= 50 && Math.abs(lo) > 200);
+
+    // Editing the plan invalidates validation + arming — like the real app.
+    if (fromEdit && (armed || dryOk)) disarm('Plan changed — HV disarmed, Start locked');
+  }
+
+  // wire the editable values: fit width, recompute on input, don't toggle the loop
+  document.querySelectorAll('.numedit').forEach(i => {
+    const fit = () => { i.style.width = Math.max(2, i.value.length) + 'ch'; };
+    fit();
+    i.addEventListener('input', () => { fit(); recompute(true); });
+    i.addEventListener('keydown', e => { if (e.key === 'Enter') i.blur(); });
+    i.addEventListener('click', e => e.stopPropagation());
+  });
+  recompute(false);
+
+  // ---------- Validate ----------
+  $('validate').addEventListener('click', () => {
+    const p = readPlan();
+    const issues = [];
+    if (![p.bs,p.be,p.bst,p.xs,p.xe,p.xst,p.ys,p.ye,p.yst].every(isFinite))
+      issues.push('A value is not a number.');
+    if (p.bst === 0 || p.xst === 0 || p.yst === 0)
+      issues.push('Step size of 0 — the loop would never advance.');
+    if (Math.abs(p.bs) > 3000 || Math.abs(p.be) > 3000)
+      issues.push('HV outside the supply range (±3 kV) — the driver would refuse the ramp.');
+    if (p.be !== p.bs && Math.sign(p.be - p.bs) !== Math.sign(p.bst))
+      issues.push('Bias step sign never reaches the stop value.');
+    [['x', p.xs, p.xe], ['y', p.ys, p.ye]].forEach(([ax, a, b]) => {
+      if (Math.min(a, b) < -5 || Math.max(a, b) > 5)
+        issues.push(`Stage ${ax} exceeds the soft limits (±5 mm).`);
+    });
+    const nb = nSteps(p.bs, p.be, p.bst), nx = nSteps(p.xs, p.xe, p.xst), ny = nSteps(p.ys, p.ye, p.yst);
+    if (nb * nx * ny > 250000)
+      issues.push(`Point budget exceeded — ${(nb*nx*ny).toLocaleString('en-US')} > 250,000 (max_points).`);
+
+    const old = document.getElementById('valRows'); if (old) old.remove();
+    const box = document.createElement('div'); box.id = 'valRows';
+    box.style.display = 'flex'; box.style.flexDirection = 'column'; box.style.gap = '8px';
+    if (issues.length === 0) {
+      box.innerHTML = '<div class="warn-row g"><span class="dot"></span><span class="txt"><b>Validation passed</b> — limits, HV range, steps and point budget OK.</span></div>';
+    } else {
+      box.innerHTML = issues.map(t =>
+        `<div class="warn-row c"><span class="dot"></span><span class="txt"><b>Blocked:</b> ${t}</span></div>`).join('');
+    }
+    $('warns').prepend(box);
+  });
+
+  // ---------- Dry Run ----------
+  dryBtn.addEventListener('click', () => {
+    if (dryOk) return;
+    dryOk = true;
+    const row = document.createElement('div');
+    row.id = 'dryRow'; row.className = 'warn-row g';
+    row.innerHTML = '<span class="dot"></span><span class="txt"><b>Dry run passed</b> — walked the recipe without hardware; limits, compliance and point budget OK.</span>';
+    $('warns').prepend(row);
+    dryBtn.textContent = '✓ Dry Run';
+  });
+
+  // ---------- Arm HV: button → confirm modal → arm → unlock Start ----------
+  const scrim = $('scrim');
+  armBtn.addEventListener('click', () => { if (!armed) scrim.classList.add('open'); });
+  $('mCancel').addEventListener('click', () => scrim.classList.remove('open'));
+  scrim.addEventListener('click', e => { if (e.target === scrim) scrim.classList.remove('open'); });
+  $('mConfirm').addEventListener('click', () => {
+    armed = true;
+    scrim.classList.remove('open');
+    armBtn.classList.add('done'); armBtn.textContent = '✓ HV armed';
+    startBtn.disabled = false;
+    hvStatus.classList.add('armed');
+    hvText.textContent = 'HV armed — Start unlocked';
+    hvStatus.querySelector('.lock').textContent = '🔓';
+  });
+  startBtn.addEventListener('click', () => {
+    startBtn.textContent = '● Running…';
+    startBtn.style.filter = 'brightness(.9)';
+  });
+</script>

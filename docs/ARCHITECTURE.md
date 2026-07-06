@@ -86,6 +86,28 @@ Core design rules (verified in code):
   channel. `start()` and `start_voltage_scan()` both call `_resolve_bias`
   up front and pass the resolved `BiasChannel` into the scan thread
   (`_run`/`_run_voltage_scan`).
+- `scan_plan.py` — `ScanPlan` tree dataclass: fail-closed nested parameter loops
+  (Axis, Bias, Delay loops), action leaves (Move, Settle, Acquire, Extract, Save),
+  guard nodes, and danger nodes. YAML round-trip via `load()`/`save()`;
+  `iter_leaf_contexts()` yields leaf scan points. New `LeafMeta` carries effective
+  `n_averages`/`settle_s` (action params > nearest enclosing loop > defaults);
+  `iter_leaf_contexts_ex()` yields `(coords, action, meta)` tuples.
+- `scan_plan_validator.py` — pure fail-closed plan pre-flight:
+  `validate_plan(plan, PlanLimits) -> list[PlanIssue]`. Checks stage limits, HV
+  range, `max_points` cap, and (fail-closed) requires any bias-driving plan to
+  declare `safety.require_hv_confirmation: True`; never raises (`(plan.safety or {})`
+  guard).
+- `plan_compiler.py` — pure tree → ordered steps compiler:
+  `compile_plan(plan) -> list[Step]`. Contracts: `MoveStep.x/y/z_mm: float|None`
+  where **None = "do not command this axis"** (undriven axes never fabricated as
+  0.0); MoveStep emitted only when a driven axis changes; `BiasStep` only on bias
+  change (dedup); step order per leaf = Bias → Move → settle `WaitStep` → action;
+  `MoveStep`/`BiasStep` carry `requires_confirm` + `danger_kind` ("move"/"hv_ramp").
+  No execution/threads — executor lands in step 2.
+- `plan_estimate.py` — plan estimation: `estimate_plan(plan, Timing, Sizing) ->
+  PlanEstimate` (points, runtime, data bytes, per-axis travel, HV range). Walks
+  compiled plan output; settle comes ONLY from emitted WaitSteps (`Timing` no
+  longer has `settle_s` — plan is the single source of truth).
 - `device_manager.py` — owns all device instances; single
   connect/disconnect/status interface for the GUI. Backend registries map
   `devices.yaml` keys to classes: `MOTOR_BACKENDS` (`pi`, `grbl`, `simulated`),
@@ -109,7 +131,10 @@ Core design rules (verified in code):
   `bias_channels` reflects the real channel count by the time it returns.
 - `slow_control_manager.py` — environment/slow-control channels; feeds
   `data/influx_writer` and the HDF5 `slow_control` group.
-- `config_validator.py` — validates `devices.yaml` before use.
+- `config_validator.py` — validates `devices.yaml` before use. `_KNOWN_KEYS`
+  checks all sections: motor_stage, intensity_monitor, oscilloscope, bias_supply,
+  waveform_generator, camera, laser, slow_control, influx, output, charge_calibration
+  (unknown keys → WARNING; silent typos never escape).
 - `repeatability.py` — stage repeatability measurement logic.
 
 ## devices/ (one family = base + backends)
@@ -372,6 +397,8 @@ Details: `docs/REFERENCE_MATERIAL.md`.
   `bias_channel` field on `ScanConfig`/`VoltageScanConfig` plus
   `ScanController._resolve_bias(cfg)`, which validates the index and refuses
   to start on an out-of-range channel.
+
+- 2026-07-07 — **Phase 2.2 step 1 + Phase 3 kickoff:** Documented three new pure planner modules (`controller/scan_plan_validator.py`, `plan_compiler.py`, `plan_estimate.py`; 51 tests total) and updated `scan_plan.py` (new `LeafMeta` + `iter_leaf_contexts_ex()`) and `config_validator.py` (now covers 11 `devices.yaml` sections; 14 tests). Mary review CHANGES-REQUIRED → all 4 findings fixed (MoveStep None-axis contract, loop n_averages/settle propagation, module rename, safety-None guard) + independently probe-verified. Suite **218 passed**.
 
 - 2026-07-06 — Added `gui/liveness.py:LivenessMonitor` (background-thread
   device-liveness sweep, owned by `TCTMainWindow`) and the

@@ -57,42 +57,20 @@ marquee feature (item 1 in "What's NEXT" below). Noah is ready to build.
 - **GUI direction decided**: stay Python/Qt; combine **A (design system) +
   C-first (embed web planner), B (QML) in reserve** → converge to A + one. See
   the roadmap artifact + `docs/design/gui_architecture_plan.md §5`.
+- **Phase 2.2 step 1 (planner pure modules)** — `scan_plan_validator.py` +
+  `plan_compiler.py` + `plan_estimate.py`, 51 tests. Mary CHANGES-REQUIRED →
+  4/4 findings fixed + independently probe-verified. Suite **218 passed**.
+- **Phase 3 kickoff** — `config_validator` now covers all 11 `devices.yaml`
+  sections (14 tests). Mary-approved.
 
 ## What's NEXT (in order)
 
-1. **M2.2 — scan routine planner pilot** (the marquee feature). Reproduce the
-   user's own artifact **1:1**: artifact UUID `654ce683-cb79-4072-9620-a98a6caa9d96`
-   ("TCT Scan Routine Planner") — fetch its HTML via WebFetch. It's a **Recipe
-   Tree** (nested parameter loops; each axis = one rail color; guard/danger nodes
-   with a confirm gate; a sticky "Before you run" panel with Validate/Dry Run/
-   Arm HV/Start). Build approach: **embed the HTML in a `QWebEngineView`** (deps
-   confirmed present in PySide6 6.11.1 — QtWebEngineWidgets/QtWebChannel/QtQml/
-   QtQuickWidgets/QtCharts all import) and drive it via `QWebChannel`; every
-   danger confirm + Arm-HV/Start routes into the Python safety-gated controller,
-   never JS-side. Full design + axis-rail palette recorded in
-   `docs/design/gui_architecture_plan.md §"Scan routine planner"`.
-   Routine stages to support: XY(Z) motor raster, per-channel bias sweep,
-   z-focus/laser-align, per-point acquisition+save, and laser/wavegen params
-   (duty cycle, amplitude, frequency).
-   **Integration map (build-ready):**
-   - Planner panel registers in `tct_gui.py` `_build_central()` (~L238-317):
-     build panel → `_scrollable()` → `self._tabs.addTab(...)`.
-   - Safety-gated controller entry points: `ScanController.start(cfg: ScanConfig)`,
-     `pause()`, `resume()`, `abort()`, `start_z_focus_scan(cfg, on_point, on_done)`,
-     `start_voltage_scan(cfg)`.
-   - Recipe shape: `ScanConfig` dataclass (scan_controller.py ~L32-45):
-     `x/y_start/stop/step_mm`, `z_mm`, `n_averages`, `settle_time_s`,
-     `bias_channel:int|None`.
-   - Status back to UI: `gui/status_bus.py` `STATUS.message = Signal(str, str)`.
-   - `ScanPanel` signals (scan_panel.py ~L35): `start_requested(ScanConfig)`,
-     `abort_requested()`, `pause_requested(bool)`, `z_focus_requested(ZFocusScanConfig)`,
-     `vscan_requested(VoltageScanConfig)`.
-   - No existing QWebEngineView/QWebChannel in the repo — this is the first;
-     all 6 QtWebEngine/QWebChannel/QtQml/QtQuickWidgets/QtCharts modules
-     confirmed importable on PySide6 6.11.1.
-2. **Fold the axis-rail palette** (bias=amber, Z=violet, X=teal, Y=magenta,
-   laser=purple, delay=green) into the design-system tokens so an axis reads the
-   same color everywhere (follow-up to Noah after M2.2).
+**P2.2 step 2** — `DangerGate` protocol + `ScanController.arm_hv()` latch +
+`start_plan()`/`_run_plan()` (reuse daemon-thread/`_pause_event`/`_abort_event`/
+`_ScanBridge`/`_resolve_bias` patterns; factor out `_check_compliance` + acquire
+body; **MUST re-assert HV on resume** per Mary's note in TECH_DEBT). Then
+**P2.2 step 3** = native `gui/planner_panel.py`; visual reference =
+`artifacts_claude/` files (see `docs/ROADMAP.md` 2.3).
 
 ## Open items / tech-debt (see `docs/TECH_DEBT.md`)
 
@@ -105,6 +83,8 @@ marquee feature (item 1 in "What's NEXT" below). Noah is ready to build.
   the TBS1052C.
 - `tek_fastframe` backend is non-functional (vendored `dustin_scope` missing);
   motor/bias/camera still use flag-based `is_alive` (only the scope has a probe).
+
+**Note:** `docs/ROADMAP.md` is the strategic map (phases, north star, ordering rationale); this handoff is the tactical resume point (immediate next steps, what broke, where we left the code).
 
 ## Key constraints (don't relearn the hard way)
 
