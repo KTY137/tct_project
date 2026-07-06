@@ -33,6 +33,14 @@ Core design rules (verified in code):
 - `devices/base.py:BaseDevice` gives every driver a `simulation` flag, a
   `connected` property, and an **`io_lock` (re-entrant)** that serialises hardware
   I/O — GUI pollers and the scan thread share one VISA/serial session per device.
+- `BaseDevice.is_alive()` is a cheap link probe swept every 3 s by
+  `gui/liveness.LivenessMonitor` (via `controller/device_manager.poll_liveness()`)
+  so a yanked cable or powered-off instrument flips `connected` to `False`
+  within seconds instead of staying green forever. Default trusts the
+  `connected` flag; overrides must verify the physical link, set
+  `_connected = False` on failure, use a **non-blocking** `io_lock` acquire
+  (skip the probe if the device is mid-conversation), and never change
+  instrument state.
 
 ## Entry point
 
@@ -42,7 +50,12 @@ Core design rules (verified in code):
 - `tct_gui.py` — `TCTMainWindow`: assembles all panels into detachable tabs
   (`gui/detachable_tabs.DetachableTabWidget`), wires `ScanController` callbacks,
   owns the `StateMachine`. `_QtLogHandler`/`_LogBridge` forward log records onto
-  the main thread via a Qt signal (thread-safe in-app log view).
+  the main thread via a Qt signal (thread-safe in-app log view). Also owns a
+  `gui.liveness.LivenessMonitor` on its own `QThread` (created in
+  `_build_central`, stopped in `_teardown_panels`), which sweeps
+  `DeviceManager.poll_liveness()` every 3 s and emits `device_lost(name)` on a
+  connected→lost transition; `_on_device_lost` turns that into a status-bus
+  warning even when no device window is open.
 
 ## controller/
 
@@ -61,12 +74,39 @@ Core design rules (verified in code):
     amplitude) or `mode="edge_scan"` (recommended: max spatial gradient |dQ/dx|
     across a metal/silicon edge per Z step).
   - `VoltageScanConfig` — IV / bias sweeps.
+
+  Both `ScanConfig` and `VoltageScanConfig` carry an optional `bias_channel:
+  int | None` field (default `None` = the primary channel, i.e. unchanged
+  historic behaviour). `ScanController._resolve_bias(cfg)` resolves it to a
+  `devices.bias_channel.BiasChannel` **before** any state change or hardware
+  action: `None` returns `self._dev.bias_supply` (the primary proxy); an
+  explicit `int` indexes `self._dev.bias_channels`. A non-integer or
+  out-of-range index raises `ValueError` and the scan refuses to start —
+  channel selection is never allowed to silently fall back to another
+  channel. `start()` and `start_voltage_scan()` both call `_resolve_bias`
+  up front and pass the resolved `BiasChannel` into the scan thread
+  (`_run`/`_run_voltage_scan`).
 - `device_manager.py` — owns all device instances; single
   connect/disconnect/status interface for the GUI. Backend registries map
   `devices.yaml` keys to classes: `MOTOR_BACKENDS` (`pi`, `grbl`, `simulated`),
   `INTENSITY_BACKENDS` (`scope_channel`, `simulated`), etc. `_APP_ROOT` anchors
   relative output paths to `TCT_app/` regardless of launch cwd. New driver =
-  new registry entry.
+  new registry entry. Reads `oscilloscope.n_channels` from `devices.yaml` and
+  passes it to `Oscilloscope`. `poll_liveness()` calls `BaseDevice.is_alive()`
+  on every `named_devices()` entry and never raises — the sole client is
+  `gui.liveness.LivenessMonitor`.
+  `self.bias_supply` is a `devices.bias_channel.BiasChannel` bound to the
+  **primary** channel (index from the bias driver's `channel:` config key;
+  `0` by default) — a stable object, so `named_devices()`, liveness, and the
+  scan controller's default (`bias_channel=None`) path are unchanged.
+  `self.bias_channels: list[BiasChannel]` holds one `BiasChannel` per HV
+  channel the driver reports; `refresh_bias_channels()` queries the shared
+  driver's `channel_count()` (needs a live link; returns `1` in simulation
+  or on error, never raises) and rebuilds the list, reusing the existing
+  primary-channel proxy object at its index. `connect_all()` calls
+  `refresh_bias_channels()` itself, right after the bias driver connects
+  (before the intensity monitor and slow-control channels), so
+  `bias_channels` reflects the real channel count by the time it returns.
 - `slow_control_manager.py` — environment/slow-control channels; feeds
   `data/influx_writer` and the HDF5 `slow_control` group.
 - `config_validator.py` — validates `devices.yaml` before use.
@@ -78,24 +118,167 @@ Core design rules (verified in code):
 |---|---|---|
 | Motor stage | `motor_base.py` (`MotorStageBase`, `SoftwareLimits`) | `motor_grbl.py`, `motor_pi.py`, `motor_simulated.py` (+ `printer_presets.py`) |
 | Bias supply (HV) | `bias_supply_base.py` (`BiasSupplyBase`) | `bias_supply_iseg.py`, `bias_supply_keithley.py`, `bias_supply_e4control.py`, `bias_supply_simulated.py` |
-| Oscilloscope | — | `oscilloscope.py` (VISA), `oscilloscope_drs4.py` (PSI DRS4 eval board) |
+| Bias channel (proxy) | — | `bias_channel.py` (`BiasChannel` — binds one `(driver, channel_index)` pair; see below) |
+| Oscilloscope | — | `oscilloscope.py` (VISA), `oscilloscope_drs4.py` (PSI DRS4 eval board), `oscilloscope_tek_fastframe.py` (Tektronix MSO5204B FastFrame — currently non-functional, see Known constraints) |
 | Intensity monitor | `intensity_base.py` | `intensity_scope_ch.py`, `intensity_simulated.py` |
 | Slow control | `slow_control_base.py` | `slow_control_simulated.py` |
 | Other | `waveform_generator.py` (VISA), `camera_blackfly.py` (FLIR PySpin), `laser_manual.py` (metadata-only laser record) | |
 
 All inherit `base.py:BaseDevice` (`DeviceError`, `io_lock`, `simulation`,
-abstract `connect()`/`disconnect()`).
+`is_alive()`, abstract `connect()`/`disconnect()`).
+
+**Multi-channel bias + polarity (verified in code):**
+- `bias_channel.py:BiasChannel` binds one `(driver, channel_index)` pair and
+  presents the full `BiasSupplyBase`-shaped API the GUI and scan controller
+  already use — `set_voltage`/`set_compliance`/`output_on`/`output_off`/
+  `read`/`ramp_to`/`get_polarity`/`set_polarity`/`supports_polarity_switch`/
+  `channel_count`/`is_alive`, plus `setpoint_V`/`compliance_A`/
+  `voltage_range_V`/`connected`/`.channel`/`.driver` — by delegating every
+  call to the shared driver's channel-aware `*_ch` methods for `self.channel`.
+  It performs **no hardware I/O of its own and keeps no independent state**;
+  every safety gate (compliance-before-output, discharge-before-polarity,
+  voltage-range clamp, confirm-after-switch) lives in the driver, so a
+  primary-channel proxy is byte-for-byte equivalent to using the bare driver
+  directly. `channel_count()` on a `BiasChannel` always returns `1` (it is a
+  single-channel view); `connect()`/`disconnect()` delegate to the shared
+  driver, but only the primary-channel proxy is registered in
+  `DeviceManager.named_devices()`/`connect_all()`, so the driver's
+  transport connects/disconnects exactly once even though several proxies
+  share it. One VISA/serial session therefore serves all `N` channels.
+- `bias_supply_base.py:BiasSupplyBase` adds an optional polarity/multi-channel
+  API with safe single-channel defaults so every existing backend keeps
+  working unchanged: `supports_polarity_switch()` (default `False`),
+  `get_polarity()` (default `None`), `set_polarity(polarity)` (default
+  raises `DeviceError` — fixed-polarity backends refuse), `channel_count()`
+  (default `1`). A parallel channel-aware `*_ch` method set
+  (`set_voltage_ch`/`set_compliance_ch`/`output_on_ch`/`output_off_ch`/
+  `read_ch`/`ramp_to_ch`/`get_polarity_ch`/`set_polarity_ch`/
+  `supports_polarity_switch_ch`/`setpoint_V_ch`/`compliance_A_ch`/
+  `output_is_on_ch`) takes an explicit channel index; the base defaults
+  ignore the index and delegate to the zero-arg methods, so a single-channel
+  backend needs no changes. `_ramp_channel()` is a generic per-channel ramp
+  (mirrors `ramp_to()`) that genuine multi-channel backends can reuse by
+  overriding only the `*_ch` primitives. `normalize_polarity()` normalises
+  `'p'/'pos'/'positive'/'+'` and `'n'/'neg'/'negative'/'-'` (case-insensitive)
+  to iseg's canonical `'p'`/`'n'`, raising `DeviceError` on anything else so a
+  typo can never reach an HV supply. `set_polarity` is a **DANGEROUS
+  action** (throws an HV relay) — the docstring requires the same gating as
+  an HV ramp: caller/GUI confirmation, plus the concrete implementation must
+  verify OFF-and-discharged and refuse rather than force the relay.
+- `bias_supply_iseg.py:IsegBiasSupply` is channel-aware: one VISA/serial
+  session serves every HV channel on the module. Per-channel state
+  (`setpoint_V`/`output_on`/`compliance_A`) lives in `self._ch_state[channel]`
+  (created on first use); the base class's scalar state
+  (`_setpoint_V`/`_output_on`/`_compliance_A`) is a property view of the
+  **primary** channel (`self._ch`, from `devices.yaml: bias_supply.channel`),
+  so the pre-existing single-channel path (`ramp_to`, `disconnect`,
+  `setpoint_V`, …) is byte-for-byte unchanged. The zero-arg
+  `set_voltage`/`set_compliance`/`output_on`/`output_off`/`read` are thin
+  wrappers bound to `self._ch`. `channel_count()` queries
+  `:READ:MODULE:CHANNELNUMBER?` (falls back to `1` in simulation, with no
+  session, or on any error). `disconnect()` also ramps-to-0/switches-off any
+  *other* channel this driver has touched (`self._ch_state` keys other than
+  the primary), so a multi-channel session never leaves a secondary channel
+  biased on teardown; single-channel use never populates those entries, so
+  this is a no-op there.
+  `set_polarity_ch(channel, polarity)` is gated per
+  `docs/research/iseg_polarity_scpi.md` §3 — **verified only against that
+  research note plus simulation, not yet on real HV**: (a)
+  `supports_polarity_switch_ch()` (`:CONF:OUTP:POL:LIST?` reports both `'p'`
+  and `'n'`, read-only, no HV action), (b) output confirmed OFF via both the
+  local flag AND the channel status word (`:READ:CHAN:STAT? (@ch)`, bit 3 =
+  "Is On") — a status query that fails (e.g. USB-VCP timeout) is treated as
+  **unknown, not OFF**, and the switch is refused (fail-closed), (c)
+  `|V_meas| < 0.002·voltage_range_V` via `:MEAS:VOLT?` (the discharge
+  precondition; `voltage_range_V` must be configured or the switch is
+  refused). All three checks and the switch itself run under one `io_lock`
+  acquisition so no other thread can enable the output or start a ramp
+  mid-gate. On success, `:CONF:OUTP:POL <p|n>,(@ch)` is written and then
+  polled back (`:CONF:OUTP:POL?`) for up to `_POL_CONFIRM_BUDGET_S = 0.5 s`
+  (`_POL_POLL_INTERVAL_S = 0.05 s`) to confirm the relay actually moved
+  before returning; the relay settle time itself is undocumented by iseg, so
+  this 0.5 s budget is **UNVERIFIED on real HV** — a confirm timeout raises
+  and explicitly does not proceed to ramp.
+
+**Bench fact:** the lab oscilloscope is a Tektronix **TBS1052C** (2 channels,
+no FastFrame support), driven by the default `oscilloscope.py` VISA backend
+(`devices.yaml: oscilloscope.n_channels: 2`).
+
+`oscilloscope.py` invariants (verified in code):
+- Tektronix trigger config (`configure_tct_trigger`) uses the `TRIGger:A:*`
+  tree; the old bare `TRIGger:MODE/SOURce/LEVel/SLOPe` forms are rejected as
+  "Undefined header" on the TBS1000C family.
+- `read_channel()` pre-checks `SELect:CH<x>?` and raises `DeviceError` fast
+  when the channel display is off — `CURVE?` on an inactive source times out
+  and wedges the scope's output queue instead of failing cleanly.
+- `_recover_session()` issues a VISA device-clear (`instr.clear()`) after any
+  failed query so one bad reply can't garble the ones that follow.
+- `_check_scpi_errors()` drains `*ESR?`/`ALLEv?` after config writes so a
+  silently-rejected command is logged instead of vanishing.
+- `set_averaging()` (`ACQuire:MODe` / `ACQuire:NUMAVg`) and
+  `set_channel_display()` (`SELect:CH<x> ON|OFF`) are public control methods
+  backing the scope panel's averaging combo and channel toggles.
+- `n_channels` comes from `devices.yaml: oscilloscope.n_channels`, else a
+  `*IDN?` heuristic (`tek_channel_count_from_idn` — last digit of the Tek
+  model number); `gui/scope_panel.py` builds its channel cards from it.
+- `is_alive()` = a `*STB?` heartbeat (see Big picture / `is_alive()` contract).
 
 ## gui/ (PySide6 — never PyQt6)
 
-Panels: `motor_panel`, `bias_panel`, `scope_panel`, `scan_panel`, `laser_panel`,
-`intensity_panel`, `camera_panel`, `monitor_panel`, `analysis_panel`,
-`calibration_panel`, `device_panel` (`DeviceManagerWindow`, `device_state`),
-`settings_window`. Support: `status_bus.py` (cross-panel status),
+Panels: `motor_panel`, `bias_panel`, `multi_bias_panel`, `scope_panel`,
+`scan_panel`, `laser_panel`, `intensity_panel`, `camera_panel`,
+`monitor_panel`, `analysis_panel`, `calibration_panel`, `device_panel`
+(`DeviceManagerWindow`, `device_state`), `settings_window`. Support:
+`status_bus.py` (cross-panel status),
 `scan_map_window.py` (live scan map), `stage_view.py` (3D GL stage view),
-`scope_measurements.py`, `detachable_tabs.py`, `style.py` (theming).
+`scope_measurements.py`, `detachable_tabs.py`, `style.py` (token design system:
+scope-cyan accent, tokens for UI states, spacing/radius/type scales, axis-rail
+palette, `axis_color()` helper, `statusChip`/`eyebrow` objectName hooks),
+`liveness.py` (`LivenessMonitor` — background device-liveness sweep, owned by
+`TCTMainWindow`, see Big picture and Entry point).
 Long-running work never runs on the main thread; log records cross threads via
 the `_LogBridge` signal.
+
+`scope_panel.py`'s `_ScopeReader.read_once` now reads each enabled channel
+independently and reports per-channel errors, so one dead channel (display
+off, timeout) no longer blanks the channels that read fine. Channel-card
+toggles drive `SELect:CH<x>` on the instrument, gated on the panel's "Drive
+scope" switch. The acquire row's averaging combo drives
+`Oscilloscope.set_averaging()` (`ACQuire:NUMAVg`).
+
+`multi_bias_panel.py:MultiBiasPanel` (`QWidget`, replaces the old
+single-`BiasPanel` top-level widget in `tct_gui.py`) presents one
+`gui/bias_panel.py:BiasPanel` per HV channel inside a `QTabWidget`
+(`CH<n>` tabs), built from `DeviceManager.bias_channels`. Constructing it
+performs **no hardware I/O** — each tab's `BiasPanel` only polls once its
+channel reports `connected`. `rebuild(channels)` is called from
+`tct_gui.py` after `connect_all()` (which runs `refresh_bias_channels()`)
+to rebuild the tabs from the driver's real channel count; it no-ops when
+the channel set is unchanged so a same-shape reconnect keeps the existing
+panels (and their plot state). Only the primary channel's tab
+(`panels[0]`) owns the bias+waveform scan controls, since the scan
+controller is bound to the primary supply by default — its
+`vscan_requested` signal is the only one re-emitted through
+`MultiBiasPanel.vscan_requested`. A prominent **"⏹ ALL OUTPUTS OFF"**
+button above the tabs ramps every *connected* channel to 0 V and disables
+its output, off the GUI thread (`_SupplyCallWorker`, mirroring `BiasPanel`'s
+pattern); it is fail-safe — it keeps switching off the remaining channels
+even if one errors, then reports the aggregated failure via
+`gui/status_bus.notify`. `shutdown()` stops the ALL-OFF worker thread and
+every per-panel poll thread before the widget is discarded.
+
+`bias_panel.py:BiasPanel` gained a **Polarity** group: a read-only
+polarity indicator (`+`/`−`/`—` for unknown) and a **"⇄ Switch Polarity"**
+button (`dangerBtn` styling) that is only shown when the bound channel
+reports `supports_polarity_switch()` — fixed-polarity channels never see
+the control. Switching polarity is treated exactly like an HV ramp: the
+button requires an explicit confirmation dialog naming the channel and the
+`current → target` polarity, then runs `supply.set_polarity(target)`
+off the GUI thread via the existing `_SupplyCallWorker`/`QThread` pattern
+(never on the GUI thread — instrument I/O blocks). The panel's own
+`_ReadoutPoller` (`QObject`, moved to a dedicated `QThread`, `_POLL_MS =
+500`) polls both `read()` and `get_polarity()`/`supports_polarity_switch()`
+every 500 ms and touches no hardware until the channel reports `connected`.
 
 ## data/
 
@@ -143,6 +326,12 @@ Details: `docs/REFERENCE_MATERIAL.md`.
 - numpy pinned `<2` (PySpin 3.2 wheel, numpy 1.x C-ABI). 64-bit CPython 3.10
   required for real-camera use.
 - Real hardware extras not on PyPI: FLIR Spinnaker SDK runtime, PSI DRS4 driver.
+- `oscilloscope_tek_fastframe.py` (Tektronix MSO5204B FastFrame backend) is
+  currently non-functional: it imports the vendored `dustin_scope` package
+  from `TCT_app/vendor/dustin_scope/`, which is absent from this checkout.
+  The bench scope is a TBS1052C (2 channels, no FastFrame), which uses the
+  default `oscilloscope.py` VISA backend instead — `tek_fastframe` targets a
+  different instrument than what's on the bench.
 
 ## TODO (Samantha: verify and deepen)
 
@@ -155,6 +344,47 @@ Details: `docs/REFERENCE_MATERIAL.md`.
       registries beyond MOTOR/INTENSITY).
 
 ## Changelog
+
+- 2026-07-06 — **M2.1 design-system foundation:** `gui/style.py` evolved to a
+  token design system (scope-cyan accent `#33c8ff` dark / `#0d8ba6` light;
+  tokens `accent_strong`/`amber`/`good`/`warn`/`crit`; spacing/radius/type
+  scales; axis-rail palette for bias/Z/X/Y/laser/delay/hazard; `axis_color()`
+  helper; new `statusChip` + `eyebrow` objectName hooks; all 12 legacy hooks
+  preserved). Both themes render; 153 tests pass.
+
+- 2026-07-06 — Documented the multi-channel bias + polarity + per-channel
+  scan work: new `devices/bias_channel.py:BiasChannel` proxy (one VISA/serial
+  session serves N channels, no I/O or state of its own); the
+  polarity/multi-channel API added to `devices/bias_supply_base.py`
+  (`supports_polarity_switch`/`get_polarity`/`set_polarity` [DANGEROUS]/
+  `channel_count`, safe single-channel defaults, `normalize_polarity`,
+  `_ramp_channel`); `devices/bias_supply_iseg.py`'s channel-aware `*_ch`
+  methods, per-channel state dict, and gated `set_polarity_ch` (reversible +
+  output-OFF fail-closed + discharged + confirm-poll — SCPI and the 0.5 s
+  relay-settle budget verified only against `docs/research/iseg_polarity_scpi.md`
+  and simulation, **not yet on real HV**); `controller/device_manager.py`'s
+  `self.bias_supply` (now a primary-channel `BiasChannel`, stable object) and
+  new `self.bias_channels` list + `refresh_bias_channels()` (auto-called at
+  the end of `connect_all()`); the new `gui/multi_bias_panel.py:MultiBiasPanel`
+  (one `BiasPanel` tab per channel, global ALL-OUTPUTS-OFF) and `BiasPanel`'s
+  new Polarity group (gated Switch-Polarity button, per-panel
+  `_ReadoutPoller` thread); and `controller/scan_controller.py`'s optional
+  `bias_channel` field on `ScanConfig`/`VoltageScanConfig` plus
+  `ScanController._resolve_bias(cfg)`, which validates the index and refuses
+  to start on an out-of-range channel.
+
+- 2026-07-06 — Added `gui/liveness.py:LivenessMonitor` (background-thread
+  device-liveness sweep, owned by `TCTMainWindow`) and the
+  `devices/base.py:BaseDevice.is_alive()` contract it polls via
+  `controller/device_manager.poll_liveness()`. Documented `oscilloscope.py`
+  invariants added for the TBS1052C (bench oscilloscope; `TRIGger:A:*` trigger
+  tree, `SELect:CH<x>?` pre-check in `read_channel()`, `_recover_session()`
+  device-clear, `_check_scpi_errors()`, new `set_averaging()` /
+  `set_channel_display()`, `n_channels` sourcing, `*STB?` liveness) and the
+  matching `gui/scope_panel.py` per-channel fault isolation, channel-toggle
+  SCPI drive, and averaging combo. Recorded that `oscilloscope_tek_fastframe.py`
+  is currently non-functional (vendored `dustin_scope` missing from
+  `TCT_app/vendor/`) and targets the MSO5204B, not the bench TBS1052C.
 
 - 2026-07-05 - Restored the missing `TCT_app/data/` package used by
   `device_manager` and `scan_controller`; added smoke coverage for the HDF5
