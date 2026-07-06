@@ -62,6 +62,11 @@ python -m pytest tests/ -q   # tests — must pass headless, no hardware
 - **Recovery memory lives outside this repo** at
   `C:\Users\nukei\Desktop\agent_env\memory\`. Check `todos.local.md` after token
   limits, crashes, or interrupted subagent work. See `docs/AGENT_WORKFLOW.md`.
+- **External intercom lives in `agent_env`.** For Codex/Claude/bench handoffs,
+  use `C:\Users\nukei\Desktop\agent_env\outbox\` -> `inbox\` via:
+  `python -m agent_env.orchestrate "<task>" --project project_tct --lane auto`.
+  If Claude tokens are exhausted, use `--lane local_only`; that lane never calls
+  Claude and reports failure instead of spending senior-lane tokens.
 - **Consult the architecture bookkeep first**: `docs/ARCHITECTURE.md` describes
   every module, its responsibilities, and its invariants. Point subagents to it.
   After any structural change (new/renamed module, class, signal, config key,
@@ -96,6 +101,23 @@ the one doing the delegating.
 | Mary | `qa-critic` | Code review, race conditions, hardware safety, physics sanity checks, exception handling, maintainability |
 | Samantha | `docs-dev` | README/usage/setup docs, lab operating instructions, docstrings |
 | Prometheus | `researcher` | Internet research: manuals, datasheets, SCPI references, library docs, prior art; also first-officer advisor on architecture/planning decisions |
+| Kiroku | `kiroku` | **Haiku** bookkeeper/scribe. Keeps the *structured* record in sync: `docs/ARCHITECTURE.md` index + changelog lines, `docs/TECH_DEBT.md`, research index, TODO ledgers. Cheap; call often. (Prose docs stay Samantha.) |
+| Shiori | `shiori` | **Haiku** librarian / internal researcher. Read-only in-repo lookups: where is X, what calls Y, which config keys/signals/HDF5 groups exist, what a research note already says. The in-repo counterpart to Prometheus's external research. |
+| Mamoru | `mamoru` | **Haiku** watchdog / drift-catcher. Routine read-only sweeps: docs-vs-code drift, config keys missing from the validator, dead code, stale `TODO(manual needed)`, missing tests; runs the pytest suite. Reports; never fixes (hands to the owner). |
+
+### The Haiku trio — "always-on" the practical way
+
+Kiroku, Shiori, and Mamoru are **cheap, stateless, on-demand** Haiku workers, not
+background daemons (no subagent runs continuously; none talk to each other). They
+are "always active" only in the sense that Adam should **route routine work to
+them by default** rather than doing it inline or waking an Opus specialist:
+- Need to find something in the repo? → **Shiori**, not a manual grep dump.
+- Made a structural change? → **Kiroku** updates the index/changelog in the same beat.
+- Want a health/drift check? → **Mamoru** sweeps and the pytest suite.
+Reserve the senior crew (Opus/Sonnet) for judgment: drivers, GUI, safety review,
+external research. A true timer-based cadence is opt-in via the **Coffee Break /
+Standup protocol** in `.claude/AGENT_PROTOCOL.md` (token cost is real — prefer
+boundary-triggered standups over a tight clock).
 
 ## Institutional knowledge (learned facts — do not rediscover)
 
@@ -144,3 +166,36 @@ These apply to every agent and every change:
    the error.
 6. Claude itself must never execute commands that touch real instruments — run only
    the test suite and simulation mode.
+
+<!-- AGENT_ENV_ENFORCED:BEGIN -->
+
+## Agent Env Enforcement
+
+This repository is managed by the external `agent_env` harness. When delegating
+work, use the harness file bus instead of direct agent-to-agent messages.
+
+- Token-safe local path:
+
+  ```powershell
+  python -m agent_env.file_bridge enqueue "<task>" --project project_tct --lane local_only --source claude
+  ```
+
+- Normal routed path:
+
+  ```powershell
+  python -m agent_env.file_bridge enqueue "<task>" --project project_tct --lane auto --source claude
+  ```
+
+- The watcher must be running:
+
+  ```powershell
+  python -m agent_env.file_bridge watch --project project_tct
+  ```
+
+Rules:
+- Prefer `local_only` while Claude tokens are exhausted.
+- Do not bypass Ikarus for local/Ollama work.
+- Read reports from `C:\Users\nukei\Desktop\agent_env\inbox`.
+- Check recovery memory at `C:\Users\nukei\Desktop\agent_env\memory\todos.local.md`.
+
+<!-- AGENT_ENV_ENFORCED:END -->

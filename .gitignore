@@ -55,6 +55,16 @@ config.local.*
 reference/
 lab_assets/
 sources/git_history/
+sources/.pioenv/
+sources/Marlin-2.1.2.8/
+sources/Configurations-release-2.1.2.8/
+sources/Configurations-release-2.1.2.8.zip
+
+# Agent harness local state (external agent_env bus/config)
+.agentenv/
+
+# Local test artifacts
+pytest_output.txt
 
 # IDE / OS noise
 .vscode/*
