@@ -220,6 +220,25 @@ class ActionBlock(ScanBlock):
                    params=dict(d.get("params") or {}))
 
 
+@dataclass(frozen=True)
+class LeafMeta:
+    """Effective loop context carried to each leaf action.
+
+    Fields are resolved by :meth:`ScanPlan.iter_leaf_contexts_ex` to the value of
+    the *nearest enclosing loop that sets the field*, else the model default.
+    They are LOOP-derived only: an action's own ``params`` (e.g.
+    ``ACQUIRE_WAVEFORM``'s ``params['n_averages']``) override them downstream, in
+    the compiler — not here.
+
+    * ``n_averages`` — default 1; a loop contributes it when ``n_averages`` is
+      not None (matching ``LoopBlock.n_averages: int | None = None``).
+    * ``settle_s`` — default 0.0; a loop contributes it when ``settle_s > 0``.
+      ``LoopBlock.settle_s`` has no unset sentinel, so 0.0 means "no settle".
+    """
+    n_averages: int = 1
+    settle_s: float = 0.0
+
+
 # --------------------------------------------------------------------------- #
 # Plan                                                                         #
 # --------------------------------------------------------------------------- #
@@ -288,12 +307,27 @@ class ScanPlan:
     def iter_leaf_contexts(self) -> Iterator[tuple[dict, ActionBlock]]:
         """Yield ``(loop_values, action)`` for every action, in execution order.
 
-        ``loop_values`` maps axis-value strings (e.g. ``"stage_x"``) to the
-        current coordinate.  Serpentine (``snake``) loops reverse on alternate
-        entries; ordering only — counts are unaffected.  Pure value generation,
-        no hardware.
+        Back-compat 2-tuple view of :meth:`iter_leaf_contexts_ex` (drops the
+        per-leaf :class:`LeafMeta`).  ``loop_values`` maps axis-value strings
+        (e.g. ``"stage_x"``) to the current coordinate.  Serpentine (``snake``)
+        loops reverse on alternate entries; ordering only — counts are
+        unaffected.  Pure value generation, no hardware.
         """
-        yield from _iter_blocks(self.root, {}, {})
+        for coords, action, _meta in self.iter_leaf_contexts_ex():
+            yield coords, action
+
+    def iter_leaf_contexts_ex(
+        self,
+    ) -> Iterator[tuple[dict, ActionBlock, LeafMeta]]:
+        """Yield ``(loop_values, action, meta)`` for every action, in order.
+
+        Like :meth:`iter_leaf_contexts` but also carries the effective loop
+        context (:class:`LeafMeta`: ``n_averages`` / ``settle_s`` resolved to the
+        nearest enclosing loop that sets each field, else the default).  The
+        compiler consumes ``meta`` so a loop-level ``n_averages`` / ``settle_s``
+        is honoured instead of silently dropped.  Pure; no hardware.
+        """
+        yield from _iter_blocks_ex(self.root, {}, LeafMeta(), {})
 
 
 # --------------------------------------------------------------------------- #
@@ -320,11 +354,12 @@ def _count_points(blocks: list[ScanBlock]) -> int:
     return total
 
 
-def _iter_blocks(
+def _iter_blocks_ex(
     blocks: list[ScanBlock],
     ctx: dict,
+    meta: LeafMeta,
     visit_counts: dict,
-) -> Iterator[tuple[dict, ActionBlock]]:
+) -> Iterator[tuple[dict, ActionBlock, LeafMeta]]:
     for b in blocks:
         if isinstance(b, LoopBlock):
             vals = b.materialize()
@@ -332,11 +367,26 @@ def _iter_blocks(
             visit_counts[id(b)] = n + 1
             if b.snake and (n % 2 == 1):
                 vals = list(reversed(vals))
+            child_meta = _child_meta(meta, b)
             for v in vals:
                 child_ctx = {**ctx, b.axis.value: float(v)}
-                yield from _iter_blocks(b.children, child_ctx, visit_counts)
+                yield from _iter_blocks_ex(b.children, child_ctx, child_meta,
+                                           visit_counts)
         elif isinstance(b, ActionBlock):
-            yield dict(ctx), b
+            yield dict(ctx), b, meta
+
+
+def _child_meta(meta: LeafMeta, loop: LoopBlock) -> LeafMeta:
+    """Fold *loop*'s effective settings onto *meta* (nearest-set-wins).
+
+    ``n_averages`` is inherited when the loop leaves it None; ``settle_s`` is
+    inherited when the loop's value is not positive (0.0 == "no settle" — the
+    dataclass has no unset sentinel).  Pure and fail-closed: no getattr/eval.
+    """
+    n_avg = meta.n_averages if loop.n_averages is None else int(loop.n_averages)
+    loop_settle = float(loop.settle_s)
+    settle = loop_settle if loop_settle > 0.0 else meta.settle_s
+    return LeafMeta(n_averages=n_avg, settle_s=settle)
 
 
 # --------------------------------------------------------------------------- #
