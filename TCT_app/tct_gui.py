@@ -32,12 +32,14 @@ from gui.camera_panel import CameraPanel
 from gui.scope_panel import ScopePanel
 from gui.laser_panel import LaserPanel
 from gui.scan_panel import ScanPanel
-from gui.bias_panel import BiasPanel
+from gui.multi_bias_panel import MultiBiasPanel
 from gui.monitor_panel import MonitorPanel
 from gui.analysis_panel import AnalysisPanel
 from gui.calibration_panel import CalibrationPanel
 from gui.device_panel import DeviceManagerWindow, device_state
+from gui.liveness import LivenessMonitor
 from gui.settings_window import SettingsWindow
+from gui.status_bus import notify
 
 logger = logging.getLogger(__name__)
 
@@ -201,6 +203,7 @@ class _ScanBridge(QObject):
 
 class TCTMainWindow(QMainWindow):
     _bias_poll_stop_requested = Signal()
+    _liveness_stop_requested = Signal()
 
     def __init__(self, config_path: str = "configs/devices.yaml") -> None:
         super().__init__()
@@ -247,7 +250,9 @@ class TCTMainWindow(QMainWindow):
                                            analysis_kwargs=self._devices.analysis_kwargs)
         self._laser_panel     = LaserPanel(self._devices.laser, self._devices.waveform_generator)
         self._scan_panel      = ScanPanel()
-        self._bias_panel      = BiasPanel(self._devices.bias_supply)
+        # One tab per HV channel.  Starts as [primary] and is rebuilt from the
+        # driver's real channel count once connect_all() runs refresh_bias_channels().
+        self._bias_panel      = MultiBiasPanel(self._devices.bias_channels)
         self._monitor_panel   = MonitorPanel(
             self._devices.slow_control,
             poll_interval_s=self._devices._poll_interval_s,
@@ -324,7 +329,7 @@ class TCTMainWindow(QMainWindow):
         self._bridge.progress.connect(self._scan_panel.on_progress)
         self._bridge.finished.connect(self._on_scan_finished)
         self._bridge.error.connect(self._on_scan_error)
-        self._bridge.vscan_point.connect(self._bias_panel._on_vscan_point_cb)
+        self._bridge.vscan_point.connect(self._bias_panel.on_vscan_point)
 
         self._scanner.on_point_done = lambda r:       self._bridge.point_done.emit(r)
         self._scanner.on_progress   = lambda d, t:    self._bridge.progress.emit(d, t)
@@ -360,8 +365,10 @@ class TCTMainWindow(QMainWindow):
         self._bias_poll_thread.started.connect(self._bias_poller.start)
         self._bias_poll_stop_requested.connect(self._bias_poller.stop)
         self._bias_poll_thread.finished.connect(self._bias_poller.deleteLater)
+        # Drives the always-visible safety strip (primary channel).  The per-tab
+        # readout is now driven by each BiasPanel's own poll thread, so this
+        # poller no longer feeds the panel directly.
         self._bias_poller.reading.connect(self._refresh_bias_strip)
-        self._bias_poller.reading.connect(self._bias_panel.set_reading)
         self._bias_poll_thread.start()
 
         # Always-on poll so the device lights reflect the live state — including
@@ -374,6 +381,19 @@ class TCTMainWindow(QMainWindow):
         self._light_timer.timeout.connect(self._sync_app_state)
         self._light_timer.start()
         self._refresh_lights()
+
+        # ── Device liveness monitor (own thread — probes may do I/O) ─────
+        # Actively verifies links (BaseDevice.is_alive) so a yanked cable
+        # flips the flag instead of showing CONNECTED forever; the lights /
+        # Device Manager table repaint from the corrected flags above.
+        self._liveness = LivenessMonitor(self._devices)
+        self._liveness_thread = QThread(self)
+        self._liveness.moveToThread(self._liveness_thread)
+        self._liveness_thread.started.connect(self._liveness.start)
+        self._liveness_stop_requested.connect(self._liveness.stop)
+        self._liveness_thread.finished.connect(self._liveness.deleteLater)
+        self._liveness.device_lost.connect(self._on_device_lost)
+        self._liveness_thread.start()
 
         # Re-apply the theme now that the pyqtgraph plots exist, so they get the
         # dark canvas + grid (they didn't exist when apply_theme ran at startup).
@@ -600,6 +620,18 @@ class TCTMainWindow(QMainWindow):
             if dev is not None:
                 light.set_state(device_state(dev))
 
+    @Slot(str)
+    def _on_device_lost(self, name: str) -> None:
+        """A liveness probe found a dead link — surface it loudly.
+
+        The device's own driver already flipped its connected flag, so the
+        lights and Device Manager table go red on their next refresh tick;
+        this adds the human-visible alert.
+        """
+        notify(f"⚠ {name} connection lost — check cable/power. "
+               "Marked disconnected.", "error")
+        self._refresh_lights()
+
     @Slot(object)
     def _refresh_bias_strip(self, r) -> None:
         """Update the bias strip from a reading delivered by the _BiasPoller
@@ -659,12 +691,16 @@ class TCTMainWindow(QMainWindow):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
         if reply != QMessageBox.Yes:
             return
+        # Stop every I/O thread (panels, pollers, liveness monitor) BEFORE
+        # disconnecting devices — the always-on liveness monitor and scope
+        # reader must not issue VISA I/O while disconnect() closes the handle
+        # (same ordering closeEvent uses; reversing it races the close).
+        self._teardown_panels()
         self._safe_bias_shutdown()
         try:
             self._devices.disconnect_all()
         except Exception:
             pass
-        self._teardown_panels()
         self._config_path = path
         try:
             self._devices = DeviceManager(path)
@@ -697,6 +733,15 @@ class TCTMainWindow(QMainWindow):
             self._bias_poll_thread.quit()
             self._bias_poll_thread.wait(2000)
             self._bias_poll_thread = None
+        # Stop the liveness monitor (it holds the old DeviceManager).  Stop the
+        # timer first (queued into its thread) so no new sweep starts, then
+        # quit; the wait margin covers an in-flight sweep's probe timeout.
+        if getattr(self, "_liveness_thread", None) is not None:
+            self._liveness_stop_requested.emit()
+            self._liveness_thread.quit()
+            self._liveness_thread.wait(4000)
+            self._liveness_thread = None
+            self._liveness = None
         try:
             self._scanner.abort()
         except Exception:
@@ -783,6 +828,12 @@ class TCTMainWindow(QMainWindow):
 
     def _on_connect_done(self, results, err: str) -> None:
         self._refresh_lights()
+        # connect_all() ran refresh_bias_channels(); reflect the real channel
+        # count in the bias panel (no-ops when the channel set is unchanged).
+        try:
+            self._bias_panel.rebuild(self._devices.bias_channels)
+        except Exception:
+            logger.debug("bias panel rebuild failed", exc_info=True)
         if err:
             QMessageBox.critical(self, "Connection Failed", err)
             self._act_connect.setEnabled(True)

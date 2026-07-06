@@ -29,6 +29,7 @@ from devices.waveform_generator import WaveformGenerator
 from devices.camera_blackfly import BlackflyCamera
 from devices.laser_manual import LaserManualMetadata
 from devices.bias_supply_base import BiasSupplyBase
+from devices.bias_channel import BiasChannel
 from devices.bias_supply_keithley import KeithleyBiasSupply
 from devices.bias_supply_simulated import SimulatedBiasSupply
 from devices.bias_supply_e4control import E4ControlBiasSupply
@@ -162,6 +163,7 @@ class DeviceManager:
                 trigger_source  = scope_cfg.get("trigger_source",  "EXT"),
                 trigger_level_V = scope_cfg.get("trigger_level_V", -0.41),
                 trigger_slope   = scope_cfg.get("trigger_slope",   "FALL"),
+                n_channels      = scope_cfg.get("n_channels"),
                 simulation      = scope_cfg.get("simulation",   True),
             )
 
@@ -254,6 +256,8 @@ class DeviceManager:
             frequency_hz=wfg_cfg.get("frequency_hz", 1000.0),
             pulse_width_s=wfg_cfg.get("pulse_width_s", 100e-9),
             amplitude_V=wfg_cfg.get("amplitude_V", 3.3),
+            offset_V=wfg_cfg.get("offset_V", 0.0),
+            output_load=wfg_cfg.get("output_load", "INFinity"),
             output_channel=wfg_cfg.get("output_channel", 1),
             vendor=wfg_cfg.get("vendor", "rigol"),
             timeout_ms=wfg_cfg.get("timeout_ms", 5000),
@@ -277,7 +281,7 @@ class DeviceManager:
                 f"Available: {list(BIAS_BACKENDS)}"
             )
         if bias_backend == "keithley":
-            self.bias_supply: BiasSupplyBase = KeithleyBiasSupply(
+            bias_driver: BiasSupplyBase = KeithleyBiasSupply(
                 visa_address=bias_cfg.get("visa_address", ""),
                 compliance_A=bias_cfg.get("compliance_A", 100e-6),
                 voltage_range_V=bias_cfg.get("voltage_range_V", 1100.0),
@@ -285,7 +289,7 @@ class DeviceManager:
                 simulation=bias_cfg.get("simulation", False),
             )
         elif bias_backend == "iseg":
-            self.bias_supply = IsegBiasSupply(
+            bias_driver = IsegBiasSupply(
                 host            = bias_cfg.get("host",            ""),
                 port            = bias_cfg.get("port",            10001),
                 channel         = bias_cfg.get("channel",         0),
@@ -297,7 +301,7 @@ class DeviceManager:
                 simulation      = bias_cfg.get("simulation",      False),
             )
         elif bias_backend == "e4control":
-            self.bias_supply = E4ControlBiasSupply(
+            bias_driver = E4ControlBiasSupply(
                 e4c_device      = bias_cfg.get("e4c_device",       "K2410"),
                 connection_type = bias_cfg.get("connection_type",  "gpib"),
                 host            = bias_cfg.get("host",             "192.168.1.100"),
@@ -308,7 +312,18 @@ class DeviceManager:
                 simulation      = bias_cfg.get("simulation",       False),
             )
         else:
-            self.bias_supply = SimulatedBiasSupply()
+            bias_driver = SimulatedBiasSupply()
+
+        # One driver owns the transport; each HV channel is a BiasChannel view.
+        # ``channel_count()`` needs a live link, so we start with a single
+        # primary-channel list here (no hardware I/O in __init__) and rebuild it
+        # after the driver connects via refresh_bias_channels().  The primary
+        # channel proxy IS ``self.bias_supply`` so the existing single-channel
+        # panel, scan controller, named_devices(), and liveness are unchanged.
+        self._bias_driver: BiasSupplyBase = bias_driver
+        self._bias_primary_ch: int = int(getattr(bias_driver, "_ch", 0))
+        self.bias_supply = BiasChannel(bias_driver, self._bias_primary_ch)
+        self.bias_channels: list[BiasChannel] = [self.bias_supply]
 
         # ── Slow-control channels (modular — add via devices.yaml) ────
         sc_cfg = cfg.get("slow_control", {})
@@ -474,6 +489,10 @@ class DeviceManager:
                 results[name] = f"{exc}{self._at(name)}"
                 logger.error("Connect failed for %s%s: %s", name, self._at(name), exc)
 
+        # Now that the bias driver has a live link, enumerate its HV channels.
+        # (channel_count() needs the connection; it is safe/1 in simulation.)
+        self.refresh_bias_channels()
+
         # intensity monitor connects after scope
         try:
             self.intensity_monitor.connect()
@@ -489,6 +508,42 @@ class DeviceManager:
             results[f"slow_control/{name}"] = status
 
         return results
+
+    def refresh_bias_channels(self) -> list[BiasChannel]:
+        """Rebuild ``self.bias_channels`` from the driver's channel count.
+
+        Queries ``channel_count()`` on the shared bias driver (which needs a
+        live link and returns 1 in simulation / on error) and builds one
+        :class:`BiasChannel` per channel ``0 .. N-1``.  The primary-channel
+        proxy object (``self.bias_supply``) is reused unchanged so any GUI
+        panel already bound to it keeps working.  Never raises.
+
+        Returns the new channel list.  Safe to call repeatedly.
+        """
+        drv = self._bias_driver
+        try:
+            n = int(drv.channel_count())
+        except Exception as exc:
+            logger.warning("bias channel_count() failed (%s) — assuming 1", exc)
+            n = 1
+        n = max(1, n)
+        primary = self._bias_primary_ch
+
+        channels: list[BiasChannel] = []
+        for idx in range(n):
+            if idx == primary:
+                channels.append(self.bias_supply)      # reuse the primary proxy
+            else:
+                channels.append(BiasChannel(drv, idx))
+        # If the configured primary index is outside 0..N-1 (unusual), keep it
+        # so self.bias_supply always appears in the list.
+        if primary not in range(n):
+            channels.append(self.bias_supply)
+
+        self.bias_channels = channels
+        logger.info("Bias supply exposes %d channel(s); primary=CH%d",
+                    len(channels), primary)
+        return channels
 
     def disconnect_all(self) -> None:
         self.slow_control.disconnect_all()
@@ -521,6 +576,22 @@ class DeviceManager:
             "Camera":             self.camera,
             "Waveform Generator": self.waveform_generator,
         }
+
+    def poll_liveness(self) -> dict[str, bool]:
+        """Ask every device to verify its link (``BaseDevice.is_alive``).
+
+        Returns {name: alive}; never raises.  Drivers without a cheap probe
+        just report their connected flag, so this is safe to call on a timer
+        (the gui.liveness.LivenessMonitor does, from a background thread).
+        """
+        out: dict[str, bool] = {}
+        for name, dev in self.named_devices().items():
+            try:
+                out[name] = bool(dev.is_alive())
+            except Exception as exc:
+                logger.warning("Liveness check failed for %s: %s", name, exc)
+                out[name] = False
+        return out
 
     def connect_device(self, name: str) -> str:
         """Connect a single device by name. Returns 'ok' or error string."""

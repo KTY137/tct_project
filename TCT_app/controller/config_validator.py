@@ -35,7 +35,7 @@ _KNOWN_KEYS: dict[str, set[str]] = {
     "oscilloscope": {
         "backend", "simulation", "n_averages",
         # visa backend
-        "visa_address", "vendor", "timeout_ms",
+        "visa_address", "vendor", "timeout_ms", "n_channels",
         "trigger_source", "trigger_level_V", "trigger_slope",
         # drs4 backend
         "frequency_ghz", "voltage_range", "trigger_edge", "trigger_delay_ns",
@@ -69,7 +69,8 @@ _KNOWN_KEYS: dict[str, set[str]] = {
     },
     "waveform_generator": {
         "visa_address", "vendor", "frequency_hz", "pulse_width_s",
-        "amplitude_V", "output_channel", "timeout_ms", "simulation",
+        "amplitude_V", "offset_V", "output_load", "output_channel",
+        "timeout_ms", "simulation",
     },
     "analysis": {
         "termination_ohm", "integration_window_s", "baseline_samples",

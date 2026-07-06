@@ -21,6 +21,7 @@ import numpy as np
 from controller.state_machine import StateMachine, AppState
 from controller.device_manager import DeviceManager
 from devices.base import DeviceError
+from devices.bias_channel import BiasChannel
 from analysis.waveform_analysis import analyse_waveform, WaveformResult
 from analysis.laser_normalization import normalise
 from data.hdf5_writer import HDF5Writer
@@ -39,6 +40,9 @@ class ScanConfig:
     z_mm:       float =  0.0
     n_averages: int   =  1
     settle_time_s: float = 0.05
+    # Bias-supply channel this scan monitors / records for compliance.
+    # None = the primary channel (DeviceManager.bias_supply) = historic behavior.
+    bias_channel: int | None = None
 
 
 @dataclass
@@ -100,6 +104,9 @@ class VoltageScanConfig:
     x_mm: float = 0.0
     y_mm: float = 0.0
     z_mm: float = 0.0
+    # Bias-supply channel this IV sweep drives.
+    # None = the primary channel (DeviceManager.bias_supply) = historic behavior.
+    bias_channel: int | None = None
 
 
 @dataclass
@@ -250,6 +257,31 @@ class ScanController:
             }
         return info
 
+    def _resolve_bias(self, cfg) -> BiasChannel:
+        """Resolve which bias-supply channel this run drives / records.
+
+        ``cfg.bias_channel is None`` (the default) returns the primary proxy,
+        ``self._dev.bias_supply`` — byte-for-byte the historic single-channel
+        path.  An explicit integer selects ``self._dev.bias_channels[idx]``.
+
+        An out-of-range or non-integer index raises *before* any hardware
+        action and refuses to start: HV channel selection must be explicit and
+        must never silently fall back to another channel.
+        """
+        idx = getattr(cfg, "bias_channel", None)
+        if idx is None:
+            return self._dev.bias_supply
+        channels = self._dev.bias_channels
+        n = len(channels)
+        if isinstance(idx, bool) or not isinstance(idx, int) or not (0 <= idx < n):
+            raise ValueError(
+                f"bias_channel={idx!r} is out of range — the bias supply "
+                f"exposes {n} channel(s) (valid indices 0..{n - 1}). Refusing "
+                "to start; HV channel selection must be explicit and never "
+                "silently falls back to another channel."
+            )
+        return channels[idx]
+
     # ------------------------------------------------------------------ #
     # Public control interface                                            #
     # ------------------------------------------------------------------ #
@@ -257,11 +289,12 @@ class ScanController:
     def start(self, cfg: ScanConfig) -> None:
         if not self._sm.can(AppState.RUNNING):
             raise RuntimeError("Cannot start scan in current state.")
+        bias = self._resolve_bias(cfg)  # validate BEFORE any state change / hardware
         self._abort_event.clear()
         self._pause_event.set()
         self._sm.transition(AppState.RUNNING)
         self._thread = threading.Thread(
-            target=self._run, args=(cfg,), daemon=True, name="ScanThread"
+            target=self._run, args=(cfg, bias), daemon=True, name="ScanThread"
         )
         self._thread.start()
 
@@ -311,12 +344,13 @@ class ScanController:
         """Run a bias voltage scan (IV curve) in a background thread."""
         if not self._sm.can(AppState.RUNNING):
             raise RuntimeError("Cannot start voltage scan in current state.")
+        bias = self._resolve_bias(cfg)  # validate BEFORE any state change / hardware
         self._abort_event.clear()
         self._pause_event.set()
         self._sm.transition(AppState.RUNNING)
         self._thread = threading.Thread(
             target=self._run_voltage_scan,
-            args=(cfg,),
+            args=(cfg, bias),
             daemon=True,
             name="VoltageScanThread",
         )
@@ -326,7 +360,7 @@ class ScanController:
     # Scan loop (runs in background thread)                               #
     # ------------------------------------------------------------------ #
 
-    def _run(self, cfg: ScanConfig) -> None:
+    def _run(self, cfg: ScanConfig, bias: BiasChannel) -> None:
         points = _build_scan_points(cfg)
         total = len(points)
         logger.info("Scan started: %d points", total)
@@ -341,7 +375,7 @@ class ScanController:
                     logger.info("Scan aborted at point %d / %d", point.index, total)
                     break
 
-                result = self._acquire_point(point, cfg)
+                result = self._acquire_point(point, cfg, bias)
 
                 if self._abort_event.is_set():
                     break
@@ -350,9 +384,9 @@ class ScanController:
                 # protection against cooking a sensor mid-scan, so a failing
                 # bias read must not be silently ignored: tolerate transient
                 # glitches, abort after 3 consecutive failures.
-                if self._dev.bias_supply.connected:
+                if bias.connected:
                     try:
-                        bias_reading = self._dev.bias_supply.read()
+                        bias_reading = bias.read()
                         bias_read_failures = 0
                         if bias_reading.compliant:
                             logger.warning("Compliance hit during scan at point %d — aborting", point.index)
@@ -364,11 +398,17 @@ class ScanController:
                                     f"I={bias_reading.current_A*1e6:.2f} µA).\n"
                                     "Scan aborted. Bias ramped to 0 V."
                                 )
+                            # Disable the output even if the ramp raises — the
+                            # output-off is the safety-critical step after a
+                            # compliance trip and must not be skipped.
                             try:
-                                self._dev.bias_supply.ramp_to(0.0, step_V=20.0, delay_s=0.05)
-                                self._dev.bias_supply.output_off()
+                                bias.ramp_to(0.0, step_V=20.0, delay_s=0.05)
                             except Exception:
                                 logger.warning("Post-compliance bias ramp-down failed", exc_info=True)
+                            try:
+                                bias.output_off()
+                            except Exception:
+                                logger.warning("Post-compliance bias output-off failed", exc_info=True)
                             break
                     except Exception as exc:
                         bias_read_failures += 1
@@ -595,7 +635,7 @@ class ScanController:
             if self.on_finished:
                 self.on_finished()
 
-    def _run_voltage_scan(self, cfg: "VoltageScanConfig") -> None:
+    def _run_voltage_scan(self, cfg: "VoltageScanConfig", bias: BiasChannel) -> None:
         """Background thread: IV + charge vs. bias sweep."""
         dev = self._dev
         # Compute step sign from start/stop so the user only needs to supply
@@ -624,14 +664,14 @@ class ScanController:
                 if self._abort_event.is_set():
                     break
 
-                dev.bias_supply.ramp_to(
+                bias.ramp_to(
                     float(v),
                     step_V=abs(cfg.ramp_step_V),
                     delay_s=cfg.ramp_delay_s,
                 )
                 time.sleep(cfg.hold_delay_s)
 
-                reading = dev.bias_supply.read()
+                reading = bias.read()
                 # Compliance trip → abort immediately and ramp down
                 if reading.compliant:
                     logger.warning(
@@ -660,8 +700,8 @@ class ScanController:
                     self.on_progress(idx + 1, total)
 
             # Ramp back to 0 V
-            dev.bias_supply.ramp_to(0.0, step_V=20.0, delay_s=0.05)
-            dev.bias_supply.output_off()
+            bias.ramp_to(0.0, step_V=20.0, delay_s=0.05)
+            bias.output_off()
 
             self._sm.transition(
                 AppState.ABORTED if self._abort_event.is_set() else AppState.FINISHED
@@ -674,15 +714,15 @@ class ScanController:
         finally:
             try:
                 dev.waveform_generator.output_off()
-                dev.bias_supply.ramp_to(0.0, step_V=20.0, delay_s=0.05)
-                dev.bias_supply.output_off()
+                bias.ramp_to(0.0, step_V=20.0, delay_s=0.05)
+                bias.output_off()
             except Exception:
                 pass
             self._end_run()
             if self.on_finished:
                 self.on_finished()
 
-    def _acquire_point(self, point: ScanPoint, cfg: ScanConfig) -> ScanResult:
+    def _acquire_point(self, point: ScanPoint, cfg: ScanConfig, bias: BiasChannel) -> ScanResult:
         dev = self._dev
 
         # 1. Move
@@ -740,7 +780,7 @@ class ScanController:
         # Measured per-point context (not recomputable offline) — best-effort.
         bias_v = bias_i = None
         try:
-            br = dev.bias_supply.read()
+            br = bias.read()
             bias_v, bias_i = float(br.voltage_V), float(br.current_A)
         except Exception:
             pass

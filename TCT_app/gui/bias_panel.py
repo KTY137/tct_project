@@ -17,7 +17,7 @@ from PySide6.QtCore import QTimer, Qt, Signal, QThread, QObject
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QLabel, QDoubleSpinBox, QSpinBox,
-    QPushButton, QProgressBar,
+    QPushButton, QProgressBar, QMessageBox,
 )
 
 try:
@@ -29,6 +29,7 @@ except ImportError:
 
 from devices.bias_supply_base import BiasSupplyBase
 from controller.scan_controller import VoltageScanConfig
+from gui.status_bus import notify
 
 
 # ---------------------------------------------------------------------------
@@ -106,6 +107,54 @@ class _SupplyCallWorker(QObject):
             self.done.emit(str(exc))
 
 
+class _ReadoutPoller(QObject):
+    """Polls one channel's live readout + polarity in a dedicated QThread.
+
+    Instrument reads (``read``/``get_polarity``/``supports_polarity_switch``)
+    are blocking I/O on real hardware, so they must never run on the GUI
+    thread.  The poller emits pure data back via queued signals; the panel only
+    updates widgets.  It reads *nothing* until the supply reports ``connected``
+    (mirrors the main-window ``_BiasPoller``), so constructing/starting it never
+    touches hardware.
+    """
+
+    reading  = Signal(object)         # BiasReading, or None when unavailable
+    polarity = Signal(object, bool)   # (polarity 'p'/'n'/None, supports_switch)
+
+    def __init__(self, get_supply, interval_ms: int = 500) -> None:
+        super().__init__()
+        self._get_supply = get_supply
+        self._timer = QTimer(self)     # parented → moves with us to the thread
+        self._timer.setInterval(interval_ms)
+        self._timer.timeout.connect(self._poll)
+
+    def start(self) -> None:
+        self._timer.start()
+
+    def stop(self) -> None:
+        self._timer.stop()
+
+    def _poll(self) -> None:
+        supply = self._get_supply()
+        if supply is None or not getattr(supply, "connected", False):
+            self.reading.emit(None)
+            self.polarity.emit(None, False)
+            return
+        try:
+            self.reading.emit(supply.read())
+        except Exception:
+            self.reading.emit(None)
+        try:
+            pol = supply.get_polarity()
+        except Exception:
+            pol = None
+        try:
+            supports = bool(supply.supports_polarity_switch())
+        except Exception:
+            supports = False
+        self.polarity.emit(pol, supports)
+
+
 class BiasPanel(QWidget):
     """
     GUI panel for a single bias supply channel.
@@ -117,9 +166,11 @@ class BiasPanel(QWidget):
 
     output_toggled  = Signal(bool)
     vscan_requested = Signal(VoltageScanConfig)
+    _read_stop_requested = Signal()
 
     _COMPLIANCE_WARN_A = 1e-3    # warn if compliance > 1 mA
     _POLL_MS = 500               # live readout interval
+    _POL_SYMBOLS = {"p": "+", "n": "−"}
 
     def __init__(self, supply: BiasSupplyBase, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -130,7 +181,23 @@ class BiasPanel(QWidget):
         self._vscan_q: list[float] = []
         self._op_thread: QThread | None = None
         self._op_worker: _SupplyCallWorker | None = None
+        self._io_busy = False
+        self._last_polarity: str | None = None
+        self._pol_supported = False
         self._build_ui()
+
+        # ── Live readout + polarity poll (own thread — instrument I/O must
+        #    never run on the GUI thread).  Safe to start now: it emits None
+        #    until the supply reports connected, so it touches no hardware. ──
+        self._read_poller = _ReadoutPoller(lambda: self._supply, self._POLL_MS)
+        self._read_thread = QThread(self)
+        self._read_poller.moveToThread(self._read_thread)
+        self._read_thread.started.connect(self._read_poller.start)
+        self._read_stop_requested.connect(self._read_poller.stop)
+        self._read_thread.finished.connect(self._read_poller.deleteLater)
+        self._read_poller.reading.connect(self.set_reading)
+        self._read_poller.polarity.connect(self._on_polarity_polled)
+        self._read_thread.start()
 
     # ------------------------------------------------------------------ #
     # UI construction                                                      #
@@ -218,6 +285,26 @@ class BiasPanel(QWidget):
         read_form.addRow("Current:", self._lbl_i)
         read_form.addRow("Compliance:", self._lbl_comp_status)
         root.addWidget(read_box)
+
+        # ── Polarity ───────────────────────────────────────────────────
+        # Read-only indicator (polled off-thread) + a DANGEROUS switch button
+        # that only appears when the supply reports the channel reversible.
+        pol_box = QGroupBox("Polarity")
+        pol_form = QFormLayout(pol_box)
+        self._lbl_polarity = QLabel("—")
+        self._lbl_polarity.setStyleSheet("font-weight: 700; font-size: 16px;")
+        self._lbl_polarity.setToolTip("Current HV output polarity (read-only).")
+        pol_form.addRow("Current polarity:", self._lbl_polarity)
+        self._btn_polarity = QPushButton("⇄ Switch Polarity")
+        self._btn_polarity.setObjectName("dangerBtn")
+        self._btn_polarity.setToolTip(
+            "Reverse HV polarity (throws an HV relay).\n"
+            "Output must be OFF and fully discharged first."
+        )
+        self._btn_polarity.clicked.connect(self._on_switch_polarity)
+        self._btn_polarity.setVisible(False)   # shown only when reversible
+        pol_form.addRow(self._btn_polarity)
+        root.addWidget(pol_box)
 
         # ── IV scan ────────────────────────────────────────────────────
         iv_box = QGroupBox("IV Scan")
@@ -474,13 +561,64 @@ class BiasPanel(QWidget):
         return True
 
     def _set_io_busy(self, busy: bool) -> None:
+        self._io_busy = busy
         for widget in (self._btn_set_comp, self._btn_apply, self._btn_off,
                        self._btn_iv, self._btn_vscan):
             widget.setEnabled(not busy)
+        # Polarity button follows both the busy state and whether the supply
+        # reports the channel reversible (tracked from the poll thread).
+        self._btn_polarity.setEnabled(self._pol_supported and not busy)
+
+    def _on_polarity_polled(self, polarity, supports: bool) -> None:
+        """Update the read-only polarity indicator + switch-button visibility
+        from data delivered by the readout poll thread (pure widget work)."""
+        self._last_polarity = polarity if polarity in ("p", "n") else None
+        self._pol_supported = bool(supports)
+        self._lbl_polarity.setText(self._POL_SYMBOLS.get(self._last_polarity, "—"))
+        self._btn_polarity.setVisible(self._pol_supported)
+        self._btn_polarity.setEnabled(self._pol_supported and not self._io_busy)
+
+    def _on_switch_polarity(self) -> None:
+        """Confirm, then reverse HV polarity off the GUI thread (DANGEROUS).
+
+        The driver enforces the real gate (output OFF + discharged + confirm);
+        this adds the mandatory explicit user confirmation on top."""
+        target = {"p": "n", "n": "p"}.get(self._last_polarity)
+        ch = getattr(self._supply, "channel", "?")
+        if target is None:
+            notify("Current polarity unknown — wait for the readout before switching.",
+                   "warn")
+            return
+        cur_sym = self._POL_SYMBOLS.get(self._last_polarity, "?")
+        tgt_sym = self._POL_SYMBOLS.get(target, "?")
+        reply = QMessageBox.warning(
+            self, "Reverse HV Polarity",
+            f"Reverse HV polarity on CH{ch}  ({cur_sym} → {tgt_sym})?\n\n"
+            "Output must be OFF and fully discharged.\n"
+            "This physically throws an HV relay.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._run_supply_call(
+            lambda: self._supply.set_polarity(target),
+            self._on_switch_polarity_done,
+        )
+
+    def _on_switch_polarity_done(self, err: str) -> None:
+        ch = getattr(self._supply, "channel", "?")
+        if err:
+            notify(f"CH{ch} polarity switch failed: {err}", "error")
+        else:
+            notify(f"CH{ch} polarity switched.", "info")
 
     def _do_emergency_off(self) -> None:
-        self._supply.ramp_to(0.0, step_V=20.0, delay_s=0.05)
-        self._supply.output_off()
+        # Disable the output even if the ramp raises — output_off is the
+        # safety-critical step and must never be skipped by a ramp error.
+        try:
+            self._supply.ramp_to(0.0, step_V=20.0, delay_s=0.05)
+        finally:
+            self._supply.output_off()
 
     def _on_apply_compliance_done(self, err: str) -> None:
         if err:
@@ -514,6 +652,14 @@ class BiasPanel(QWidget):
             if self._op_thread is not None and self._op_thread.isRunning():
                 self._op_thread.quit()
                 self._op_thread.wait(2000)
+        except Exception:
+            pass
+        try:
+            thread = getattr(self, "_read_thread", None)
+            if thread is not None and thread.isRunning():
+                self._read_stop_requested.emit()   # stop the QTimer in its thread
+                thread.quit()
+                thread.wait(2000)
         except Exception:
             pass
 
