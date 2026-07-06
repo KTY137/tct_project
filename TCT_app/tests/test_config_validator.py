@@ -1,5 +1,7 @@
 """Config-validator tests, including the real-world contradiction that
 motivated it (marlin: true with a GRBL-style negative limits envelope)."""
+import pytest
+
 from controller.config_validator import (
     validate_config, errors, warnings, ERROR, WARNING,
 )
@@ -88,3 +90,57 @@ def test_current_shipped_yaml_parses_and_validates():
     assert isinstance(issues, list)
     for e in errors(issues):
         assert "motor_stage" in e, f"unexpected non-motor config error: {e}"
+
+
+# --------------------------------------------------------------------------- #
+# Coverage for previously unvalidated sections (Phase-3 robustness):           #
+# camera, laser, slow_control, influx, output, charge_calibration.             #
+# Before this, typos in these blocks were silently ignored.                    #
+# --------------------------------------------------------------------------- #
+
+_COVERAGE_SECTIONS = [
+    "camera", "laser", "slow_control", "influx", "output", "charge_calibration",
+]
+
+
+@pytest.mark.parametrize("section", _COVERAGE_SECTIONS)
+def test_unknown_key_in_covered_section_warns(section):
+    """An unknown/typo'd key in each newly-covered section warns, naming it."""
+    cfg = {section: {"definitely_not_a_real_key": 123}}
+    issues = validate_config(cfg)
+    ws = warnings(issues)
+    assert any("definitely_not_a_real_key" in w and section in w for w in ws), \
+        f"expected a warning naming {section} + the bogus key, got {ws}"
+    # Typos are advisory only — never a blocking error.
+    assert errors(issues) == []
+
+
+@pytest.mark.parametrize("section", _COVERAGE_SECTIONS)
+def test_missing_covered_section_does_not_error(section):
+    """A config that omits an optional section must not error on it."""
+    issues = validate_config({"motor_stage": _motor()})  # no coverage sections
+    assert not any(section in str(i) for i in issues)
+
+
+def test_shipped_yaml_covered_sections_are_clean():
+    """The real devices.yaml must produce zero warnings in the covered sections
+    (guards that each known-key set is complete for the shipped config)."""
+    from pathlib import Path
+    import yaml
+    path = Path(__file__).resolve().parent.parent / "configs" / "devices.yaml"
+    cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
+    ws = warnings(validate_config(cfg))
+    for section in _COVERAGE_SECTIONS:
+        offending = [w for w in ws if w.startswith(f"[{section}]")]
+        assert offending == [], \
+            f"shipped devices.yaml produced warnings in {section}: {offending}"
+
+
+def test_covered_section_real_keys_do_not_warn():
+    """A block using every real key of a covered section stays warning-free."""
+    cfg = {"camera": {
+        "serial_number": "19112408", "exposure_us": 5000.0, "gain_db": 0.0,
+        "pixel_format": "Mono8", "gamma_enabled": True, "gamma_value": 1.0,
+        "binning": 1, "fps": 10.0, "simulation": True,
+    }}
+    assert not any(w.startswith("[camera]") for w in warnings(validate_config(cfg)))

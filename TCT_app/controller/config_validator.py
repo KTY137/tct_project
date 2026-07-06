@@ -30,7 +30,14 @@ class ConfigIssue:
 
 
 # Known keys per section — unknown keys are warned about (typo detection).
-# Keep in sync with the constructor kwargs in controller/device_manager.py.
+# Keep in sync with the constructor kwargs in controller/device_manager.py and
+# the ``from_config()`` factories the manager delegates to (InfluxWriter,
+# SaveOptions, ChargeCalibration, SlowControlManager).
+#
+# Only each section's TOP-LEVEL keys are listed/checked; nested mappings (e.g.
+# motor_stage.software_limits, output.save, charge_calibration.reference,
+# slow_control.channels) are validated by their own consumers, not typo-checked
+# here — matching the existing motor_stage idiom.
 _KNOWN_KEYS: dict[str, set[str]] = {
     "oscilloscope": {
         "backend", "simulation", "n_averages",
@@ -75,6 +82,37 @@ _KNOWN_KEYS: dict[str, set[str]] = {
     "analysis": {
         "termination_ohm", "integration_window_s", "baseline_samples",
         "cfd_fraction", "onset_threshold_fraction",
+    },
+    # BlackflyCamera kwargs (device_manager.py).
+    "camera": {
+        "serial_number", "exposure_us", "gain_db", "pixel_format",
+        "gamma_enabled", "gamma_value", "binning", "fps", "simulation",
+    },
+    # LaserManualMetadata kwargs (device_manager.py).
+    "laser": {
+        "wavelength_nm", "repetition_mode", "repetition_frequency_hz",
+    },
+    # Top-level slow-control keys; the per-channel dicts under 'channels' are
+    # built by SlowControlManager.from_config (controller/slow_control_manager.py)
+    # and are not typo-checked here.
+    "slow_control": {
+        "poll_interval_s", "channels",
+    },
+    # InfluxWriter.from_config (data/influx_writer.py). 'measurement' is read by
+    # the code but is not present in the shipped devices.yaml.
+    "influx": {
+        "enabled", "url", "token", "org", "bucket", "measurement",
+    },
+    # Output/data-saving; the nested 'save' dict is consumed by
+    # SaveOptions.from_config (data/save_options.py).
+    "output": {
+        "data_dir", "save",
+    },
+    # ChargeCalibration.from_config (analysis/charge_calibration.py); the nested
+    # 'reference' dict is validated there, not typo-checked here.
+    "charge_calibration": {
+        "method", "termination_ohm", "amp_gain", "transimpedance_ohm",
+        "output_units", "reference",
     },
 }
 
