@@ -1,17 +1,19 @@
 """
 TCT Settings Window.
 
-Two-tab dialog for editing configs/devices.yaml without leaving the app.
+Multi-tab dialog for editing configs/devices.yaml without leaving the app.
 
-Quick Settings tab
-    Structured form covering the most important per-device options.
-    Backend dropdowns show/hide the relevant sub-fields automatically.
-    Changing any field immediately regenerates the YAML text in the other tab.
+Per-device Quick Settings tabs (Oscilloscope / Motor Stage / Bias Supply /
+Waveform Gen / Camera / Data Saving)
+    Each tab holds a structured form covering that device's most important
+    options.  Backend dropdowns show/hide the relevant sub-fields
+    automatically.  Changing any field immediately regenerates the YAML text
+    in the Full YAML tab.
 
 Full YAML tab
     Plain-text editor with YAML syntax highlighting and live parse validation.
-    Editing here is the source of truth — Quick Settings reflects it when
-    you switch back to that tab.
+    Editing here is the source of truth — the device tabs reflect it when
+    you switch back to one of them.
 
 Save button  — writes the current YAML text to configs/devices.yaml.
 Reload       — discards unsaved changes and re-reads the file from disk.
@@ -864,23 +866,30 @@ class SettingsWindow(QDialog):
         # ── Tabs ──────────────────────────────────────────────────────
         self._tabs = QTabWidget()
 
-        # Tab 1: Quick Settings
-        quick_scroll = QScrollArea()
-        quick_scroll.setWidgetResizable(True)
-        quick_widget = QWidget()
-        self._quick_layout = QVBoxLayout(quick_widget)
-        self._quick_layout.setAlignment(Qt.AlignTop)
-        # Sections are populated after loading the file (need the parsed cfg)
+        # One scrollable tab per device section, in place of the old single
+        # "Quick Settings" column.  Widgets themselves are populated after
+        # loading the file (need the parsed cfg) — see _rebuild_quick_settings.
+        def _device_tab(title: str) -> QScrollArea:
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            self._tabs.addTab(scroll, title)
+            return scroll
+
+        self._scope_scroll = _device_tab("Oscilloscope")
+        self._motor_scroll = _device_tab("Motor Stage")
+        self._bias_scroll  = _device_tab("Bias Supply")
+        self._wfg_scroll   = _device_tab("Waveform Gen")
+        self._cam_scroll   = _device_tab("Camera")
+        self._data_scroll  = _device_tab("Data Saving")
+
         self._scope_section:  _OscilloscopeSection | None = None
         self._motor_section:  _MotorSection | None = None
         self._wfg_section:    _WaveformSection | None = None
         self._cam_section:    _CameraSection | None = None
         self._bias_section:   _BiasSection | None = None
         self._data_section:   _DataSavingSection | None = None
-        quick_scroll.setWidget(quick_widget)
-        self._tabs.addTab(quick_scroll, "Quick Settings")
 
-        # Tab 2: Full YAML
+        # Last tab: Full YAML
         yaml_widget = QWidget()
         yaml_layout = QVBoxLayout(yaml_widget)
         self._editor = QPlainTextEdit()
@@ -895,8 +904,9 @@ class SettingsWindow(QDialog):
         self._editor.textChanged.connect(self._on_yaml_changed)
         yaml_layout.addWidget(self._editor)
         yaml_layout.addWidget(self._parse_error_label)
-        self._tabs.addTab(yaml_widget, "Full YAML")
+        self._yaml_tab_index = self._tabs.addTab(yaml_widget, "Full YAML")
 
+        self._prev_tab_index = self._tabs.currentIndex()
         self._tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(self._tabs)
 
@@ -953,14 +963,7 @@ class SettingsWindow(QDialog):
         self._rebuild_quick_settings(cfg)
 
     def _rebuild_quick_settings(self, cfg: dict) -> None:
-        """Tear down and recreate the Quick Settings section widgets."""
-        # Remove old sections
-        for sec in (self._scope_section, self._motor_section, self._wfg_section,
-                    self._cam_section, self._bias_section, self._data_section):
-            if sec is not None:
-                self._quick_layout.removeWidget(sec)
-                sec.deleteLater()
-
+        """Tear down and recreate the per-device section widgets."""
         self._scope_section = _OscilloscopeSection(cfg.get("oscilloscope", {}))
         self._motor_section = _MotorSection(cfg.get("motor_stage", {}))
         self._wfg_section   = _WaveformSection(cfg.get("waveform_generator", {}))
@@ -968,20 +971,30 @@ class SettingsWindow(QDialog):
         self._bias_section  = _BiasSection(cfg.get("bias_supply", {}))
         self._data_section  = _DataSavingSection(cfg.get("output", {}))
 
+        # QScrollArea.setWidget() takes ownership of the new widget and
+        # deletes whatever widget it previously held — no manual teardown
+        # of the old sections needed here.
+        self._scope_scroll.setWidget(self._scope_section)
+        self._motor_scroll.setWidget(self._motor_section)
+        self._bias_scroll.setWidget(self._bias_section)
+        self._wfg_scroll.setWidget(self._wfg_section)
+        self._cam_scroll.setWidget(self._cam_section)
+        self._data_scroll.setWidget(self._data_section)
+
         for sec in (self._scope_section, self._motor_section, self._wfg_section,
                     self._cam_section, self._bias_section, self._data_section):
             sec.changed.connect(self._on_quick_settings_changed)
-            self._quick_layout.addWidget(sec)
-
-        self._quick_layout.addStretch()
 
     # ------------------------------------------------------------------ #
     # Tab switching                                                       #
     # ------------------------------------------------------------------ #
 
     def _on_tab_changed(self, index: int) -> None:
-        if index == 0:
-            # Switching to Quick Settings — parse YAML and rebuild widgets
+        prev_index = self._prev_tab_index
+        self._prev_tab_index = index
+        if index != self._yaml_tab_index and prev_index == self._yaml_tab_index:
+            # Coming back from Full YAML to a device tab — parse the YAML
+            # and rebuild the section widgets so they reflect manual edits.
             text = self._editor.toPlainText()
             try:
                 cfg = yaml.safe_load(text) or {}

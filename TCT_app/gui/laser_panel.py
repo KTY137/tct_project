@@ -91,12 +91,35 @@ class LaserPanel(QWidget):
         self._spin_ampl.setValue(float(getattr(self._wfg, "_amplitude", 3.3)))
         self._spin_ampl.setSuffix(" Vpp")
 
+        self._spin_offset = QDoubleSpinBox()
+        self._spin_offset.setRange(-5.0, 5.0)
+        self._spin_offset.setDecimals(4)
+        self._spin_offset.setValue(float(getattr(self._wfg, "_offset", 0.0)))
+        self._spin_offset.setSuffix(" V")
+
+        # Output load the generator assumes it drives — a mismatch here is a
+        # silent up-to-2x amplitude error (the bench "wavegen amplitude wrong"
+        # bug this control fixes the GUI side of).
+        self._load_combo = QComboBox()
+        self._load_combo.addItem("High-Z", "INFinity")
+        self._load_combo.addItem("50 Ω", 50)
+        _cur_load = getattr(self._wfg, "_output_load", "INFinity")
+        _idx = 1 if str(_cur_load).strip().upper() not in ("INFINITY", "INF", "") else 0
+        self._load_combo.setCurrentIndex(_idx)
+        self._load_combo.setToolTip(
+            "Load impedance the generator assumes it drives. Must match the real "
+            "load (High-Z for a scope input, 50 Ω for a terminated load) or the "
+            "amplitude is off by up to 2x.")
+        self._load_combo.currentIndexChanged.connect(self._on_load_changed)
+
         wfg_form.addRow("Frequency:", self._spin_freq)
         wfg_form.addRow("Pulse spec:", self._pulse_mode)
         wfg_form.addRow("Pulse width:", self._spin_width)
         wfg_form.addRow("Duty cycle:", self._spin_duty)
         wfg_form.addRow("", self._pulse_hint)
         wfg_form.addRow("Amplitude:", self._spin_ampl)
+        wfg_form.addRow("Offset:", self._spin_offset)
+        wfg_form.addRow("Output load:", self._load_combo)
 
         self._pulse_mode.currentTextChanged.connect(self._on_pulse_mode)
         for _w in (self._spin_freq, self._spin_width, self._spin_duty):
@@ -169,6 +192,14 @@ class LaserPanel(QWidget):
             else:
                 self._wfg.set_pulse_width(self._spin_width.value())
             self._wfg.set_amplitude(self._spin_ampl.value())
+            self._wfg.set_offset(self._spin_offset.value())
+        except Exception as exc:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "WFG Error", str(exc))
+
+    def _on_load_changed(self, idx: int) -> None:
+        try:
+            self._wfg.set_output_load(self._load_combo.itemData(idx))
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "WFG Error", str(exc))

@@ -27,6 +27,30 @@ io_logger = logging.getLogger("tct.device_io")
 
 _NUM_RE = re.compile(r"[-+]?\d+(?:\.\d*)?(?:[eE][-+]?\d+)?")
 
+# Tektronix model → channel count heuristic: the last digit of the model
+# number is the analog channel count across the modern TBS/DPO/MSO/MDO lines
+# (TBS1052C → 2, MSO5204B → 4).  Used ONLY as a fallback when devices.yaml
+# doesn't set n_channels; read_channel's SELect? precheck stops a wrong guess
+# from wedging the scope, at worst it hides a real channel from the panel.
+# NOTE: unreliable on some older TDS models where the last digit isn't the
+# channel count (e.g. TDS1001/TDS1002 are both 2-channel), so TDS is
+# deliberately excluded — set n_channels explicitly for those.
+_TEK_MODEL_RE = re.compile(r"\b(?:TBS|DPO|MSO|MDO)\s*(\d{3,4})", re.I)
+
+
+def tek_channel_count_from_idn(idn: str) -> int | None:
+    """Best-effort analog channel count from a Tektronix *IDN? reply.
+
+    Returns None when the model isn't recognised — the caller then keeps its
+    default rather than guessing.  Prefer the explicit ``n_channels`` config
+    key; this only spares the common case of forgetting to set it.
+    """
+    m = _TEK_MODEL_RE.search(idn or "")
+    if not m:
+        return None
+    last = int(m.group(1)[-1])
+    return last if 1 <= last <= 4 else None
+
 # Mapping of vendor names to channel-data query format strings.
 # Each entry: (waveform_cmd, preamble_cmd)
 _VENDOR_CMDS: dict[str, dict[str, str]] = {
@@ -97,13 +121,17 @@ class Oscilloscope(BaseDevice):
         trigger_source: str = "EXT",
         trigger_level_V: float = -0.41,
         trigger_slope: str = "FALL",
+        n_channels: int | None = None,
         simulation: bool = False,
     ) -> None:
         super().__init__(simulation=simulation)
         self._address = visa_address
         self._vendor = vendor.lower()
-        self._n_averages = n_averages
+        self._n_averages = max(int(n_averages), 1)
         self._timeout_ms = timeout_ms
+        # Channel count: explicit config wins; refined from *IDN? on connect.
+        self._n_channels_cfg = n_channels
+        self.n_channels = int(n_channels) if n_channels else 4
         # Trigger configuration (applied on connect; editable via the panel's
         # Trigger Settings window).
         self.trig_source = str(trigger_source)
@@ -140,14 +168,44 @@ class Oscilloscope(BaseDevice):
         except Exception as exc:
             raise DeviceError(f"Oscilloscope VISA open failed: {exc}") from exc
 
+        # *CLS (IEEE 488.2) clears stale events/status from earlier sessions so
+        # our own error checks below only see errors we caused.
+        try:
+            self._instr.write("*CLS")
+        except Exception:
+            pass
+        # Force bare (non-headed) query replies on Tektronix.  HEADer is a
+        # persisted instrument setting; with HEADer ON, "SELect:CH1?" answers
+        # ":SELECT:CH1 0" instead of "0", which would silently defeat the
+        # channel-active precheck in read_channel and re-wedge the scope.
+        # Doing it here makes every query in this driver deterministic.
+        if self._vendor == "tektronix":
+            try:
+                self._instr.write("HEADer OFF")
+                self._instr.write("VERBose OFF")
+            except Exception as exc:
+                logger.warning("Could not set HEADer/VERBose OFF: %s", exc)
+
         idn = self._query_text("*IDN?").strip()
         logger.info("Oscilloscope connected: %s", idn)
+        self._idn = idn
+        if not self._n_channels_cfg:
+            detected = tek_channel_count_from_idn(idn)
+            if detected:
+                self.n_channels = detected
+                logger.info("Oscilloscope channel count from *IDN?: %d", detected)
         self._connected = True
         # Apply the configured trigger (previously this was never sent).
         try:
             self.configure_tct_trigger(self.trig_source, self.trig_level_V, self.trig_slope)
         except Exception as exc:
             logger.warning("Trigger config on connect failed: %s", exc)
+        # Apply the configured acquisition averaging (n_averages was previously
+        # read from devices.yaml but never sent to the instrument).
+        try:
+            self.set_averaging(self._n_averages)
+        except Exception as exc:
+            logger.warning("Averaging config on connect failed: %s", exc)
 
     def test_connection(self) -> str:
         """Query *IDN? and return the reply — confirms the VISA link."""
@@ -162,13 +220,51 @@ class Oscilloscope(BaseDevice):
             return f"*IDN? query failed: {exc}"
 
     def disconnect(self) -> None:
-        if self._instr is not None:
+        # Hold io_lock so close() can't race a query on a poller/scan thread
+        # (cross-thread close vs query on one VISA handle is undefined at the
+        # backend level — it can hang or crash, not just raise).
+        with self.io_lock:
+            if self._instr is not None:
+                try:
+                    self._instr.close()
+                except Exception:
+                    pass
+            self._instr = None
+            self._connected = False
+
+    def is_alive(self) -> bool:
+        """Verify the VISA link with an IEEE 488.2 ``*STB?`` heartbeat.
+
+        Called periodically by the liveness monitor so an unplugged/powered-
+        off scope flips to DISCONNECTED instead of keeping a stale green
+        flag.  Non-contending: if another thread holds the io_lock the scope
+        is mid-conversation and is reported alive without probing.
+        """
+        if self.simulation or not self._connected:
+            return self._connected
+        if self._instr is None:
+            self._connected = False
+            return False
+        if not self.io_lock.acquire(blocking=False):
+            return True
+        try:
+            old_timeout = self._instr.timeout
             try:
-                self._instr.close()
-            except Exception:
-                pass
-        self._instr = None
-        self._connected = False
+                self._instr.timeout = 1000
+                self._instr.query("*STB?")
+                return True
+            finally:
+                try:
+                    self._instr.timeout = old_timeout
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.error("Oscilloscope liveness check failed — marking "
+                         "disconnected: %s", exc)
+            self._connected = False
+            return False
+        finally:
+            self.io_lock.release()
 
     # ------------------------------------------------------------------ #
     # Acquisition                                                         #
@@ -200,10 +296,23 @@ class Oscilloscope(BaseDevice):
             )
             self._write("TRIG_MODE NORM")
         else:
-            self._write("TRIGger:MODE NORMal")
-            self._write(f"TRIGger:SOURce {source}")
-            self._write(f"TRIGger:LEVel {level_V}")
-            self._write(f"TRIGger:SLOPe {slope}")
+            # Tektronix "A trigger" tree.  The previous bare forms
+            # (TRIGger:MODE/SOURce/LEVel/SLOPe) are rejected with
+            # "Undefined header" on the TBS1000C family — confirmed live on
+            # the lab's TBS1052C, whose TRIGger:A:* tree answers all the
+            # matching queries (see docs/research/tbs1000c_scpi.md).
+            src = str(source).upper()
+            slope_str = "FALL" if str(slope).upper() in ("FALL", "NEG") else "RISe"
+            self._write("TRIGger:A:TYPe EDGE")
+            self._write("TRIGger:A:MODe NORMal")
+            self._write(f"TRIGger:A:EDGE:SOUrce {src}")
+            self._write(f"TRIGger:A:EDGE:SLOpe {slope_str}")
+            if src.startswith("CH"):
+                # Channel sources keep independent levels on this family.
+                self._write(f"TRIGger:A:LEVel:{src} {level_V}")
+            else:
+                self._write(f"TRIGger:A:LEVel {level_V}")
+            self._check_scpi_errors("trigger config")
 
     def _query_preamble(self) -> str:
         """Query the waveform preamble, tolerating Tektronix model differences.
@@ -222,6 +331,9 @@ class Oscilloscope(BaseDevice):
                 if s and s.strip():
                     return s
             except Exception:
+                # Unwedge before trying the next candidate — a failed query
+                # otherwise garbles the following reply (observed on TBS1052C).
+                self._recover_session()
                 continue
         return self._query_text(self._cmds["pre_query"])
 
@@ -232,6 +344,50 @@ class Oscilloscope(BaseDevice):
     def set_channel_position(self, channel: int, divisions: float) -> None:
         """Vertical trace position, in divisions (Tektronix CH:POSition)."""
         self._write(f"CH{channel}:POSition {divisions}")
+
+    def set_probe_attenuation(self, channel: int, factor: float) -> None:
+        """Tell the scope the probe attenuation factor (1×, 10×, 100×, …).
+
+        Tektronix models this as a *gain* = 1/factor (a 10× probe → gain 0.1).
+        Getting this wrong is silent and multiplies every reading by the ratio:
+        a direct BNC cable (1×) on a channel left at gain 0.1 makes waveforms
+        read 10× too large — the 2026-07-06 bench "wrong scale" bug. Verify with
+        read_settings()['probe_gain'].
+        """
+        if self.simulation:
+            self._last_probe_factor = factor
+            return
+        if self._vendor != "tektronix":
+            raise DeviceError(
+                f"set_probe_attenuation not verified for vendor '{self._vendor}'."
+            )
+        if factor <= 0:
+            raise DeviceError("Probe attenuation factor must be positive.")
+        with self.io_lock:
+            self._write(f"CH{channel}:PRObe:GAIN {1.0 / factor:.6g}")
+            self._check_scpi_errors("probe attenuation")
+
+    def set_coupling(self, channel: int, coupling: str) -> None:
+        """Set channel input coupling: 'DC' | 'AC' | 'GND' (Tektronix CH:COUPling)."""
+        c = str(coupling).upper()
+        if c not in ("DC", "AC", "GND"):
+            raise DeviceError(f"Invalid coupling '{coupling}' (use DC/AC/GND).")
+        if self.simulation:
+            return
+        with self.io_lock:
+            self._write(f"CH{channel}:COUPling {c}")
+            self._check_scpi_errors("coupling")
+
+    def set_bandwidth_limit(self, channel: int, limit: str) -> None:
+        """Set channel bandwidth limit: 'FULL' or 'TWENTY' (20 MHz) — Tektronix
+        ``CH<x>:BANdwidth``. Reduces high-frequency noise on slow signals."""
+        lim = str(limit).upper()
+        arg = "TWEnty" if lim in ("TWENTY", "TWE", "20", "20MHZ") else "FULl"
+        if self.simulation:
+            return
+        with self.io_lock:
+            self._write(f"CH{channel}:BANdwidth {arg}")
+            self._check_scpi_errors("bandwidth limit")
 
     def set_timebase(self, time_per_div_s: float) -> None:
         self._last_tdiv = time_per_div_s
@@ -255,6 +411,9 @@ class Oscilloscope(BaseDevice):
             try:
                 return float(self._query_text(cmd))
             except Exception:
+                # A timed-out query leaves the output queue unterminated on
+                # Tek USB scopes — clear it so the next query isn't garbled.
+                self._recover_session()
                 return None
 
         out: dict = {}
@@ -267,11 +426,25 @@ class Oscilloscope(BaseDevice):
         pos = q("CH2:POSition?")
         if pos is not None:
             out["voff_div"] = pos
-        lvl = q("TRIGger:MAIn:LEVel?")
+        # A-tree first: valid on the TBS1000C family (the MAIn tree is the
+        # older TDS fallback and times out on TBS, wedging the session).
+        lvl = q("TRIGger:A:LEVel?")
         if lvl is None:
-            lvl = q("TRIGger:A:LEVel?")
+            lvl = q("TRIGger:MAIn:LEVel?")
         if lvl is not None:
             out["trig_level"] = lvl
+        # Probe gain (0.1 == 10× probe) — surfaced so the panel can warn when a
+        # channel is scaled as if a probe is attached to a bare BNC cable.
+        gain = q("CH1:PRObe:GAIN?")
+        if gain and gain > 0:
+            out["probe_gain"] = gain
+            out["probe_factor"] = round(1.0 / gain, 3)
+        try:
+            parts = self._query_text("CH1:COUPling?").strip().split()
+            if parts:                      # guard: empty reply must not IndexError
+                out["coupling"] = parts[-1]
+        except Exception:
+            self._recover_session()
         return out
 
     def acquire(self) -> None:
@@ -300,29 +473,155 @@ class Oscilloscope(BaseDevice):
             if self._vendor == "lecroy":
                 return self._read_channel_lecroy(channel)
 
-            cmds = self._cmds
-            if cmds["data_src"]:
-                self._write(cmds["data_src"].format(ch=channel))
-            if cmds["data_enc"]:
-                self._write(cmds["data_enc"])
-            if cmds.get("data_width"):
-                self._write(cmds["data_width"])
-            if cmds["data_start"]:
-                self._write(cmds["data_start"])
-            if cmds["data_stop"]:
-                self._write(cmds["data_stop"])
+            if self._vendor == "tektronix":
+                # Fail fast if the channel isn't displayed: CURVE? on an
+                # inactive source doesn't just error, it times out AND leaves
+                # the output queue unterminated, so every later query returns
+                # garbage until a device clear (observed live on TBS1052C,
+                # event 2244 "Source waveform is not active").
+                try:
+                    sel = self._query_text(f"SELect:CH{channel}?").strip()
+                except Exception as exc:
+                    self._recover_session()
+                    raise DeviceError(
+                        f"CH{channel} state query failed — does this "
+                        f"oscilloscope have a CH{channel}? ({exc})"
+                    ) from exc
+                # Parse the last whitespace token so this holds even if HEADer
+                # is ON (":SELECT:CH1 0") despite the connect-time HEADer OFF.
+                token = sel.split()[-1].upper() if sel.split() else sel.upper()
+                if token in ("0", "OFF"):
+                    raise DeviceError(
+                        f"CH{channel} is not active on the oscilloscope "
+                        "(display off). Toggle the channel on in the panel "
+                        "or press the channel button on the scope."
+                    )
 
-            raw = self._query_binary_values(
-                cmds["wfm_query"], datatype="b", is_big_endian=True
-            )
-            preamble_str = self._query_preamble()
+            cmds = self._cmds
+            try:
+                if cmds["data_src"]:
+                    self._write(cmds["data_src"].format(ch=channel))
+                if cmds["data_enc"]:
+                    self._write(cmds["data_enc"])
+                if cmds.get("data_width"):
+                    self._write(cmds["data_width"])
+                if cmds["data_start"]:
+                    self._write(cmds["data_start"])
+                if cmds["data_stop"]:
+                    self._write(cmds["data_stop"])
+
+                raw = self._query_binary_values(
+                    cmds["wfm_query"], datatype="b", is_big_endian=True
+                )
+                preamble_str = self._query_preamble()
+            except DeviceError:
+                raise
+            except Exception as exc:
+                self._recover_session()
+                raise DeviceError(
+                    f"CH{channel} waveform read failed: {exc}"
+                ) from exc
         time_s, voltage_V = self._parse_waveform(np.array(raw), preamble_str)
         self._check_clipping(voltage_V, channel)
         return time_s, voltage_V
 
+    def set_channel_display(self, channel: int, on: bool) -> None:
+        """Turn a channel's display on/off (a channel must be active for
+        CURVE? to return data — see read_channel).
+
+        Tektronix ``SELect:CH<x> {ON|OFF}``; the query form is confirmed live
+        on the TBS1052C and the set form is in the TBS1000C programmer manual
+        (docs/research/tbs1000c_scpi.md).
+        """
+        if self.simulation:
+            return
+        if self._vendor != "tektronix":
+            raise DeviceError(
+                f"set_channel_display is not implemented for vendor "
+                f"'{self._vendor}' — command not verified against a manual."
+            )
+        self._write(f"SELect:CH{channel} {'ON' if on else 'OFF'}")
+        self._check_scpi_errors("channel display")
+
+    def set_averaging(self, n_averages: int) -> None:
+        """Set scope-side acquisition averaging (1 = plain sample mode).
+
+        Tektronix ``ACQuire:MODe SAMple|AVErage`` + ``ACQuire:NUMAVg`` — the
+        same sequence used working in oscilloscope_tek_fastframe.py
+        (Dustin's MSO5204B toolkit); both query forms answer live on the
+        TBS1052C.  Other vendors: not implemented, logged instead of guessed.
+        """
+        n = max(int(n_averages), 1)
+        self._n_averages = n
+        if self.simulation:
+            return
+        if self._vendor != "tektronix":
+            logger.warning(
+                "set_averaging not implemented for vendor '%s' — command "
+                "not verified against a manual; scope left unchanged.",
+                self._vendor,
+            )
+            return
+        with self.io_lock:
+            if n <= 1:
+                self._write("ACQuire:MODe SAMple")
+            else:
+                self._write("ACQuire:MODe AVErage")
+                self._write(f"ACQuire:NUMAVg {n}")
+            self._check_scpi_errors("averaging config")
+
+    @property
+    def n_averages(self) -> int:
+        return self._n_averages
+
     # ------------------------------------------------------------------ #
     # Internal helpers                                                     #
     # ------------------------------------------------------------------ #
+
+    def _check_scpi_errors(self, context: str) -> None:
+        """Log any queued instrument errors (Tektronix event queue).
+
+        The scope accepts unknown headers silently on the write channel and
+        only reports them via *ESR?/ALLEv? — without this check, rejected
+        commands (the old TRIGger:MODE form, for instance) fail silently.
+        """
+        if self.simulation or self._instr is None or self._vendor != "tektronix":
+            return
+        try:
+            esr = int(float(self._query_text("*ESR?").strip()))
+            if not esr & 0x3C:   # CME | EXE | DDE | QYE
+                return
+            events = self._query_text("ALLEv?").strip()
+        except Exception:
+            return
+        logger.warning("Oscilloscope SCPI error(s) after %s: %s", context, events)
+
+    def _recover_session(self) -> None:
+        """Best-effort unwedge after a failed/timed-out query.
+
+        A failed CURVE?/query on this family leaves the output queue
+        unterminated ("Query INTERRUPTED"/"UNTERMINATED" events) and every
+        subsequent reply comes back truncated until a VISA device clear.
+
+        Holds io_lock (re-entrant): a device clear is a control transfer on
+        the shared VISA handle, so it must never fire while another thread is
+        mid ``query_binary_values`` on the same session — that would abort the
+        in-flight bulk transfer and corrupt a scan waveform.  Callers already
+        inside a ``with self.io_lock`` block (read_channel/_query_preamble)
+        re-enter harmlessly; the read_settings/is_alive paths get serialized.
+        """
+        if self._instr is None:
+            return
+        with self.io_lock:
+            try:
+                self._instr.clear()
+            except Exception:
+                pass
+            try:
+                self._query_text("*ESR?")
+                self._query_text("ALLEv?")
+            except Exception:
+                pass
 
     def _write(self, cmd: str) -> None:
         if self._instr is not None:
@@ -453,12 +752,16 @@ class Oscilloscope(BaseDevice):
             nums = [_f(p) for p in parts]
             try:
                 if len(parts) >= 16:
-                    # Tektronix numeric/positional WFMPRE fallback.
+                    # Tektronix numeric/positional WFMPRE?/WFMOutpre? fallback.
+                    # Field order (0-indexed): 9=XINcr 10=XZEro 13=YMUlt
+                    # 14=YOFf 15=YZEro — confirmed live on the TBS1052C.
+                    # (Previously 14/15 were swapped, which corrupted absolute
+                    # voltages whenever YOFf was non-zero — the common case.)
                     x_inc = x_inc if x_inc is not None else float(parts[9])
                     x_orig = x_orig if x_orig is not None else float(parts[10])
                     y_mult = y_mult if y_mult is not None else float(parts[13])
-                    y_zero = y_zero if y_zero is not None else float(parts[14])
-                    y_off = y_off if y_off is not None else float(parts[15])
+                    y_off = y_off if y_off is not None else float(parts[14])
+                    y_zero = y_zero if y_zero is not None else float(parts[15])
                 elif len(parts) >= 10:
                     x_inc = x_inc if x_inc is not None else nums[4]
                     x_orig = x_orig if x_orig is not None else nums[5]

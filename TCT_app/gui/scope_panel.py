@@ -149,8 +149,16 @@ class _TriggerDialog(QDialog):
         form = QFormLayout(self)
 
         self._source = QComboBox()
-        self._source.addItems(["EXT", "CH1", "CH2", "CH3", "CH4", "LINE"])
-        self._source.setCurrentText(str(getattr(scope, "trig_source", "EXT")))
+        # Only offer channels the instrument actually has; AUX is the external
+        # trigger input on the Tektronix TBS family (the connector labelled
+        # "AUX In"; "EXT" is accepted as an alias and reads back as AUX).
+        n_ch = int(getattr(scope, "n_channels", 4) or 4)
+        sources = [f"CH{i}" for i in range(1, n_ch + 1)] + ["AUX", "LINE"]
+        cur = str(getattr(scope, "trig_source", "AUX"))
+        if cur not in sources:            # keep a configured legacy value (e.g. EXT)
+            sources.append(cur)
+        self._source.addItems(sources)
+        self._source.setCurrentText(cur)
         self._level = QDoubleSpinBox()
         self._level.setRange(-50.0, 50.0)
         self._level.setDecimals(3)
@@ -190,27 +198,31 @@ class _TriggerDialog(QDialog):
                              + ("" if self._scope.connected else "  (saved; not connected)"))
 
 
-def _save_trigger_to_yaml(path: str | None, source: str, level: float, slope: str) -> None:
-    """Persist the trigger keys into devices.yaml (merge, preserve the rest)."""
+def _save_scope_keys_to_yaml(path: str | None, **keys) -> None:
+    """Persist oscilloscope config keys into devices.yaml (merge, keep the rest)."""
     if not path:
         return
     p = Path(path)
     try:
         cfg = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-        osc = cfg.setdefault("oscilloscope", {})
-        osc["trigger_source"] = source
-        osc["trigger_level_V"] = float(level)
-        osc["trigger_slope"] = slope
+        cfg.setdefault("oscilloscope", {}).update(keys)
         p.write_text(yaml.dump(cfg, default_flow_style=False, sort_keys=False,
                                allow_unicode=True), encoding="utf-8")
     except Exception:
         pass
 
 
+def _save_trigger_to_yaml(path: str | None, source: str, level: float, slope: str) -> None:
+    """Persist the trigger keys into devices.yaml (merge, preserve the rest)."""
+    _save_scope_keys_to_yaml(path, trigger_source=source,
+                             trigger_level_V=float(level), trigger_slope=slope)
+
+
 class _ChannelCard(QFrame):
     """Compact per-channel control: colour swatch, enable, role, live readout."""
 
-    changed = Signal()   # enable or role changed
+    changed = Signal()             # enable or role changed
+    toggled = Signal(int, bool)    # channel number, enabled
 
     def __init__(self, state: _ChannelState, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -260,6 +272,7 @@ class _ChannelCard(QFrame):
 
     def _on_toggle(self, checked: bool) -> None:
         self._state.enabled = bool(checked)
+        self.toggled.emit(self._state.number, bool(checked))
         self.changed.emit()
 
     def _on_role(self, role: str) -> None:
@@ -289,6 +302,9 @@ class _ScopeReader(QObject):
     settings_done = Signal(object, str)   # settings dict, error text
     sync_done = Signal(str)
     trigger_done = Signal(str)
+    display_done = Signal(int, bool, str)  # channel, on, error text
+    avg_done = Signal(str)
+    chan_config_done = Signal(str)
 
     def __init__(self, scope: Oscilloscope) -> None:
         super().__init__()
@@ -316,14 +332,36 @@ class _ScopeReader(QObject):
             # notifies a single time until the state changes.
             self.failed.emit("Oscilloscope not connected.")
             return
+        # Per-channel fault isolation: one dead channel (display off on the
+        # scope, timeout, …) must not blank the channels that DID read fine —
+        # that was the bench "nothing plots" failure (CH2 off killed CH1 too).
         results: dict[int, tuple[np.ndarray, np.ndarray]] = {}
-        try:
-            for ch in sorted(self._enabled):
+        errors: list[str] = []
+        for ch in sorted(self._enabled):
+            try:
                 results[ch] = self._scope.read_channel(ch)
-        except Exception as exc:
-            self.failed.emit(str(exc))
+            except Exception as exc:
+                errors.append(f"CH{ch}: {exc}")
+        if results:
+            self.acquired.emit(results)
+        if errors:
+            self.failed.emit(" | ".join(errors))
+
+    def set_channel_display(self, channel: int, on: bool) -> None:
+        if not self._scope.connected:
             return
-        self.acquired.emit(results)
+        try:
+            self._scope.set_channel_display(channel, on)
+            self.display_done.emit(channel, on, "")
+        except Exception as exc:
+            self.display_done.emit(channel, on, str(exc))
+
+    def apply_averaging(self, n_averages: int) -> None:
+        try:
+            self._scope.set_averaging(n_averages)
+            self.avg_done.emit("")
+        except Exception as exc:
+            self.avg_done.emit(str(exc))
 
     def test_connection(self) -> None:
         try:
@@ -361,6 +399,23 @@ class _ScopeReader(QObject):
         except Exception as exc:
             self.trigger_done.emit(str(exc))
 
+    def apply_chan_config(self, atten_factor: float, coupling: str, bw_limit: str) -> None:
+        """Apply probe attenuation / coupling / bandwidth-limit to every
+        currently-enabled channel (mirrors the per-channel fault isolation in
+        read_once — one bad channel must not block the others)."""
+        if not self._scope.connected:
+            self.chan_config_done.emit("Oscilloscope not connected.")
+            return
+        errors: list[str] = []
+        for ch in sorted(self._enabled):
+            try:
+                self._scope.set_probe_attenuation(ch, atten_factor)
+                self._scope.set_coupling(ch, coupling)
+                self._scope.set_bandwidth_limit(ch, bw_limit)
+            except Exception as exc:
+                errors.append(f"CH{ch}: {exc}")
+        self.chan_config_done.emit(" | ".join(errors))
+
 
 class ScopePanel(QWidget):
     # Queued requests into the reader thread (auto-queued: different thread).
@@ -371,6 +426,9 @@ class ScopePanel(QWidget):
     _settings_requested   = Signal()
     _sync_requested       = Signal(float, float, float)
     _trigger_requested    = Signal(str, float, str)
+    _display_requested    = Signal(int, bool)
+    _avg_requested        = Signal(int)
+    _chan_config_requested = Signal(float, str, str)   # probe factor, coupling, bw limit
 
     def __init__(self, scope: Oscilloscope, config_path: str | None = None,
                  analysis_kwargs: dict | None = None,
@@ -381,10 +439,14 @@ class ScopePanel(QWidget):
         # Waveform-analysis parameters from devices.yaml (analysis: block) so
         # the live readout uses the same window/termination as the scans.
         self._analysis_kwargs = dict(analysis_kwargs or {})
-        # Per-channel state + last acquired data.
+        # Per-channel state + last acquired data.  Only offer channels the
+        # instrument actually has (the bench TBS1052C has two; querying CH3/4
+        # on it times out and wedges the VISA session).
+        n_ch = int(getattr(scope, "n_channels", 4) or 4)
         self._channels: dict[int, _ChannelState] = {
             n: _ChannelState(number=n, color=col, role=role, enabled=en, label=lab)
             for n, (col, role, en, lab) in _CHAN_DEFAULTS.items()
+            if n <= n_ch
         }
         self._last: dict[int, tuple[np.ndarray, np.ndarray]] = {}
         self._curves: dict[int, "pg.PlotDataItem"] = {}
@@ -426,12 +488,18 @@ class ScopePanel(QWidget):
         self._settings_requested.connect(self._reader.read_settings)
         self._sync_requested.connect(self._reader.sync_scope)
         self._trigger_requested.connect(self._reader.apply_trigger)
+        self._display_requested.connect(self._reader.set_channel_display)
+        self._avg_requested.connect(self._reader.apply_averaging)
+        self._chan_config_requested.connect(self._reader.apply_chan_config)
         self._reader.acquired.connect(self._on_acquired)
         self._reader.failed.connect(self._on_acquire_failed)
         self._reader.test_done.connect(self._on_test_done)
         self._reader.settings_done.connect(self._on_settings_done)
         self._reader.sync_done.connect(self._on_sync_done)
         self._reader.trigger_done.connect(self._on_trigger_done)
+        self._reader.display_done.connect(self._on_display_done)
+        self._reader.avg_done.connect(self._on_avg_done)
+        self._reader.chan_config_done.connect(self._on_chan_config_done)
         self._reader_thread.finished.connect(self._reader.deleteLater)
         self._reader_thread.start()
         self._sync_reader_channels()
@@ -551,6 +619,7 @@ class ScopePanel(QWidget):
         for n, st in self._channels.items():
             card = _ChannelCard(st)
             card.changed.connect(self._on_channel_changed)
+            card.toggled.connect(self._on_channel_toggled)
             self._cards[n] = card
             ch_lay.addWidget(card)
         v.addWidget(ch_box)
@@ -642,6 +711,17 @@ class ScopePanel(QWidget):
                                      "pair and read the difference (Δt also shows 1/Δt)")
         self._cursor_mode.currentIndexChanged.connect(self._on_cursor_mode)
 
+        # Scope-side acquisition averaging (ACQuire:MODe / NUMAVg).
+        self._avg_combo = QComboBox()
+        self._avg_combo.setToolTip("Scope-side acquisition averaging "
+                                   "(ACQuire:NUMAVg — reduces noise, slows update)")
+        for n in (1, 2, 4, 8, 16, 32, 64, 128, 256):
+            self._avg_combo.addItem("Avg off" if n == 1 else f"Avg ×{n}", n)
+        cur = int(getattr(self._scope, "n_averages", 1) or 1)
+        idx = self._avg_combo.findData(cur)
+        self._avg_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._avg_combo.currentIndexChanged.connect(self._on_avg_changed)
+
         btn_export = QPushButton("Export CSV")
         ico = _icon("mdi.content-save")
         if ico is not None:
@@ -660,8 +740,8 @@ class ScopePanel(QWidget):
         btn_visa.setToolTip("List VISA resource strings (find the scope's USB address)")
         btn_visa.clicked.connect(self._list_visa)
 
-        for b in (self._btn_single, self._btn_live, self._cursor_mode,
-                  btn_export, btn_test, btn_visa):
+        for b in (self._btn_single, self._btn_live, self._avg_combo,
+                  self._cursor_mode, btn_export, btn_test, btn_visa):
             ctrl.addWidget(b)
         ctrl.addStretch(1)
         return ctrl
@@ -681,6 +761,35 @@ class ScopePanel(QWidget):
 
     def _sync_reader_channels(self) -> None:
         self._reader.set_enabled_channels(self._enabled_channels())
+
+    def _on_channel_toggled(self, channel: int, on: bool) -> None:
+        """Drive the scope's channel display to match the card toggle.
+
+        An enabled card whose channel is off on the instrument was the bench
+        "nothing plots" failure — CURVE? on an inactive source times out.
+        Gated on the same "Drive scope" switch as the scale sync.
+        """
+        drive = getattr(self, "_chk_sync", None)
+        if drive is not None and drive.isChecked() and self._scope.connected:
+            self._display_requested.emit(channel, on)
+        # Allow the deduplicated "CHx not active" warning to fire again if the
+        # situation recurs after this state change.
+        self._last_acq_err = None
+
+    def _on_avg_changed(self, idx: int) -> None:
+        n = int(self._avg_combo.itemData(idx))
+        if self._scope.connected:
+            self._avg_requested.emit(n)
+        _save_scope_keys_to_yaml(self._config_path, n_averages=n)
+
+    def _on_display_done(self, channel: int, on: bool, err: str) -> None:
+        if err:
+            notify(f"Scope CH{channel} display {'on' if on else 'off'} "
+                   f"failed: {err}", "warn")
+
+    def _on_avg_done(self, err: str) -> None:
+        if err:
+            notify(f"Scope averaging config failed: {err}", "warn")
 
     def _on_channel_changed(self) -> None:
         # Enable/role changed — update curve visibility, reader set, re-render.
@@ -861,7 +970,60 @@ class ScopePanel(QWidget):
         row.addWidget(btn_read)
         g.addLayout(row, 4, 0, 1, 3)
         g.addWidget(self._chk_sync, 5, 0, 1, 3)
+        g.addWidget(self._build_chan_setup_box(), 6, 0, 1, 3)
         return box
+
+    def _build_chan_setup_box(self) -> QGroupBox:
+        """Probe attenuation / coupling / bandwidth-limit for the enabled
+        channels — the bench "wrong voltage scale" bug was a 10x probe factor
+        left set on a bare BNC cable, silently multiplying every reading."""
+        box = QGroupBox("Channel setup")
+        form = QFormLayout(box)
+
+        self._probe_combo = QComboBox()
+        for label, factor in (("1x", 1.0), ("10x", 10.0), ("100x", 100.0)):
+            self._probe_combo.addItem(label, factor)
+        self._probe_combo.setCurrentIndex(0)   # default 1x (bare BNC)
+        self._probe_combo.setToolTip(
+            "Probe attenuation applied to CH1:PRObe:GAIN on the enabled channel(s). "
+            "Must match the physical probe — wrong here silently scales every reading.")
+        form.addRow("Probe atten.:", self._probe_combo)
+
+        self._coupling_combo = QComboBox()
+        self._coupling_combo.addItems(["DC", "AC", "GND"])
+        form.addRow("Coupling:", self._coupling_combo)
+
+        self._bw_combo = QComboBox()
+        self._bw_combo.addItem("Full", "FULL")
+        self._bw_combo.addItem("20 MHz", "TWENTY")
+        form.addRow("BW limit:", self._bw_combo)
+
+        btn_apply_chan = QPushButton("Apply channel setup")
+        btn_apply_chan.setToolTip("Push probe atten. / coupling / BW limit to the "
+                                  "currently-enabled channel(s)")
+        btn_apply_chan.clicked.connect(self._apply_chan_config)
+        form.addRow(btn_apply_chan)
+
+        self._lbl_probe_warn = QLabel("")
+        self._lbl_probe_warn.setStyleSheet("color:#e0a020; font-weight: 600;")
+        self._lbl_probe_warn.setVisible(False)
+        form.addRow(self._lbl_probe_warn)
+        return box
+
+    def _apply_chan_config(self) -> None:
+        if not self._scope.connected:
+            notify("Oscilloscope not connected.", "warn")
+            return
+        factor = float(self._probe_combo.currentData())
+        coupling = self._coupling_combo.currentText()
+        bw_limit = self._bw_combo.currentData()
+        self._chan_config_requested.emit(factor, coupling, bw_limit)
+
+    def _on_chan_config_done(self, err: str) -> None:
+        if err:
+            notify(f"Channel setup apply failed: {err}", "warn")
+        else:
+            notify("Applied probe atten. / coupling / BW limit.", "info")
 
     def _on_tdiv_slider(self, idx: int) -> None:
         self._tdiv = self._tdiv_seq[idx]
@@ -1083,6 +1245,19 @@ class ScopePanel(QWidget):
             self._voff_frac = max(-1.0, min(1.0, s["voff_div"] / 4.0))
         self._set_widgets_from_state()
         self._apply_view()
+        # Surface a silent-scaling trap: a probe factor >1x on a channel that's
+        # actually a bare BNC cable multiplies every reading (the bench
+        # "wrong voltage scale" bug this task fixes the GUI side of).
+        factor = s.get("probe_factor")
+        warn = getattr(self, "_lbl_probe_warn", None)
+        if warn is not None:
+            if factor and factor > 1:
+                coupling = s.get("coupling", "")
+                warn.setText(f"⚠ CH1 scaled as {factor:g}x probe"
+                             + (f"  ({coupling})" if coupling else ""))
+                warn.setVisible(True)
+            else:
+                warn.setVisible(False)
         notify("Read t/div, V/div, offset from oscilloscope.", "info")
 
     def _on_sync_done(self, err: str) -> None:

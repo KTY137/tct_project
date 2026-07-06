@@ -32,6 +32,11 @@ _WFG_CMDS: dict[str, dict[str, str]] = {
         "pulse_width": ":SOURce{ch}:FUNCtion:PULSe:WIDTh {val:.3e}",
         "duty":        ":SOURce{ch}:FUNCtion:PULSe:DCYCle {val:.3f}",
         "amplitude":   ":SOURce{ch}:VOLTage {val:.4f}",
+        "offset":      ":SOURce{ch}:VOLTage:OFFSet {val:.4f}",
+        # Output load the generator assumes it is driving.  Rigol pre-halves
+        # the amplitude for a 50Ω load; into a High-Z scope input that reads
+        # 2× high, so this must match the real load.  "INFinity" = High-Z.
+        "load":        ":OUTPut{ch}:IMPedance {val}",
         "output_on":   ":OUTPut{ch}:STATe ON",
         "output_off":  ":OUTPut{ch}:STATe OFF",
         "burst_ncyc":  ":SOURce{ch}:BURSt:NCYCles {val}",
@@ -45,6 +50,8 @@ _WFG_CMDS: dict[str, dict[str, str]] = {
         "pulse_width": "SOURce{ch}:PULSe:WIDTh {val:.3e}",
         "duty":        "SOURce{ch}:FUNCtion:PULSe:DCYCle {val:.3f}",
         "amplitude":   "SOURce{ch}:VOLTage:AMPLitude {val:.4f}",
+        "offset":      "SOURce{ch}:VOLTage:OFFSet {val:.4f}",
+        "load":        "OUTPut{ch}:LOAD {val}",
         "output_on":   "OUTPut{ch}:STATe ON",
         "output_off":  "OUTPut{ch}:STATe OFF",
         "burst_ncyc":  "SOURce{ch}:BURSt:NCYCles {val}",
@@ -134,6 +141,8 @@ class WaveformGenerator(BaseDevice):
         frequency_hz: float = 1000.0,
         pulse_width_s: float = 100e-9,
         amplitude_V: float = 3.3,
+        offset_V: float = 0.0,
+        output_load: str | float = "INFinity",
         output_channel: int = 1,
         vendor: str = "rigol",
         timeout_ms: int = 5000,
@@ -144,6 +153,11 @@ class WaveformGenerator(BaseDevice):
         self._frequency = frequency_hz
         self._pulse_width = pulse_width_s
         self._amplitude = amplitude_V
+        self._offset = offset_V
+        # Output load the generator is told it drives.  Default High-Z matches
+        # a scope's 1 MΩ input; set to 50 for a 50Ω load. Getting this wrong is
+        # a silent 2× amplitude error.
+        self._output_load = output_load
         self._ch = output_channel
         self._vendor = vendor.lower() if vendor else "rigol"
         self._timeout_ms = int(timeout_ms)
@@ -225,6 +239,21 @@ class WaveformGenerator(BaseDevice):
         self._amplitude = amplitude_V
         self._send("amplitude", val=amplitude_V)
 
+    def set_offset(self, offset_V: float) -> None:
+        self._offset = offset_V
+        self._send("offset", val=offset_V)
+
+    def set_output_load(self, load: str | float) -> None:
+        """Set the load impedance the generator assumes it drives.
+
+        ``"INFinity"`` (High-Z, e.g. a scope's 1 MΩ input) or a number of ohms
+        (e.g. ``50``). Must match the real load or the amplitude is off by up to
+        2× — see the command-table note.
+        """
+        self._output_load = load
+        val = load if isinstance(load, str) else f"{float(load):g}"
+        self._send("load", val=val)
+
     def output_on(self) -> None:
         self._send("output_on")
         self._output_on = True
@@ -247,10 +276,14 @@ class WaveformGenerator(BaseDevice):
     # ------------------------------------------------------------------ #
 
     def _apply_defaults(self) -> None:
+        # Load first: it changes how the generator interprets the amplitude
+        # that follows, so it must be set before set_amplitude.
+        self.set_output_load(self._output_load)
         self._send("function")
         self.set_frequency(self._frequency)
         self.set_pulse_width(self._pulse_width)
         self.set_amplitude(self._amplitude)
+        self.set_offset(self._offset)
 
     def _send(self, key: str, **kw: Any) -> None:
         """Format a vendor SCPI template and write it."""

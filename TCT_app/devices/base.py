@@ -21,6 +21,18 @@ class BaseDevice(ABC):
     def connected(self) -> bool:
         return self._connected
 
+    def is_alive(self) -> bool:
+        """Cheap link-liveness check, polled by the DeviceManager monitor.
+
+        Default implementation trusts the ``connected`` flag (for drivers
+        without a cheap probe).  Overrides should verify the physical link
+        (e.g. an IEEE 488.2 ``*STB?``) and set ``_connected = False`` when it
+        is gone, so a yanked cable can never keep showing a green flag.
+        Must be fast, must not change instrument state, and must never block
+        on the io_lock (skip the probe when the device is mid-conversation).
+        """
+        return self._connected
+
     @abstractmethod
     def connect(self) -> None: ...
 
