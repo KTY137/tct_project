@@ -16,11 +16,12 @@ import time
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QByteArray, QCoreApplication, QMimeData
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from controller.danger_gate import DangerAction
-from controller.scan_plan import ActionBlock, ActionType, Axis, LoopBlock, ScanPlan
-from controller.scan_plan_validator import validate_plan
+from controller.plan_estimate import estimate_plan
+from controller.scan_plan import ActionBlock, ActionType, Axis, LoopBlock, ScanPlan, ScanBlock
+from controller.scan_plan_validator import PlanLimits, validate_plan
 from gui.planner_panel import _MIME_TYPE, PlannerPanel
 from gui.qt_danger_gate import QtDangerGate
 
@@ -64,6 +65,34 @@ def _mime_for(payload: dict) -> QMimeData:
     mime = QMimeData()
     mime.setData(_MIME_TYPE, QByteArray(json.dumps(payload).encode("utf-8")))
     return mime
+
+
+def _count_ghost_rows(panel: PlannerPanel) -> int:
+    """Walk the whole tree and count rows whose item widget is the
+    ``plannerGhostRow`` preview frame — used to prove a candidate change
+    cleans up the old ghost slot instead of leaving a stray duplicate."""
+    count = 0
+
+    def walk(item) -> None:
+        nonlocal count
+        widget = panel._tree.itemWidget(item, 0)
+        if widget is not None and widget.objectName() == "plannerGhostRow":
+            count += 1
+        for i in range(item.childCount()):
+            walk(item.child(i))
+
+    for i in range(panel._tree.topLevelItemCount()):
+        walk(panel._tree.topLevelItem(i))
+    return count
+
+
+def _ghost_labels(panel: PlannerPanel) -> list[str]:
+    """Text of every ``QLabel`` inside the current ghost row's widget, for
+    asserting the ghost renders the expected block summary."""
+    assert panel._ghost_item is not None
+    widget = panel._tree.itemWidget(panel._ghost_item, 0)
+    assert widget is not None
+    return [lbl.text() for lbl in widget.findChildren(QLabel)]
 
 
 # --------------------------------------------------------------------------- #
@@ -484,6 +513,343 @@ def test_public_api_surface_unchanged():
             "plan", "set_plan", "refresh_theme", "shutdown",
         ):
             assert callable(getattr(panel, name)), name
+    finally:
+        panel.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# Planner v2 — drop ghost/delta PREVIEW (dragMoveEvent)                        #
+# --------------------------------------------------------------------------- #
+
+def test_drag_preview_ghost_appears_for_palette_new_at_correct_index():
+    _app()
+    panel = PlannerPanel()
+    try:
+        before_plan = panel._plan.to_dict()
+        x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        x_item = panel._item_for_block(x_loop)
+        before_children = len(x_loop.children)   # just [y_loop] -> no decorative rows
+
+        new_block = ActionBlock(action=ActionType.WAIT, params={"seconds": 2.0})
+        mime = _mime_for({"op": "new", "block": new_block.to_dict()})
+        decision = panel._preview_drag(mime, x_item, "on")
+        assert decision is not None
+
+        assert panel._ghost_item is not None
+        assert x_item.indexOfChild(panel._ghost_item) == before_children
+        labels = _ghost_labels(panel)
+        assert any("Wait" in t for t in labels)
+        assert any("2.0 s" in t for t in labels)
+
+        # A preview NEVER mutates the real plan or the undo stack.
+        assert panel._plan.to_dict() == before_plan
+        assert panel._undo_stack == []
+    finally:
+        panel.shutdown()
+
+
+def test_drag_preview_ghost_appears_for_internal_move_at_correct_index():
+    _app()
+    panel = PlannerPanel()
+    try:
+        before_plan = panel._plan.to_dict()
+        y_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_Y)
+        acquire, save = y_loop.children[0], y_loop.children[1]
+        acquire_path = panel._path_for_block(acquire)
+        save_item = panel._item_for_block(save)
+        y_item = panel._item_for_block(y_loop)
+
+        mime = _mime_for({"op": "move", "path": acquire_path})
+        decision = panel._preview_drag(mime, save_item, "below")
+        assert decision is not None
+
+        # y_loop's tree children are [move, settle, acquire, save] (2
+        # decorative rows ahead of the 2 real ones) -- "below save" is
+        # plan-index 2, so the ghost lands at tree-child-index 2 + 2 = 4.
+        assert panel._ghost_item is not None
+        assert y_item.indexOfChild(panel._ghost_item) == 4
+
+        # An internal-move ghost renders the MOVED block's own live summary.
+        labels = _ghost_labels(panel)
+        assert any("Acquire waveform" in t for t in labels)
+        assert any("64 avg" in t for t in labels)
+
+        assert panel._plan.to_dict() == before_plan
+        assert panel._undo_stack == []
+    finally:
+        panel.shutdown()
+
+
+def test_drag_preview_ghost_for_new_loop_at_root_after_preflight_offset():
+    _app()
+    panel = PlannerPanel()
+    try:
+        z_loop = LoopBlock(axis=Axis.STAGE_Z, start=-2.0, stop=2.0, step=0.1)
+        mime = _mime_for({"op": "new", "block": z_loop.to_dict()})
+        decision = panel._preview_drag(mime, None, "viewport")
+        assert decision is not None
+
+        # topLevelItem(0) is the decorative Preflight row; root has one real
+        # block (the bias loop) -> append lands at top-level index 2.
+        assert panel._ghost_item is not None
+        assert panel._tree.indexOfTopLevelItem(panel._ghost_item) == 2
+        labels = _ghost_labels(panel)
+        assert any("stage z" in t for t in labels)
+        assert any("-2" in t and "2" in t for t in labels)
+    finally:
+        panel.shutdown()
+
+
+def test_drag_preview_ghost_absent_for_self_and_descendant_move():
+    _app()
+    panel = PlannerPanel()
+    try:
+        bias_loop = _bias_loop(panel._plan)
+        x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        bias_path = panel._path_for_block(bias_loop)
+        bias_item = panel._item_for_block(bias_loop)
+        x_item = panel._item_for_block(x_loop)
+        mime = _mime_for({"op": "move", "path": bias_path})
+
+        assert panel._preview_drag(mime, x_item, "on") is None
+        assert panel._ghost_item is None
+        assert not panel._chip_delta_preview.isVisibleTo(panel)
+
+        assert panel._preview_drag(mime, bias_item, "on") is None
+        assert panel._ghost_item is None
+    finally:
+        panel.shutdown()
+
+
+def test_drag_preview_ghost_absent_for_leaf_into_target():
+    _app()
+    panel = PlannerPanel()
+    try:
+        y_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_Y)
+        acquire_item = panel._item_for_block(y_loop.children[0])
+        new_block = ActionBlock(action=ActionType.WAIT)
+        mime = _mime_for({"op": "new", "block": new_block.to_dict()})
+
+        assert panel._preview_drag(mime, acquire_item, "on") is None
+        assert panel._ghost_item is None
+
+        # "above" the same leaf is a valid location -- ghost DOES appear.
+        assert panel._preview_drag(mime, acquire_item, "above") is not None
+        assert panel._ghost_item is not None
+    finally:
+        panel.shutdown()
+
+
+def test_drag_preview_candidate_change_moves_ghost_without_duplicate():
+    _app()
+    panel = PlannerPanel()
+    try:
+        x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        y_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_Y)
+        x_item = panel._item_for_block(x_loop)
+        y_item = panel._item_for_block(y_loop)
+
+        new_block = ActionBlock(action=ActionType.WAIT)
+        mime = _mime_for({"op": "new", "block": new_block.to_dict()})
+
+        panel._preview_drag(mime, x_item, "on")
+        first_ghost = panel._ghost_item
+        assert first_ghost is not None
+        assert _count_ghost_rows(panel) == 1
+
+        panel._preview_drag(mime, y_item, "on")
+        second_ghost = panel._ghost_item
+        assert second_ghost is not None
+        assert second_ghost is not first_ghost
+        assert _count_ghost_rows(panel) == 1   # stale slot cleaned up, no dupe
+    finally:
+        panel.shutdown()
+
+
+def test_drag_preview_same_candidate_slot_does_not_recreate_ghost():
+    """Throttle: re-hovering the SAME (parent-path, index) candidate must not
+    tear down and rebuild the ghost item (that's the per-pixel-flicker case
+    the brief calls out)."""
+    _app()
+    panel = PlannerPanel()
+    try:
+        x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        x_item = panel._item_for_block(x_loop)
+        new_block = ActionBlock(action=ActionType.WAIT)
+        mime = _mime_for({"op": "new", "block": new_block.to_dict()})
+
+        panel._preview_drag(mime, x_item, "on")
+        first_ghost = panel._ghost_item
+        assert first_ghost is not None
+
+        panel._preview_drag(mime, x_item, "on")
+        assert panel._ghost_item is first_ghost
+    finally:
+        panel.shutdown()
+
+
+def test_drag_preview_delta_computes_correct_candidate_points():
+    _app()
+    panel = PlannerPanel()
+    try:
+        before_plan_dict = panel._plan.to_dict()
+        x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        x_item = panel._item_for_block(x_loop)
+
+        new_block = ActionBlock(action=ActionType.ACQUIRE_WAVEFORM, params={"n_averages": 64})
+        mime = _mime_for({"op": "new", "block": new_block.to_dict()})
+        decision = panel._preview_drag(mime, x_item, "on")
+        assert decision is not None
+
+        # Force the debounced compute now instead of waiting the real
+        # 150 ms -- headless tests call the timer's slot directly.
+        panel._on_preview_debounce_timeout()
+
+        # Independently build the SAME candidate via plain ScanPlan/ScanBlock
+        # APIs (not the panel's private mutation helpers) and compare.
+        expected_plan = ScanPlan.from_dict(before_plan_dict)
+        expected_x_loop = _find_loop_in_plan(expected_plan, Axis.STAGE_X)
+        expected_x_loop.children.append(ScanBlock.from_dict(new_block.to_dict()))
+        expected = estimate_plan(expected_plan)
+
+        assert panel._chip_delta_preview.isVisibleTo(panel)
+        assert f"{expected.total_points:,}" in panel._chip_delta_preview.text()
+
+        assert panel._plan.to_dict() == before_plan_dict
+        assert panel._undo_stack == []
+    finally:
+        panel.shutdown()
+
+
+def test_drag_preview_delta_warns_when_candidate_exceeds_max_points():
+    _app()
+    panel = PlannerPanel()
+    try:
+        tiny_limits = PlanLimits(
+            x_min_mm=-5.0, x_max_mm=5.0, y_min_mm=-5.0, y_max_mm=5.0,
+            z_min_mm=-5.0, z_max_mm=5.0, voltage_range_V=3000.0, max_points=10,
+        )
+        panel.set_limits(tiny_limits)
+
+        x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        x_item = panel._item_for_block(x_loop)
+        new_block = ActionBlock(action=ActionType.ACQUIRE_WAVEFORM)
+        mime = _mime_for({"op": "new", "block": new_block.to_dict()})
+        decision = panel._preview_drag(mime, x_item, "on")
+        assert decision is not None
+
+        panel._on_preview_debounce_timeout()
+
+        assert panel._chip_delta_preview.property("state") == "warn"
+    finally:
+        panel.shutdown()
+
+
+def test_drag_preview_cleared_by_clear_drag_preview():
+    """Stands in for both dragLeave and a rejected/accepted drop -- every
+    exit path funnels through ``_clear_drag_preview()``."""
+    _app()
+    panel = PlannerPanel()
+    try:
+        x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        x_item = panel._item_for_block(x_loop)
+        new_block = ActionBlock(action=ActionType.WAIT)
+        mime = _mime_for({"op": "new", "block": new_block.to_dict()})
+        panel._preview_drag(mime, x_item, "on")
+        panel._on_preview_debounce_timeout()
+        assert panel._ghost_item is not None
+        assert panel._chip_delta_preview.isVisibleTo(panel)
+
+        panel._clear_drag_preview()
+
+        assert panel._ghost_item is None
+        assert panel._ghost_key is None
+        assert panel._ghost_decision is None
+        assert not panel._chip_delta_preview.isVisibleTo(panel)
+        assert not panel._preview_debounce.isActive()
+        assert _count_ghost_rows(panel) == 0
+    finally:
+        panel.shutdown()
+
+
+def test_drag_preview_survives_into_real_drop_with_no_stray_ghost():
+    """A real drop (palette-append fallback path exercised through the same
+    _apply_drop the drop event calls) must leave no ghost/delta artifact
+    behind, mirroring what _RecipeTree.dropEvent does before _apply_drop."""
+    _app()
+    panel = PlannerPanel()
+    try:
+        x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        x_item = panel._item_for_block(x_loop)
+        new_block = ActionBlock(action=ActionType.WAIT, params={"seconds": 3.0})
+        mime = _mime_for({"op": "new", "block": new_block.to_dict()})
+
+        decision = panel._preview_drag(mime, x_item, "on")
+        assert panel._ghost_item is not None
+
+        # Mirrors _RecipeTree.dropEvent: clear the preview, THEN apply.
+        panel._clear_drag_preview()
+        panel._apply_drop(*decision)
+
+        assert panel._ghost_item is None
+        assert _count_ghost_rows(panel) == 0
+        new_x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        assert any(
+            isinstance(c, ActionBlock) and c.action == ActionType.WAIT
+            for c in new_x_loop.children
+        )
+    finally:
+        panel.shutdown()
+
+
+def test_shutdown_mid_drag_clears_ghost_and_stops_timers():
+    _app()
+    panel = PlannerPanel()
+    x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+    x_item = panel._item_for_block(x_loop)
+    new_block = ActionBlock(action=ActionType.WAIT)
+    mime = _mime_for({"op": "new", "block": new_block.to_dict()})
+    panel._preview_drag(mime, x_item, "on")
+    assert panel._ghost_item is not None
+
+    panel.shutdown()
+
+    assert panel._ghost_item is None
+    assert not panel._preview_debounce.isActive()
+    assert not panel._debounce.isActive()
+
+
+def test_drag_preview_never_touches_plan_or_undo_stack_across_a_session():
+    """A whole preview "session" -- several hovers over different valid AND
+    invalid candidates, plus a debounced delta compute -- must never mutate
+    the real plan dict or push anything onto the undo stack."""
+    _app()
+    panel = PlannerPanel()
+    try:
+        before_plan = panel._plan.to_dict()
+        x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        y_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_Y)
+        bias_loop = _bias_loop(panel._plan)
+        x_item = panel._item_for_block(x_loop)
+        y_item = panel._item_for_block(y_loop)
+        bias_item = panel._item_for_block(bias_loop)
+
+        new_action = _mime_for({"op": "new", "block": ActionBlock(action=ActionType.WAIT).to_dict()})
+        move_bias = _mime_for({"op": "move", "path": panel._path_for_block(bias_loop)})
+
+        panel._preview_drag(new_action, x_item, "on")
+        panel._on_preview_debounce_timeout()
+        panel._preview_drag(new_action, y_item, "on")
+        panel._on_preview_debounce_timeout()
+        panel._preview_drag(move_bias, x_item, "on")   # rejected: descendant
+        panel._preview_drag(move_bias, bias_item, "on")   # rejected: self
+
+        assert panel._plan.to_dict() == before_plan
+        assert panel._undo_stack == []
+
+        panel._clear_drag_preview()
+        assert panel._plan.to_dict() == before_plan
+        assert panel._undo_stack == []
     finally:
         panel.shutdown()
 

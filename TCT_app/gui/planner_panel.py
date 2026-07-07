@@ -148,6 +148,14 @@ def _fmt_duration(seconds: float) -> str:
     return f"{minutes / 60.0:.1f} h"
 
 
+def _fmt_duration_delta(delta_seconds: float) -> str:
+    """Signed runtime delta for the drop delta-preview chip, e.g. ``+2.2 h``
+    or ``-30 s``. Reuses :func:`_fmt_duration` for the magnitude so it stays
+    visually consistent with the "Est. runtime" chip."""
+    sign = "+" if delta_seconds >= 0 else "-"
+    return f"{sign}{_fmt_duration(abs(delta_seconds))}"
+
+
 def _fmt_data(num_bytes: int) -> str:
     mb = num_bytes / (1024 * 1024)
     if mb >= 1024:
@@ -275,6 +283,7 @@ class _RecipeTree(QTreeWidget):
 
     def dragEnterEvent(self, event) -> None:
         if event.mimeData().hasFormat(_MIME_TYPE):
+            self._panel._ghost_key = None   # fresh gesture: force a real recompute
             event.acceptProposedAction()
         else:
             event.ignore()
@@ -282,18 +291,39 @@ class _RecipeTree(QTreeWidget):
     def dragMoveEvent(self, event) -> None:
         point = event.position().toPoint()
         item = self.itemAt(point)
+        if item is self._panel._ghost_item:
+            # Hovering the ghost's OWN preview row: nothing about the
+            # candidate slot changed (it can't be a drop target itself,
+            # _mark_decorative-style — see PlannerPanel._place_ghost), so
+            # keep accepting without touching/flickering the existing
+            # preview instead of resolving geometry against a fake target.
+            if self._panel._ghost_item is not None:
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+            return
         indicator = self._indicator_for_point(item, point)
-        decision = self._panel._plan_drop_decision(event.mimeData(), item, indicator)
+        decision = self._panel._preview_drag(event.mimeData(), item, indicator)
         if decision is not None:
             event.acceptProposedAction()
         else:
             event.ignore()
 
+    def dragLeaveEvent(self, event) -> None:
+        self._panel._clear_drag_preview()
+        super().dragLeaveEvent(event)
+
     def dropEvent(self, event) -> None:
         point = event.position().toPoint()
         item = self.itemAt(point)
-        indicator = self._indicator_for_point(item, point)
-        decision = self._panel._plan_drop_decision(event.mimeData(), item, indicator)
+        if item is self._panel._ghost_item:
+            # Released directly on the ghost row -- reuse the decision that
+            # placed it rather than resolving geometry against a fake target.
+            decision = self._panel._ghost_decision
+        else:
+            indicator = self._indicator_for_point(item, point)
+            decision = self._panel._plan_drop_decision(event.mimeData(), item, indicator)
+        self._panel._clear_drag_preview()
         if decision is None:
             event.ignore()
             return
@@ -353,6 +383,17 @@ class PlannerPanel(QWidget):
         self._debounce.setSingleShot(True)
         self._debounce.setInterval(200)
         self._debounce.timeout.connect(self._on_debounced_edit)
+
+        # Drag-drop ghost/delta preview (never touches self._plan or the
+        # undo stack -- see the "Drag & drop preview" section below).
+        self._ghost_item: QTreeWidgetItem | None = None
+        self._ghost_key: tuple | None = None
+        self._ghost_decision: tuple | None = None
+        self._pending_preview: tuple | None = None
+        self._preview_debounce = QTimer(self)
+        self._preview_debounce.setSingleShot(True)
+        self._preview_debounce.setInterval(150)
+        self._preview_debounce.timeout.connect(self._on_preview_debounce_timeout)
 
         self._build_ui()
         self._rebuild_tree()
@@ -466,6 +507,15 @@ class PlannerPanel(QWidget):
         stats_form.addRow("Stage travel:", self._chip_travel)
         stats_form.addRow("HV range:", self._chip_hv)
         aside_lay.addLayout(stats_form)
+
+        # Drop delta preview -- "Preview: 3,087 -> 9,261 pts . +2h 10m", only
+        # visible while a valid drag candidate is hovering the tree; never
+        # reflects a real mutation, see _render_delta_preview().
+        self._chip_delta_preview = StatusChip("", "neutral")
+        self._chip_delta_preview.setWordWrap(True)
+        self._chip_delta_preview.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self._chip_delta_preview.setVisible(False)
+        aside_lay.addWidget(self._chip_delta_preview)
 
         self._issues_layout = QVBoxLayout()
         self._issues_layout.setSpacing(4)
@@ -1062,14 +1112,17 @@ class PlannerPanel(QWidget):
             return None
         return dest_parent_path, dest_index, payload
 
-    def _move_block(
-        self, source_path: list[int],
+    @staticmethod
+    def _move_block_on(
+        root: list, source_path: list[int],
         dest_parent_path: list[int] | None, dest_index: int,
     ) -> None:
-        """Remove the block at *source_path* and reinsert it at
+        """Remove the block at *source_path* from *root* and reinsert it at
         *dest_parent_path*/*dest_index*, correcting for the index shift when
-        source and destination share the same parent list."""
-        root = self._plan.root
+        source and destination share the same parent list. Operates on any
+        block-list root -- the live plan's (:meth:`_move_block`) or a
+        throwaway candidate copy (:meth:`_compute_candidate_estimate`) --
+        so the preview mutates a completely separate object graph."""
         src_parent_path, src_index = _split_path(source_path)
         src_list = _list_for_parent(root, src_parent_path)
         block = src_list.pop(src_index)
@@ -1078,6 +1131,12 @@ class PlannerPanel(QWidget):
             dest_index -= 1
         dest_index = max(0, min(dest_index, len(dest_list)))
         dest_list.insert(dest_index, block)
+
+    def _move_block(
+        self, source_path: list[int],
+        dest_parent_path: list[int] | None, dest_index: int,
+    ) -> None:
+        self._move_block_on(self._plan.root, source_path, dest_parent_path, dest_index)
 
     def _apply_drop(
         self, dest_parent_path: list[int] | None, dest_index: int, payload: dict,
@@ -1093,6 +1152,255 @@ class PlannerPanel(QWidget):
             dest_index = max(0, min(dest_index, len(dest_list)))
             dest_list.insert(dest_index, block)
         self._after_structural_change()
+
+    # ------------------------------------------------------------------ #
+    # Drag & drop — ghost + delta PREVIEW (dragMove only)                 #
+    #                                                                      #
+    # Builds on the exact same _plan_drop_decision() a real drop uses, so #
+    # preview and actual drop can never disagree. Never mutates           #
+    # self._plan, never touches the undo stack, never triggers a full     #
+    # tree rebuild -- a single reusable ghost QTreeWidgetItem is          #
+    # inserted/moved directly in the live tree, and the delta chip is     #
+    # computed from a throwaway to_dict()/from_dict() plan copy.          #
+    # ------------------------------------------------------------------ #
+
+    def _preview_drag(
+        self, mime: QMimeData, target_item: QTreeWidgetItem | None, indicator: str,
+    ) -> tuple[list[int] | None, int, dict] | None:
+        """Panel-side mirror of ``_RecipeTree.dragMoveEvent``'s decision +
+        preview-update sequence: decide via :meth:`_plan_drop_decision`,
+        then update the ghost/delta preview from that SAME decision. The
+        primary entry point for headless tests (no real Qt drag event
+        needed) and for ``dragMoveEvent`` itself."""
+        decision = self._plan_drop_decision(mime, target_item, indicator)
+        self._update_drag_preview(decision)
+        return decision
+
+    def _update_drag_preview(
+        self, decision: tuple[list[int] | None, int, dict] | None,
+    ) -> None:
+        if decision is None:
+            self._clear_drag_preview()
+            return
+        dest_parent_path, dest_index, payload = decision
+        self._ghost_decision = decision
+        key = (
+            tuple(dest_parent_path) if dest_parent_path is not None else None,
+            dest_index,
+        )
+        if key == self._ghost_key and self._ghost_item is not None:
+            return   # same candidate slot as last hover -- throttle, no-op
+        self._ghost_key = key
+        self._place_ghost(dest_parent_path, dest_index, payload)
+        self._schedule_delta_preview(dest_parent_path, dest_index, payload)
+
+    def _clear_drag_preview(self) -> None:
+        """Tear down BOTH preview artifacts. Called on drop (accepted or
+        rejected), dragLeave, a fresh dragEnter, and ``shutdown()`` -- every
+        exit path a drag gesture can take."""
+        self._ghost_key = None
+        self._ghost_decision = None
+        self._remove_ghost_item()
+        self._clear_delta_preview()
+
+    # -- ghost row -----------------------------------------------------
+
+    def _ghost_block_for_payload(self, payload: dict):
+        """The block the ghost row should *look like*: a freshly parsed copy
+        for a palette "new" drop, or the REAL (still plan-owned) block for a
+        tree-internal "move" -- read-only rendering only, never wired to any
+        edit signal, so referencing the live object cannot mutate it."""
+        op = payload.get("op")
+        try:
+            if op == "new":
+                return ScanBlock.from_dict(payload["block"])
+            if op == "move":
+                return _block_at_path(self._plan.root, payload["path"])
+        except (ValueError, KeyError, TypeError, IndexError, AttributeError):
+            return None
+        return None
+
+    def _ghost_target(
+        self, dest_parent_path: list[int] | None, dest_index: int,
+    ) -> tuple[QTreeWidgetItem | None, int]:
+        """``(parent_tree_item, child_index)`` for inserting the ghost at the
+        tree position matching plan-index *dest_index* under
+        *dest_parent_path* -- correcting for the decorative rows
+        (Preflight at root; danger/guard/settle under a loop) that always
+        sit ahead of a parent's real block children (see ``_add_block``)."""
+        if dest_parent_path is None:
+            return self._tree.invisibleRootItem(), dest_index + 1  # +1: Preflight
+        try:
+            parent_block = _block_at_path(self._plan.root, dest_parent_path)
+        except (IndexError, AttributeError, TypeError, KeyError):
+            return None, 0
+        parent_item = self._item_for_block(parent_block)
+        if parent_item is None:
+            return None, 0
+        prefix = 0
+        for i in range(parent_item.childCount()):
+            if parent_item.child(i).data(0, _ROLE_PATH) is None:
+                prefix += 1
+            else:
+                break
+        return parent_item, prefix + dest_index
+
+    def _place_ghost(
+        self, dest_parent_path: list[int] | None, dest_index: int, payload: dict,
+    ) -> None:
+        self._remove_ghost_item()
+        block = self._ghost_block_for_payload(payload)
+        if block is None:
+            return
+        parent_item, child_index = self._ghost_target(dest_parent_path, dest_index)
+        if parent_item is None:
+            return
+        item = QTreeWidgetItem()
+        item.setFlags(Qt.ItemFlag.NoItemFlags)   # never itself a drop target
+        parent_item.insertChild(child_index, item)
+        self._tree.setItemWidget(item, 0, self._make_ghost_row(block))
+        item.setExpanded(True)
+        self._ghost_item = item
+
+    def _remove_ghost_item(self) -> None:
+        if self._ghost_item is None:
+            return
+        item = self._ghost_item
+        self._ghost_item = None
+        self._tree.setItemWidget(item, 0, None)
+        parent = item.parent()
+        if parent is not None:
+            parent.removeChild(item)
+        else:
+            idx = self._tree.indexOfTopLevelItem(item)
+            if idx >= 0:
+                self._tree.takeTopLevelItem(idx)
+
+    def _make_ghost_row(self, block) -> QWidget:
+        """Read-only preview row: axis-coloured "LOOP <axis> <start> → <stop>"
+        summary for a loop, the action's own glyph+label for an action leaf
+        (for an internal move this reads the moved block's OWN live
+        attributes -- see ``_ghost_block_for_payload``). Dashed translucent
+        frame + a "will insert here" affordance mark it as not-yet-real."""
+        if isinstance(block, LoopBlock):
+            return self._make_ghost_loop_row(block)
+        if isinstance(block, ActionBlock):
+            return self._make_ghost_action_row(block)
+        return self._make_leaf_frame("•", "block", "", frame_name="plannerGhostRow")
+
+    def _make_ghost_loop_row(self, loop: LoopBlock) -> QFrame:
+        axis_key = _axis_ui_key(loop.axis)
+        color = axis_color(axis_key, self._theme_mode)
+        unit = "V" if loop.axis == Axis.BIAS_V else "mm"
+        if loop.values is not None:
+            summary = f"{len(loop.values)} explicit values"
+        else:
+            start = loop.start if loop.start is not None else 0.0
+            stop = loop.stop if loop.stop is not None else 0.0
+            summary = f"{start:g} → {stop:g} {unit}"
+
+        frame = QFrame()
+        frame.setObjectName("plannerGhostRow")
+        frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        frame.setStyleSheet(
+            f"#plannerGhostRow {{ border: 1px dashed {_rgba(color, 0.55)}; "
+            f"border-left: 3px dashed {color}; background: {_rgba(color, 0.10)}; }}"
+        )
+        lay = QHBoxLayout(frame)
+        lay.setContentsMargins(8, 4, 8, 4)
+        lay.setSpacing(8)
+        tag = QLabel("LOOP")
+        tag.setObjectName("plannerTag")
+        tag.setStyleSheet(f"#plannerTag {{ color: {color}; background: {_rgba(color, 0.16)}; }}")
+        lay.addWidget(tag)
+        name = QLabel(f"{_AXIS_LABEL[loop.axis]}  {summary}")
+        name.setObjectName("plannerGhostLabel")
+        name.setStyleSheet(f"color: {color};")
+        lay.addWidget(name)
+        lay.addStretch(1)
+        lay.addWidget(self._make_ghost_hint(color))
+        return frame
+
+    def _make_ghost_action_row(self, action: ActionBlock) -> QFrame:
+        p = DARK if self._theme_mode == "dark" else LIGHT
+        color = p["accent"]
+        glyph, label = _ACTION_UI.get(action.action, ("•", action.action.value))
+        return self._make_leaf_frame(
+            glyph, label, self._leaf_meta_text(action),
+            frame_name="plannerGhostRow", label_name="plannerGhostLabel",
+            glyph_style=f"color: {color};", label_style=f"color: {color};",
+            frame_style=(
+                f"#plannerGhostRow {{ border: 1px dashed {_rgba(color, 0.55)}; "
+                f"border-left: 3px dashed {color}; background: {_rgba(color, 0.10)}; }}"
+            ),
+            trailing=self._make_ghost_hint(color),
+        )
+
+    def _make_ghost_hint(self, color: str) -> QLabel:
+        lbl = QLabel("↳ will insert here")
+        lbl.setObjectName("plannerGhostHint")
+        lbl.setStyleSheet(f"color: {color};")
+        return lbl
+
+    # -- delta preview ("Before you run" card) --------------------------
+
+    def _schedule_delta_preview(
+        self, dest_parent_path: list[int] | None, dest_index: int, payload: dict,
+    ) -> None:
+        self._pending_preview = (dest_parent_path, dest_index, payload)
+        self._preview_debounce.start()
+
+    def _on_preview_debounce_timeout(self) -> None:
+        if self._pending_preview is None:
+            return
+        dest_parent_path, dest_index, payload = self._pending_preview
+        estimate = self._compute_candidate_estimate(dest_parent_path, dest_index, payload)
+        self._render_delta_preview(estimate)
+
+    def _compute_candidate_estimate(
+        self, dest_parent_path: list[int] | None, dest_index: int, payload: dict,
+    ) -> PlanEstimate | None:
+        """Build a throwaway candidate plan (``to_dict``/``from_dict`` copy +
+        the would-be mutation) and estimate it. The real plan object and the
+        undo stack are never touched -- this is a completely separate object
+        graph from the very first line."""
+        try:
+            candidate = ScanPlan.from_dict(self._plan.to_dict())
+            op = payload.get("op")
+            if op == "move":
+                self._move_block_on(candidate.root, payload["path"], dest_parent_path, dest_index)
+            elif op == "new":
+                block = ScanBlock.from_dict(payload["block"])
+                dest_list = _list_for_parent(candidate.root, dest_parent_path)
+                idx = max(0, min(dest_index, len(dest_list)))
+                dest_list.insert(idx, block)
+            else:
+                return None
+            return estimate_plan(candidate)
+        except (ValueError, KeyError, TypeError, IndexError, AttributeError):
+            return None
+
+    def _render_delta_preview(self, candidate: PlanEstimate | None) -> None:
+        if candidate is None:
+            self._chip_delta_preview.setVisible(False)
+            return
+        base = self._safe_estimate()
+        base_points = base.total_points if base is not None else 0
+        base_runtime = base.est_runtime_s if base is not None else 0.0
+        delta_runtime = candidate.est_runtime_s - base_runtime
+        over_cap = candidate.total_leaf_visits > self._limits.max_points
+        text = (
+            f"Preview: {base_points:,} → {candidate.total_points:,} pts "
+            f"· {_fmt_duration_delta(delta_runtime)}"
+        )
+        self._chip_delta_preview.set_status(text, "warn" if over_cap else "neutral")
+        self._chip_delta_preview.setVisible(True)
+
+    def _clear_delta_preview(self) -> None:
+        self._pending_preview = None
+        self._preview_debounce.stop()
+        self._chip_delta_preview.setVisible(False)
+        self._chip_delta_preview.set_status("", "neutral")
 
     # ------------------------------------------------------------------ #
     # Context menu — Remove / Duplicate / Move up / Move down             #
@@ -1397,7 +1705,11 @@ class PlannerPanel(QWidget):
         self._populate_palette()
 
     def shutdown(self) -> None:
-        """Stop the debounce timer before the panel is discarded (called from
-        ``tct_gui._teardown_panels``, mirroring every other panel's
-        ``shutdown()``)."""
+        """Stop the debounce timers before the panel is discarded (called
+        from ``tct_gui._teardown_panels``, mirroring every other panel's
+        ``shutdown()``). Also clears any in-flight drag ghost/delta preview
+        so a panel torn down mid-drag never leaves a dangling tree-item
+        reference or a stray pending timer callback."""
         self._debounce.stop()
+        self._preview_debounce.stop()
+        self._clear_drag_preview()

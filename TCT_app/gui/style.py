@@ -634,6 +634,17 @@ QLabel#plannerConfirmPill {{
     font-family: {MONO_FAMILY}; font-size: {FONT_XS - 1}px; font-weight: 700;
     letter-spacing: 0.04em; padding: 2px {SPACE_SM}px; border-radius: {RADIUS_PILL}px;
 }}
+
+/* Drop ghost-insertion preview row (dragMoveEvent, gui/planner_panel.py
+   PlannerPanel._make_ghost_row): dashed border colour and translucent
+   background are set per-instance (axis colour for a loop, accent for an
+   action) via the same inline-QSS idiom as plannerDanger/plannerGuard above;
+   these rules only carry the shared structural chrome. */
+QFrame#plannerGhostRow {{ border-radius: {RADIUS_SM}px; }}
+QLabel#plannerGhostLabel {{ font-weight: 600; font-style: italic; }}
+QLabel#plannerGhostHint {{
+    font-family: {MONO_FAMILY}; font-size: {FONT_XS}px; font-style: italic;
+}}
 """
 
 
