@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from PySide6.QtCore import Qt, QRegularExpression, QSettings, Signal
+from PySide6.QtCore import Qt, QObject, QRegularExpression, QSettings, QThread, Signal
 from PySide6.QtGui import (
     QColor, QFont, QSyntaxHighlighter, QTextCharFormat,
 )
@@ -121,16 +121,187 @@ def _line(text: str) -> QLineEdit:
     return le
 
 
+def _scan_visa_resources() -> list[str]:
+    """Blocking VISA enumeration — only ever called off the GUI thread, via
+    ``_VisaScanManager``.  May raise (``DeviceError`` / ``ImportError``); the
+    caller (``_ScanWorker``) turns that into an error string for the chip /
+    message box instead of letting it kill the worker thread silently."""
+    from devices.waveform_generator import list_visa_resources
+    return list_visa_resources()
+
+
+def _scan_lan_instruments() -> list[str]:
+    """Blocking mDNS/LXI discovery (~2.5 s) — only ever called off the GUI
+    thread, via ``_VisaScanManager``.  An empty result is the expected
+    managed-switch reality (mDNS multicast frequently dropped), not a
+    failure — see ``devices.waveform_generator.discover_lan_instruments``."""
+    from devices.waveform_generator import discover_lan_instruments
+    return discover_lan_instruments()
+
+
+# Durable, process-lifetime registry keeping every in-flight _ScanWorker
+# alive.  A worker cannot have a Qt parent (QObject.moveToThread() refuses
+# to move an object that has one), so its Python-side reference is the only
+# thing keeping the underlying C++ object alive; without this, a worker
+# built and moveToThread()'d inside _VisaScanManager._start() is a purely
+# local variable that CPython garbage-collects the instant _start() returns
+# — typically before the freshly spawned OS thread has even been scheduled
+# — silently dropping the started -> run connection (Qt auto-disconnects a
+# connection whose receiver was destroyed), so the scan simply never runs.
+# Registering here, independent of any _VisaScanManager/SettingsWindow
+# instance, is what lets a worker survive its own manager being torn down
+# mid-scan (matching the QApplication-parented QThread in _start()).
+_ACTIVE_SCAN_WORKERS: set["_ScanWorker"] = set()
+
+
+class _ScanWorker(QObject):
+    """Runs one blocking discovery callable (VISA list / LAN mDNS browse) on
+    a dedicated QThread and reports back via a signal — never touches any
+    widget itself (see ``_VisaScanManager``)."""
+
+    done = Signal(list, str)   # (resources, error) — error is "" on success
+
+    def __init__(self, fn) -> None:
+        super().__init__()
+        self._fn = fn
+        _ACTIVE_SCAN_WORKERS.add(self)
+
+    def run(self) -> None:
+        try:
+            self.done.emit(list(self._fn()), "")
+        except Exception as exc:
+            self.done.emit([], str(exc))
+        finally:
+            _ACTIVE_SCAN_WORKERS.discard(self)
+
+
+class _VisaScanManager(QObject):
+    """Owns every off-GUI-thread VISA/LAN discovery for one Settings dialog.
+
+    Root cause of the freeze this replaces: each ``_VisaPicker`` used to call
+    ``list_visa_resources()`` *synchronously in ``__init__``*, and
+    ``_rebuild_quick_settings`` builds four pickers (scope / keithley / iseg /
+    wfg) — every dialog open *and* every "switch back from Full YAML" tab
+    change fired four blocking VISA scans on the GUI thread.  On a real bench
+    with a slow/absent VISA backend that freezes the whole dialog.
+
+    Fix: the resource list is scanned **once**, off-thread, and cached here;
+    every picker reads the cache via ``resources_ready`` instead of scanning
+    itself.  A manual rescan (🔄) re-runs the scan off-thread and refreshes
+    every currently-open picker together.  Per-picker LAN (mDNS) discovery
+    ("🔎 LAN") is user-initiated so it is not cached, but it is still routed
+    through here purely so its worker thread's lifetime is tracked in
+    ``self._threads`` and can be quit/joined from ``shutdown()`` — including
+    a scan still in flight when the requesting picker has since been torn
+    down (a tab-switch rebuild replaces every picker) or the dialog itself is
+    closing.
+
+    Completion is always delivered to a **bound method of a QObject living on
+    the GUI thread** (the manager itself for the VISA cache; the requesting
+    picker for a LAN scan) — never a bare closure.  That distinction matters:
+    PySide only auto-queues a cross-thread signal to the GUI thread when the
+    connected slot is a bound method of a QObject Qt can ask "which thread do
+    you live on?"; connecting to a plain function/lambda runs it inline, on
+    the *emitting* (worker) thread, which would silently reintroduce
+    off-thread widget access.
+    """
+
+    resources_ready = Signal(list, str)   # (resources, error) — VISA cache updated
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self.cache: list[str] | None = None   # None == never scanned yet
+        self._visa_busy = False
+        self._threads: set[QThread] = set()
+
+    # -- shared VISA resource cache ------------------------------------ #
+    def ensure_scanned(self) -> None:
+        """Kick off the shared scan iff there is no cache yet and none is
+        already running.  Idempotent — building N pickers in one
+        ``_rebuild_quick_settings`` call costs exactly one scan."""
+        if self.cache is not None or self._visa_busy:
+            return
+        self.rescan()
+
+    def rescan(self) -> None:
+        if self._visa_busy:
+            return
+        self._visa_busy = True
+        self._start(_scan_visa_resources, self._on_visa_done)
+
+    def _on_visa_done(self, result: list, err: str) -> None:
+        self._visa_busy = False
+        self.cache = result
+        self.resources_ready.emit(result, err)
+
+    # -- per-picker LAN discovery --------------------------------------- #
+    def request_lan_scan(self, on_done) -> None:
+        """*on_done(resources, error)* must be a bound method of a QObject
+        living on the GUI thread (see class docstring)."""
+        self._start(_scan_lan_instruments, on_done)
+
+    # -- shared worker-thread plumbing ------------------------------------ #
+    def _start(self, fn, on_done) -> None:
+        # Deliberately parented to the QApplication instance, NOT to self —
+        # this manager (and its owning SettingsWindow) can be garbage
+        # collected mid-scan (e.g. a dialog constructed with no Qt parent
+        # and never explicitly closed).  A QThread whose Qt parent is
+        # cascade-deleted while it is still running is a hard Qt6 crash
+        # ("QThread: Destroyed while thread is still running"); parenting to
+        # the long-lived QApplication instead means the thread survives its
+        # manager's teardown and finishes cleanly via its own
+        # done -> quit/deleteLater chain below, regardless of what happens
+        # to this manager or the dialog that created it.
+        thread = QThread(QApplication.instance())
+        worker = _ScanWorker(fn)
+        worker.moveToThread(thread)
+        self._threads.add(thread)
+        thread.started.connect(worker.run)
+        worker.done.connect(on_done)
+        # Canonical Qt "worker object" teardown: the worker asks its own
+        # thread to stop and schedules its own deletion (both queued/direct
+        # appropriately since each receiver lives in its own home thread);
+        # the QThread controller deletes itself once fully stopped.
+        worker.done.connect(thread.quit)
+        worker.done.connect(worker.deleteLater)
+        thread.finished.connect(self._on_thread_finished)
+        thread.finished.connect(thread.deleteLater)
+        thread.start()
+
+    def _on_thread_finished(self) -> None:
+        thread = self.sender()
+        self._threads.discard(thread)
+
+    def shutdown(self) -> None:
+        """Quit + join every in-flight scan thread.  Called from
+        ``SettingsWindow.closeEvent`` (and ``QApplication.aboutToQuit`` — see
+        ``SettingsWindow.__init__``) so a scan started just before the
+        dialog/app closes can never leak a thread or crash into a deleted
+        widget.  Best-effort like the rest of the codebase's thread teardown
+        (``DeviceManagerWindow.shutdown``, ``tct_gui._teardown_panels``): a
+        genuinely stuck blocking call (dead VISA backend, no-timeout mDNS
+        browse) cannot be force-killed safely, so ``wait()`` has a bound —
+        3 s comfortably covers the documented ~2.5 s LAN-discovery window."""
+        for thread in list(self._threads):
+            thread.quit()
+            thread.wait(3000)
+        self._threads.clear()
+
+
 class _VisaPicker(QWidget):
     """Editable dropdown of discovered VISA resources + a 🔄 scan button.
 
     Lets the user pick an instrument address instead of typing it; manual
-    entry / paste still works (the combo is editable).  Scans once on creation
-    and again on demand, so opening Settings already offers suggestions.
+    entry / paste still works (the combo is editable).  VISA discovery is
+    shared across every picker in the dialog through a ``_VisaScanManager``
+    (see above) — a picker never scans on its own, so it is fully usable
+    (editable, manual entry works) the instant it appears, even while the
+    shared scan is still running or a real bench VISA backend is slow/absent.
     """
     changed = Signal()
 
-    def __init__(self, current: str = "") -> None:
+    def __init__(self, current: str = "",
+                 scan_mgr: "_VisaScanManager | None" = None) -> None:
         super().__init__()
         h = QHBoxLayout(self)
         h.setContentsMargins(0, 0, 0, 0)
@@ -140,24 +311,43 @@ class _VisaPicker(QWidget):
         self._combo.setMinimumWidth(260)
         self._combo.setToolTip("Pick a discovered VISA instrument, or type / paste "
                                "an address.  Click 🔄 to (re)scan.")
-        btn = QToolButton()
-        btn.setText("🔄")
-        btn.setToolTip("Scan for connected VISA instruments (needs NI-VISA)")
-        btn.clicked.connect(self._refresh)
-        lan = QToolButton()
-        lan.setText("🔎 LAN")
-        lan.setToolTip("Auto-discover LAN/LXI instruments (mDNS), or enter an IP")
-        lan.clicked.connect(self._add_lan)
+        self._btn_scan = QToolButton()
+        self._btn_scan.setText("🔄")
+        self._btn_scan.setToolTip("Scan for connected VISA instruments (needs NI-VISA)")
+        self._btn_scan.clicked.connect(self._refresh)
+        self._btn_lan = QToolButton()
+        self._btn_lan.setText("🔎 LAN")
+        self._btn_lan.setToolTip("Auto-discover LAN/LXI instruments (mDNS), or enter an IP")
+        self._btn_lan.clicked.connect(self._add_lan)
         self._chip_scan = StatusChip("Scan ready", "neutral", min_width=82)
         h.addWidget(self._combo, 1)
-        h.addWidget(btn)
-        h.addWidget(lan)
+        h.addWidget(self._btn_scan)
+        h.addWidget(self._btn_lan)
         h.addWidget(self._chip_scan)
-        # Scan once on open so suggestions are offered immediately.
-        found, _err = self._scan()
-        self._fill(current, found)
-        self._chip_scan.set_status(f"{len(found)} found" if found else "No VISA",
-                                   "good" if found else "warn")
+
+        self._scan_mgr = scan_mgr
+        self._pending_rescan_notice = False
+        if scan_mgr is not None:
+            scan_mgr.resources_ready.connect(self._on_scan_results)
+            cached = scan_mgr.cache
+            if cached is not None:
+                self._fill(current, cached)
+                self._chip_scan.set_status(f"{len(cached)} found" if cached else "No VISA",
+                                           "good" if cached else "warn")
+            else:
+                # No cache yet (first Settings open this session) — fill with
+                # just the saved value so the picker is usable immediately;
+                # the shared background scan kicked off below lands via
+                # _on_scan_results whenever it completes.
+                self._fill(current, [])
+                self._chip_scan.set_status("Scanning...", "busy")
+            scan_mgr.ensure_scanned()
+        else:
+            # No manager wired — shouldn't happen in the running app (every
+            # call site passes one), but keep the picker usable regardless.
+            self._fill(current, [])
+            self._chip_scan.set_status("No VISA", "warn")
+
         self._combo.editTextChanged.connect(self.changed)
         # Normalise a bare IP to a TCPIP address when the user finishes editing.
         self._combo.lineEdit().editingFinished.connect(self._commit)
@@ -177,30 +367,39 @@ class _VisaPicker(QWidget):
             self.changed.emit()
 
     def _add_lan(self) -> None:
-        from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QInputDialog, QApplication
-        # 1) try mDNS/LXI auto-discovery
-        found: list[str] = []
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            from devices.waveform_generator import discover_lan_instruments
-            found = discover_lan_instruments()
-        except Exception as exc:
-            logger.info("LAN auto-discovery unavailable: %s", exc)
-        finally:
-            QApplication.restoreOverrideCursor()
+        if self._scan_mgr is None:
+            self._prompt_manual_lan_address()
+            return
+        self._btn_lan.setEnabled(False)
+        self._chip_scan.set_status("LAN scan...", "busy")
+        self._scan_mgr.request_lan_scan(self._on_lan_result)
+
+    def _on_lan_result(self, found: list[str], err: str) -> None:
+        self._btn_lan.setEnabled(True)
+        if err:
+            logger.info("LAN auto-discovery unavailable: %s", err)
         if found:
             for addr in found:
                 if self._combo.findText(addr) < 0:
                     self._combo.addItem(addr)
             self._combo.setCurrentText(found[0])
             self.changed.emit()
+            self._chip_scan.set_status(f"{len(found)} found", "good")
             self._combo.showPopup()          # let the user pick among discovered
             return
-        # 2) fall back to manual IP entry
+        # Empty is the expected managed-switch reality (mDNS multicast often
+        # dropped by IGMP-snooping), not a failure — say so, then offer
+        # manual entry instead of implying something went wrong.
+        self._chip_scan.set_status("None on LAN", "warn")
+        self._prompt_manual_lan_address()
+
+    def _prompt_manual_lan_address(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
         ip, ok = QInputDialog.getText(
             self.window(), "Add LAN instrument",
-            "No instruments auto-discovered (mDNS).\nEnter IP or hostname:")
+            "No instruments found on this network segment (mDNS discovery "
+            "is often blocked by managed switches — this doesn't mean the "
+            "instrument isn't reachable).\nEnter its IP or hostname:")
         if ok and ip.strip():
             addr = self._normalize(ip.strip())
             if self._combo.findText(addr) < 0:
@@ -215,16 +414,6 @@ class _VisaPicker(QWidget):
         s = (s or "").strip()
         return (not s) or ("..." in s) or ("::" not in s)
 
-    @staticmethod
-    def _scan() -> tuple[list[str], str | None]:
-        """Return (resources, error_message). error is None on success."""
-        try:
-            from devices.waveform_generator import list_visa_resources
-            return list_visa_resources(), None
-        except Exception as exc:
-            logger.info("VISA scan failed: %s", exc)
-            return [], str(exc)
-
     def _fill(self, current: str, found: list[str]) -> None:
         items = list(found)
         if current and not self._looks_placeholder(current) and current not in items:
@@ -232,30 +421,46 @@ class _VisaPicker(QWidget):
         self._combo.blockSignals(True)
         self._combo.clear()
         self._combo.addItems(items)
-        # Auto-select a discovered address when the saved one is just a
-        # placeholder — so discovery is visible instead of hidden in the list.
-        if found and self._looks_placeholder(current):
-            self._combo.setCurrentText(found[0])
-        else:
-            self._combo.setCurrentText(current)
+        # No auto-select — even when *current* is a placeholder.  The shared
+        # VISA scan returns every resource the backend can see, not just the
+        # one that belongs to *this* device/section, so picking found[0]
+        # here could silently hand e.g. the waveform-gen picker the scope's
+        # USB address (and mark the config dirty from a choice the user
+        # never made).  Leave the saved/placeholder text as-is; discovered
+        # addresses are all in the dropdown for the user to pick explicitly.
+        self._combo.setCurrentText(current)
         self._combo.blockSignals(False)
 
-    def _refresh(self) -> None:
-        self._chip_scan.set_status("Scanning...", "busy")
-        QApplication.processEvents()
-        found, err = self._scan()
-        keep = "" if self._looks_placeholder(self.text()) else self.text()
+    def _on_scan_results(self, found: list, err: str) -> None:
+        """The shared cache scan landed (initial scan or a 🔄 rescan started
+        by *any* picker) — refresh this picker's dropdown without disturbing
+        whatever the user currently has typed/selected (see _fill: no
+        auto-select, so this never marks the config dirty on its own)."""
+        keep = self._combo.currentText()
         self._fill(keep, found)
-        self.changed.emit()
         if found:
             self._chip_scan.set_status(f"{len(found)} found", "good")
-            self._combo.showPopup()          # show the discovered list
         else:
             self._chip_scan.set_status("No VISA", "warn")
-            QMessageBox.information(
-                self.window(), "VISA scan",
-                err or "No VISA instruments found.\n"
-                "Check the USB connection and that NI-VISA is installed.")
+        if self._pending_rescan_notice:
+            # Only the picker whose 🔄 button the user actually clicked pops
+            # a popup/message — a shared rescan silently refreshes every
+            # other open picker's dropdown in the background.
+            self._pending_rescan_notice = False
+            if found:
+                self._combo.showPopup()
+            else:
+                QMessageBox.information(
+                    self.window(), "VISA scan",
+                    err or "No VISA instruments found.\n"
+                    "Check the USB connection and that NI-VISA is installed.")
+
+    def _refresh(self) -> None:
+        if self._scan_mgr is None:
+            return
+        self._pending_rescan_notice = True
+        self._chip_scan.set_status("Scanning...", "busy")
+        self._scan_mgr.rescan()
 
     def text(self) -> str:
         return self._normalize(self._combo.currentText())
@@ -306,12 +511,13 @@ def _accent_rail(card: Card, theme_mode: str) -> None:
 class _OscilloscopeSection(QWidget):
     changed = Signal()
 
-    def __init__(self, cfg: dict, theme_mode: str = "light") -> None:
+    def __init__(self, cfg: dict, theme_mode: str = "light",
+                 scan_mgr: "_VisaScanManager | None" = None) -> None:
         super().__init__()
         self._theme_mode = theme_mode
-        self._build(cfg)
+        self._build(cfg, scan_mgr)
 
-    def _build(self, cfg: dict) -> None:
+    def _build(self, cfg: dict, scan_mgr: "_VisaScanManager | None") -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         card = Card("Oscilloscope", "VISA / DRS4 backend")
@@ -326,7 +532,7 @@ class _OscilloscopeSection(QWidget):
         self._visa_frame = QWidget()
         vf = QFormLayout(self._visa_frame)
         vf.setContentsMargins(0, 0, 0, 0)
-        self._visa_addr   = _VisaPicker(str(cfg.get("visa_address", "")))
+        self._visa_addr   = _VisaPicker(str(cfg.get("visa_address", "")), scan_mgr)
         self._vendor      = _combo(["lecroy", "tektronix", "keysight", "rigol"],
                                     cfg.get("vendor", "lecroy"))
         self._timeout_ms  = _ispin(cfg.get("timeout_ms", 10000), 100, 120000)
@@ -610,12 +816,13 @@ class _MotorSection(QWidget):
 class _BiasSection(QWidget):
     changed = Signal()
 
-    def __init__(self, cfg: dict, theme_mode: str = "light") -> None:
+    def __init__(self, cfg: dict, theme_mode: str = "light",
+                 scan_mgr: "_VisaScanManager | None" = None) -> None:
         super().__init__()
         self._theme_mode = theme_mode
-        self._build(cfg)
+        self._build(cfg, scan_mgr)
 
-    def _build(self, cfg: dict) -> None:
+    def _build(self, cfg: dict, scan_mgr: "_VisaScanManager | None") -> None:
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         card = Card("Bias Supply", "connection · compliance")
@@ -630,7 +837,7 @@ class _BiasSection(QWidget):
         self._keithley_frame = QWidget()
         kf = QFormLayout(self._keithley_frame)
         kf.setContentsMargins(0, 0, 0, 0)
-        self._k_visa = _VisaPicker(str(cfg.get("visa_address", "")))
+        self._k_visa = _VisaPicker(str(cfg.get("visa_address", "")), scan_mgr)
         kf.addRow("VISA address:", self._k_visa)
         kf.addRow(_hint_label(
             "USB, GPIB, or LAN via VISA (e.g. USB0::0x05e6::0x2410::...::INSTR)",
@@ -661,7 +868,7 @@ class _BiasSection(QWidget):
         iseg_addr = str(cfg.get("visa_address", ""))
         if not iseg_addr and cfg.get("host"):
             iseg_addr = f"TCPIP0::{cfg.get('host')}::{cfg.get('port', 10001)}::SOCKET"
-        self._iseg_visa = _VisaPicker(iseg_addr)
+        self._iseg_visa = _VisaPicker(iseg_addr, scan_mgr)
         self._iseg_ch   = _ispin(cfg.get("channel", 0), 0, 15)
         self._iseg_ramp = _dspin(cfg.get("ramp_speed_V_s", 50.0), 0.1, 5000.0, 1)
         gf.addRow("VISA address:", self._iseg_visa)
@@ -816,7 +1023,8 @@ class _WaveformSection(QWidget):
     """Waveform generator (trigger / rep-rate source — Rigol DG4000, Tek, …)."""
     changed = Signal()
 
-    def __init__(self, cfg: dict, theme_mode: str = "light") -> None:
+    def __init__(self, cfg: dict, theme_mode: str = "light",
+                 scan_mgr: "_VisaScanManager | None" = None) -> None:
         super().__init__()
         self._theme_mode = theme_mode
         outer = QVBoxLayout(self)
@@ -828,7 +1036,7 @@ class _WaveformSection(QWidget):
         card.set_rail("delay", theme_mode)
         outer.addWidget(card)
         form = QFormLayout()
-        self._addr   = _VisaPicker(str(cfg.get("visa_address", "")))
+        self._addr   = _VisaPicker(str(cfg.get("visa_address", "")), scan_mgr)
         self._vendor = _combo(["rigol", "tektronix", "keysight", "siglent", "generic"],
                               str(cfg.get("vendor", "rigol")))
         self._ch     = _ispin(cfg.get("output_channel", 1), 1, 4)
@@ -933,6 +1141,24 @@ class SettingsWindow(QDialog):
         self._suppress_yaml_update = False
         self._dirty = False
         self._base_tab_titles: dict[int, str] = {}
+        # Shared, off-GUI-thread VISA/LAN discovery for every _VisaPicker in
+        # this dialog (scope / keithley / iseg / wfg) — see _VisaScanManager.
+        # Created before _build_ui()/_load_file() since _rebuild_quick_settings
+        # (called from _load_file) needs it to construct the pickers.
+        self._visa_scan_mgr = _VisaScanManager(self)
+        # Safety net for the "whole app exits without this dialog's Close
+        # button ever being clicked" path: tct_gui.py caches this dialog as a
+        # Qt-parented child of the main window, and — per
+        # tct_gui._teardown_panels's own docstring — "child-widget deletion
+        # does not fire closeEvent", so a scan still in flight when the app
+        # quits would otherwise never get joined before Qt's C++ parent-child
+        # cascade destroys the still-running QThread (a hard crash in Qt6).
+        # aboutToQuit fires while the event loop can still process events,
+        # ahead of that cascade, so it is a reliable last-chance hook here —
+        # entirely self-contained, no tct_gui.py change needed.
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._visa_scan_mgr.shutdown)
         # Theme mode for the Quick-Settings Card rails (bias amber, x/y/z
         # limit rows, waveform-gen "delay") and the muted/danger chrome
         # labels below — same QSettings key main.py/tct_gui.py use, mirroring
@@ -1053,6 +1279,16 @@ class SettingsWindow(QDialog):
         btn_row.addWidget(btn_close)
         root.addLayout(btn_row)
 
+    def closeEvent(self, event) -> None:
+        """Hide rather than destroy — tct_gui.py caches this dialog and
+        re-shows it on the next "Settings" click (mirrors
+        DeviceManagerWindow.closeEvent).  Joins any in-flight VISA/LAN scan
+        thread first so a scan started just before Close can never fire into
+        a hidden/rebuilt widget or leak a thread."""
+        self._visa_scan_mgr.shutdown()
+        event.ignore()
+        self.hide()
+
     def _restyle_chrome_tokens(self) -> None:
         """Re-resolve the dialog-level muted/danger label colours from the
         current theme (the "Config file:" path label, the bottom info note,
@@ -1156,13 +1392,20 @@ class SettingsWindow(QDialog):
         self._rebuild_quick_settings(cfg)
 
     def _rebuild_quick_settings(self, cfg: dict) -> None:
-        """Tear down and recreate the per-device section widgets."""
+        """Tear down and recreate the per-device section widgets.
+
+        Called on load AND every "switch back from Full YAML" tab change —
+        the four VISA pickers built here (scope / keithley / iseg / wfg) all
+        share ``self._visa_scan_mgr``, so this never re-scans: the manager's
+        cache (populated once, off-thread) is reused every time.
+        """
         tm = self._theme_mode
-        self._scope_section = _OscilloscopeSection(cfg.get("oscilloscope", {}), tm)
+        mgr = self._visa_scan_mgr
+        self._scope_section = _OscilloscopeSection(cfg.get("oscilloscope", {}), tm, mgr)
         self._motor_section = _MotorSection(cfg.get("motor_stage", {}), tm)
-        self._wfg_section   = _WaveformSection(cfg.get("waveform_generator", {}), tm)
+        self._wfg_section   = _WaveformSection(cfg.get("waveform_generator", {}), tm, mgr)
         self._cam_section   = _CameraSection(cfg.get("camera", {}), tm)
-        self._bias_section  = _BiasSection(cfg.get("bias_supply", {}), tm)
+        self._bias_section  = _BiasSection(cfg.get("bias_supply", {}), tm, mgr)
         self._data_section  = _DataSavingSection(cfg.get("output", {}), tm)
 
         # QScrollArea.setWidget() takes ownership of the new widget and
