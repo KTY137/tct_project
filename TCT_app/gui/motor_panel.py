@@ -5,7 +5,7 @@ import logging
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, QSettings
 from PySide6.QtWidgets import (
-    QWidget, QGridLayout, QHBoxLayout, QVBoxLayout,
+    QApplication, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout,
     QLabel, QDoubleSpinBox, QPushButton, QSizePolicy, QSplitter,
     QButtonGroup, QFrame,
 )
@@ -133,18 +133,54 @@ class MotorPanel(QWidget):
         self._readout_caps: dict[str, QLabel] = {}
         self._jog_axis_btns: dict[str, list[QPushButton]] = {"x": [], "y": [], "z": []}
         self._abs_captions: dict[str, QLabel] = {}
+        # Last position seen from the poller — lets the connection/homed chip
+        # refresh (below) repaint without needing a live poll of its own; see
+        # _refresh_connection_state().
+        self._last_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._build_ui()
 
         # Position polling runs in a separate thread so serial I/O never
         # blocks the GUI (especially important for Marlin M114 queries).
+        #
+        # Deliberately parented to the QApplication instance, NOT to ``self``
+        # (QThread(self)) — same fix/idiom as gui/settings_window.py's
+        # _VisaScanManager._start(): a soft config-reload tears this panel
+        # down and Qt's setCentralWidget() deletes the old widget tree
+        # shortly after.  shutdown() below waits for this thread with a
+        # bound, but a bound is not a guarantee — a bench-observed case is a
+        # task thread stuck inside a long move holding the driver lock (see
+        # _run_async's _task_thread), which can make the poll thread's own
+        # quit() take longer than the bound too.  A QThread whose Qt parent
+        # is cascade-deleted while still running is a hard Qt6 crash
+        # ("QThread: Destroyed while thread is still running"); parenting to
+        # the long-lived QApplication instead means the thread survives this
+        # widget's teardown and finishes cleanly via its own
+        # quit -> finished -> deleteLater chain below, regardless of what
+        # happens to this panel.
         self._poller = _PositionPoller(motor)
-        self._poll_thread = QThread(self)
+        self._poll_thread = QThread(QApplication.instance())
         self._poller.moveToThread(self._poll_thread)
         self._poll_thread.started.connect(self._poller.start)
         self._poll_stop_requested.connect(self._poller.stop)
         self._poll_thread.finished.connect(self._poller.deleteLater)
+        self._poll_thread.finished.connect(self._poll_thread.deleteLater)
         self._poller.position_updated.connect(self._on_position_updated)
         self._poll_thread.start()
+
+        # Connection/homed chip refresh — a *separate*, GUI-thread-only timer
+        # that reads only plain ``connected``/``homed`` attributes (no device
+        # I/O, same as tct_gui.py's top-bar status strip).  The poller above
+        # only emits position_updated (which drives _refresh_status_chips)
+        # after a successful get_position() call, and it skips calling
+        # get_position() at all while the motor is disconnected — so a
+        # freshly-built panel for a not-yet-connected device would otherwise
+        # be stuck showing its construction-time default chip text ("Not
+        # homed") forever instead of an accurate "Offline".
+        self._conn_timer = QTimer(self)
+        self._conn_timer.setInterval(1000)
+        self._conn_timer.timeout.connect(self._refresh_connection_state)
+        self._conn_timer.start()
+        self._refresh_connection_state()   # paint the correct state immediately
 
     # ------------------------------------------------------------------ #
     # UI construction                                                      #
@@ -599,9 +635,14 @@ class MotorPanel(QWidget):
         self._set_busy(True)
         self._poller.set_paused(True)      # only the task thread talks serial now
         self._task = _MotorTask(fn)
-        self._task_thread = QThread(self)
+        # Parented to QApplication, same reason as _poll_thread above: a soft
+        # config-reload can tear this panel down while a home()/move() is
+        # still running (up to ~120 s), so this thread must be free to
+        # outlive — and clean itself up after — the widget that started it.
+        self._task_thread = QThread(QApplication.instance())
         self._task.moveToThread(self._task_thread)
         self._task_thread.started.connect(self._task.run)
+        self._task_thread.finished.connect(self._task_thread.deleteLater)
         self._task.done.connect(self._on_task_done)
         self._task_thread.start()
 
@@ -644,10 +685,23 @@ class MotorPanel(QWidget):
         QMessageBox.information(self, "Motor Connection Test", msg)
 
     def _on_position_updated(self, x: float, y: float, z: float) -> None:
+        self._last_pos = (x, y, z)
         self._lbl_x.setText(f"X: {x:.4f} mm")
         self._lbl_y.setText(f"Y: {y:.4f} mm")
         self._lbl_z.setText(f"Z: {z:.4f} mm")
         self._stage_view.set_position(x, y, z)
+        self._refresh_status_chips(x, y, z)
+
+    def _refresh_connection_state(self) -> None:
+        """GUI-thread-only, I/O-free refresh of the connected/homed chip.
+
+        Reads only plain ``connected``/``homed`` attributes (exactly what
+        tct_gui.py's top-bar status strip already does on its own 1 s timer),
+        so it keeps the panel's own chip accurate even while the poller is
+        paused or the motor is disconnected — see the _conn_timer comment in
+        __init__ for why that case would otherwise go stale.
+        """
+        x, y, z = self._last_pos
         self._refresh_status_chips(x, y, z)
 
     def _refresh_status_chips(self, x: float, y: float, z: float) -> None:
@@ -655,7 +709,9 @@ class MotorPanel(QWidget):
         homed = bool(getattr(self._motor, "homed", False))
         if not connected:
             self._chip_homed.set_status("Offline", "neutral")
-        elif homed:
+            self._chip_limits.set_status("Limits --", "neutral")
+            return
+        if homed:
             self._chip_homed.set_status("Homed", "good")
         else:
             self._chip_homed.set_status("Not homed", "warn")
@@ -685,13 +741,45 @@ class MotorPanel(QWidget):
         """Legacy stub — polling now handled by _PositionPoller in a QThread."""
 
     def shutdown(self) -> None:
-        """Stop all worker threads — call before discarding the panel."""
-        if self._task_thread is not None:
+        """Stop all worker threads — call before discarding the panel.
+
+        Order matters (bench bug: a soft config-reload froze the panel):
+          1. Pause the poller *first* (a plain bool write, safe from the GUI
+             thread) so no new get_position() read can start while we tear
+             down — mirrors _run_async's own set_paused(True) use.
+          2. Best-effort interrupt any in-flight task (home/move) via
+             motor.stop() — the same call _emergency_stop() uses, and it is
+             deliberately safe/non-blocking even mid-move (see
+             MotorStageBase.stop() and GRBLMotorStage.stop(), which never
+             takes the command lock a running move holds).  This gives the
+             bounded wait below the best chance of the worker thread
+             *actually* finishing instead of merely timing out.
+          3. Quit + a BOUNDED wait — never an unbounded wait, which a stuck
+             serial read/long move could hang the GUI thread on.  A timeout
+             here is survivable (not a freeze): both worker threads are
+             parented to QApplication, not to this widget, and
+             self-deleteLater() on ``finished`` (see __init__ / _run_async),
+             so a thread that outlives this bounded wait cleans itself up on
+             its own later instead of Qt destroying a still-running QThread
+             as a side effect of this widget being deleted
+             (setCentralWidget() during a soft reload) — that
+             undefined-behaviour path was the actual freeze.
+        """
+        self._conn_timer.stop()
+        self._poller.set_paused(True)
+        if self._task_thread is not None and self._task_thread.isRunning():
+            try:
+                self._motor.stop()
+            except Exception:
+                logging.getLogger(__name__).debug(
+                    "motor.stop() during panel shutdown failed", exc_info=True)
             self._task_thread.quit()
-            self._task_thread.wait(2000)
+            self._task_thread.wait(3000)
+        self._task_thread = None
+        self._task = None
         self._poll_stop_requested.emit()
         self._poll_thread.quit()
-        self._poll_thread.wait(2000)
+        self._poll_thread.wait(3000)
 
     def closeEvent(self, event) -> None:
         self.shutdown()
