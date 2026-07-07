@@ -590,7 +590,8 @@ class TCTMainWindow(QMainWindow):
                       getattr(self, "_bias_panel", None),
                       getattr(self, "_planner_panel", None),
                       getattr(self, "_scope_panel", None),
-                      getattr(self, "_laser_panel", None)):
+                      getattr(self, "_laser_panel", None),
+                      getattr(self, "_monitor_panel", None)):
             if panel is not None and hasattr(panel, "refresh_theme"):
                 try:
                     panel.refresh_theme(self._theme_mode)

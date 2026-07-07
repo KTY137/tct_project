@@ -29,8 +29,9 @@ except ImportError:
 
 from devices.bias_supply_base import BiasSupplyBase
 from controller.scan_controller import VoltageScanConfig
+from gui.panel_kit import Card
 from gui.status_bus import notify
-from gui.style import axis_color, set_chip_state
+from gui.style import WARN_RED, axis_color, set_chip_state
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 
 
@@ -227,8 +228,8 @@ class BiasPanel(QWidget):
         root.addLayout(status_row)
 
         # ── Safety / compliance ────────────────────────────────────────
-        safe_box = QGroupBox("⚠ Compliance (current limit)")
-        safe_form = QFormLayout(safe_box)
+        safe_box = Card("⚠ Compliance (current limit)")
+        safe_form = QFormLayout()
 
         comp_uA = max(0.001, float(getattr(self._supply, "compliance_A", 100e-6)) * 1e6)
         self._spin_comp = QDoubleSpinBox()
@@ -243,7 +244,7 @@ class BiasPanel(QWidget):
         )
         self._spin_comp.valueChanged.connect(self._on_compliance_changed)
         self._lbl_comp_warn = QLabel("")
-        self._lbl_comp_warn.setStyleSheet("color: red; font-weight: bold;")
+        self._lbl_comp_warn.setStyleSheet(f"color: {WARN_RED}; font-weight: bold;")
         self._chip_comp_limit = StatusChip("Limit OK", "good")
 
         safe_form.addRow("Compliance:", self._spin_comp)
@@ -254,16 +255,18 @@ class BiasPanel(QWidget):
         set_button_icon(self._btn_set_comp, "mdi.check")
         self._btn_set_comp.clicked.connect(self._apply_compliance)
         safe_form.addRow(self._btn_set_comp)
+        safe_box.add_layout(safe_form)
         root.addWidget(safe_box)
 
         # ── Voltage control ────────────────────────────────────────────
         # Bias-axis rail (gui.style.axis_color("bias", ...)) marks this as
         # the panel's primary bias-axis control; the Live-Readout voltage
         # label and the two plots below echo the same amber (_restyle_bias_axis).
-        volt_box = QGroupBox("Bias Voltage")
-        volt_box.setObjectName("biasRail")
+        # Card.set_rail() replaces the old "#biasRail" objectName + inline
+        # QSS border — same amber accent, scoped to this Card via panel_kit.
+        volt_box = Card("Bias Voltage")
         self._volt_box = volt_box
-        volt_form = QFormLayout(volt_box)
+        volt_form = QFormLayout()
 
         vlim = abs(float(getattr(self._supply, "voltage_range_V", None) or 1100.0))
 
@@ -303,11 +306,12 @@ class BiasPanel(QWidget):
         btn_row.addWidget(self._btn_apply)
         btn_row.addWidget(self._btn_off)
         volt_form.addRow(btn_row)
+        volt_box.add_layout(volt_form)
         root.addWidget(volt_box)
 
         # ── Live readout ───────────────────────────────────────────────
-        read_box = QGroupBox("Live Readout")
-        read_form = QFormLayout(read_box)
+        read_box = Card("Live Readout")
+        read_form = QFormLayout()
 
         self._lbl_v = QLabel("— V")
         self._lbl_i = QLabel("— A")
@@ -317,13 +321,14 @@ class BiasPanel(QWidget):
         read_form.addRow("Voltage:", self._lbl_v)
         read_form.addRow("Current:", self._lbl_i)
         read_form.addRow("Compliance:", self._lbl_comp_status)
+        read_box.add_layout(read_form)
         root.addWidget(read_box)
 
         # ── Polarity ───────────────────────────────────────────────────
         # Read-only indicator (polled off-thread) + a DANGEROUS switch button
         # that only appears when the supply reports the channel reversible.
-        pol_box = QGroupBox("Polarity")
-        pol_form = QFormLayout(pol_box)
+        pol_box = Card("Polarity")
+        pol_form = QFormLayout()
         self._lbl_polarity = QLabel("—")
         self._lbl_polarity.setStyleSheet("font-weight: 700; font-size: 16px;")
         self._lbl_polarity.setToolTip("Current HV output polarity (read-only).")
@@ -337,6 +342,7 @@ class BiasPanel(QWidget):
         self._btn_polarity.clicked.connect(self._on_switch_polarity)
         self._btn_polarity.setVisible(False)   # shown only when reversible
         pol_form.addRow(self._btn_polarity)
+        pol_box.add_layout(pol_form)
         root.addWidget(pol_box)
 
         # ── IV scan ────────────────────────────────────────────────────
@@ -438,7 +444,7 @@ class BiasPanel(QWidget):
         card's rail, the live-voltage readout, and the IV/Vscan plot curves.
         Bias reads amber in both themes, everywhere in this panel."""
         color = axis_color("bias", self._theme_mode)
-        self._volt_box.setStyleSheet(f"#biasRail {{ border-left: 3px solid {color}; }}")
+        self._volt_box.set_rail("bias", self._theme_mode)
         self._lbl_v.setStyleSheet(f"color: {color}; font-weight: 600;")
         if _HAS_PG:
             self._iv_curve.setPen(pg.mkPen(color, width=2))

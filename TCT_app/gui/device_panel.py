@@ -5,12 +5,13 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer, QThread, QObject, Signal
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QGroupBox, QPushButton, QTableWidget,
+    QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QAbstractItemView,
     QMessageBox,
 )
 
 from controller.device_manager import DeviceManager
+from gui.panel_kit import Card
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 
 
@@ -86,9 +87,9 @@ class DeviceManagerWindow(QMainWindow):
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
-        box = QGroupBox("Hardware Devices")
+        box = Card("Hardware Devices")
         root.addWidget(box)
-        box_layout = QVBoxLayout(box)
+        box_layout = box.body
 
         status_row = QHBoxLayout()
         self._chip_summary = StatusChip("Devices idle", "neutral")

@@ -1,0 +1,180 @@
+"""Headless construct/grab checks for the panel_kit rollout — Batch 1
+(the five LOW-RISK mechanical panels: motor, bias, multi-bias, intensity,
+monitor, device manager).
+
+Follows the existing gui test idiom (see ``test_status_widgets.py`` /
+``test_planner_panel.py``): ``QT_QPA_PLATFORM=offscreen``, a shared
+``QApplication.instance()`` helper, no pytest-qt.
+
+Each touched widget is constructed and rendered (``.grab()``) under BOTH
+themes (light/dark) to confirm the QGroupBox -> Card swap and the new
+panel_header()s don't crash construction or leave a blank/zero-size widget
+in either theme. Two untouched panels (camera, settings) are also
+constructed to confirm the design-system swap in this batch has no bleed
+into panels outside its scope.
+"""
+from __future__ import annotations
+
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication, QFrame, QPushButton
+
+from controller.device_manager import DeviceManager
+from controller.slow_control_manager import SlowControlManager
+from devices.bias_channel import BiasChannel
+from devices.bias_supply_simulated import SimulatedBiasSupply
+from devices.camera_blackfly import BlackflyCamera
+from devices.intensity_simulated import SimulatedIntensityMonitor
+from devices.motor_simulated import SimulatedMotorStage
+from devices.slow_control_simulated import SimulatedSlowChannel
+from gui.bias_panel import BiasPanel
+from gui.camera_panel import CameraPanel
+from gui.device_panel import DeviceManagerWindow
+from gui.intensity_panel import IntensityPanel
+from gui.monitor_panel import MonitorPanel
+from gui.motor_panel import MotorPanel
+from gui.multi_bias_panel import MultiBiasPanel
+from gui.settings_window import SettingsWindow
+from gui.style import apply_theme
+
+
+def _app() -> QApplication:
+    return QApplication.instance() or QApplication([])
+
+
+def _grab_both_themes(make_panel, *, has_refresh: bool = True) -> None:
+    """Build *make_panel()*, render it under light then dark, call
+    ``refresh_theme`` if present, and confirm the pixmap is non-empty both
+    times. Always tears the panel down via ``shutdown()`` when available."""
+    app = _app()
+    apply_theme(app, "light")
+    panel = make_panel()
+    try:
+        pm_light = panel.grab()
+        assert not pm_light.isNull()
+        assert pm_light.width() > 0 and pm_light.height() > 0
+
+        apply_theme(app, "dark")
+        if has_refresh and hasattr(panel, "refresh_theme"):
+            panel.refresh_theme("dark")
+        pm_dark = panel.grab()
+        assert not pm_dark.isNull()
+        assert pm_dark.width() > 0 and pm_dark.height() > 0
+
+        if has_refresh and hasattr(panel, "refresh_theme"):
+            panel.refresh_theme("light")
+        apply_theme(app, "light")
+    finally:
+        shutdown = getattr(panel, "shutdown", None)
+        if shutdown is not None:
+            shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# Touched panels — both themes                                                #
+# --------------------------------------------------------------------------- #
+
+def test_motor_panel_constructs_both_themes():
+    _grab_both_themes(lambda: MotorPanel(SimulatedMotorStage()))
+
+
+def test_bias_panel_constructs_both_themes():
+    _grab_both_themes(lambda: BiasPanel(SimulatedBiasSupply()))
+
+
+def test_multi_bias_panel_constructs_both_themes():
+    def _make():
+        drv = SimulatedBiasSupply(channel_count=2, voltage_range_V=1000.0)
+        drv.connect()
+        return MultiBiasPanel([BiasChannel(drv, 0), BiasChannel(drv, 1)])
+    _grab_both_themes(_make)
+
+
+def test_intensity_panel_constructs_both_themes():
+    _grab_both_themes(lambda: IntensityPanel(SimulatedIntensityMonitor()))
+
+
+def test_monitor_panel_constructs_both_themes():
+    def _make():
+        mgr = SlowControlManager([SimulatedSlowChannel("Temp", "C")])
+        return MonitorPanel(mgr)
+    _grab_both_themes(_make)
+
+
+def test_device_manager_window_constructs_both_themes():
+    _grab_both_themes(lambda: DeviceManagerWindow(DeviceManager()))
+
+
+# --------------------------------------------------------------------------- #
+# Behavioural spot-checks: presentation swap kept every existing hook alive   #
+# --------------------------------------------------------------------------- #
+
+def test_motor_panel_hooks_survive_card_swap():
+    _app()
+    panel = MotorPanel(SimulatedMotorStage())
+    try:
+        # jogBtn / dangerBtn / segmented / instrumentReadout / controlCluster
+        # objectNames all still resolve after the QGroupBox -> Card swap
+        # (Card only wraps the section; it does not touch these inner hooks).
+        assert panel.findChild(QFrame, "instrumentReadout") is not None
+        assert panel.findChild(QFrame, "controlCluster") is not None
+        assert panel.findChild(QFrame, "segmented") is not None
+        jog_btns = [b for b in panel.findChildren(QPushButton)
+                    if b.objectName() == "jogBtn"]
+        assert len(jog_btns) == 6   # X+/X-/Y+/Y-/Z+/Z-
+        stop_btns = [b for b in panel.findChildren(QPushButton)
+                     if b.objectName() == "dangerBtn"]
+        assert len(stop_btns) == 1 and stop_btns[0].text() == "STOP"
+        # New Card sections carry the design-system surface objectName.
+        assert len(panel.findChildren(QFrame, "cardPane")) >= 5
+    finally:
+        panel.shutdown()
+
+
+def test_bias_panel_danger_and_rail_hooks_present():
+    _app()
+    panel = BiasPanel(SimulatedBiasSupply())
+    try:
+        assert panel._btn_off.objectName() == "dangerBtn"
+        assert panel._btn_polarity.objectName() == "dangerBtn"
+        # The amber rail now lives on the Card via set_rail()'s railAxis
+        # property instead of the old "#biasRail" objectName.
+        assert panel._volt_box.property("railAxis") == "bias"
+        assert "bias" in panel._volt_box.styleSheet() or \
+            panel._volt_box.property("railAxis") == "bias"
+    finally:
+        panel.shutdown()
+
+
+def test_multi_bias_panel_all_off_button_still_dangerous():
+    drv = SimulatedBiasSupply(channel_count=1, voltage_range_V=1000.0)
+    drv.connect()
+    panel = MultiBiasPanel([BiasChannel(drv, 0)])
+    try:
+        assert panel._btn_all_off.objectName() == "dangerBtn"
+        assert panel._btn_all_off.text() == "⏹ ALL OUTPUTS OFF"
+    finally:
+        panel.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# Untouched panels — construct only, to prove no bleed from this batch        #
+# --------------------------------------------------------------------------- #
+
+def test_camera_panel_still_constructs_untouched():
+    _app()
+    panel = CameraPanel(BlackflyCamera(simulation=True))
+    try:
+        pm = panel.grab()
+        assert not pm.isNull()
+    finally:
+        panel._timer.stop()
+
+
+def test_settings_window_still_constructs_untouched():
+    _app()
+    win = SettingsWindow()
+    pm = win.grab()
+    assert not pm.isNull()

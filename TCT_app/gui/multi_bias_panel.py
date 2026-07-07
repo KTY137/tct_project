@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from devices.bias_channel import BiasChannel
 from controller.scan_controller import VoltageScanConfig
 from gui.bias_panel import BiasPanel, _SupplyCallWorker
+from gui.panel_kit import panel_header
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, set_button_icon
 
@@ -56,7 +57,8 @@ class MultiBiasPanel(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
-        top = QHBoxLayout()
+        # The danger control sits in the header's trailing slot — top-right,
+        # ahead of the tabs, so it stays reachable and visible from any tab.
         self._btn_all_off = QPushButton("⏹ ALL OUTPUTS OFF")
         self._btn_all_off.setObjectName("dangerBtn")
         set_button_icon(self._btn_all_off, "mdi.power", color="white")
@@ -64,15 +66,20 @@ class MultiBiasPanel(QWidget):
             "Ramp EVERY connected HV channel to 0 V and disable its output."
         )
         self._btn_all_off.clicked.connect(self._all_outputs_off)
-        top.addWidget(self._btn_all_off)
+        root.addWidget(panel_header(
+            "TCT Control — High Voltage", "Bias Supplies",
+            trailing=[self._btn_all_off],
+        ))
+
+        status_row = QHBoxLayout()
         self._chip_all_off = StatusChip("All-off idle", "neutral")
         self._chip_channels = StatusChip("Channels --", "neutral")
         self._chip_compliance = StatusChip("Compliance --", "neutral")
-        top.addWidget(self._chip_all_off)
-        top.addWidget(self._chip_channels)
-        top.addWidget(self._chip_compliance)
-        top.addStretch()
-        root.addLayout(top)
+        status_row.addWidget(self._chip_all_off)
+        status_row.addWidget(self._chip_channels)
+        status_row.addWidget(self._chip_compliance)
+        status_row.addStretch()
+        root.addLayout(status_row)
 
         self._tabs = QTabWidget()
         root.addWidget(self._tabs)

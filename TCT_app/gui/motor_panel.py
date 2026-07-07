@@ -5,12 +5,13 @@ import logging
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, QSettings
 from PySide6.QtWidgets import (
-    QWidget, QGroupBox, QGridLayout, QHBoxLayout, QVBoxLayout,
+    QWidget, QGridLayout, QHBoxLayout, QVBoxLayout,
     QLabel, QDoubleSpinBox, QPushButton, QSizePolicy, QSplitter,
     QButtonGroup, QFrame,
 )
 
 from devices.motor_base import MotorStageBase
+from gui.panel_kit import Card, panel_header
 from gui.stage_view import StageView
 from gui.style import axis_color
 from gui.status_widgets import StatusChip, flash_button
@@ -155,12 +156,14 @@ class MotorPanel(QWidget):
         root.setContentsMargins(4, 4, 4, 4)
         root.setSpacing(14)
 
+        root.addWidget(panel_header("TCT Control — Motion", "Motor Stage"))
+
         # ── Position display ─────────────────────────────────────────
         # A dark "instrument screen" readout (same visual language as the
         # plot canvas) instead of three plain labels, so the current
         # position reads as the panel's live display at a glance.
-        pos_box = QGroupBox("Position")
-        pos_v = QVBoxLayout(pos_box)
+        pos_box = Card("Position")
+        pos_v = pos_box.body
         pos_v.setSpacing(10)
 
         readout = QFrame()
@@ -210,8 +213,8 @@ class MotorPanel(QWidget):
         # The cross, Z column and step-size presets all live inside one
         # recessed "controlCluster" card so they read as a single jog
         # controller rather than loose buttons in a form.
-        jog_box = QGroupBox("Jog")
-        jog_v = QVBoxLayout(jog_box)
+        jog_box = Card("Jog")
+        jog_v = jog_box.body
 
         cluster = QFrame()
         cluster.setObjectName("controlCluster")
@@ -374,8 +377,8 @@ class MotorPanel(QWidget):
         root.addWidget(jog_box)
 
         # ── Absolute move ─────────────────────────────────────────────
-        abs_box = QGroupBox("Absolute Move")
-        abs_layout = QGridLayout(abs_box)
+        abs_box = Card("Absolute Move")
+        abs_layout = QGridLayout()
         abs_layout.setHorizontalSpacing(10)
         abs_layout.setVerticalSpacing(6)
         self._spin_x = self._make_spin()
@@ -399,6 +402,7 @@ class MotorPanel(QWidget):
         btn_move.clicked.connect(self._move_abs)
         abs_layout.addWidget(btn_move, 2, 0, 1, 3)
         self._motion_widgets.extend([self._spin_x, self._spin_y, self._spin_z, btn_move])
+        abs_box.add_layout(abs_layout)
         root.addWidget(abs_box)
 
         # ── Action buttons ─────────────────────────────────────────────
@@ -406,8 +410,8 @@ class MotorPanel(QWidget):
         # on one row; STOP is its own full-width, red, unmistakable control
         # underneath — never disabled (see _motion_widgets below), so it
         # always fires immediately, mid-move or not.
-        actions_box = QGroupBox("Actions")
-        actions_v = QVBoxLayout(actions_box)
+        actions_box = Card("Actions")
+        actions_v = actions_box.body
         actions_v.setSpacing(10)
 
         secondary_row = QHBoxLayout()
@@ -441,8 +445,8 @@ class MotorPanel(QWidget):
         root.addWidget(actions_box)
 
         # ── Scan-integration helpers ──────────────────────────────────
-        helper_box = QGroupBox("Scan Integration")
-        helper_layout = QHBoxLayout(helper_box)
+        helper_box = Card("Scan Integration")
+        helper_layout = QHBoxLayout()
         helper_layout.setSpacing(8)
         btn_use_pos = QPushButton("Use Current Pos in Abs. Move")
         _apply_icon(btn_use_pos, "fa5s.clipboard-list")
@@ -454,6 +458,7 @@ class MotorPanel(QWidget):
         self._btn_set_start.clicked.connect(self._emit_set_as_start)
         helper_layout.addWidget(btn_use_pos)
         helper_layout.addWidget(self._btn_set_start)
+        helper_box.add_layout(helper_layout)
         root.addWidget(helper_box)
         root.addStretch(1)
 

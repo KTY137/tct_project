@@ -11,7 +11,7 @@ import logging
 
 from PySide6.QtCore import Qt, QTimer, QThread, QObject, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
+    QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QDoubleSpinBox, QPushButton,
 )
 
@@ -22,7 +22,9 @@ except ImportError:
     _HAS_PG = False
 
 from devices.intensity_base import IntensityMonitorBase
+from gui.panel_kit import Card, panel_header
 from gui.status_widgets import ReadoutCell, StatusChip, flash_button, set_button_icon
+from gui.style import OK_GREEN, WARN_RED
 
 logger = logging.getLogger(__name__)
 
@@ -95,9 +97,11 @@ class IntensityPanel(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
+        root.addWidget(panel_header("TCT Control · Instrument", "Intensity Monitor"))
+
         # ── Live values ───────────────────────────────────────────────
-        vals_box = QGroupBox("Reference Monitor")
-        vals_v = QVBoxLayout(vals_box)
+        vals_box = Card("Reference Monitor")
+        vals_v = vals_box.body
         status_row = QHBoxLayout()
         self._chip_live = StatusChip("Monitor offline", "neutral")
         self._chip_sat = StatusChip("Saturation --", "neutral")
@@ -193,7 +197,7 @@ class IntensityPanel(QWidget):
             stable, rms_rel = self._monitor.check_stability()
             msg = f"RMS {rms_rel*100:.2f} % — {'STABLE' if stable else 'UNSTABLE'}"
             self._lbl_stab.setText(msg)
-            color = "green" if stable else "red"
+            color = OK_GREEN if stable else WARN_RED
             self._lbl_stab.setStyleSheet(f"color: {color};")
             self._chip_stab.set_status("Stable" if stable else "Unstable",
                                        "good" if stable else "warn")
