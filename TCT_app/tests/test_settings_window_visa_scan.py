@@ -117,7 +117,7 @@ def test_dialog_open_scans_visa_once_not_once_per_picker(tmp_path, monkeypatch):
 def test_construction_does_not_block_on_slow_scan(tmp_path, monkeypatch):
     """A slow (bench-realistic) VISA enumeration must not stall __init__."""
     def slow_list():
-        time.sleep(1.0)
+        time.sleep(3.0)
         return []
 
     monkeypatch.setattr("devices.waveform_generator.list_visa_resources", slow_list)
@@ -127,18 +127,19 @@ def test_construction_does_not_block_on_slow_scan(tmp_path, monkeypatch):
     win = SettingsWindow(config_path=_write_cfg(tmp_path, _REAL_CONFIG.read_text(encoding="utf-8")))
     elapsed = time.monotonic() - t0
     try:
-        # Generous margin (well under the 1s simulated scan, but not so tight
-        # that ordinary widget-construction overhead under a loaded test
-        # suite can make this flaky) — the point is "orders of magnitude
-        # faster than the scan", not "instant".
-        assert elapsed < 0.5, f"SettingsWindow() blocked for {elapsed:.3f}s on the VISA scan"
+        # The point is "returned well before the scan could have finished",
+        # not "instant": the budget must stay below the simulated scan sleep
+        # above, but generous enough that widget-construction overhead on a
+        # loaded machine can't trip it (the old 1.0s/0.5s pairing flaked
+        # repeatedly under back-to-back suite runs, 2026-07-07/08).
+        assert elapsed < 2.0, f"SettingsWindow() blocked for {elapsed:.3f}s on the VISA scan"
         # The picker must stay usable (editable combo) while the scan runs.
         picker = win._scope_section._visa_addr
         assert picker._combo.isEnabled()
         assert picker._combo.isEditable()
         # Let the background scan actually land before teardown so this test
         # doesn't race its own QThread's shutdown.
-        assert _pump_until(app, lambda: win._visa_scan_mgr.cache is not None, timeout_s=2.0)
+        assert _pump_until(app, lambda: win._visa_scan_mgr.cache is not None, timeout_s=5.0)
     finally:
         win.close()
 
