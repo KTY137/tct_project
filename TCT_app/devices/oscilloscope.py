@@ -124,14 +124,30 @@ class Oscilloscope(BaseDevice):
         n_channels: int | None = None,
         simulation: bool = False,
     ) -> None:
+        """Construct the driver (no hardware I/O — connect() opens the link).
+
+        Channel-count precedence (resolved on connect, see
+        :meth:`_apply_channel_count_from_idn`):
+            explicit config (clamped down to a detected capability)
+            > *IDN? detection
+            > default 4.
+        An explicit ``n_channels`` is honored as-is when it is at or below the
+        instrument's detected capability (asking for FEWER channels than the
+        hardware has is a legitimate user choice).  It is clamped DOWN — with a
+        warning — only when it EXCEEDS the capability *IDN? proves the scope
+        has, because querying a nonexistent channel wedges the VISA session
+        (bench 2026-07-06: CH3/CH4 on a 2-channel TBS1052C).  Unknown models
+        (detection returns None) leave the explicit config untouched.
+        """
         super().__init__(simulation=simulation)
         self._address = visa_address
         self._vendor = vendor.lower()
         self._n_averages = max(int(n_averages), 1)
         self._timeout_ms = timeout_ms
-        # Channel count: explicit config wins; refined from *IDN? on connect.
-        self._n_channels_cfg = n_channels
-        self.n_channels = int(n_channels) if n_channels else 4
+        # Channel count: explicit config wins but is clamped to the detected
+        # hardware capability on connect (see _apply_channel_count_from_idn).
+        self._n_channels_cfg = int(n_channels) if n_channels else None
+        self.n_channels = self._n_channels_cfg if self._n_channels_cfg else 4
         # Trigger configuration (applied on connect; editable via the panel's
         # Trigger Settings window).
         self.trig_source = str(trigger_source)
@@ -189,11 +205,7 @@ class Oscilloscope(BaseDevice):
         idn = self._query_text("*IDN?").strip()
         logger.info("Oscilloscope connected: %s", idn)
         self._idn = idn
-        if not self._n_channels_cfg:
-            detected = tek_channel_count_from_idn(idn)
-            if detected:
-                self.n_channels = detected
-                logger.info("Oscilloscope channel count from *IDN?: %d", detected)
+        self._apply_channel_count_from_idn(idn)
         self._connected = True
         # Apply the configured trigger (previously this was never sent).
         try:
@@ -206,6 +218,40 @@ class Oscilloscope(BaseDevice):
             self.set_averaging(self._n_averages)
         except Exception as exc:
             logger.warning("Averaging config on connect failed: %s", exc)
+
+    def _apply_channel_count_from_idn(self, idn: str) -> None:
+        """Resolve ``self.n_channels`` from the *IDN? reply and the config.
+
+        Precedence (see the constructor docstring): explicit config, clamped
+        down to a detected capability, > detection > default 4.
+
+        * No explicit config: a recognised model's channel count refines the
+          default; an unknown model keeps the default.
+        * Explicit config at/below the detected capability: honored verbatim
+          (fewer channels than the hardware has is a valid user choice).
+        * Explicit config ABOVE the detected capability: clamped down to the
+          capability with a warning — querying a nonexistent channel wedges the
+          VISA session (bench 2026-07-06, CH3/CH4 on a 2-channel TBS1052C).
+
+        Reads only the passed string; performs no I/O.
+        """
+        detected = tek_channel_count_from_idn(idn)
+        if not self._n_channels_cfg:
+            if detected:
+                self.n_channels = detected
+                logger.info("Oscilloscope channel count from *IDN?: %d", detected)
+            return
+        if detected and self._n_channels_cfg > detected:
+            logger.warning(
+                "Config n_channels=%d exceeds the %d-channel capability "
+                "detected from *IDN? (%s) — clamping to %d to avoid wedging "
+                "the VISA session on a nonexistent channel.",
+                self._n_channels_cfg, detected, idn, detected,
+            )
+            self.n_channels = detected
+        else:
+            # Config honored as-is (unknown model, or config <= capability).
+            self.n_channels = self._n_channels_cfg
 
     def test_connection(self) -> str:
         """Query *IDN? and return the reply — confirms the VISA link."""

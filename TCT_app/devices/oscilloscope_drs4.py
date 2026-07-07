@@ -60,6 +60,11 @@ _TRIG_BITS: dict[str, int] = {
 # Number of samples per channel (fixed by DRS4 hardware)
 _N_SAMPLES = 1024
 
+# Analog channel count — fixed by the DRS4 evaluation-board hardware.  Cited
+# from this module's own spec block ("4 differential channels (CH 1–4)") and
+# the _TRIG_BITS table (CH1–CH4); not a heuristic.
+_N_CHANNELS = 4
+
 
 class DRS4Oscilloscope(BaseDevice):
     """
@@ -86,6 +91,9 @@ class DRS4Oscilloscope(BaseDevice):
         simulation: bool = True,
     ) -> None:
         super().__init__(simulation=simulation)
+        # Fixed hardware capability (see _N_CHANNELS); exposed like the VISA
+        # driver's attribute so ScopePanel can size its channel cards uniformly.
+        self.n_channels = _N_CHANNELS
         self._freq_ghz = frequency_ghz
         self._range = voltage_range
         self._trig_source = trigger_source.upper()

@@ -225,6 +225,16 @@ def _check_scope(scope: dict[str, Any], issues: list[ConfigIssue]) -> None:
     if not scope:
         return
     sec = "oscilloscope"
+    # Channel count: a whole number in 1–8 (no real bench scope has more).  A
+    # bad value isn't fatal — the driver falls back to *IDN? detection / its
+    # default 4 — so this is a WARNING, matching the section's value-check idiom.
+    n_ch = scope.get("n_channels")
+    if n_ch is not None and (not _is_num(n_ch) or float(n_ch) != int(n_ch)
+                             or not 1 <= int(n_ch) <= 8):
+        issues.append(ConfigIssue(
+            WARNING, sec,
+            f"n_channels should be an integer 1–8 (got {n_ch!r}); the driver "
+            "will use its *IDN?-detected or default channel count instead."))
     backend = str(scope.get("backend", "visa")).lower()
     if backend == "visa":
         stray = _DRS4_ONLY_SCOPE_KEYS & set(scope)

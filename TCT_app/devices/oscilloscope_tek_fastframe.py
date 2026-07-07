@@ -163,6 +163,11 @@ class TekFastFrameOscilloscope(BaseDevice):
         simulation: bool = False,
     ) -> None:
         super().__init__(simulation=simulation)
+        # Analog channel count — both instruments this driver targets are
+        # 4-channel: the MSO5204B and DPO5104 named in the class docstring
+        # (the trigger/waveform defaults reference CH4).  Exposed like the VISA
+        # driver's attribute for uniform capability reporting.
+        self.n_channels = 4
         self._address = visa_address
         self._timeout_ms = int(timeout_ms)
         self._trigger_channel = trigger_channel

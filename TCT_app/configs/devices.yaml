@@ -2,6 +2,7 @@
 oscilloscope:
   backend: visa
   n_averages: 1
+  # bench TBS1052C has 2; set 4 for the DRS4/4-ch scopes; auto-detected from *IDN? when omitted; clamped to detected capability.
   n_channels: 2
   simulation: false
   visa_address: USB0::0x0699::0x03C4::C010198::INSTR
