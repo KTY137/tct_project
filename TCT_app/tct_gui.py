@@ -1091,10 +1091,18 @@ class TCTMainWindow(QMainWindow):
     @Slot()
     def _on_plan_maybe_finished(self) -> None:
         """bridge.finished for the planner: forward only for a plan run, and
-        clear the flag so later classic scans don't leak into the panel."""
+        clear the flag so later classic scans don't leak into the panel.
+
+        The green "Run finished" paint is reserved for a genuinely FINISHED
+        terminal — after an abort / denied confirm / fault the run must not
+        be repainted as a clean finish (on_error already carried the message
+        and the crit styling); just release the panel's running state."""
         if self._plan_run_active:
             self._plan_run_active = False
-            self._planner_panel.on_finished()
+            if self._sm.state is AppState.FINISHED:
+                self._planner_panel.on_finished()
+            else:
+                self._planner_panel.set_running(False)
 
     @Slot(str)
     def _on_plan_manual_pause(self, prompt: str) -> None:

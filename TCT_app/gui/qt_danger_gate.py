@@ -114,6 +114,16 @@ class QtDangerGate(QObject):
 
     @Slot(object, object)
     def _on_confirm_requested(self, action: DangerAction, pending: _PendingConfirm) -> None:
+        # Decide UNDER THE LOCK whether this request is still live before
+        # showing anything: shutdown()/abort()/the confirm timeout may have
+        # already released the worker while this queued call sat undelivered
+        # in the event queue — showing the dialog then would pop a stray
+        # modal (e.g. during window teardown) whose answer nobody reads.
+        with self._lock:
+            active = (not self._closed) and pending in self._pending
+        if not active:
+            pending.event.set()   # idempotent — every path releases
+            return
         # try/finally: if the dialog itself raises, the blocked worker must
         # still be released immediately (result stays False = deny) instead
         # of stalling until the timeout.

@@ -563,6 +563,86 @@ def test_qt_danger_gate_timeout_denies():
     assert gate.shown_actions == []
 
 
+def test_qt_danger_gate_no_stray_dialog_after_shutdown():
+    """A queued confirm released by shutdown() must NOT pop a dialog when the
+    event loop later delivers the stale request (reviewer-reproduced BUG:
+    stray modal during window teardown)."""
+    _app()
+    gate = _StubGate(True)
+    action = DangerAction(kind="hv_ramp", summary="Ramp CH0 to -300 V")
+    result: list[bool] = []
+
+    def _worker() -> None:
+        result.append(gate.confirm(action))
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    # Let the worker post its queued request, then shut down BEFORE the GUI
+    # thread pumps events (mimics teardown racing an in-flight confirm).
+    time.sleep(0.1)
+    gate.shutdown()
+    t.join(timeout=5.0)
+    assert not t.is_alive()
+    assert result == [False]          # released as deny
+    # NOW deliver the stale queued request — no dialog may appear.
+    deadline = time.time() + 0.5
+    while time.time() < deadline:
+        QCoreApplication.processEvents()
+        time.sleep(0.005)
+    assert gate.shown_actions == []
+
+
+def test_qt_danger_gate_timeout_then_pump_shows_no_stray_dialog():
+    """Same stray-request guard for the timeout path: after a confirm times
+    out (deny), pumping the loop must not show the now-orphaned dialog."""
+    _app()
+    gate = _StubGate(True, timeout_s=0.05)
+    action = DangerAction(kind="move", summary="Move stage")
+    result: list[bool] = []
+
+    def _worker() -> None:
+        result.append(gate.confirm(action))
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t.join(timeout=5.0)
+    assert not t.is_alive() and result == [False]
+    deadline = time.time() + 0.5
+    while time.time() < deadline:
+        QCoreApplication.processEvents()
+        time.sleep(0.005)
+    assert gate.shown_actions == []
+
+
+def test_qt_danger_gate_dialog_exception_releases_worker_as_deny():
+    """If the dialog slot raises, the blocked worker must be released
+    immediately as deny — not stall until the timeout."""
+    _app()
+
+    class _RaisingGate(QtDangerGate):
+        def _show_dialog(self, action: DangerAction) -> bool:
+            raise RuntimeError("dialog exploded")
+
+    gate = _RaisingGate(timeout_s=5.0)   # long timeout: release must NOT need it
+    action = DangerAction(kind="hv_ramp", summary="Ramp")
+    result: list[bool] = []
+
+    def _worker() -> None:
+        result.append(gate.confirm(action))
+
+    t = threading.Thread(target=_worker, daemon=True)
+    t.start()
+    t0 = time.time()
+    deadline = time.time() + 5.0
+    while t.is_alive() and time.time() < deadline:
+        QCoreApplication.processEvents()
+        time.sleep(0.005)
+    t.join(timeout=1.0)
+    assert not t.is_alive()
+    assert result == [False]
+    assert time.time() - t0 < 4.0     # released by the finally, not the timeout
+
+
 def test_qt_danger_gate_shutdown_denies_pending_and_future():
     _app()
     gate = _StubGate(True, timeout_s=5.0)
