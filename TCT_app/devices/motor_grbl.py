@@ -171,8 +171,13 @@ class GRBLMotorStage(MotorStageBase):
                 "pyserial is not installed. Run: pip install pyserial"
             ) from exc
         try:
+            # Both read AND write timeouts are explicit: without write_timeout a
+            # write to a wedged/unplugged port blocks forever — which would also
+            # hang the emergency stop() (it writes the jog-cancel / M410).  With
+            # it, a stuck write raises SerialTimeoutException promptly and the
+            # caller fails safe instead of freezing.
             self._ser = serial.Serial(
-                self._port, self._baud, timeout=2.0
+                self._port, self._baud, timeout=2.0, write_timeout=2.0,
             )
             time.sleep(2.0)          # GRBL sends welcome banner on connect
             # Auto-detect the firmware dialect and let it win over the config —
@@ -391,6 +396,10 @@ class GRBLMotorStage(MotorStageBase):
                     self._grbl_get_position()
                 self.logger.info("GRBLMotorStage homed — machine pos %s", self._pos)
             except Exception as exc:
+                # A homing failure (endstop not tripping, ALARM, comms drop) must
+                # not leave the stage creeping toward an endstop — halt, then
+                # surface the failure clearly to the caller.
+                self._fail_safe_halt("home")
                 raise MotorHomingError(f"Homing failed: {exc}") from exc
 
         # Drive to the centre of the soft-limit envelope so the stage parks at a
@@ -428,24 +437,31 @@ class GRBLMotorStage(MotorStageBase):
         if self.simulation:
             self._pos = machine
             return
-        if self._marlin:
-            cmd = (f"G1 X{machine.x_mm:.4f} Y{machine.y_mm:.4f} "
-                   f"Z{machine.z_mm:.4f} F{self._feed:.0f}")
-            self._send_wait(cmd)
-            self._send_wait("M400", timeout=120.0)
-        else:
-            # Absolute move via GRBL's JOG in MACHINE coordinates ($J=G53 G90):
-            #  • G53  → machine frame, immune to any G54/G92 work offset
-            #  • G90  → absolute target
-            #  • out-of-range target is *refused* (error:15); it does NOT trip an
-            #    ALARM that resets/locks the controller
-            #  • same jog engine as the (reliable) relative moves.  A plain
-            #    "G53 G1" was hanging _grbl_wait_idle on this board right after
-            #    homing — the jog form does not.
-            cmd = (f"$J=G53 G90 X{machine.x_mm:.4f} Y{machine.y_mm:.4f} "
-                   f"Z{machine.z_mm:.4f} F{self._feed:.0f}")
-            self._send_wait(cmd)
-            self._grbl_wait_idle(timeout=120.0)
+        try:
+            if self._marlin:
+                cmd = (f"G1 X{machine.x_mm:.4f} Y{machine.y_mm:.4f} "
+                       f"Z{machine.z_mm:.4f} F{self._feed:.0f}")
+                self._send_wait(cmd)
+                self._send_wait("M400", timeout=120.0)
+            else:
+                # Absolute move via GRBL's JOG in MACHINE coordinates ($J=G53 G90):
+                #  • G53  → machine frame, immune to any G54/G92 work offset
+                #  • G90  → absolute target
+                #  • out-of-range target is *refused* (error:15); it does NOT trip
+                #    an ALARM that resets/locks the controller
+                #  • same jog engine as the (reliable) relative moves.  A plain
+                #    "G53 G1" was hanging _grbl_wait_idle on this board right
+                #    after homing — the jog form does not.
+                cmd = (f"$J=G53 G90 X{machine.x_mm:.4f} Y{machine.y_mm:.4f} "
+                       f"Z{machine.z_mm:.4f} F{self._feed:.0f}")
+                self._send_wait(cmd)
+                self._grbl_wait_idle(timeout=120.0)
+        except DeviceError:
+            self._fail_safe_halt("move_to")   # already a clear error — just halt
+            raise
+        except Exception as exc:              # e.g. a raw serial write/read error
+            self._fail_safe_halt("move_to")
+            raise DeviceError(f"Motor move_to failed: {exc}") from exc
         self._pos = machine
 
     def move_relative(self, dx_mm: float, dy_mm: float, dz_mm: float) -> None:
@@ -476,8 +492,15 @@ class GRBLMotorStage(MotorStageBase):
         ddy = machine.y_mm - cur.y_mm
         ddz = machine.z_mm - cur.z_mm
         cmd = f"$J=G91 X{ddx:.4f} Y{ddy:.4f} Z{ddz:.4f} F{self._feed:.0f}"
-        self._send_wait(cmd)
-        self._grbl_wait_idle()
+        try:
+            self._send_wait(cmd)
+            self._grbl_wait_idle()
+        except DeviceError:
+            self._fail_safe_halt("move_relative")
+            raise
+        except Exception as exc:
+            self._fail_safe_halt("move_relative")
+            raise DeviceError(f"Motor move_relative failed: {exc}") from exc
         self._pos = machine
 
     def stop(self) -> None:
@@ -600,6 +623,20 @@ class GRBLMotorStage(MotorStageBase):
         """
         if self.limits is not None:
             self.limits.check(pos)
+
+    def _fail_safe_halt(self, op: str) -> None:
+        """Best-effort emergency stop after a comms/motion error mid-operation.
+
+        Safety rule: never continue after a hardware error during motion — try
+        to decelerate the stage and surface the failure.  ``stop()`` is itself
+        exception-safe (it swallows serial errors and never takes the command
+        lock), so this can never mask or delay the original error.
+        """
+        try:
+            self.stop()
+        except Exception:
+            pass
+        self.logger.error("%s failed — issued fail-safe stop.", op)
 
     def _send(self, cmd: str) -> None:
         """Send a G-code command (no reply wait)."""

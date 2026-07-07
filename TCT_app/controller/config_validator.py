@@ -179,9 +179,22 @@ def _check_motor(motor: dict[str, Any], issues: list[ConfigIssue]) -> None:
             issues.append(ConfigIssue(ERROR, sec,
                                       f"software_limits {ax}: non-numeric bound"))
             axes_ok = False
-        elif float(lo) >= float(hi):
-            issues.append(ConfigIssue(ERROR, sec,
-                                      f"software_limits {ax}: min ({lo}) must be < max ({hi})"))
+        elif float(lo) > float(hi):
+            # The exact class of bug that shipped: min=300, max=0 makes
+            # 'min <= pos <= max' false for EVERY position, so all moves are
+            # silently refused.  Name the axis and both values, and say why.
+            issues.append(ConfigIssue(
+                ERROR, sec,
+                f"software_limits {ax}: min ({lo}) > max ({hi}) — bounds are "
+                f"SWAPPED, so '{ax}_min_mm <= pos <= {ax}_max_mm' is false for "
+                "EVERY position and all moves are refused. Swap the two values."))
+            axes_ok = False
+        elif float(lo) == float(hi):
+            issues.append(ConfigIssue(
+                ERROR, sec,
+                f"software_limits {ax}: min == max == {lo} — a ZERO-WIDTH "
+                f"envelope leaves only one reachable point on {ax.upper()}; "
+                f"widen {ax}_min_mm / {ax}_max_mm."))
             axes_ok = False
 
     # Firmware dialect vs. limit sign convention.  GRBL homes to machine 0 with
@@ -212,8 +225,10 @@ def _check_motor(motor: dict[str, Any], issues: list[ConfigIssue]) -> None:
     if bool(marlin) and motor.get("push_steps_to_grbl"):
         issues.append(ConfigIssue(
             WARNING, sec,
-            "push_steps_to_grbl: true is IGNORED with marlin: true "
-            "($100-$102 are GRBL settings; Marlin uses M92)."))
+            "push_steps_to_grbl: true is IGNORED under marlin: true — $100-$102 "
+            "are GRBL settings and Marlin stores steps/mm via M92. To silence "
+            "this, set push_steps_to_grbl: false; only set marlin: false if the "
+            "controller really runs GRBL (auto-detect at connect confirms which)."))
     if bool(marlin) and str(motor.get("snap_mode", "off")).lower() == "off" \
             and "steps_per_mm" in motor and not motor.get("push_steps_to_grbl"):
         issues.append(ConfigIssue(

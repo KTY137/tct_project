@@ -11,12 +11,15 @@ MotorStageBase — no concrete class ever leaks past the device layer.
 """
 from __future__ import annotations
 
+import logging
 import time
 from abc import abstractmethod
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
 from .base import BaseDevice, DeviceError
+
+_limits_logger = logging.getLogger("SoftwareLimits")
 
 
 class MotorLimitError(DeviceError):
@@ -42,9 +45,20 @@ class SoftwareLimits:
     z_min: float = -10.0
     z_max: float =  10.0
 
+    def __post_init__(self) -> None:
+        # Guarantee ``check()`` can trust its bounds: no dataclass instance —
+        # however it was built (defaults, from_config, or a direct call) — is
+        # ever left with an envelope that silently blocks all motion.
+        self.validate()
+
     @classmethod
     def from_config(cls, cfg: dict) -> "SoftwareLimits":
-        """Build from a devices.yaml software_limits block."""
+        """Build from a devices.yaml software_limits block.
+
+        The resulting instance is run through :meth:`validate` (via
+        ``__post_init__``), so a swapped or zero-width envelope is caught and
+        loudly logged here instead of silently refusing every move later.
+        """
         return cls(
             x_min=cfg.get("x_min_mm", cls.x_min),
             x_max=cfg.get("x_max_mm", cls.x_max),
@@ -53,6 +67,59 @@ class SoftwareLimits:
             z_min=cfg.get("z_min_mm", cls.z_min),
             z_max=cfg.get("z_max_mm", cls.z_max),
         )
+
+    def validate(self) -> None:
+        """Detect and neutralise an incoherent soft-limit envelope.
+
+        Two failure classes silently block motion and must never pass unnoticed:
+
+          * **Swapped bounds** (``min > max``) — ``check()`` refuses *every*
+            position, so no move is ever accepted.  This is the exact bug that
+            shipped in devices.yaml (x_min=300, x_max=0).  We auto-correct by
+            swapping the pair in place and log a loud WARNING.  The real fix
+            belongs in devices.yaml, which ``config_validator`` reports as an
+            ERROR that blocks ``connect_all`` — auto-correction here only keeps
+            the app launchable and the bounds coherent; it never authorises a
+            real move on its own (a flagged config never connects).
+          * **Zero-width axis** (``min == max``) — only a single point is
+            reachable.  There is no correct width to invent, so we leave the
+            values untouched but log a loud WARNING (the validator flags it too).
+
+        Chosen behaviour is auto-correct-and-warn rather than *raise* because
+        ``SoftwareLimits.from_config`` runs inside ``DeviceManager.__init__``,
+        which is not guarded at application startup: raising there would prevent
+        the app from launching at all on a bad config, whereas the established
+        contract is that config errors are surfaced and *block connect_all*
+        while the app still starts and shows what is wrong.
+        """
+        for lo_attr, hi_attr, axis in (
+            ("x_min", "x_max", "X"),
+            ("y_min", "y_max", "Y"),
+            ("z_min", "z_max", "Z"),
+        ):
+            lo, hi = getattr(self, lo_attr), getattr(self, hi_attr)
+            # Non-numeric bounds are a separate error class handled loudly by
+            # config_validator; don't crash __post_init__ trying to compare them.
+            if not (isinstance(lo, (int, float)) and isinstance(hi, (int, float))):
+                continue
+            if lo > hi:
+                _limits_logger.warning(
+                    "Software limits for %s axis are SWAPPED (min=%s > max=%s) — "
+                    "auto-correcting to [%s, %s]. This envelope would otherwise "
+                    "refuse EVERY move. Fix motor_stage.software_limits in "
+                    "devices.yaml so %s_min_mm < %s_max_mm.",
+                    axis, lo, hi, hi, lo, axis.lower(), axis.lower(),
+                )
+                setattr(self, lo_attr, hi)
+                setattr(self, hi_attr, lo)
+            elif lo == hi:
+                _limits_logger.warning(
+                    "Software limits for %s axis are ZERO-WIDTH (min == max == "
+                    "%s) — only that single point is reachable, so the axis "
+                    "cannot move. Widen motor_stage.software_limits.%s_min_mm / "
+                    "%s_max_mm in devices.yaml.",
+                    axis, lo, axis.lower(), axis.lower(),
+                )
 
     def check(self, pos: Position) -> None:
         """Raise MotorLimitError if *pos* is outside any limit."""

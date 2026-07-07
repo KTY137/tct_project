@@ -44,6 +44,26 @@ def test_min_ge_max_is_error():
     assert any("min" in e for e in errors(validate_config(cfg)))
 
 
+def test_swapped_limits_is_error_naming_axis_and_values():
+    """The exact shipped bug: x_min=300, x_max=0 blocks every move.
+
+    Must be an explicit ERROR that names the axis AND both values (so an
+    operator can see and fix it), not a silent pass."""
+    cfg = {"motor_stage": _motor(software_limits={
+        "x_min_mm": 300.0, "x_max_mm": 0.0})}
+    errs = errors(validate_config(cfg))
+    assert any("x" in e and "300" in e and "0" in e and "SWAP" in e.upper()
+               for e in errs), errs
+
+
+def test_zero_width_axis_is_error():
+    """A zero-width axis (min == max) leaves one reachable point → ERROR."""
+    cfg = {"motor_stage": _motor(software_limits={
+        "z_min_mm": 5.0, "z_max_mm": 5.0})}
+    errs = errors(validate_config(cfg))
+    assert any("z" in e and "ZERO-WIDTH" in e.upper() for e in errs), errs
+
+
 def test_push_steps_with_marlin_warns():
     cfg = {"motor_stage": _motor(push_steps_to_grbl=True)}
     assert any("push_steps_to_grbl" in w for w in warnings(validate_config(cfg)))
@@ -75,12 +95,13 @@ def test_bad_analysis_window_is_error():
 
 
 def test_current_shipped_yaml_parses_and_validates():
-    """Smoke test: the live devices.yaml parses and the validator runs on it.
+    """The live devices.yaml parses and validates with zero blocking errors.
 
-    NOTE the shipped config currently carries a known contradiction
-    (marlin: true + GRBL-style negative software_limits) that the motor
-    revamp will resolve; until then the validator is *expected* to flag the
-    motor_stage section, and connect_all() refuses to run with it.
+    The historical contradiction (marlin: true + a GRBL-style negative,
+    swapped-limits envelope where x_min=300 > x_max=0) has been fixed in the
+    shipped config — a positive 0..296 / 0..298 / 0..400 envelope — so the
+    validator must now find NO errors at all.  (push_steps_to_grbl + marlin is
+    still a WARNING, which does not block connect_all.)
     """
     from pathlib import Path
     import yaml
@@ -88,8 +109,8 @@ def test_current_shipped_yaml_parses_and_validates():
     cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
     issues = validate_config(cfg)
     assert isinstance(issues, list)
-    for e in errors(issues):
-        assert "motor_stage" in e, f"unexpected non-motor config error: {e}"
+    assert errors(issues) == [], \
+        f"shipped devices.yaml should validate clean: {errors(issues)}"
 
 
 # --------------------------------------------------------------------------- #

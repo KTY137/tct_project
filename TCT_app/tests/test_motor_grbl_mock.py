@@ -5,6 +5,7 @@ regression test for the Marlin emergency-stop deadlock: stop() must never
 take the command lock (a running move holds it inside _send_wait for up to
 120 s).
 """
+import logging
 import queue
 import sys
 import threading
@@ -162,6 +163,61 @@ class TestFirmwareDetect:
         m = GRBLMotorStage(serial_port="MOCK", marlin=True, simulation=False)
         m._ser = MockSerial([])
         assert m._detect_firmware() is None
+
+
+class TestSoftwareLimitsGuard:
+    """SoftwareLimits must never silently accept an envelope that blocks motion.
+
+    Regression for the shipped soft-limit bug: x_min=300, x_max=0 made
+    'min <= pos <= max' false for EVERY position, so every move was refused and
+    nothing warned that the envelope was impossible.
+    """
+
+    def test_valid_bounds_emit_no_warning(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="SoftwareLimits"):
+            lim = SoftwareLimits(0, 235, 0, 235, 0, 250)
+        assert caplog.records == []
+        lim.check(Position(10, 10, 10))                 # in range → ok
+        with pytest.raises(MotorLimitError):
+            lim.check(Position(300, 0, 0))              # out of range → refused
+
+    def test_defaults_stay_valid(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="SoftwareLimits"):
+            lim = SoftwareLimits()                       # ±50 / ±10 defaults
+        assert caplog.records == []
+        lim.check(Position(0, 0, 0))
+
+    def test_swapped_bounds_autocorrected_and_warned(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="SoftwareLimits"):
+            lim = SoftwareLimits(x_min=300, x_max=0,
+                                 y_min=0, y_max=235, z_min=0, z_max=250)
+        # Corrected in place so check() can trust its bounds …
+        assert (lim.x_min, lim.x_max) == (0, 300)
+        # … and it was loud, naming the axis + both values.
+        msg = " ".join(r.getMessage() for r in caplog.records)
+        assert "SWAPPED" in msg and "300" in msg and "0" in msg
+        lim.check(Position(150, 10, 10))                 # now accepted
+        with pytest.raises(MotorLimitError):
+            lim.check(Position(400, 10, 10))            # still bounded
+
+    def test_zero_width_axis_warns_but_does_not_raise(self, caplog):
+        with caplog.at_level(logging.WARNING, logger="SoftwareLimits"):
+            lim = SoftwareLimits(x_min=0, x_max=235, y_min=0, y_max=235,
+                                 z_min=7, z_max=7)        # Z pinned to one point
+        msg = " ".join(r.getMessage() for r in caplog.records)
+        assert "ZERO-WIDTH" in msg
+        lim.check(Position(10, 10, 7))                    # the one reachable Z
+        with pytest.raises(MotorLimitError):
+            lim.check(Position(10, 10, 8))               # any other Z refused
+
+    def test_from_config_swapped_is_autocorrected(self):
+        lim = SoftwareLimits.from_config({
+            "x_min_mm": 300.0, "x_max_mm": 0.0,
+            "y_min_mm": 0.0, "y_max_mm": 200.0,
+            "z_min_mm": 0.0, "z_max_mm": 400.0,
+        })
+        assert lim.x_min == 0.0 and lim.x_max == 300.0
+        lim.check(Position(150, 100, 200))               # a coherent envelope now
 
 
 class TestWaitIdleHoldState:
