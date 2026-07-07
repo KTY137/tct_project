@@ -231,3 +231,166 @@ class TestWaitIdleHoldState:
         with pytest.raises(DeviceError, match="[Hh]old"):
             m._grbl_wait_idle(timeout=10.0)
         assert time.monotonic() - t0 < 5.0
+
+
+# --------------------------------------------------------------------------- #
+# Marlin M114 position-readback regression (real CR-10S / Marlin 2.1.2.8)      #
+# --------------------------------------------------------------------------- #
+#
+# Ground truth captured from the physical bench (used VERBATIM below):
+#   * M114 answers with `X:.. Y:.. Z:.. Count X:.. Y:.. Z:..` then an
+#     ADVANCED_OK line `ok P15 B2` (the 'ok' carries a ` P<planner> B<block>`
+#     suffix — NOT a bare 'ok').
+#   * The FIRST M114 in a burst is SILENTLY DROPPED (no position line, no ok).
+#   * Unsolicited lines (e.g. `echo:SD card released`) are interleaved.
+#
+# The bug: after a real G28, the single post-home M114 was dropped, the old
+# reader timed out and RETURNED THE STALE cached position (54/52) while the
+# stage was physically at (4,2,0).  A wrong internal position sends absolute
+# moves to the wrong place and validates soft limits against a lie.
+
+# Verbatim bench captures ---------------------------------------------------
+CR10S_M114_LINE = b"X:4.00 Y:2.00 Z:0.00 Count X:320 Y:160 Z:0\n"
+CR10S_ADVANCED_OK = b"ok P15 B2\n"
+CR10S_M114_REPLY = CR10S_M114_LINE + CR10S_ADVANCED_OK
+CR10S_ECHO = b"echo:SD card released\n"
+
+# The stale position the bug used to return — physically wrong after homing.
+STALE_POS = Position(54.0, 52.0, 0.0)
+HOMED_POS = Position(4.0, 2.0, 0.0)
+
+
+class FakeMarlinSerial:
+    """Duck-typed serial that replays real CR-10S / Marlin 2.1.2.8 captures.
+
+    ``m114_replies`` scripts the reply pushed into the read buffer for each
+    successive ``M114`` write: ``b""`` models the silently-dropped first burst,
+    and any write past the end of the list also pushes nothing (dropped).  Every
+    other non-empty write (e.g. ``G28``/``G1``/``M400``) pushes ``other_reply``
+    (Marlin's bare ``ok``).  ``reset_input_buffer`` clears the read buffer, just
+    like the real port — the driver calls it before each M114 attempt.
+    """
+
+    def __init__(self, m114_replies, other_reply=b"ok\n", timeout=0.02):
+        self._m114_replies = list(m114_replies)
+        self._other_reply = other_reply
+        self.timeout = timeout          # real pyserial attribute the driver reads
+        self.is_open = True
+        self.written: list[bytes] = []
+        self._buf = b""
+        self._m114_count = 0
+
+    def write(self, data: bytes) -> None:
+        self.written.append(data)
+        payload = data.strip()
+        if payload == b"M114":
+            if self._m114_count < len(self._m114_replies):
+                self._buf += self._m114_replies[self._m114_count]
+            self._m114_count += 1
+        elif payload and self._other_reply is not None:
+            self._buf += self._other_reply
+
+    def flush(self) -> None:
+        pass
+
+    def reset_input_buffer(self) -> None:
+        self._buf = b""
+
+    def readline(self) -> bytes:
+        if not self._buf:
+            time.sleep(self.timeout)     # emulate a read that hits its timeout
+            return b""
+        idx = self._buf.find(b"\n")
+        if idx >= 0:
+            line, self._buf = self._buf[:idx + 1], self._buf[idx + 1:]
+            return line
+        line, self._buf = self._buf, b""
+        return line
+
+    def close(self) -> None:
+        self.is_open = False
+
+    @property
+    def in_waiting(self) -> int:
+        return len(self._buf)
+
+    def _m114_writes(self) -> int:
+        return sum(1 for w in self.written if w.strip() == b"M114")
+
+
+def _marlin_stage_with(ser):
+    m = GRBLMotorStage(serial_port="MOCK", marlin=True, simulation=False,
+                       home_to_center=False)
+    m._ser = ser
+    m._connected = True
+    m.limits = SoftwareLimits(x_min=0, x_max=235, y_min=0, y_max=235,
+                              z_min=0, z_max=250)
+    return m
+
+
+class TestMarlinM114Robustness:
+    def test_first_m114_dropped_retries_and_returns_fresh(self):
+        """(a) 1st M114 drops, 2nd answers — retry, return (4,2,0) not stale."""
+        ser = FakeMarlinSerial([b"", CR10S_M114_REPLY])
+        m = _marlin_stage_with(ser)
+        m._pos = STALE_POS                      # the ghost the bug returned
+        pos = m._marlin_get_position()
+        assert pos == HOMED_POS
+        assert m._pos == HOMED_POS
+        assert ser._m114_writes() == 2          # proof it retried
+
+    def test_unsolicited_echo_before_position_is_skipped(self):
+        """(b) `echo:SD card released` interleaved — position still parsed."""
+        ser = FakeMarlinSerial([CR10S_ECHO + CR10S_M114_REPLY])
+        m = _marlin_stage_with(ser)
+        assert m._marlin_get_position() == HOMED_POS
+
+    def test_advanced_ok_is_consumed_so_next_send_wait_is_clean(self):
+        """(c) ADVANCED_OK `ok P15 B2` consumed — buffer empty afterwards."""
+        ser = FakeMarlinSerial([CR10S_M114_REPLY])
+        m = _marlin_stage_with(ser)
+        assert m._marlin_get_position() == HOMED_POS
+        assert ser.in_waiting == 0              # 'ok P15 B2' was drained
+        # A following command gets its OWN ack, not a stale leftover 'ok'.
+        assert m._send_wait("G1 X4 Y2 Z0 F3000").lower().startswith("ok")
+
+    def test_all_attempts_dropped_raises_not_stale(self, monkeypatch):
+        """(d) every M114 dropped — raise DeviceError, never return stale."""
+        import devices.motor_grbl as mg
+        monkeypatch.setattr(mg, "_MARLIN_M114_ATTEMPT_TIMEOUT_S", 0.1)
+        from devices.base import DeviceError
+        ser = FakeMarlinSerial([b"", b"", b""])
+        m = _marlin_stage_with(ser)
+        m._pos = STALE_POS
+        with pytest.raises(DeviceError, match="no position response"):
+            m._marlin_get_position()
+        assert ser._m114_writes() == mg._MARLIN_M114_ATTEMPTS
+
+    def test_home_recovers_from_dropped_post_g28_m114(self):
+        """The exact bench bug: G28 ok, post-home M114 dropped once, then the
+        homed corner arrives — home() must end at (4,2,0), NOT the stale cache."""
+        ser = FakeMarlinSerial([b"", CR10S_M114_REPLY])   # M114 #1 dropped
+        m = _marlin_stage_with(ser)
+        m._pos = STALE_POS
+        m.home()                                 # G28 -> M114(drop) -> retry
+        assert m.homed
+        assert m._pos == HOMED_POS               # not (54,52,0)
+
+
+class TestMarlinConnectPrime:
+    def test_prime_fires_one_m114_and_drains_reply(self):
+        ser = FakeMarlinSerial([CR10S_M114_REPLY])
+        m = _marlin_stage_with(ser)
+        m._marlin_prime()
+        assert ser._m114_writes() == 1
+        assert ser.in_waiting == 0               # reply fully drained, clean
+
+    def test_prime_swallows_errors_and_releases_lock(self):
+        class Boom(FakeMarlinSerial):
+            def write(self, data):               # port wedged mid-prime
+                raise OSError("port wedged")
+
+        m = _marlin_stage_with(Boom([]))
+        m._marlin_prime()                        # must NOT raise
+        assert m._lock.acquire(blocking=False)   # lock was released
+        m._lock.release()

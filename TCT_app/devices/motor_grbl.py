@@ -47,6 +47,15 @@ _MARLIN_POS = re.compile(
     r"^X:([-\d]+\.\d+)\s+Y:([-\d]+\.\d+)\s+Z:([-\d]+\.\d+)"
 )
 
+# M114 robustness (bench-captured from a real CR-10S / Marlin 2.1.2.8):
+#   * The FIRST M114 in a burst is silently dropped — no position line and no
+#     'ok' ever arrive — so a single query is unreliable and must be retried.
+#   * Retrying (rather than returning a stale cache) is the safety fix: a caller
+#     acting on a wrong position drives an absolute move to the wrong place and
+#     validates soft limits against a lie.
+_MARLIN_M114_ATTEMPTS = 3
+_MARLIN_M114_ATTEMPT_TIMEOUT_S = 1.5
+
 
 class GRBLMotorStage(MotorStageBase):
     """
@@ -205,6 +214,10 @@ class GRBLMotorStage(MotorStageBase):
             self._connected = True   # set before _send_wait so it is permitted
             if not self._marlin:
                 self._grbl_reset_clean()
+            else:
+                # Spend the known-unreliable first-after-reset M114 now so the
+                # first real get_position() is clean (best-effort, never moves).
+                self._marlin_prime()
             self.logger.info(
                 "GRBLMotorStage connected on %s @ %d baud (marlin=%s)",
                 self._port, self._baud, self._marlin,
@@ -772,30 +785,85 @@ class GRBLMotorStage(MotorStageBase):
         raise DeviceError(f"GRBL move did not complete within {timeout:.0f} s")
 
     def _marlin_get_position(self) -> Position:
+        """Query Marlin for the live position (M114) and update ``self._pos``.
+
+        Robustness notes from a real CR-10S / Marlin 2.1.2.8 bench capture:
+
+          * The FIRST M114 in a burst is *silently dropped* — no position line
+            and no 'ok' arrive.  We therefore RETRY up to
+            ``_MARLIN_M114_ATTEMPTS`` times instead of trusting one query.
+          * Unsolicited lines (``echo:``/``busy:``/``Cap:``, blanks) are
+            interleaved and are skipped while hunting the ``X:.. Y:.. Z:..``
+            report (the anchored ``_MARLIN_POS`` regex already ignores the
+            ``Count X:..`` step suffix).
+          * The acknowledgement is an ADVANCED_OK carrying a suffix
+            (``ok P15 B2``), not a bare ``ok``; we consume it (startswith "ok")
+            so it is not mistaken for a command ack by the next ``_send_wait``.
+
+        Safety: this NEVER returns a stale cached position on failure.  A caller
+        acting on a wrong position moves absolutely to the wrong place and
+        checks soft limits against a lie — worse than a clear error.  If every
+        attempt fails, it raises ``DeviceError``; ``home()`` fails safe and the
+        GUI poller / scan loop already handle the exception.
+        """
         assert self._ser is not None
         with self._lock:
-            self._ser.reset_input_buffer()   # discard unsolicited temperature/status lines
-            self._ser.write(b"M114\n")
-            self._ser.flush()
-            # After the position line Marlin always sends a bare 'ok'.
-            # We must consume it here so it does not sit in the OS buffer
-            # and be mistaken for a command ack by the next _send_wait call.
-            found = False
-            deadline = time.monotonic() + 5.0
-            while time.monotonic() < deadline:
-                line = self._ser.readline().decode(errors="replace").strip()
-                if not found:
-                    m = _MARLIN_POS.search(line)
-                    if m:
-                        self._pos = Position(
-                            float(m.group(1)), float(m.group(2)), float(m.group(3))
-                        )
-                        found = True
-                else:
-                    # Drain lines until we see the trailing 'ok'
-                    if line.lower().startswith("ok"):
+            for attempt in range(_MARLIN_M114_ATTEMPTS):
+                self._ser.reset_input_buffer()   # drop stale temp/status chatter
+                self._ser.write(b"M114\n")
+                self._ser.flush()
+                found = False
+                deadline = time.monotonic() + _MARLIN_M114_ATTEMPT_TIMEOUT_S
+                while time.monotonic() < deadline:
+                    line = self._ser.readline().decode(errors="replace").strip()
+                    if not line:
+                        continue
+                    if not found:
+                        m = _MARLIN_POS.search(line)
+                        if m:
+                            self._pos = Position(
+                                float(m.group(1)), float(m.group(2)),
+                                float(m.group(3)),
+                            )
+                            found = True
+                        # else: unsolicited echo:/busy:/Cap:/banner — skip it
+                    elif line.lower().startswith("ok"):
+                        # Consume the trailing ADVANCED_OK ('ok P.. B..') so it
+                        # is not left in the buffer for the next _send_wait.
                         return self._pos
-            if found:
-                return self._pos
-        self.logger.warning("Marlin M114 timeout — returning cached position")
-        return self._pos
+                if found:
+                    # Position captured but the trailing 'ok' never arrived
+                    # within this attempt — the position itself is valid.
+                    return self._pos
+                self.logger.warning(
+                    "Marlin M114 attempt %d/%d: no position report — retrying",
+                    attempt + 1, _MARLIN_M114_ATTEMPTS,
+                )
+        raise DeviceError(
+            f"Marlin M114: no position response after "
+            f"{_MARLIN_M114_ATTEMPTS} attempts"
+        )
+
+    def _marlin_prime(self) -> None:
+        """Fire one throwaway M114 on connect and drain its reply, best-effort.
+
+        The board resets when the serial port opens (DTR toggle), and the first
+        command after any reset/idle gap is unreliable — on this CR-10S the
+        first M114 of a burst is silently dropped.  Spending that dropped read
+        here keeps the first *real* ``get_position()`` clean and off the retry
+        path.  A pure read that never moves the stage: safe on the connect path.
+        Any failure is swallowed — priming must never fail ``connect()``.
+        """
+        assert self._ser is not None
+        try:
+            with self._lock:
+                self._ser.reset_input_buffer()
+                self._ser.write(b"M114\n")
+                self._ser.flush()
+                deadline = time.monotonic() + _MARLIN_M114_ATTEMPT_TIMEOUT_S
+                while time.monotonic() < deadline:
+                    line = self._ser.readline().decode(errors="replace").strip()
+                    if line.lower().startswith("ok"):
+                        break
+        except Exception as exc:
+            self.logger.debug("Marlin connect prime skipped: %s", exc)
