@@ -79,15 +79,16 @@ or executes it yet.** Build order (each step keeps the app runnable):
    abort). A **generic `DangerGate`** (`confirm(DangerAction) -> bool`) + an
    `arm_hv()` latch — the missing "confirm dangerous action" primitive — so every
    danger node and Arm-HV routes UI→Python→driver, never JS-trusted.
-3. **Native panel (Option B first)** — `gui/planner_panel.py`, the first consumer
-   of `axis_color`/`statusChip`/`eyebrow`/`dangerBtn`; wires like `ScanPanel`
-   (emit signals → `tct_gui` calls the controller). Fully headless-testable.
-4. **Option C embed (when ready)** — the exported artifact
-   (`artifacts_claude/TCT Scan Routine Planner.html`, a self-contained compiled
-   bundle) loaded whole in a `QWebEngineView` and driven via `QWebChannel` for
-   literal 1:1 fidelity — swaps in behind the same façade; **all** safety
-   components (validator, executor, gate, latches) reused unchanged. Deps already
-   bundled in PySide6 6.11.1; no new pip installs.
+3. **Native panel (Option B) — ✅ DONE, and the chosen face** — `gui/planner_panel.py`,
+   the first consumer of `axis_color`/`statusChip`/`eyebrow`/`dangerBtn`; wires like
+   `ScanPanel` (emit signals → `tct_gui` calls the controller). Fully headless-testable.
+   Shipped with a drag-and-drop block palette, movable nodes, and structural undo.
+4. **Option C embed — SHELVED (user decision 2026-07-07: stay native).** The native
+   panel (v1 + v2 drag-drop) overtook the embed on capability, is fully
+   headless-testable, and keeps every danger confirm Python-side without a JS
+   bridge. The `QWebEngineView`/`QWebChannel` embed is not being built; the exported
+   artifact stays a visual reference only. Reopen only if pixel-1:1 fidelity ever
+   outweighs testability.
 
 ### 2.4 Appearance settings — user-adjustable colors
 
