@@ -25,12 +25,6 @@ motor_stage:
   microsteps: 16
   snap_mode: 'off'
   push_steps_to_grbl: true
-  # Marlin (CR-10S) homes to origin and runs POSITIVE coordinates.  Bounds
-  # match the flashed firmware envelope (X_BED_SIZE 296 / Y 298 / Z_MAX_POS
-  # 400) so the app refuses a move just INSIDE the firmware limit rather than
-  # letting the firmware clip it.  Min/max were previously swapped (min=300,
-  # max=0), making `min <= pos <= max` false for EVERY position -> the panel
-  # reported "outside software limits" for any move.  BENCH-VERIFY the usable Z.
   software_limits:
     x_min_mm: 0.0
     x_max_mm: 296.0
@@ -65,7 +59,7 @@ bias_supply:
   voltage_range_V: 2000
   timeout_ms: 5000
 waveform_generator:
-  visa_address: TCPIP0::169.254.115.135::INSTR
+  visa_address: TCPIP0::192.168.0.10::INSTR
   vendor: rigol
   frequency_hz: 1000
   pulse_width_s: 1.0e-07
