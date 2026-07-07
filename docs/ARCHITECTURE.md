@@ -269,7 +269,13 @@ Panels: `motor_panel`, `bias_panel`, `multi_bias_panel`, `scope_panel`,
 (`DeviceManagerWindow`, `device_state`), `settings_window`, `planner_panel`
 (Recipe-Tree QTreeWidget, editable loop rows, live estimate, validate/dry-run/
 arm/start latch chain; v2: drag-drop palette, movable nodes, right-click ops,
-20-deep undo). Support: `status_bus.py` (cross-panel status),
+20-deep undo). Panels built on `panel_kit` Cards: `scope_panel`, `laser_panel`,
+`motor_panel`, `bias_panel`, `multi_bias_panel`, `intensity_panel`,
+`monitor_panel`, `device_panel` (9 of 12 core panels). Support: `panel_kit.py`
+(Card composition: title/subtitle, header, per-card `set_rail(axis, mode)` with
+dynamic railAxis property; panel_header, eyebrow_title, section_header,
+readout_cell, form_row, axis_rail_css; QSS hooks cardHeader/cardTitle/
+cardSubtitle in style.py), `status_bus.py` (cross-panel status),
 `status_widgets.py` (StatusChip, StatusPill, flash_button design-system tokens),
 `scan_map_window.py` (live scan map), `stage_view.py` (3D GL stage view),
 `scope_measurements.py`, `detachable_tabs.py`, `style.py` (token design system:
@@ -389,6 +395,8 @@ Details: `docs/REFERENCE_MATERIAL.md`.
       registries beyond MOTOR/INTENSITY).
 
 ## Changelog
+
+- 2026-07-07 — **GUI improvement: panel_kit composition layer + pilot (scope/laser) + batch-1 rollout (motor/bias/intensity/monitor/devices); QtDangerGate stray-dialog fix; native planner locked (embed shelved); suite 321.** New `gui/panel_kit.py` (Card: title/subtitle, header, per-card `set_rail(axis, mode)` with dynamic railAxis; panel_header, eyebrow_title, section_header, readout_cell, form_row, axis_rail_css; QSS hooks cardHeader/cardTitle/cardSubtitle). Pilot scope_panel + laser_panel rebuilt on panel_kit (Mary APPROVE-WITH-NITS; nits fixed: rail scoping, docstrings). Scope fixed pre-existing chip-overflow clipping DUT-analysis readouts. Batch-1 rollout: motor, bias (4/6 boxes; 2 CHECKABLE groupboxes stay native QGroupBox), multi_bias, intensity, monitor, device_panel (hardcoded colors → tokens, +11 tests). QtDangerGate stray-dialog BUG fixed (+3 regression tests); honest plan-run terminal status; native-planner decision (embed shelved). tct_gui theme-refresh tuple: motor, bias, planner, scope, laser, monitor.
 
 - 2026-07-07 — **P2.2 executor & planner (steps 2+3), fault injection, scope modularity, design-system rollout:** `controller/danger_gate.py` (DangerAction/DangerGate protocol, AutoConfirmGate/DenyAllGate/QtDangerGate); `ScanController.arm_hv()` latch, `start_plan()`/`_run_plan()` with shared fail-safe helpers, motor.stop() in all finallys, HV re-assertion on resume; `tests/test_fault_injection.py` + `test_fault_injection_legacy.py` prove safety under disconnect/HV-trip/motor-fault/abort; `gui/planner_panel.py` v2 (Recipe-Tree, drag-drop, movable nodes, 20-deep undo, live estimate); `gui/qt_danger_gate.py` (worker→GUI confirm bridge); `gui/status_widgets.py` (StatusChip/StatusPill/flash_button); `Oscilloscope.n_channels` modular (config-settable, *IDN?-clamped, validator checks 1..8); `ScopePanel.rebuild_channels()` at connect; design-system tokens rolled across all panels. Suite **293 passed**.
 

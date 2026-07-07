@@ -75,22 +75,28 @@ marquee feature (item 1 in "What's NEXT" below). Noah is ready to build.
   checks 1..8); `ScopePanel.rebuild_channels()` at connect. Design-system tokens
   rolled across all panels. **4-commit checkpoint on experimental-wip. Suite 293
   passed.**
+- **GUI improvement: panel_kit composition layer + batch-1 rollout (2026-07-07):**
+  New `gui/panel_kit.py` (Card: title/subtitle, header, per-card `set_rail(axis, mode)` with
+  dynamic railAxis; composition primitives panel_header, eyebrow_title, section_header,
+  readout_cell, form_row, axis_rail_css; QSS hooks). Pilot scope_panel + laser_panel rebuilt
+  on panel_kit (Mary APPROVE-WITH-NITS; nits fixed: rail scoping, docstrings; scope fixed
+  pre-existing chip-overflow). Batch-1 rollout: motor, bias (4/6 boxes; 2 CHECKABLE stay native),
+  multi_bias, intensity, monitor, device_panel (hardcoded colors → tokens, +11 tests).
+  QtDangerGate stray-dialog BUG fixed (+3 regression tests); honest plan-run terminal status;
+  native-planner decision (embed shelved). **9 of 12 core panels on the new level; suite 321 passed.
+  Commits: e422ae7, 8c3d9fb, 6b970ac (rollout), 5193968 (gate fix), 5572d35 (native decision).
+  12 unpushed commits remain on experimental-wip.**
 
 ## What's NEXT (in order)
 
-**(a) Typography & QSS refinement pass — IN PROGRESS (Noah):** polish planner
-panel design, statusChip/statusPill spacing & contrast, adjust warn-token contrast
-on light theme.
+**(a) USER DECISIONS pending:** Confirm three design choices before batch-2 rollout:
+  1. **Axis semantics**: drift/rise/CFD naming — should CFD always green=delay (earliest timing) or is there a toggle/context?
+  2. **scan_panel fate**: style as-is (dual-channel raster) or fold into planner-driven workflow?
+  3. **Batch-2 panel order**: camera vs. settings window — each should own its session; confirm priority.
 
-**(b) GUI direction decision:** native-panel approach (v1+v2 now feature-rich:
-planner, scope, bias, calibration) vs QWebEngineView embed for live-HTML views
-(originally planned for live analysis plots). Native may now be sufficient; embed
-deprioritized pending real use-case pressure.
+**(b) Batch-2 rollout** (after decisions above): remaining 3 core panels (scan_panel, camera_panel, analysis_panel) + consistency pass (legacy panel checks in style.py/QSS). Target suite 330+.
 
-**(c) Tech-debt resolution (see `docs/TECH_DEBT.md`):** Teardown JOIN the scan
-worker thread (concurrent bias ramp risk); QtDangerGate stray emit on timeout;
-Noah's 3 MINOR M1 findings (per-panel control disabling, poller leak, vscan
-on non-primary tabs).
+**(c) Push unpushed commits**: 12 commits remain on experimental-wip; push to main when user confirms decisions.
 
 ## Open items / tech-debt (see `docs/TECH_DEBT.md`)
 
