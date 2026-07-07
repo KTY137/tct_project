@@ -2,7 +2,6 @@
 oscilloscope:
   backend: visa
   n_averages: 1
-  # bench TBS1052C has 2; set 4 for the DRS4/4-ch scopes; auto-detected from *IDN? when omitted; clamped to detected capability.
   n_channels: 2
   simulation: false
   visa_address: USB0::0x0699::0x03C4::C010198::INSTR
@@ -26,13 +25,19 @@ motor_stage:
   microsteps: 16
   snap_mode: 'off'
   push_steps_to_grbl: true
+  # Marlin (CR-10S) homes to origin and runs POSITIVE coordinates.  Bounds
+  # match the flashed firmware envelope (X_BED_SIZE 296 / Y 298 / Z_MAX_POS
+  # 400) so the app refuses a move just INSIDE the firmware limit rather than
+  # letting the firmware clip it.  Min/max were previously swapped (min=300,
+  # max=0), making `min <= pos <= max` false for EVERY position -> the panel
+  # reported "outside software limits" for any move.  BENCH-VERIFY the usable Z.
   software_limits:
-    x_min_mm: -300.0
-    x_max_mm: 0.0
-    y_min_mm: -300.0
-    y_max_mm: 0.0
-    z_min_mm: -400.0
-    z_max_mm: 0.0
+    x_min_mm: 0.0
+    x_max_mm: 296.0
+    y_min_mm: 0.0
+    y_max_mm: 298.0
+    z_min_mm: 0.0
+    z_max_mm: 400.0
 intensity_monitor:
   backend: simulated
   channel: 1
@@ -66,13 +71,6 @@ waveform_generator:
   pulse_width_s: 1.0e-07
   amplitude_V: 3.3
   offset_V: 0.0
-  # Load impedance the DG4162 assumes it is driving. The PDL 800 external
-  # trigger input is 50 Ohm (PicoQuant manual; docs/research/pdl800_trigger_wavegen_lan.md).
-  # If left High-Z (INFinity) while the cable actually terminates into the
-  # 50 Ohm PDL trigger input, the DG4162 delivers HALF the displayed amplitude.
-  # This is BENCH-CABLING-SPECIFIC and MUST match reality: use 50 when driving
-  # the PDL trigger directly; use INFinity only if the output truly sees a
-  # High-Z load (e.g. a 1 MOhm scope input).
   output_load: 50
   output_channel: 1
   simulation: false
