@@ -87,6 +87,13 @@ marquee feature (item 1 in "What's NEXT" below). Noah is ready to build.
   Commits: e422ae7, 8c3d9fb, 6b970ac (rollout), 5193968 (gate fix), 5572d35 (native decision).
   12 unpushed commits remain on experimental-wip.**
 
+- **Real-hardware bench bring-up (camera + motor + wavegen, all verified 2026-07-07):**
+  - **Camera (Blackfly BFLY-U3-23S6M, SN 19112408)**: PySpin 3.2.0.65 wheel installed from `reference/spinnaker_sdk/` (numpy<2 pin intact); FLIR Spinnaker **64-bit** runtime required (x86 installer fails; venv is 64-bit). `camera_blackfly.py` auto-locates FLIR GenTL producer (sets FLIR_GENTL64_CTI_VS140 if unset — no restart needed after SDK install) and guards binning writes (IsWritable check skips read-only BinningHorizontal at INFO). Real-verified: connects + grabs 1920×1200 frames. **USB gotcha: camera needs a DIRECT USB-3 port — hub connection fails detection.**
+  - **Motor (GRBL/Marlin CR-10S, COM4)**: Fixed `_marlin_get_position()` stale-position bug (first M114 of burst dropped, Marlin ADVANCED_OK 'ok P.. B..' suffix; now retries, skips echo lines, raises on fail). Panel-freeze on soft-reload fixed (poller QThread was parented → destroyed while running). SoftwareLimits/config_validator reject swapped/impossible envelope loudly. Real-verified: get_position() == raw M114; homing + jog correct.
+  - **Waveform generator (Rigol DG4162)**: Moved off flaky link-local (169.254.x) to static IP on isolated instrument LAN. Layout: TP-Link switch 192.168.0.1, PC Ethernet 192.168.0.2/24 (static, no gateway, isolated WLAN). DG4162 192.168.0.10/24 (DHCP+AutoIP off). `devices.yaml: waveform_generator.visa_address = TCPIP0::192.168.0.10::INSTR`. Verified via VISA + driver (*IDN? → Rigol DG4162; connect() leaves output OFF, laser-safe).
+  - **Decision**: Printrun/printcore rejected (GPLv3 + numpy pin); static IPs chosen (simpler than bench DHCP; isolated LAN is safe). See `docs/research/bench_lan_dhcp_static.md`.
+  - **Note**: HV and laser deliberately left OFF per user request — not yet bench-verified. Suite **445 passed**.
+
 ## What's NEXT (in order)
 
 **(a) USER DECISIONS pending:** Confirm three design choices before batch-2 rollout:
