@@ -424,3 +424,48 @@ def test_levels_absent_keeps_legacy_amplitude_path() -> None:
     assert any("VOLT" in w.upper() and "3.3" in w for w in fake.writes), fake.writes
     assert any("OFFS" in w.upper() for w in fake.writes), fake.writes
     assert not any("HIGH" in w.upper() or ":LOW" in w.upper() for w in fake.writes), fake.writes
+
+
+# --------------------------------------------------------------------------- #
+# Config plumbing: devices.yaml level_low_V / level_high_V reach the driver.    #
+# Absent → both None → byte-identical legacy bipolar default (proven above by   #
+# test_levels_absent_keeps_legacy_amplitude_path).                              #
+# --------------------------------------------------------------------------- #
+
+def _dm_from_wfg_cfg(tmp_path, wfg_extra: dict):
+    """Build a fully-simulated DeviceManager whose waveform_generator block is
+    the sim defaults plus *wfg_extra*; return its constructed driver."""
+    import yaml
+    from controller.device_manager import DeviceManager
+    cfg = {
+        "oscilloscope":       {"backend": "visa", "simulation": True},
+        "motor_stage":        {"backend": "simulated"},
+        "intensity_monitor":  {"backend": "simulated"},
+        "camera":             {"simulation": True},
+        "bias_supply":        {"backend": "simulated"},
+        "waveform_generator": {"simulation": True, **wfg_extra},
+        "output":             {"data_dir": str(tmp_path / "runs")},
+    }
+    path = tmp_path / "devices.yaml"
+    path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    dm = DeviceManager(config_path=str(path))
+    return dm
+
+
+def test_config_levels_reach_constructed_driver(tmp_path) -> None:
+    """level_low_V / level_high_V in devices.yaml land on the WaveformGenerator
+    the DeviceManager builds (the plumbing this task adds)."""
+    dm = _dm_from_wfg_cfg(tmp_path, {"level_low_V": 0.0, "level_high_V": 2.5})
+    assert dm.config_errors() == [], dm.config_errors()
+    wfg = dm.waveform_generator
+    assert wfg._level_low == 0.0
+    assert wfg._level_high == 2.5
+
+
+def test_config_levels_absent_is_none_bipolar_default(tmp_path) -> None:
+    """No level keys → both rails None → the driver stays on the legacy bipolar
+    amplitude+offset path (byte-identical to today's default)."""
+    dm = _dm_from_wfg_cfg(tmp_path, {})
+    wfg = dm.waveform_generator
+    assert wfg._level_low is None
+    assert wfg._level_high is None

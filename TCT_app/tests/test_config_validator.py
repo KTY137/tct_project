@@ -157,6 +157,85 @@ def test_shipped_yaml_covered_sections_are_clean():
             f"shipped devices.yaml produced warnings in {section}: {offending}"
 
 
+# --------------------------------------------------------------------------- #
+# Waveform generator: opt-in unipolar rails (level_low_V / level_high_V).       #
+# Bipolar (both absent) is the default and must validate clean; the pair is     #
+# both-or-neither, numeric, low < high.                                         #
+# --------------------------------------------------------------------------- #
+
+def test_wfg_no_levels_is_clean():
+    """Bipolar default (no level keys) must produce no waveform_generator issues."""
+    cfg = {"waveform_generator": {
+        "vendor": "rigol", "frequency_hz": 1000, "amplitude_V": 3.3,
+        "offset_V": 0.0, "output_load": 50, "simulation": True,
+    }}
+    issues = validate_config(cfg)
+    assert not any(str(i).startswith("[waveform_generator]") for i in issues), issues
+
+
+def test_wfg_valid_level_pair_is_clean():
+    """A valid low < high rail pair validates with zero errors/warnings."""
+    cfg = {"waveform_generator": {
+        "simulation": True, "level_low_V": 0.0, "level_high_V": 2.5,
+    }}
+    issues = validate_config(cfg)
+    assert errors(issues) == [], errors(issues)
+    assert not any(str(i).startswith("[waveform_generator]") for i in issues), issues
+
+
+def test_wfg_low_ge_high_is_error():
+    """level_low_V >= level_high_V is an ERROR (the driver's set_levels rejects it)."""
+    cfg = {"waveform_generator": {
+        "simulation": True, "level_low_V": 2.5, "level_high_V": 2.5,
+    }}
+    errs = errors(validate_config(cfg))
+    assert any("level_low_V" in e and "level_high_V" in e for e in errs), errs
+    cfg2 = {"waveform_generator": {
+        "simulation": True, "level_low_V": 3.0, "level_high_V": 1.0,
+    }}
+    assert any("level_low_V" in e for e in errors(validate_config(cfg2)))
+
+
+def test_wfg_lone_level_key_is_error():
+    """A lone level key (silently reverts to bipolar) is an ERROR, both ways."""
+    only_low = {"waveform_generator": {"simulation": True, "level_low_V": 0.0}}
+    errs = errors(validate_config(only_low))
+    assert any("level_high_V" in e and "BOTH" in e for e in errs), errs
+    only_high = {"waveform_generator": {"simulation": True, "level_high_V": 2.5}}
+    errs = errors(validate_config(only_high))
+    assert any("level_low_V" in e and "BOTH" in e for e in errs), errs
+
+
+def test_wfg_non_numeric_level_is_error():
+    cfg = {"waveform_generator": {
+        "simulation": True, "level_low_V": "zero", "level_high_V": 2.5,
+    }}
+    assert any("numeric" in e for e in errors(validate_config(cfg)))
+
+
+def test_wfg_nan_or_inf_level_is_error():
+    """YAML `.nan` passes numeric checks but every NaN comparison is False —
+    it would silently bypass the low < high guard AND the driver's own
+    set_levels() rejection. Same for `.inf`. Both must be refused."""
+    cfg = {"waveform_generator": {
+        "simulation": True, "level_low_V": float("nan"), "level_high_V": 2.5,
+    }}
+    assert any("finite" in e for e in errors(validate_config(cfg)))
+    cfg2 = {"waveform_generator": {
+        "simulation": True, "level_low_V": 0.0, "level_high_V": float("inf"),
+    }}
+    assert any("finite" in e for e in errors(validate_config(cfg2)))
+
+
+def test_wfg_level_keys_are_known():
+    """The two new keys are recognised (no unknown-key typo warning)."""
+    cfg = {"waveform_generator": {
+        "simulation": True, "level_low_V": 0.0, "level_high_V": 2.5,
+    }}
+    ws = warnings(validate_config(cfg))
+    assert not any("level_low_V" in w or "level_high_V" in w for w in ws), ws
+
+
 def test_covered_section_real_keys_do_not_warn():
     """A block using every real key of a covered section stays warning-free."""
     cfg = {"camera": {

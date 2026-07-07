@@ -259,6 +259,11 @@ class DeviceManager:
             offset_V=wfg_cfg.get("offset_V", 0.0),
             output_load=wfg_cfg.get("output_load", "INFinity"),
             output_channel=wfg_cfg.get("output_channel", 1),
+            # Optional explicit square rails (opt-in unipolar 0→+V trigger).
+            # Absent → None → the driver keeps the legacy amplitude+offset
+            # bipolar path unchanged (the safe, manual-confirmed default).
+            level_low_V=wfg_cfg.get("level_low_V"),
+            level_high_V=wfg_cfg.get("level_high_V"),
             vendor=wfg_cfg.get("vendor", "rigol"),
             timeout_ms=wfg_cfg.get("timeout_ms", 5000),
             simulation=wfg_cfg.get("simulation", True),

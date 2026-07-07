@@ -68,6 +68,12 @@ waveform_generator:
   output_load: 50
   output_channel: 1
   simulation: false
+  # Default (both commented) = BIPOLAR trigger via amplitude_V/offset_V above
+  # (the manual-confirmed safe path). Uncomment BOTH to drive a clean unipolar
+  # 0->+V square instead, via SCPI :VOLTage:LOW / :VOLTage:HIGH. When set they
+  # take over from amplitude_V/offset_V; both are required and low < high.
+  # level_low_V: 0.0
+  # level_high_V: 2.5
 laser:
   wavelength_nm: 660
   repetition_mode: external

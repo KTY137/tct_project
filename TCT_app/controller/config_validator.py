@@ -12,6 +12,7 @@ motor/config revamp keeps working as long as it stays self-consistent.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -78,6 +79,9 @@ _KNOWN_KEYS: dict[str, set[str]] = {
         "visa_address", "vendor", "frequency_hz", "pulse_width_s",
         "amplitude_V", "offset_V", "output_load", "output_channel",
         "timeout_ms", "simulation",
+        # Opt-in explicit square rails (unipolar 0→+V trigger).  Absent → the
+        # driver keeps the legacy bipolar amplitude+offset path.
+        "level_low_V", "level_high_V",
     },
     "analysis": {
         "termination_ohm", "integration_window_s", "baseline_samples",
@@ -131,6 +135,7 @@ def validate_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
     _check_motor(cfg.get("motor_stage") or {}, issues)
     _check_scope(cfg.get("oscilloscope") or {}, issues)
     _check_bias(cfg.get("bias_supply") or {}, issues)
+    _check_waveform(cfg.get("waveform_generator") or {}, issues)
     _check_analysis(cfg.get("analysis") or {}, issues)
     return issues
 
@@ -298,6 +303,57 @@ def _check_bias(bias: dict[str, Any], issues: list[ConfigIssue]) -> None:
         issues.append(ConfigIssue(WARNING, sec,
                                   f"ramp_speed_V_s = {ramp} V/s is very fast for "
                                   "a silicon sensor — intentional?"))
+
+
+def _check_waveform(wfg: dict[str, Any], issues: list[ConfigIssue]) -> None:
+    """Validate the opt-in unipolar square rails (level_low_V / level_high_V).
+
+    These map to the driver's ``set_levels()`` path (SCPI ``:VOLTage:HIGH`` /
+    ``:VOLTage:LOW``) for a clean 0→+V trigger.  Absent → the driver keeps the
+    legacy bipolar amplitude+offset path (the safe, manual-confirmed default),
+    so there is nothing to check.  When used they must be:
+      * both present (a lone key silently reverts to the bipolar path — a
+        surprise), and
+      * numeric with ``low < high`` (the driver's set_levels() raises otherwise,
+        which would abort at connect-time — catch it here, before hardware).
+    """
+    if not wfg:
+        return
+    sec = "waveform_generator"
+    low = wfg.get("level_low_V")
+    high = wfg.get("level_high_V")
+    if low is None and high is None:
+        return  # legacy bipolar default — nothing to validate.
+    if (low is None) != (high is None):
+        present, missing = (("level_low_V", "level_high_V") if high is None
+                            else ("level_high_V", "level_low_V"))
+        issues.append(ConfigIssue(
+            ERROR, sec,
+            f"{present} is set but {missing} is not — the unipolar rail path "
+            f"needs BOTH (a lone key silently reverts to the bipolar "
+            f"amplitude+offset path). Set {missing} too, or remove {present}."))
+        return
+    if not (_is_num(low) and _is_num(high)):
+        issues.append(ConfigIssue(
+            ERROR, sec,
+            f"level_low_V / level_high_V must be numeric "
+            f"(got {low!r} / {high!r})."))
+        return
+    if not (math.isfinite(float(low)) and math.isfinite(float(high))):
+        # YAML `.nan`/`.inf` pass the numeric check but every comparison with
+        # NaN is False — it would silently bypass the low < high guard below
+        # AND the driver's own set_levels() rejection. Refuse it here.
+        issues.append(ConfigIssue(
+            ERROR, sec,
+            f"level_low_V / level_high_V must be finite numbers "
+            f"(got {low!r} / {high!r})."))
+        return
+    if float(low) >= float(high):
+        issues.append(ConfigIssue(
+            ERROR, sec,
+            f"level_low_V ({low}) must be < level_high_V ({high}) — the square "
+            "rail low must sit below the high (the driver's set_levels() rejects "
+            "high <= low)."))
 
 
 def _check_analysis(analysis: dict[str, Any], issues: list[ConfigIssue]) -> None:
