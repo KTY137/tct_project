@@ -22,6 +22,8 @@ try:
 except ImportError:
     _HAS_PG = False
 
+from gui.status_widgets import StatusChip, flash_button, set_button_icon
+
 # Quantities available for display
 _QUANTITIES = [
     "dut_charge_pC",
@@ -88,18 +90,27 @@ class ScanMapWindow(QMainWindow):
         self._chk_auto_levels.setChecked(True)
         self._chk_auto_levels.toggled.connect(self._redraw)
         toolbar.addWidget(self._chk_auto_levels)
+        self._chip_data = StatusChip("No data", "neutral")
+        self._chip_levels = StatusChip("Auto levels", "info")
+        self._chip_export = StatusChip("Export --", "neutral")
+        toolbar.addWidget(self._chip_data)
+        toolbar.addWidget(self._chip_levels)
+        toolbar.addWidget(self._chip_export)
 
         btn_clear = QPushButton("Clear")
+        set_button_icon(btn_clear, "mdi.delete-outline")
         btn_clear.clicked.connect(self.clear)
         toolbar.addWidget(btn_clear)
 
-        btn_export = QPushButton("💾 Export PNG")
-        btn_export.clicked.connect(self._export_png)
-        toolbar.addWidget(btn_export)
+        self._btn_export_png = QPushButton("Export PNG")
+        set_button_icon(self._btn_export_png, "mdi.image")
+        self._btn_export_png.clicked.connect(self._export_png)
+        toolbar.addWidget(self._btn_export_png)
 
-        btn_export_csv = QPushButton("💾 Export CSV")
-        btn_export_csv.clicked.connect(self._export_csv)
-        toolbar.addWidget(btn_export_csv)
+        self._btn_export_csv = QPushButton("Export CSV")
+        set_button_icon(self._btn_export_csv, "mdi.content-save")
+        self._btn_export_csv.clicked.connect(self._export_csv)
+        toolbar.addWidget(self._btn_export_csv)
 
         toolbar.addStretch()
         root.addLayout(toolbar)
@@ -165,6 +176,8 @@ class ScanMapWindow(QMainWindow):
         if _HAS_PG:
             self._img_view.clear()
             self._lbl_info.setText("No data")
+        self._chip_data.set_status("No data", "neutral")
+        self._chip_export.set_status("Export --", "neutral")
 
     # ------------------------------------------------------------------ #
     # Internal                                                            #
@@ -190,6 +203,8 @@ class ScanMapWindow(QMainWindow):
         display = np.where(np.isnan(arr), 0.0, arr)
 
         auto = self._chk_auto_levels.isChecked()
+        self._chip_levels.set_status("Auto levels" if auto else "Manual levels",
+                                     "info" if auto else "neutral")
         self._img_view.setImage(
             display,
             autoRange=True,
@@ -210,6 +225,9 @@ class ScanMapWindow(QMainWindow):
             f"X: [{xs[0]:.3f}, {xs[-1]:.3f}] mm  "
             f"Y: [{ys[0]:.3f}, {ys[-1]:.3f}] mm"
         )
+        self._chip_data.set_status(f"{n_filled}/{nx*ny} pts",
+                                   "good" if n_filled == nx * ny else "busy")
+        self._chip_export.set_status("Export ready", "good")
 
     def _export_png(self) -> None:
         if not _HAS_PG:
@@ -222,6 +240,7 @@ class ScanMapWindow(QMainWindow):
         try:
             exporter = pg.exporters.ImageExporter(self._img_view.imageItem)
             exporter.export(path)
+            flash_button(self._btn_export_png, "good", "Exported")
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Export Error", str(exc))
@@ -242,6 +261,7 @@ class ScanMapWindow(QMainWindow):
                 writer.writerow(["x_mm", "y_mm", qty])
                 for (x, y), val in sorted(self._map_data.items()):
                     writer.writerow([f"{x:.6f}", f"{y:.6f}", f"{val:.8g}"])
+            flash_button(self._btn_export_csv, "good", "Exported")
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Export Error", str(exc))

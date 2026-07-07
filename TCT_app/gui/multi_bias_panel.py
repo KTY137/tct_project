@@ -30,6 +30,7 @@ from devices.bias_channel import BiasChannel
 from controller.scan_controller import VoltageScanConfig
 from gui.bias_panel import BiasPanel, _SupplyCallWorker
 from gui.status_bus import notify
+from gui.status_widgets import StatusChip, set_button_icon
 
 
 class MultiBiasPanel(QWidget):
@@ -58,11 +59,18 @@ class MultiBiasPanel(QWidget):
         top = QHBoxLayout()
         self._btn_all_off = QPushButton("⏹ ALL OUTPUTS OFF")
         self._btn_all_off.setObjectName("dangerBtn")
+        set_button_icon(self._btn_all_off, "mdi.power", color="white")
         self._btn_all_off.setToolTip(
             "Ramp EVERY connected HV channel to 0 V and disable its output."
         )
         self._btn_all_off.clicked.connect(self._all_outputs_off)
         top.addWidget(self._btn_all_off)
+        self._chip_all_off = StatusChip("All-off idle", "neutral")
+        self._chip_channels = StatusChip("Channels --", "neutral")
+        self._chip_compliance = StatusChip("Compliance --", "neutral")
+        top.addWidget(self._chip_all_off)
+        top.addWidget(self._chip_channels)
+        top.addWidget(self._chip_compliance)
         top.addStretch()
         root.addLayout(top)
 
@@ -76,10 +84,28 @@ class MultiBiasPanel(QWidget):
             panel = BiasPanel(ch)
             self._panels.append(panel)
             self._tabs.addTab(panel, f"CH{getattr(ch, 'channel', '?')}")
+        self._refresh_summary()
         # The primary channel (proxy index 0 in the normal single-primary
         # config) owns the bias+waveform scan controls; surface only its signal.
         if self._panels:
             self._panels[0].vscan_requested.connect(self.vscan_requested)
+
+    def _refresh_summary(self) -> None:
+        total = len(self._channels)
+        connected = sum(1 for c in self._channels if getattr(c, "connected", False))
+        if total == 0:
+            self._chip_channels.set_status("No channels", "neutral")
+        elif connected == 0:
+            self._chip_channels.set_status(f"0/{total} connected", "neutral")
+        elif connected == total:
+            self._chip_channels.set_status(f"{connected}/{total} connected", "good")
+        else:
+            self._chip_channels.set_status(f"{connected}/{total} connected", "warn")
+        for idx, ch in enumerate(self._channels):
+            label = f"CH{getattr(ch, 'channel', '?')}"
+            if getattr(ch, "connected", False):
+                label += " LIVE"
+            self._tabs.setTabText(idx, label)
 
     # ------------------------------------------------------------------ #
     # Primary-channel forwarding (stable API across rebuilds)             #
@@ -102,6 +128,19 @@ class MultiBiasPanel(QWidget):
         """
         for panel in self._panels:
             panel.set_reading(r)
+        self._refresh_summary()
+
+    def refresh_theme(self, mode: str | None = None) -> None:
+        """Forward a light/dark theme refresh to every tab's BiasPanel.
+
+        Each newly-built tab (see rebuild()/_build_tabs()) already resolves
+        the *current* theme itself at construction time (BiasPanel reads
+        QSettings directly), so this only matters for tabs that already
+        existed before the switch.  Called live by ``tct_gui._toggle_theme``
+        after ``apply_theme``; see BiasPanel.refresh_theme() for the pattern.
+        """
+        for panel in self._panels:
+            panel.refresh_theme(mode)
 
     # ------------------------------------------------------------------ #
     # Channel-count refresh                                               #
@@ -140,9 +179,12 @@ class MultiBiasPanel(QWidget):
         live = [c for c in self._channels if getattr(c, "connected", False)]
         if not live:
             notify("No connected HV channels to switch off.", "warn")
+            self._chip_all_off.set_status("Nothing live", "warn")
             return
 
         self._btn_all_off.setEnabled(False)
+        self._chip_all_off.set_status("All-off running", "busy")
+        self._tabs.setEnabled(False)
         self._off_worker = _SupplyCallWorker(lambda: self._do_all_off(live))
         self._off_thread = QThread(self)
         self._off_worker.moveToThread(self._off_thread)
@@ -156,10 +198,14 @@ class MultiBiasPanel(QWidget):
                 thread.quit()
                 thread.wait(2000)
             self._btn_all_off.setEnabled(True)
+            self._tabs.setEnabled(True)
             if err:
+                self._chip_all_off.set_status("All-off error", "crit")
                 notify(f"ALL OUTPUTS OFF: {err}", "error")
             else:
+                self._chip_all_off.set_status("All outputs off", "good")
                 notify("All HV outputs ramped to 0 V and disabled.", "info")
+            self._refresh_summary()
 
         self._off_worker.done.connect(_finish)
         self._off_thread.start()

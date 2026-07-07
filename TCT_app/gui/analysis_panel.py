@@ -32,6 +32,8 @@ try:
 except ImportError:
     _HAS_H5 = False
 
+from gui.status_widgets import StatusChip, flash_button, set_button_icon
+
 
 class AnalysisPanel(QWidget):
     """Load a completed run HDF5 file and re-analyse / re-plot."""
@@ -53,11 +55,22 @@ class AnalysisPanel(QWidget):
         file_row = QHBoxLayout()
         self._lbl_file = QLabel("No file loaded")
         self._lbl_file.setWordWrap(True)
-        btn_open = QPushButton("📂 Open HDF5 Run")
-        btn_open.clicked.connect(self._open_file)
-        file_row.addWidget(btn_open)
+        self._btn_open = QPushButton("Open HDF5 Run")
+        set_button_icon(self._btn_open, "mdi.folder-open")
+        self._btn_open.clicked.connect(self._open_file)
+        file_row.addWidget(self._btn_open)
         file_row.addWidget(self._lbl_file, stretch=1)
         root.addLayout(file_row)
+
+        chip_row = QHBoxLayout()
+        self._chip_file = StatusChip("No file", "neutral")
+        self._chip_dataset = StatusChip("Dataset --", "neutral")
+        self._chip_map = StatusChip("Map --", "neutral")
+        self._chip_export = StatusChip("Export --", "neutral")
+        for chip in (self._chip_file, self._chip_dataset, self._chip_map, self._chip_export):
+            chip_row.addWidget(chip)
+        chip_row.addStretch(1)
+        root.addLayout(chip_row)
 
         inner_tabs = QTabWidget()
         root.addWidget(inner_tabs)
@@ -75,12 +88,14 @@ class AnalysisPanel(QWidget):
         ])
         self._combo_qty.currentTextChanged.connect(self._replot_map)
         map_ctrl.addWidget(self._combo_qty)
-        btn_replot = QPushButton("Replot")
-        btn_replot.clicked.connect(self._replot_map)
-        map_ctrl.addWidget(btn_replot)
-        btn_export_csv = QPushButton("💾 Export CSV")
-        btn_export_csv.clicked.connect(self._export_csv)
-        map_ctrl.addWidget(btn_export_csv)
+        self._btn_replot = QPushButton("Replot")
+        set_button_icon(self._btn_replot, "mdi.refresh")
+        self._btn_replot.clicked.connect(self._replot_map)
+        map_ctrl.addWidget(self._btn_replot)
+        self._btn_export_csv = QPushButton("Export CSV")
+        set_button_icon(self._btn_export_csv, "mdi.content-save")
+        self._btn_export_csv.clicked.connect(self._export_csv)
+        map_ctrl.addWidget(self._btn_export_csv)
         map_layout.addLayout(map_ctrl)
 
         if _HAS_PG:
@@ -116,12 +131,14 @@ class AnalysisPanel(QWidget):
         cce_ctrl.addRow("Q_ref (full depletion):", self._spin_ref_charge)
 
         btn_plot_cce = QPushButton("Plot CCE vs. Bias")
+        set_button_icon(btn_plot_cce, "mdi.chart-line")
         btn_plot_cce.clicked.connect(self._plot_cce)
-        btn_export_cce = QPushButton("💾 Export CCE CSV")
-        btn_export_cce.clicked.connect(self._export_cce_csv)
+        self._btn_export_cce = QPushButton("Export CCE CSV")
+        set_button_icon(self._btn_export_cce, "mdi.content-save")
+        self._btn_export_cce.clicked.connect(self._export_cce_csv)
         cce_btn_row = QHBoxLayout()
         cce_btn_row.addWidget(btn_plot_cce)
-        cce_btn_row.addWidget(btn_export_cce)
+        cce_btn_row.addWidget(self._btn_export_cce)
 
         cce_layout.addLayout(cce_ctrl)
         cce_layout.addLayout(cce_btn_row)
@@ -166,9 +183,14 @@ class AnalysisPanel(QWidget):
             self._load_h5(path)
             self._run_path = path
             self._lbl_file.setText(Path(path).name)
+            self._chip_file.set_status("File loaded", "good")
+            self._chip_dataset.set_status(f"{len(self._data)} arrays",
+                                          "good" if self._data else "warn")
+            flash_button(self._btn_open, "good", "Loaded")
             self._replot_map()
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
+            self._chip_file.set_status("Load error", "crit", str(exc))
             QMessageBox.critical(self, "Load Error", str(exc))
 
     def _load_h5(self, path: str) -> None:
@@ -193,6 +215,7 @@ class AnalysisPanel(QWidget):
         qty = self._combo_qty.currentText()
         if qty not in self._data:
             self._lbl_map_info.setText(f"'{qty}' not found in file")
+            self._chip_map.set_status("Map missing", "warn")
             return
 
         x = self._data.get("x_mm")
@@ -200,6 +223,7 @@ class AnalysisPanel(QWidget):
         z = self._data.get(qty)
         if x is None or y is None or z is None:
             self._lbl_map_info.setText("Missing x_mm / y_mm arrays in file")
+            self._chip_map.set_status("Map invalid", "crit")
             return
 
         xs = np.unique(x)
@@ -226,6 +250,8 @@ class AnalysisPanel(QWidget):
             f"|  min={np.nanmin(z):.4g}  max={np.nanmax(z):.4g}  "
             f"|  X [{xs[0]:.3f}, {xs[-1]:.3f}] mm  Y [{ys[0]:.3f}, {ys[-1]:.3f}] mm"
         )
+        self._chip_map.set_status(f"Map {len(xs)}x{len(ys)}", "good")
+        self._chip_export.set_status("Export ready", "good")
 
     # ------------------------------------------------------------------ #
     # CCE vs. bias                                                         #
@@ -242,6 +268,7 @@ class AnalysisPanel(QWidget):
 
         if voltages is None or charges is None:
             from PySide6.QtWidgets import QMessageBox
+            self._chip_dataset.set_status("No bias data", "warn")
             QMessageBox.warning(
                 self, "No bias data",
                 "No 'bias_V' or 'dut_charge_pC' arrays found.\n"
@@ -268,6 +295,7 @@ class AnalysisPanel(QWidget):
             v_dep = estimate_depletion_voltage(np.array(voltages), np.array(charges))
             if v_dep is not None:
                 self._lbl_vdep.setText(f"V_dep estimate: {v_dep:.1f} V")
+                self._chip_dataset.set_status(f"Vdep {v_dep:.1f} V", "info")
         except Exception:
             pass
 
@@ -287,6 +315,7 @@ class AnalysisPanel(QWidget):
             w.writerow(["bias_V", "dut_charge_pC", "CCE"])
             for v, q in zip(voltages, charges):
                 w.writerow([f"{v:.2f}", f"{q:.6f}", f"{abs(q)/q_ref:.6f}"])
+        flash_button(self._btn_export_cce, "good", "Exported")
 
     def _export_csv(self) -> None:
         """Export all loaded analysis arrays as CSV."""
@@ -302,3 +331,4 @@ class AnalysisPanel(QWidget):
             w.writerow(keys)
             for i in range(n):
                 w.writerow([self._data[k][i] for k in keys])
+        flash_button(self._btn_export_csv, "good", "Exported")

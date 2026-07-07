@@ -18,8 +18,10 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QStackedWidget,
-    QButtonGroup, QSizePolicy,
+    QButtonGroup, QSizePolicy, QFrame,
 )
+
+from gui.status_widgets import StatusPill
 
 try:
     import pyqtgraph as pg
@@ -216,14 +218,34 @@ class StageView(QWidget):
         row = QHBoxLayout()
         row.addWidget(QLabel("<b>Setup view</b>"))
         row.addStretch(1)
+        seg = QFrame()
+        seg.setObjectName("segmented")
+        seg.setAttribute(Qt.WA_StyledBackground, True)
+        seg_lay = QHBoxLayout(seg)
+        seg_lay.setContentsMargins(3, 3, 3, 3)
+        seg_lay.setSpacing(2)
         self._btn2d = QPushButton("2D"); self._btn2d.setCheckable(True); self._btn2d.setChecked(True)
         self._btn3d = QPushButton("3D"); self._btn3d.setCheckable(True)
         for b in (self._btn2d, self._btn3d):
+            b.setObjectName("segBtn")
             b.setMaximumWidth(48)
         grp = QButtonGroup(self); grp.setExclusive(True)
         grp.addButton(self._btn2d); grp.addButton(self._btn3d)
-        row.addWidget(self._btn2d); row.addWidget(self._btn3d)
+        seg_lay.addWidget(self._btn2d); seg_lay.addWidget(self._btn3d)
+        row.addWidget(seg)
         lay.addLayout(row)
+
+        legend = QHBoxLayout()
+        legend.setSpacing(6)
+        for chip in (
+            StatusPill("Position", "good"),
+            StatusPill("Limits", "neutral"),
+            StatusPill("Scan area", "info"),
+            StatusPill("Laser path", "armed"),
+        ):
+            legend.addWidget(chip)
+        legend.addStretch(1)
+        lay.addLayout(legend)
 
         self._stack = QStackedWidget()
         self._v2d = StageView2D(limits)

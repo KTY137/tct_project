@@ -106,6 +106,28 @@ def axis_color(axis: str, mode: str = "dark") -> str:
     return AXIS_RAIL.get(str(axis).lower(), AXIS_RAIL["bias"])[key]
 
 
+def repolish(widget) -> None:
+    """Force Qt to re-evaluate stylesheet selectors for dynamic properties."""
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
+
+def set_chip_state(chip, state: str) -> None:
+    """Set a ``statusChip`` QLabel's dynamic ``state`` property and force Qt
+    to repaint it immediately.
+
+    Qt does not re-evaluate a stylesheet selector on its own when a dynamic
+    property changes — unpolish THEN polish (polish alone can leave the old
+    look when moving between two non-default states, e.g. warn -> crit).
+    Centralised here so panels reuse one idiom instead of hand-rolling it.
+    ``state`` should usually be one of ``{"neutral", "good", "warn", "crit"}``;
+    anything else falls through to the quiet neutral pill (see the
+    ``QLabel#statusChip`` QSS above).
+    """
+    chip.setProperty("state", state)
+    repolish(chip)
+
+
 def _rgba(hex_color: str, alpha: float) -> str:
     """Hex ``#rrggbb`` -> ``rgba(r,g,b,alpha)`` for translucent QSS fills."""
     h = hex_color.lstrip("#")
@@ -173,6 +195,23 @@ QPushButton:default {{
     background: {p['accent']}; color: white; border: 1px solid {p['accent_strong']};
 }}
 QPushButton:default:hover {{ background: {p['accent_strong']}; }}
+QPushButton[state="busy"] {{
+    background: {_rgba(p['accent'], 0.16)}; color: {p['accent']};
+    border: 1px solid {_rgba(p['accent'], 0.55)};
+}}
+QPushButton[state="good"] {{
+    background: {_rgba(p['good'], 0.16)}; color: {p['good']};
+    border: 1px solid {_rgba(p['good'], 0.55)};
+}}
+QPushButton[state="warn"], QPushButton#armedBtn {{
+    background: {_rgba(p['warn'], 0.18)}; color: {p['warn']};
+    border: 1px solid {_rgba(p['warn'], 0.65)};
+    font-weight: 700;
+}}
+QPushButton[state="crit"] {{
+    background: {_rgba(p['crit'], 0.16)}; color: {p['crit']};
+    border: 1px solid {_rgba(p['crit'], 0.55)};
+}}
 
 /* Accent buttons by objectName (toolbar Connect/Disconnect) */
 QPushButton#connectBtn, QToolButton#connectBtn {{
@@ -249,6 +288,16 @@ QLabel#readoutValue {{
     color: {p['accent']};
     font-family: {MONO_FAMILY};
     font-size: {FONT_XL}px; font-weight: 600;
+}}
+QFrame#readoutCell {{
+    background: {PLOT_BG}; border: 1px solid {p['border']}; border-radius: {RADIUS_SM}px;
+}}
+QLabel#readoutCellTitle {{
+    color: {PLOT_FG}; font-size: {FONT_XS}px; font-weight: 700;
+}}
+QLabel#readoutCellValue {{
+    color: {p['accent']}; font-family: {MONO_FAMILY};
+    font-size: {FONT_SM}px; font-weight: 700;
 }}
 
 /* Recessed control cluster — groups related buttons (e.g. a jog pad) into
@@ -328,6 +377,86 @@ QLabel#statusChip[state="warn"] {{
 QLabel#statusChip[state="crit"] {{
     background: {_rgba(p['crit'], 0.16)}; color: {p['crit']};
     border: 1px solid {_rgba(p['crit'], 0.55)};
+}}
+QLabel#statusChip[state="info"], QLabel#statusChip[state="busy"] {{
+    background: {_rgba(p['accent'], 0.14)}; color: {p['accent']};
+    border: 1px solid {_rgba(p['accent'], 0.50)};
+}}
+QLabel#statusChip[state="armed"] {{
+    background: {_rgba(p['warn'], 0.20)}; color: {p['warn']};
+    border: 1px solid {_rgba(p['warn'], 0.70)};
+}}
+QLabel#statusChip[state="simulated"] {{
+    background: rgba(142, 68, 173, 0.16); color: #8e44ad;
+    border: 1px solid rgba(142, 68, 173, 0.55);
+}}
+
+QFrame#statusLamp {{
+    min-width: 9px; max-width: 9px; min-height: 9px; max-height: 9px;
+    border-radius: 4px; background: {p['muted']};
+}}
+QFrame#statusLamp[state="neutral"] {{ background: {p['muted']}; }}
+QFrame#statusLamp[state="good"] {{ background: {p['good']}; }}
+QFrame#statusLamp[state="warn"], QFrame#statusLamp[state="armed"] {{ background: {p['warn']}; }}
+QFrame#statusLamp[state="crit"] {{ background: {p['crit']}; }}
+QFrame#statusLamp[state="info"], QFrame#statusLamp[state="busy"] {{ background: {p['accent']}; }}
+QFrame#statusLamp[state="simulated"] {{ background: #8e44ad; }}
+
+QFrame#statusPill {{
+    background: {p['panel']}; border: 1px solid {p['border']};
+    border-radius: {RADIUS_PILL}px;
+}}
+QFrame#statusPill[state="good"] {{ border-color: {_rgba(p['good'], 0.55)}; }}
+QFrame#statusPill[state="warn"], QFrame#statusPill[state="armed"] {{ border-color: {_rgba(p['warn'], 0.60)}; }}
+QFrame#statusPill[state="crit"] {{ border-color: {_rgba(p['crit'], 0.60)}; }}
+QFrame#statusPill[state="info"], QFrame#statusPill[state="busy"] {{ border-color: {_rgba(p['accent'], 0.55)}; }}
+QFrame#statusPill[state="simulated"] {{ border-color: rgba(142, 68, 173, 0.60); }}
+QLabel#statusPillText {{
+    font-size: {FONT_XS}px; font-weight: 700; color: {p['text']};
+}}
+
+/* ---------------------------------------------------------------------
+   Scan Routine Planner "Recipe Tree" (Phase 2.2 step 3 — gui/planner_panel.py).
+   Axis-rail colours (bias/z/x/y/laser/delay/hazard) differ per row and can't
+   be parameterised by a static QSS selector, so the panel sets them as
+   per-instance inline styles via ``gui.style.axis_color()`` — the same idiom
+   gui/motor_panel.py and gui/bias_panel.py already use for their axis-rail
+   readouts (see their ``refresh_theme()``). These rules only carry the
+   structural chrome shared by every axis/row.
+   --------------------------------------------------------------------- */
+QFrame#plannerLoopHead {{
+    background: {p['panel']}; border: 1px solid {p['border']};
+    border-radius: {RADIUS_MD}px;
+}}
+QLabel#plannerTag {{
+    font-family: {MONO_FAMILY}; font-size: {FONT_XS - 1}px; font-weight: 700;
+    letter-spacing: 0.06em; padding: 2px {SPACE_XS + 2}px; border-radius: {RADIUS_XS}px;
+}}
+QLabel#plannerAxisName {{ font-weight: 600; }}
+QLabel#plannerCountPill {{
+    font-family: {MONO_FAMILY}; font-size: {FONT_XS}px; font-weight: 700;
+    padding: 2px {SPACE_SM + 1}px; border-radius: {RADIUS_PILL}px;
+}}
+QDoubleSpinBox#plannerValueSpin {{
+    font-family: {MONO_FAMILY}; padding: 1px {SPACE_XS}px; min-width: 56px;
+}}
+QFrame#plannerActionLeaf {{ background: transparent; border-radius: {RADIUS_SM}px; }}
+QFrame#plannerActionLeaf:hover {{ background: {p['pressed']}; }}
+QLabel#plannerLeafGlyph {{ color: {p['muted']}; min-width: 16px; }}
+QLabel#plannerLeafLabel {{ color: {p['text']}; font-weight: 500; }}
+QLabel#plannerLeafMeta {{
+    font-family: {MONO_FAMILY}; font-size: {FONT_XS}px; color: {p['muted']};
+}}
+QFrame#plannerGuard {{
+    background: {_rgba(p['good'], 0.07)}; border-left: 3px solid {p['good']};
+    border-radius: {RADIUS_SM}px;
+}}
+QLabel#plannerGuardLabel {{ color: {p['good']}; font-weight: 600; }}
+QFrame#plannerDanger {{ border-radius: {RADIUS_SM}px; }}
+QLabel#plannerDangerLabel {{ font-weight: 600; }}
+QLabel#plannerConfirmPill {{
+    font-family: {MONO_FAMILY}; font-size: {FONT_XS - 1}px; font-weight: 700;
+    letter-spacing: 0.04em; padding: 2px {SPACE_SM}px; border-radius: {RADIUS_PILL}px;
 }}
 """
 

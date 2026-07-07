@@ -22,6 +22,7 @@ except ImportError:
     _HAS_PG = False
 
 from devices.intensity_base import IntensityMonitorBase
+from gui.status_widgets import ReadoutCell, StatusChip, flash_button, set_button_icon
 
 logger = logging.getLogger(__name__)
 
@@ -96,13 +97,23 @@ class IntensityPanel(QWidget):
 
         # ── Live values ───────────────────────────────────────────────
         vals_box = QGroupBox("Reference Monitor")
-        vals_layout = QHBoxLayout(vals_box)
-        self._lbl_amp  = QLabel("Amplitude: —")
-        self._lbl_chg  = QLabel("Charge: —")
-        self._lbl_sat  = QLabel("")
-        for lbl in (self._lbl_amp, self._lbl_chg, self._lbl_sat):
-            lbl.setAlignment(Qt.AlignCenter)
-            vals_layout.addWidget(lbl)
+        vals_v = QVBoxLayout(vals_box)
+        status_row = QHBoxLayout()
+        self._chip_live = StatusChip("Monitor offline", "neutral")
+        self._chip_sat = StatusChip("Saturation --", "neutral")
+        self._chip_stab = StatusChip("Stability --", "neutral")
+        self._chip_scale = StatusChip("Scale --", "neutral")
+        for chip in (self._chip_live, self._chip_sat, self._chip_stab, self._chip_scale):
+            status_row.addWidget(chip)
+        status_row.addStretch(1)
+        vals_v.addLayout(status_row)
+        vals_layout = QHBoxLayout()
+        self._lbl_amp = ReadoutCell("Amplitude", "--")
+        self._lbl_chg = ReadoutCell("Charge", "--")
+        vals_layout.addWidget(self._lbl_amp)
+        vals_layout.addWidget(self._lbl_chg)
+        vals_layout.addStretch(1)
+        vals_v.addLayout(vals_layout)
         root.addWidget(vals_box)
 
         # ── Scale control ─────────────────────────────────────────────
@@ -112,15 +123,17 @@ class IntensityPanel(QWidget):
         self._spin_scale.setRange(0.001, 10.0)
         self._spin_scale.setValue(0.1)
         self._spin_scale.setDecimals(3)
-        btn_apply_scale = QPushButton("Apply")
-        btn_apply_scale.clicked.connect(self._apply_scale)
+        self._btn_apply_scale = QPushButton("Apply")
+        set_button_icon(self._btn_apply_scale, "mdi.tune")
+        self._btn_apply_scale.clicked.connect(self._apply_scale)
         scale_row.addWidget(self._spin_scale)
-        scale_row.addWidget(btn_apply_scale)
+        scale_row.addWidget(self._btn_apply_scale)
         root.addLayout(scale_row)
 
         # ── Stability check ───────────────────────────────────────────
         stab_row = QHBoxLayout()
         self._btn_stab = QPushButton("Check Stability (10 shots)")
+        set_button_icon(self._btn_stab, "mdi.chart-bell-curve")
         self._btn_stab.clicked.connect(self._check_stability)
         self._lbl_stab = QLabel("")
         stab_row.addWidget(self._btn_stab)
@@ -143,19 +156,19 @@ class IntensityPanel(QWidget):
 
     def _on_reading(self, reading) -> None:
         if reading is None:
-            self._lbl_amp.setText("Amplitude: —")
-            self._lbl_chg.setText("Charge: —")
-            self._lbl_sat.setText("")
+            self._lbl_amp.set_value("--")
+            self._lbl_chg.set_value("--")
+            self._chip_live.set_status("Monitor offline", "neutral")
+            self._chip_sat.set_status("Saturation --", "neutral")
             return
         try:
-            self._lbl_amp.setText(f"Amplitude: {reading.amplitude_V*1000:.2f} mV")
-            self._lbl_chg.setText(f"Charge: {reading.charge_pC:.3f} pC")
+            self._chip_live.set_status("Monitor live", "busy")
+            self._lbl_amp.set_value(f"{reading.amplitude_V*1000:.2f} mV")
+            self._lbl_chg.set_value(f"{reading.charge_pC:.3f} pC")
             if reading.saturated:
-                self._lbl_sat.setText("⚠ SATURATED")
-                self._lbl_sat.setStyleSheet("color: red; font-weight: bold;")
+                self._chip_sat.set_status("Saturated", "warn")
             else:
-                self._lbl_sat.setText("OK")
-                self._lbl_sat.setStyleSheet("color: green;")
+                self._chip_sat.set_status("Saturation OK", "good")
 
             if _HAS_PG and reading.time_s is not None and reading.waveform_V is not None:
                 self._curve.setData(reading.time_s, reading.waveform_V)
@@ -168,8 +181,11 @@ class IntensityPanel(QWidget):
     def _apply_scale(self) -> None:
         try:
             self._monitor.set_scale(self._spin_scale.value())
+            self._chip_scale.set_status(f"Scale {self._spin_scale.value():.3g} V/div", "good")
+            flash_button(self._btn_apply_scale, "good", "Applied")
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
+            self._chip_scale.set_status("Scale error", "crit", str(exc))
             QMessageBox.warning(self, "Scale Error", str(exc))
 
     def _check_stability(self) -> None:
@@ -179,8 +195,12 @@ class IntensityPanel(QWidget):
             self._lbl_stab.setText(msg)
             color = "green" if stable else "red"
             self._lbl_stab.setStyleSheet(f"color: {color};")
+            self._chip_stab.set_status("Stable" if stable else "Unstable",
+                                       "good" if stable else "warn")
+            flash_button(self._btn_stab, "good" if stable else "warn")
         except Exception as exc:
             self._lbl_stab.setText(str(exc))
+            self._chip_stab.set_status("Stability error", "crit", str(exc))
 
     def set_monitor(self, monitor: IntensityMonitorBase) -> None:
         """Hot-swap the intensity monitor backend at runtime."""

@@ -21,6 +21,7 @@ except ImportError:
     _HAS_PG = False
 
 from controller.scan_controller import ScanConfig, ScanResult, ZFocusScanConfig, VoltageScanConfig
+from gui.status_widgets import StatusChip, flash_button, set_button_icon
 
 
 class ScanPanel(QWidget):
@@ -88,12 +89,14 @@ class ScanPanel(QWidget):
 
         # Save / load buttons
         io_row = QHBoxLayout()
-        btn_save = QPushButton("💾 Save Params")
-        btn_save.clicked.connect(self._save_params)
-        btn_load = QPushButton("📂 Load Params")
-        btn_load.clicked.connect(self._load_params)
-        io_row.addWidget(btn_save)
-        io_row.addWidget(btn_load)
+        self._btn_save_params = QPushButton("Save Params")
+        set_button_icon(self._btn_save_params, "mdi.content-save")
+        self._btn_save_params.clicked.connect(self._save_params)
+        self._btn_load_params = QPushButton("Load Params")
+        set_button_icon(self._btn_load_params, "mdi.folder-open")
+        self._btn_load_params.clicked.connect(self._load_params)
+        io_row.addWidget(self._btn_save_params)
+        io_row.addWidget(self._btn_load_params)
         form.addRow(io_row)
         root.addWidget(cfg_box)
 
@@ -131,19 +134,32 @@ class ScanPanel(QWidget):
             root.addWidget(QLabel("(install pyqtgraph for live map)"))
 
         # ── Progress ──────────────────────────────────────────────────
+        status_row = QHBoxLayout()
+        self._chip_run = StatusChip("Ready", "good")
+        self._chip_plan = StatusChip("Plan --", "neutral")
+        self._chip_points = StatusChip("0 pts", "neutral")
+        status_row.addWidget(self._chip_run)
+        status_row.addWidget(self._chip_plan)
+        status_row.addWidget(self._chip_points)
+        status_row.addStretch(1)
+        root.addLayout(status_row)
         self._lbl_progress = QLabel("Ready")
         root.addWidget(self._lbl_progress)
 
         # ── Buttons ───────────────────────────────────────────────────
         btn_row = QHBoxLayout()
         self._btn_start = QPushButton("▶ Start Scan")
+        set_button_icon(self._btn_start, "mdi.play")
         self._btn_start.clicked.connect(self._emit_start)
         self._btn_pause = QPushButton("⏸ Pause")
+        set_button_icon(self._btn_pause, "mdi.pause")
         self._btn_pause.setEnabled(False)
         self._btn_pause.setCheckable(True)
         self._btn_pause.toggled.connect(self._on_pause_toggled)
         self._btn_abort = QPushButton("⏹ Abort")
-        self._btn_abort.clicked.connect(self.abort_requested.emit)
+        self._btn_abort.setObjectName("dangerBtn")
+        set_button_icon(self._btn_abort, "mdi.stop", color="white")
+        self._btn_abort.clicked.connect(self._abort_scan)
         self._btn_abort.setEnabled(False)
         btn_row.addWidget(self._btn_start)
         btn_row.addWidget(self._btn_pause)
@@ -225,6 +241,7 @@ class ScanPanel(QWidget):
         zf_form.addRow(self._btn_zf_start)
 
         root.addWidget(zf_box)
+        self._update_eta()
 
     # ------------------------------------------------------------------ #
     # Public API called by ScanController callbacks                       #
@@ -241,25 +258,36 @@ class ScanPanel(QWidget):
 
     def on_progress(self, done: int, total: int) -> None:
         self._lbl_progress.setText(f"Point {done} / {total}")
+        self._chip_points.set_status(f"{done}/{total} pts",
+                                     "busy" if done < total else "good")
 
     def on_scan_started(self) -> None:
         self._btn_start.setEnabled(False)
         self._btn_abort.setEnabled(True)
         self._btn_pause.setEnabled(True)
         self._btn_pause.setChecked(False)
+        self._chip_run.set_status("Running", "busy")
 
     def on_scan_finished(self) -> None:
         self._btn_start.setEnabled(True)
         self._btn_abort.setEnabled(False)
         self._btn_pause.setEnabled(False)
         self._btn_pause.setChecked(False)
+        self._chip_run.set_status("Complete", "good")
+        flash_button(self._btn_start, "good", "Done")
 
     def _on_pause_toggled(self, paused: bool) -> None:
         self._btn_pause.setText("▶ Resume" if paused else "⏸ Pause")
+        self._chip_run.set_status("Paused" if paused else "Running",
+                                  "warn" if paused else "busy")
         # Only forward user-initiated toggles while a scan is running (the
         # programmatic un-check in on_scan_started/finished must not resume).
         if self._btn_pause.isEnabled():
             self.pause_requested.emit(paused)
+
+    def _abort_scan(self) -> None:
+        self._chip_run.set_status("Aborting", "warn")
+        self.abort_requested.emit()
 
     def set_start_position(self, x_mm: float, y_mm: float, z_mm: float) -> None:
         """Called by motor panel ‘Set as Scan Start’ button."""
@@ -367,6 +395,9 @@ class ScanPanel(QWidget):
         else:
             eta_str = f"{total_s/3600:.1f} h"
         self._lbl_eta.setText(f"Est. time: {n_pts} pts × {t_per_pt:.2f} s ≈ {eta_str}")
+        if hasattr(self, "_chip_plan"):
+            self._chip_plan.set_status(f"{n_pts} pts, {eta_str}",
+                                       "warn" if n_pts > 10000 else "good")
 
     def _save_params(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -386,6 +417,7 @@ class ScanPanel(QWidget):
             "settle_time_s": self._spin_settle.value(),
         }
         Path(path).write_text(json.dumps(params, indent=2))
+        flash_button(self._btn_save_params, "good", "Saved")
 
     def _load_params(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -404,6 +436,7 @@ class ScanPanel(QWidget):
             self._spin_z.setValue( params.get("z_mm",        self._spin_z.value()))
             self._spin_nav.setValue(int(params.get("n_averages", self._spin_nav.value())))
             self._spin_settle.setValue(params.get("settle_time_s", self._spin_settle.value()))
+            flash_button(self._btn_load_params, "good", "Loaded")
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Load Error", str(exc))

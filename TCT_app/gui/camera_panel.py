@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from devices.camera_blackfly import BlackflyCamera, FrameMeta
+from gui.status_widgets import StatusChip, flash_button, set_button_icon
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,22 @@ class CameraPanel(QWidget):
         left = QVBoxLayout()
         root.addLayout(left, stretch=3)
 
+        status_row = QHBoxLayout()
+        status_row.setSpacing(6)
+        self._chip_camera = StatusChip("Camera offline", "neutral")
+        self._chip_fps = StatusChip("FPS --", "neutral")
+        self._chip_temp = StatusChip("Temp --", "neutral")
+        self._chip_sat = StatusChip("Saturation --", "neutral")
+        self._chip_roi = StatusChip("ROI full", "neutral")
+        self._chip_bg = StatusChip("BG empty", "neutral")
+        for chip in (
+            self._chip_camera, self._chip_fps, self._chip_temp,
+            self._chip_sat, self._chip_roi, self._chip_bg,
+        ):
+            status_row.addWidget(chip)
+        status_row.addStretch(1)
+        left.addLayout(status_row)
+
         # Live image
         self._img_label = QLabel("No image")
         self._img_label.setAlignment(Qt.AlignCenter)
@@ -187,21 +204,25 @@ class CameraPanel(QWidget):
         self._chk_overlay.toggled.connect(lambda v: setattr(self, "_show_overlay", v))
         btn_row.addWidget(self._chk_overlay)
 
-        btn_save = QPushButton("Save Frame…")
-        btn_save.clicked.connect(self._save_frame)
-        btn_row.addWidget(btn_save)
+        self._btn_save = QPushButton("Save Frame…")
+        set_button_icon(self._btn_save, "mdi.content-save")
+        self._btn_save.clicked.connect(self._save_frame)
+        btn_row.addWidget(self._btn_save)
 
-        btn_bg = QPushButton("Capture BG")
-        btn_bg.clicked.connect(self._capture_background)
-        btn_row.addWidget(btn_bg)
+        self._btn_bg = QPushButton("Capture BG")
+        set_button_icon(self._btn_bg, "mdi.image-filter-center-focus")
+        self._btn_bg.clicked.connect(self._capture_background)
+        btn_row.addWidget(self._btn_bg)
 
-        btn_clr = QPushButton("Clear BG")
-        btn_clr.clicked.connect(self._camera.clear_background)
-        btn_row.addWidget(btn_clr)
+        self._btn_clr_bg = QPushButton("Clear BG")
+        set_button_icon(self._btn_clr_bg, "mdi.close-circle-outline")
+        self._btn_clr_bg.clicked.connect(self._clear_background)
+        btn_row.addWidget(self._btn_clr_bg)
 
-        btn_roi = QPushButton("Set ROI…")
-        btn_roi.clicked.connect(self._open_roi_dialog)
-        btn_row.addWidget(btn_roi)
+        self._btn_roi = QPushButton("Set ROI…")
+        set_button_icon(self._btn_roi, "mdi.crop")
+        self._btn_roi.clicked.connect(self._open_roi_dialog)
+        btn_row.addWidget(self._btn_roi)
 
         left.addLayout(btn_row)
 
@@ -327,6 +348,8 @@ class CameraPanel(QWidget):
 
     def _refresh(self) -> None:
         if not self._camera.connected:
+            self._chip_camera.set_status("Camera offline", "neutral")
+            self._chip_fps.set_status("FPS --", "neutral")
             return
         try:
             frame, meta = self._camera.get_frame_with_meta()
@@ -339,6 +362,14 @@ class CameraPanel(QWidget):
         self._display(frame, meta)
         self._update_histogram(frame)
         self._update_stats(meta)
+        self._update_status_chips(frame, meta)
+
+    def _update_status_chips(self, frame: np.ndarray, meta: FrameMeta) -> None:
+        self._chip_camera.set_status("Camera live", "busy")
+        max_possible = 65535 if frame.dtype == np.uint16 else 255
+        saturated = float(meta.pix_max) >= max_possible * 0.98
+        self._chip_sat.set_status("Saturated" if saturated else "Saturation OK",
+                                  "warn" if saturated else "good")
 
     # ──────────────────────────────────────────────────────────────────── #
     # Display helpers                                                      #
@@ -430,21 +461,27 @@ class CameraPanel(QWidget):
         if math.isnan(temp):
             self._lbl_temp.setText("Temp\n–")
             self._lbl_temp.setStyleSheet("")
+            self._chip_temp.set_status("Temp --", "neutral")
         elif temp >= 65.0:
             self._lbl_temp.setText(f"Temp\n{temp:.1f} °C ⚠")
             self._lbl_temp.setStyleSheet("color: #ff4444; font-weight: bold;")
+            self._chip_temp.set_status(f"Temp {temp:.1f} C", "crit")
         elif temp >= 55.0:
             self._lbl_temp.setText(f"Temp\n{temp:.1f} °C")
             self._lbl_temp.setStyleSheet("color: #ffaa00; font-weight: bold;")
+            self._chip_temp.set_status(f"Temp {temp:.1f} C", "warn")
         else:
             self._lbl_temp.setText(f"Temp\n{temp:.1f} °C")
             self._lbl_temp.setStyleSheet("")
+            self._chip_temp.set_status(f"Temp {temp:.1f} C", "good")
 
         fps = self._camera.get_fps_actual()
         if math.isnan(fps):
             self._lbl_fps.setText("FPS\n–")
+            self._chip_fps.set_status("FPS --", "neutral")
         else:
             self._lbl_fps.setText(f"FPS\n{fps:.1f}")
+            self._chip_fps.set_status(f"FPS {fps:.1f}", "busy")
 
     # ──────────────────────────────────────────────────────────────────── #
     # Control callbacks                                                    #
@@ -527,12 +564,23 @@ class CameraPanel(QWidget):
                     )
                 else:
                     img.save(p)
+            flash_button(self._btn_save, "good", "Saved")
         except Exception as exc:
             QMessageBox.warning(self, "Save Error", str(exc))
 
     def _capture_background(self) -> None:
         try:
             self._camera.capture_background()
+            self._chip_bg.set_status("BG captured", "good")
+            flash_button(self._btn_bg, "good", "Captured")
+        except Exception as exc:
+            QMessageBox.warning(self, "Background Error", str(exc))
+
+    def _clear_background(self) -> None:
+        try:
+            self._camera.clear_background()
+            self._chip_bg.set_status("BG empty", "neutral")
+            flash_button(self._btn_clr_bg, "good", "Cleared")
         except Exception as exc:
             QMessageBox.warning(self, "Background Error", str(exc))
 
@@ -542,6 +590,10 @@ class CameraPanel(QWidget):
         if dlg.exec() == QDialog.Accepted:
             ox2, oy2, w2, h2 = dlg.values()
             self._camera.set_roi(ox2, oy2, w2, h2)
+            active = bool(w2 and h2)
+            self._chip_roi.set_status("ROI active" if active else "ROI full",
+                                      "info" if active else "neutral")
+            flash_button(self._btn_roi, "good", "ROI set")
 
     # ──────────────────────────────────────────────────────────────────── #
     # Helper                                                               #

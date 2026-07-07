@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
 
 from devices.laser_manual import LaserManualMetadata
 from devices.waveform_generator import WaveformGenerator, list_visa_resources
+from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 
 
 class LaserPanel(QWidget):
@@ -26,6 +27,19 @@ class LaserPanel(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
+        status_row = QHBoxLayout()
+        status_row.setSpacing(6)
+        self._chip_meta = StatusChip("Metadata saved", "good")
+        self._chip_wfg = StatusChip("Wavegen --", "neutral")
+        self._chip_output = StatusChip("Output off", "good")
+        self._chip_pulse = StatusChip("Pulse --", "neutral")
+        self._chip_load = StatusChip("Load --", "neutral")
+        for chip in (self._chip_meta, self._chip_wfg, self._chip_output,
+                     self._chip_pulse, self._chip_load):
+            status_row.addWidget(chip)
+        status_row.addStretch(1)
+        root.addLayout(status_row)
+
         # ── PDL 800 manual metadata ───────────────────────────────────
         pdl_box = QGroupBox("PDL 800 (manual settings — recorded in metadata)")
         form = QFormLayout(pdl_box)
@@ -42,6 +56,11 @@ class LaserPanel(QWidget):
         self._ed_power = QLineEdit(self._laser.power_knob_setting)
         self._ed_atten = QLineEdit(self._laser.attenuation_filter)
         self._ed_notes = QLineEdit(self._laser.notes)
+        for widget in (self._ed_wavelength, self._ed_rep_mode, self._ed_power,
+                       self._ed_atten, self._ed_notes):
+            signal = getattr(widget, "valueChanged", None) or getattr(widget, "currentTextChanged", None) or getattr(widget, "textChanged", None)
+            if signal is not None:
+                signal.connect(lambda *_: self._chip_meta.set_status("Metadata dirty", "warn"))
 
         form.addRow("Wavelength:", self._ed_wavelength)
         form.addRow("Rep. mode:",  self._ed_rep_mode)
@@ -50,6 +69,7 @@ class LaserPanel(QWidget):
         form.addRow("Notes:",       self._ed_notes)
 
         btn_save = QPushButton("Save to metadata")
+        set_button_icon(btn_save, "mdi.content-save")
         btn_save.clicked.connect(self._save_metadata)
         form.addRow(btn_save)
         root.addWidget(pdl_box)
@@ -125,10 +145,16 @@ class LaserPanel(QWidget):
         for _w in (self._spin_freq, self._spin_width, self._spin_duty):
             _w.valueChanged.connect(self._update_pulse_hint)
         self._on_pulse_mode(self._pulse_mode.currentText())
+        _load_label = self._load_combo.currentText()
+        self._chip_load.set_status(f"Load {_load_label}",
+                                   "good" if _load_label == "50 Ω" else "warn")
 
         btn_row = QHBoxLayout()
         self._btn_on  = QPushButton("Output ON")
+        self._btn_on.setObjectName("armedBtn")
+        set_button_icon(self._btn_on, "mdi.power-plug", color="#d98c17")
         self._btn_off = QPushButton("Output OFF")
+        set_button_icon(self._btn_off, "mdi.power-plug-off")
         self._btn_on.clicked.connect(self._output_on)
         self._btn_off.clicked.connect(self._output_off)
         btn_row.addWidget(self._btn_on)
@@ -136,14 +162,19 @@ class LaserPanel(QWidget):
         wfg_form.addRow(btn_row)
 
         btn_apply = QPushButton("Apply settings")
+        self._btn_apply = btn_apply
+        set_button_icon(btn_apply, "mdi.tune")
         btn_apply.clicked.connect(self._apply_wfg)
         wfg_form.addRow(btn_apply)
 
         diag_row = QHBoxLayout()
         btn_test = QPushButton("🔌 Test Connection")
+        self._btn_test = btn_test
+        set_button_icon(btn_test, "mdi.lan-connect")
         btn_test.setToolTip("Query *IDN? and show the reply — confirms the VISA/USB link")
         btn_test.clicked.connect(self._test_connection)
         btn_visa = QPushButton("List VISA…")
+        set_button_icon(btn_visa, "mdi.format-list-bulleted")
         btn_visa.setToolTip("List VISA resource strings (find the instrument's USB address)")
         btn_visa.clicked.connect(self._list_visa)
         diag_row.addWidget(btn_test)
@@ -161,6 +192,7 @@ class LaserPanel(QWidget):
         self._laser.power_knob_setting  = self._ed_power.text()
         self._laser.attenuation_filter  = self._ed_atten.text()
         self._laser.notes               = self._ed_notes.text()
+        self._chip_meta.set_status("Metadata saved", "good")
 
     def _on_pulse_mode(self, mode: str) -> None:
         duty = (mode == "Duty cycle")
@@ -180,11 +212,15 @@ class LaserPanel(QWidget):
         if self._pulse_mode.currentText() == "Duty cycle":
             width = (self._spin_duty.value() / 100.0) / f if f > 0 else 0.0
             self._pulse_hint.setText(f"≈ {self._fmt_time(width)} pulse  @ {f:g} Hz")
+            self._chip_pulse.set_status(f"Duty {self._spin_duty.value():.3g}%", "info")
         else:
             duty = self._spin_width.value() * f * 100.0 if f > 0 else 0.0
             self._pulse_hint.setText(f"≈ {duty:.3g} % duty  @ {f:g} Hz")
+            self._chip_pulse.set_status(f"Width {self._fmt_time(self._spin_width.value())}", "info")
 
     def _apply_wfg(self) -> None:
+        set_button_busy(self._btn_apply, True, "Applying...")
+        ok = False
         try:
             self._wfg.set_frequency(self._spin_freq.value())
             if self._pulse_mode.currentText() == "Duty cycle":
@@ -193,29 +229,45 @@ class LaserPanel(QWidget):
                 self._wfg.set_pulse_width(self._spin_width.value())
             self._wfg.set_amplitude(self._spin_ampl.value())
             self._wfg.set_offset(self._spin_offset.value())
+            self._chip_wfg.set_status("Wavegen configured", "good")
+            ok = True
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
+            self._chip_wfg.set_status("Wavegen error", "crit", str(exc))
             QMessageBox.warning(self, "WFG Error", str(exc))
+        finally:
+            set_button_busy(self._btn_apply, False)
+        if ok:
+            flash_button(self._btn_apply, "good", "Applied")
 
     def _on_load_changed(self, idx: int) -> None:
         try:
             self._wfg.set_output_load(self._load_combo.itemData(idx))
+            label = self._load_combo.currentText()
+            self._chip_load.set_status(f"Load {label}", "good" if label == "50 Ω" else "warn")
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
+            self._chip_load.set_status("Load error", "crit", str(exc))
             QMessageBox.warning(self, "WFG Error", str(exc))
 
     def _output_on(self) -> None:
         try:
             self._wfg.output_on()
+            self._chip_output.set_status("Output armed", "armed")
+            flash_button(self._btn_on, "warn", "Armed")
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
+            self._chip_output.set_status("Output error", "crit", str(exc))
             QMessageBox.warning(self, "WFG Error", str(exc))
 
     def _output_off(self) -> None:
         try:
             self._wfg.output_off()
+            self._chip_output.set_status("Output off", "good")
+            flash_button(self._btn_off, "good", "Off")
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
+            self._chip_output.set_status("Output error", "crit", str(exc))
             QMessageBox.warning(self, "WFG Error", str(exc))
 
     def _test_connection(self) -> None:
@@ -224,8 +276,11 @@ class LaserPanel(QWidget):
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             msg = self._wfg.test_connection()
+            self._chip_wfg.set_status("Wavegen connected", "good")
+            flash_button(self._btn_test, "good", "Connected")
         except Exception as exc:
             msg = f"Test failed: {exc}"
+            self._chip_wfg.set_status("Wavegen error", "crit", str(exc))
         finally:
             QApplication.restoreOverrideCursor()
         QMessageBox.information(self, "Waveform Generator Test", msg)

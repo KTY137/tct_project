@@ -13,7 +13,6 @@ import time
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QBrush
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QGroupBox, QLabel, QSpinBox, QPushButton,
@@ -27,7 +26,8 @@ try:
 except ImportError:
     _HAS_PG = False
 
-from devices.slow_control_base import AlarmStatus, ALARM_COLORS, SlowControlReading
+from devices.slow_control_base import AlarmStatus, SlowControlReading
+from gui.status_widgets import StatusChip, set_button_icon
 
 if TYPE_CHECKING:
     from controller.slow_control_manager import SlowControlManager
@@ -75,9 +75,12 @@ class MonitorPanel(QWidget):
 
         # ── Toolbar ───────────────────────────────────────────────────
         bar = QHBoxLayout()
-        self._lbl_alarm = QLabel("● All OK")
-        self._lbl_alarm.setStyleSheet(f"color: {ALARM_COLORS[AlarmStatus.OK]}; font-weight: bold;")
-        bar.addWidget(self._lbl_alarm)
+        self._chip_alarm = StatusChip("All OK", "good")
+        self._chip_polling = StatusChip("Polling off", "neutral")
+        self._chip_stale = StatusChip("Fresh --", "neutral")
+        self._chip_alarm_count = StatusChip("0 alarms", "good")
+        for chip in (self._chip_alarm, self._chip_polling, self._chip_stale, self._chip_alarm_count):
+            bar.addWidget(chip)
         bar.addStretch()
         bar.addWidget(QLabel("Poll every"))
         self._spin_interval = QSpinBox()
@@ -87,6 +90,7 @@ class MonitorPanel(QWidget):
         self._spin_interval.valueChanged.connect(self._update_interval)
         bar.addWidget(self._spin_interval)
         self._btn_toggle = QPushButton("▶ Start")
+        set_button_icon(self._btn_toggle, "mdi.play")
         self._btn_toggle.setCheckable(True)
         self._btn_toggle.toggled.connect(self._toggle_polling)
         bar.addWidget(self._btn_toggle)
@@ -129,6 +133,7 @@ class MonitorPanel(QWidget):
                 self._table.setItem(row, col, QTableWidgetItem(""))
             self._table.item(row, 0).setText(ch.name)
             self._table.item(row, 2).setText(ch.unit)
+            self._table.setCellWidget(row, 3, StatusChip("—", "neutral"))
 
     # ------------------------------------------------------------------ #
     # Polling                                                             #
@@ -138,10 +143,14 @@ class MonitorPanel(QWidget):
         if checked:
             self._timer.start(self._poll_ms)
             self._btn_toggle.setText("⏹ Stop")
+            set_button_icon(self._btn_toggle, "mdi.stop")
+            self._chip_polling.set_status("Polling on", "busy")
             self._poll()          # immediate first read
         else:
             self._timer.stop()
             self._btn_toggle.setText("▶ Start")
+            set_button_icon(self._btn_toggle, "mdi.play")
+            self._chip_polling.set_status("Polling off", "neutral")
 
     def _update_interval(self, seconds: int) -> None:
         self._poll_ms = seconds * 1000
@@ -171,14 +180,19 @@ class MonitorPanel(QWidget):
             )
             ts_str = time.strftime("%H:%M:%S", time.localtime(r.timestamp))
             self._table.item(row, 1).setText(val_str)
-            self._table.item(row, 3).setText(r.status.value)
             self._table.item(row, 4).setText(ts_str)
+            chip: StatusChip = self._table.cellWidget(row, 3)
+            chip.set_status(r.status.value, self._alarm_state(r.status))
 
-            colour = QColor(ALARM_COLORS.get(r.status, "#ffffff"))
-            brush  = QBrush(colour)
-            for col in range(5):
-                item = self._table.item(row, col)
-                item.setForeground(brush)
+    @staticmethod
+    def _alarm_state(status: AlarmStatus) -> str:
+        if status in (AlarmStatus.ALARM_LOW, AlarmStatus.ALARM_HIGH):
+            return "crit"
+        if status in (AlarmStatus.WARN_LOW, AlarmStatus.WARN_HIGH):
+            return "warn"
+        if status == AlarmStatus.UNAVAILABLE:
+            return "neutral"
+        return "good"
 
     # ------------------------------------------------------------------ #
     # History + plot                                                      #
@@ -224,19 +238,34 @@ class MonitorPanel(QWidget):
     def _update_alarm_banner(self, readings: dict[str, SlowControlReading]) -> None:
         worst = AlarmStatus.OK
         priority = list(AlarmStatus)
+        alarm_count = 0
         for r in readings.values():
             if priority.index(r.status) > priority.index(worst):
                 worst = r.status
-        colour = ALARM_COLORS.get(worst, "#ffffff")
+            if r.status != AlarmStatus.OK:
+                alarm_count += 1
         if worst in (AlarmStatus.ALARM_LOW, AlarmStatus.ALARM_HIGH):
-            self._lbl_alarm.setText("⚠ ALARM")
+            self._chip_alarm.set_status("ALARM", "crit")
         elif worst in (AlarmStatus.WARN_LOW, AlarmStatus.WARN_HIGH):
-            self._lbl_alarm.setText("⚡ WARNING")
+            self._chip_alarm.set_status("WARNING", "warn")
         elif worst == AlarmStatus.UNAVAILABLE:
-            self._lbl_alarm.setText("? UNAVAILABLE")
+            self._chip_alarm.set_status("UNAVAILABLE", "neutral")
         else:
-            self._lbl_alarm.setText("● All OK")
-        self._lbl_alarm.setStyleSheet(f"color: {colour}; font-weight: bold;")
+            self._chip_alarm.set_status("All OK", "good")
+        self._chip_alarm_count.set_status(
+            f"{alarm_count} alarms",
+            "good" if alarm_count == 0 else (
+                "crit" if worst in (AlarmStatus.ALARM_LOW, AlarmStatus.ALARM_HIGH) else "warn"
+            ),
+        )
+        if readings:
+            newest = max(r.timestamp for r in readings.values())
+            age_s = max(0.0, time.time() - newest)
+            stale = age_s > max(2.0, 2.0 * (self._poll_ms / 1000.0))
+            self._chip_stale.set_status(
+                f"Stale {age_s:.0f}s" if stale else "Fresh",
+                "warn" if stale else "good",
+            )
 
     # ------------------------------------------------------------------ #
     # Public API                                                          #

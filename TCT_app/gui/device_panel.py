@@ -5,12 +5,13 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer, QThread, QObject, Signal
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QGroupBox, QLabel, QPushButton, QTableWidget,
+    QGroupBox, QPushButton, QTableWidget,
     QTableWidgetItem, QHeaderView, QAbstractItemView,
     QMessageBox,
 )
 
 from controller.device_manager import DeviceManager
+from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 
 
 _STATUS_STYLE = {
@@ -67,6 +68,7 @@ class DeviceManagerWindow(QMainWindow):
         self.setWindowTitle("Device Manager")
         self.resize(620, 380)
         self._devices = devices
+        self._last_errors: dict[str, str] = {}
         self._bg_thread: QThread | None = None
         self._bg_task: _DeviceTask | None = None
         self._build_ui()
@@ -88,6 +90,14 @@ class DeviceManagerWindow(QMainWindow):
         root.addWidget(box)
         box_layout = QVBoxLayout(box)
 
+        status_row = QHBoxLayout()
+        self._chip_summary = StatusChip("Devices idle", "neutral")
+        self._chip_busy = StatusChip("Idle", "neutral")
+        status_row.addWidget(self._chip_summary)
+        status_row.addWidget(self._chip_busy)
+        status_row.addStretch(1)
+        box_layout.addLayout(status_row)
+
         # Table: Name | Status | Simulation | Connect | Disconnect
         self._table = QTableWidget(0, 5)
         self._table.setHorizontalHeaderLabels(
@@ -106,8 +116,10 @@ class DeviceManagerWindow(QMainWindow):
         # Bottom row
         bottom = QHBoxLayout()
         self._btn_connect_all = QPushButton("Connect All")
+        set_button_icon(self._btn_connect_all, "mdi.lan-connect")
         self._btn_connect_all.clicked.connect(self._connect_all)
         self._btn_disconnect_all = QPushButton("Disconnect All")
+        set_button_icon(self._btn_disconnect_all, "mdi.lan-disconnect")
         self._btn_disconnect_all.clicked.connect(self._disconnect_all)
         bottom.addWidget(self._btn_connect_all)
         bottom.addWidget(self._btn_disconnect_all)
@@ -133,25 +145,28 @@ class DeviceManagerWindow(QMainWindow):
             self._table.setItem(row, 0, item_name)
 
             # Status label (updated in _refresh)
-            lbl_status = QLabel("—")
+            lbl_status = StatusChip("-", "neutral", min_width=108)
             lbl_status.setAlignment(Qt.AlignCenter)
-            lbl_status.setAutoFillBackground(True)
             self._table.setCellWidget(row, 1, lbl_status)
 
             # Simulation badge
-            sim_text = "Yes" if getattr(dev, "simulation", False) else "No"
-            lbl_sim = QLabel(sim_text)
+            is_sim = bool(getattr(dev, "simulation", False))
+            lbl_sim = StatusChip("Sim" if is_sim else "Real",
+                                 "simulated" if is_sim else "neutral",
+                                 min_width=64)
             lbl_sim.setAlignment(Qt.AlignCenter)
             self._table.setCellWidget(row, 2, lbl_sim)
 
             # Connect button
             btn_conn = QPushButton("Connect")
+            set_button_icon(btn_conn, "mdi.lan-connect")
             btn_conn.clicked.connect(lambda _, r=row: self._connect_one(r))
             self._table.setCellWidget(row, 3, btn_conn)
             self._row_buttons.append(btn_conn)
 
             # Disconnect button
             btn_disc = QPushButton("Disconnect")
+            set_button_icon(btn_disc, "mdi.lan-disconnect")
             btn_disc.clicked.connect(lambda _, r=row: self._disconnect_one(r))
             self._table.setCellWidget(row, 4, btn_disc)
             self._row_buttons.append(btn_disc)
@@ -164,18 +179,34 @@ class DeviceManagerWindow(QMainWindow):
 
     def _refresh(self) -> None:
         named = self._devices.named_devices()
+        connected = 0
+        simulated = 0
         for row, name in self._row_map.items():
             dev = named[name]
-            label, colour = _device_status(dev)
-            lbl: QLabel = self._table.cellWidget(row, 1)
-            lbl.setText(label)
-            lbl.setStyleSheet(
-                f"background-color: {colour}; color: white; "
-                "border-radius: 4px; padding: 2px 6px; font-weight: bold;"
-            )
+            state = device_state(dev)
+            label, _colour = _device_status(dev)
+            if state == "connected":
+                connected += 1
+            elif state == "simulated":
+                connected += 1
+                simulated += 1
+            lbl: StatusChip = self._table.cellWidget(row, 1)
+            err = self._last_errors.get(name, "")
+            lbl.set_status(label, state, err or label.title())
             # Update sim badge in case it changed at runtime
-            lbl_sim: QLabel = self._table.cellWidget(row, 2)
-            lbl_sim.setText("Yes" if getattr(dev, "simulation", False) else "No")
+            is_sim = bool(getattr(dev, "simulation", False))
+            lbl_sim: StatusChip = self._table.cellWidget(row, 2)
+            lbl_sim.set_status("Sim" if is_sim else "Real",
+                               "simulated" if is_sim else "neutral")
+        total = len(named)
+        if connected == 0:
+            self._chip_summary.set_status(f"0/{total} connected", "neutral")
+        elif connected == total and simulated:
+            self._chip_summary.set_status(f"{connected}/{total} connected, {simulated} sim", "simulated")
+        elif connected == total:
+            self._chip_summary.set_status(f"{connected}/{total} connected", "good")
+        else:
+            self._chip_summary.set_status(f"{connected}/{total} connected", "warn")
 
     # ------------------------------------------------------------------ #
     # Actions                                                             #
@@ -225,35 +256,50 @@ class DeviceManagerWindow(QMainWindow):
         return True
 
     def _set_busy(self, busy: bool) -> None:
+        self._chip_busy.set_status("Working..." if busy else "Idle",
+                                   "busy" if busy else "neutral")
         self._table.setEnabled(not busy)
-        self._btn_connect_all.setEnabled(not busy)
-        self._btn_disconnect_all.setEnabled(not busy)
+        set_button_busy(self._btn_connect_all, busy, "Connecting...")
+        set_button_busy(self._btn_disconnect_all, busy, "Disconnecting...")
         for btn in self._row_buttons:
             btn.setEnabled(not busy)
 
     def _on_one_done(self, action: str, result, err: str) -> None:
         self._refresh()
         if err:
+            if result and isinstance(result, tuple):
+                self._last_errors[str(result[0])] = err
             QMessageBox.critical(self, f"{action} Failed", err)
             return
         name, status = result
         if status != "ok":
+            self._last_errors[name] = str(status)
             QMessageBox.warning(self, f"{action} Failed", f"{name}:\n{status}")
+        else:
+            self._last_errors.pop(name, None)
 
     def _on_connect_all_done(self, results, err: str) -> None:
         self._refresh()
         if err:
+            self._last_errors["Connect All"] = err
             QMessageBox.critical(self, "Connect All", err)
             return
         failed = {k: v for k, v in (results or {}).items() if v != "ok"}
         if failed:
+            self._last_errors.update({k: str(v) for k, v in failed.items()})
             detail = "\n".join(f"  {k}: {v}" for k, v in failed.items())
             QMessageBox.warning(self, "Connect All", f"Some failed:\n{detail}")
+        else:
+            self._last_errors.clear()
+            flash_button(self._btn_connect_all)
 
     def _on_disconnect_all_done(self, _result, err: str) -> None:
         self._refresh()
         if err:
+            self._last_errors["Disconnect All"] = err
             QMessageBox.warning(self, "Disconnect All", err)
+        else:
+            flash_button(self._btn_disconnect_all)
 
     def showEvent(self, event) -> None:
         self._refresh_timer.start(1000)

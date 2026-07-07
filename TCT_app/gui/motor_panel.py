@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal, QSettings
 from PySide6.QtWidgets import (
     QWidget, QGroupBox, QGridLayout, QHBoxLayout, QVBoxLayout,
     QLabel, QDoubleSpinBox, QPushButton, QSizePolicy, QSplitter,
@@ -12,6 +12,8 @@ from PySide6.QtWidgets import (
 
 from devices.motor_base import MotorStageBase
 from gui.stage_view import StageView
+from gui.style import axis_color
+from gui.status_widgets import StatusChip, flash_button
 from PySide6.QtCore import QObject
 
 # Optional vector icons — the panel degrades to plain text when qtawesome is
@@ -122,6 +124,14 @@ class MotorPanel(QWidget):
         self._motion_widgets: list[QWidget] = []   # disabled while a move runs
         self._task_thread: QThread | None = None
         self._task: _MotorTask | None = None
+        # Theme mode for the axis-rail accents (gui.style.axis_color).  Read
+        # once from the same QSettings key main.py/tct_gui.py use, so a
+        # freshly built panel matches the already-applied app theme; see
+        # refresh_theme() for why there is no live change notification yet.
+        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
+        self._readout_caps: dict[str, QLabel] = {}
+        self._jog_axis_btns: dict[str, list[QPushButton]] = {"x": [], "y": [], "z": []}
+        self._abs_captions: dict[str, QLabel] = {}
         self._build_ui()
 
         # Position polling runs in a separate thread so serial I/O never
@@ -173,7 +183,20 @@ class MotorPanel(QWidget):
             lbl.setAlignment(Qt.AlignCenter)
             readout_grid.addWidget(cap, 0, col)
             readout_grid.addWidget(lbl, 1, col)
+            self._readout_caps[axis.lower()] = cap
         pos_v.addWidget(readout)
+        self._restyle_axis_readouts()
+
+        status_row = QHBoxLayout()
+        status_row.setSpacing(6)
+        self._chip_homed = StatusChip("Not homed", "neutral")
+        self._chip_motion = StatusChip("Idle", "neutral")
+        self._chip_limits = StatusChip("Limits --", "neutral")
+        self._chip_last = StatusChip("Last --", "neutral")
+        for chip in (self._chip_homed, self._chip_motion, self._chip_limits, self._chip_last):
+            status_row.addWidget(chip)
+        status_row.addStretch(1)
+        pos_v.addLayout(status_row)
 
         btn_test = QPushButton("Test Connection")
         _apply_icon(btn_test, "fa5s.plug")
@@ -211,6 +234,9 @@ class MotorPanel(QWidget):
         xy_caption = QLabel("XY")
         xy_caption.setObjectName("clusterCaption")
         xy_caption.setAlignment(Qt.AlignCenter)
+        # Combines two axes, so it keeps the neutral clusterCaption colour —
+        # axis_color() has no meaningful single hue for "xy" (the individual
+        # X/X buttons and Y/Y buttons below get their own axis colour instead).
         xy_col.addWidget(xy_caption)
 
         cross = QGridLayout()
@@ -246,6 +272,8 @@ class MotorPanel(QWidget):
         btn_x_pos.clicked.connect(lambda: self._jog("x", +1))
         btn_x_neg.clicked.connect(lambda: self._jog("x", -1))
         self._motion_widgets.extend([btn_y_pos, btn_y_neg, btn_x_pos, btn_x_neg])
+        self._jog_axis_btns["x"].extend([btn_x_pos, btn_x_neg])
+        self._jog_axis_btns["y"].extend([btn_y_pos, btn_y_neg])
         xy_col.addLayout(cross)
         pads_row.addLayout(xy_col)
 
@@ -257,6 +285,7 @@ class MotorPanel(QWidget):
         z_caption.setObjectName("clusterCaption")
         z_caption.setAlignment(Qt.AlignCenter)
         z_col_outer.addWidget(z_caption)
+        self._z_cluster_caption = z_caption   # single-axis caption — safe to tint (see "XY" below)
 
         z_col = QVBoxLayout()
         z_col.setSpacing(4)
@@ -275,10 +304,12 @@ class MotorPanel(QWidget):
         btn_z_pos.clicked.connect(lambda: self._jog("z", +1))
         btn_z_neg.clicked.connect(lambda: self._jog("z", -1))
         self._motion_widgets.extend([btn_z_pos, btn_z_neg])
+        self._jog_axis_btns["z"].extend([btn_z_pos, btn_z_neg])
         z_col_outer.addLayout(z_col)
         pads_row.addLayout(z_col_outer)
         pads_row.addStretch(1)
         cluster_v.addLayout(pads_row)
+        self._restyle_jog_buttons()
 
         # Micro-step presets: one-click exclusive step size, styled as a
         # segmented control (OctoPrint uses 0.1 / 1 / 10 / 100 mm; this
@@ -350,13 +381,19 @@ class MotorPanel(QWidget):
         self._spin_x = self._make_spin()
         self._spin_y = self._make_spin()
         self._spin_z = self._make_spin()
-        for col, (label, spin) in enumerate(
-            [("X (mm)", self._spin_x), ("Y (mm)", self._spin_y), ("Z (mm)", self._spin_z)]
+        for col, (axis_key, label, spin) in enumerate(
+            [("x", "X (MM)", self._spin_x), ("y", "Y (MM)", self._spin_y),
+             ("z", "Z (MM)", self._spin_z)]
         ):
             cap = QLabel(label)
-            cap.setObjectName("clusterCaption")
+            # A standalone caption (not inside a controlCluster frame like the
+            # jog captions), so the general-purpose "eyebrow" hook fits better
+            # than "clusterCaption" — same look, more accurate semantics.
+            cap.setObjectName("eyebrow")
             abs_layout.addWidget(cap, 0, col)
             abs_layout.addWidget(spin, 1, col)
+            self._abs_captions[axis_key] = cap
+        self._restyle_abs_move_captions()
         btn_move = QPushButton("Move To")
         _apply_icon(btn_move, "fa5s.location-arrow")
         btn_move.clicked.connect(self._move_abs)
@@ -411,12 +448,12 @@ class MotorPanel(QWidget):
         _apply_icon(btn_use_pos, "fa5s.clipboard-list")
         btn_use_pos.setToolTip("Copy current stage position into the Absolute Move spinboxes")
         btn_use_pos.clicked.connect(self._use_current_pos)
-        btn_set_start = QPushButton("Set as Scan Start")
-        _apply_icon(btn_set_start, "fa5s.thumbtack")
-        btn_set_start.setToolTip("Copy current X/Y/Z into the Scan panel start position")
-        btn_set_start.clicked.connect(self._emit_set_as_start)
+        self._btn_set_start = QPushButton("Set as Scan Start")
+        _apply_icon(self._btn_set_start, "fa5s.thumbtack")
+        self._btn_set_start.setToolTip("Copy current X/Y/Z into the Scan panel start position")
+        self._btn_set_start.clicked.connect(self._emit_set_as_start)
         helper_layout.addWidget(btn_use_pos)
-        helper_layout.addWidget(btn_set_start)
+        helper_layout.addWidget(self._btn_set_start)
         root.addWidget(helper_box)
         root.addStretch(1)
 
@@ -442,6 +479,67 @@ class MotorPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(split)
+
+    # ------------------------------------------------------------------ #
+    # Axis-rail styling (gui.style.axis_color) — re-run by refresh_theme() #
+    # ------------------------------------------------------------------ #
+
+    def _restyle_axis_readouts(self) -> None:
+        """Tint each axis's caption and give its value a quiet coloured rail
+        border, echoing the planner preview's axis-rail language (each axis
+        keeps its own hue; nothing gets a painted background)."""
+        values = {"x": self._lbl_x, "y": self._lbl_y, "z": self._lbl_z}
+        for axis, cap in self._readout_caps.items():
+            color = axis_color(axis, self._theme_mode)
+            cap.setStyleSheet(f"#readoutAxis {{ color: {color}; }}")
+            val = values.get(axis)
+            if val is not None:
+                val.setStyleSheet(
+                    f"#readoutValue {{ border-left: 3px solid {color}; padding-left: 8px; }}"
+                )
+
+    def _restyle_jog_buttons(self) -> None:
+        """Give each jog button a quiet axis-coloured left-edge rail — the
+        same idiom gui/scope_panel.py uses for its per-channel ``channelCard``
+        border, applied per-axis instead of per-channel here."""
+        for axis, buttons in self._jog_axis_btns.items():
+            color = axis_color(axis, self._theme_mode)
+            for btn in buttons:
+                btn.setStyleSheet(f"#jogBtn {{ border-left: 3px solid {color}; }}")
+        # "Z" is a single-axis caption (unlike the combined "XY" one above
+        # it), so it can safely take the Z-axis colour directly.
+        z_cap = getattr(self, "_z_cluster_caption", None)
+        if z_cap is not None:
+            z_cap.setStyleSheet(f"#clusterCaption {{ color: {axis_color('z', self._theme_mode)}; }}")
+
+    def _restyle_abs_move_captions(self) -> None:
+        """Tint the Absolute-Move X/Y/Z eyebrow captions with the same
+        per-axis colour used for the readout and jog cluster, so every place
+        an axis appears in the panel reads as the same identity."""
+        for axis, cap in self._abs_captions.items():
+            color = axis_color(axis, self._theme_mode)
+            cap.setStyleSheet(f"#eyebrow {{ color: {color}; }}")
+
+    def refresh_theme(self, mode: str | None = None) -> None:
+        """Re-resolve axis-rail colours after a light/dark theme switch.
+
+        ``gui.style.apply_theme(app, mode)`` re-applies the QApplication-wide
+        stylesheet, which already repaints every objectName-based QSS hook
+        (dangerBtn, statusChip, jogBtn, ...) automatically. The axis colours
+        painted above are baked in as instance-level inline styles at
+        construction time (Qt style sheets have no "current axis" selector),
+        so they need this explicit refresh.
+
+        Called live by ``tct_gui._toggle_theme`` right after
+        ``apply_theme(app, mode)`` (alongside the bias panel's own
+        ``refresh_theme``), so a theme switch re-resolves these
+        instance-level colours immediately.
+        """
+        if mode:
+            self._theme_mode = str(mode)
+        self._restyle_axis_readouts()
+        self._restyle_jog_buttons()
+        self._restyle_abs_move_captions()
 
     # ------------------------------------------------------------------ #
     # Slots                                                               #
@@ -512,11 +610,16 @@ class MotorPanel(QWidget):
         self._poller.set_paused(False)     # resume live position updates
         self._set_busy(False)
         if err:
+            self._chip_last.set_status("Last error", "crit", err)
             self._show_error(err)
+        else:
+            self._chip_last.set_status("Last done", "good")
 
     def _set_busy(self, busy: bool) -> None:
         for w in self._motion_widgets:
             w.setEnabled(not busy)
+        self._chip_motion.set_status("Moving..." if busy else "Idle",
+                                     "busy" if busy else "neutral")
 
     def _test_connection(self) -> None:
         """Run the backend's firmware handshake and show the reply."""
@@ -540,6 +643,38 @@ class MotorPanel(QWidget):
         self._lbl_y.setText(f"Y: {y:.4f} mm")
         self._lbl_z.setText(f"Z: {z:.4f} mm")
         self._stage_view.set_position(x, y, z)
+        self._refresh_status_chips(x, y, z)
+
+    def _refresh_status_chips(self, x: float, y: float, z: float) -> None:
+        connected = bool(getattr(self._motor, "connected", False))
+        homed = bool(getattr(self._motor, "homed", False))
+        if not connected:
+            self._chip_homed.set_status("Offline", "neutral")
+        elif homed:
+            self._chip_homed.set_status("Homed", "good")
+        else:
+            self._chip_homed.set_status("Not homed", "warn")
+
+        lim = getattr(self._motor, "limits", None)
+        if lim is None:
+            self._chip_limits.set_status("Limits --", "neutral")
+            return
+        margin_mm = 0.5
+        near: list[str] = []
+        for axis, value in (("X", x), ("Y", y), ("Z", z)):
+            lo = getattr(lim, f"{axis.lower()}_min", None)
+            hi = getattr(lim, f"{axis.lower()}_max", None)
+            if lo is None or hi is None:
+                continue
+            if value < float(lo) or value > float(hi):
+                self._chip_limits.set_status(f"{axis} limit error", "crit")
+                return
+            if min(abs(value - float(lo)), abs(float(hi) - value)) <= margin_mm:
+                near.append(axis)
+        if near:
+            self._chip_limits.set_status("Near " + "/".join(near) + " limit", "warn")
+        else:
+            self._chip_limits.set_status("Limits OK", "good")
 
     def _update_position(self) -> None:
         """Legacy stub — polling now handled by _PositionPoller in a QThread."""
@@ -576,6 +711,7 @@ class MotorPanel(QWidget):
         try:
             pos = self._motor.get_position()
             self.set_as_scan_start.emit(pos.x_mm, pos.y_mm, pos.z_mm)
+            flash_button(self._btn_set_start, "good", "Copied")
         except Exception:
             pass
 

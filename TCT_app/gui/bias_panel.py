@@ -13,7 +13,7 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-from PySide6.QtCore import QTimer, Qt, Signal, QThread, QObject
+from PySide6.QtCore import QTimer, Qt, Signal, QThread, QObject, QSettings
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QLabel, QDoubleSpinBox, QSpinBox,
@@ -30,6 +30,8 @@ except ImportError:
 from devices.bias_supply_base import BiasSupplyBase
 from controller.scan_controller import VoltageScanConfig
 from gui.status_bus import notify
+from gui.style import axis_color, set_chip_state
+from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 
 
 # ---------------------------------------------------------------------------
@@ -184,6 +186,11 @@ class BiasPanel(QWidget):
         self._io_busy = False
         self._last_polarity: str | None = None
         self._pol_supported = False
+        # Theme mode for the bias axis-rail accent (gui.style.axis_color) —
+        # bias reads amber everywhere.  Read once from the same QSettings key
+        # main.py/tct_gui.py use; see refresh_theme() for why this isn't
+        # live-notified yet.
+        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
         self._build_ui()
 
         # ── Live readout + polarity poll (own thread — instrument I/O must
@@ -206,6 +213,19 @@ class BiasPanel(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
+        # ── Status strip ───────────────────────────────────────────────
+        # Connection / output-state chips (gui.style.statusChip).  Compliance
+        # gets its own chip further down in the Live Readout box, next to the
+        # reading it summarises.
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+        self._chip_conn = StatusChip("Disconnected", "neutral")
+        self._chip_output = StatusChip("HV UNKNOWN", "neutral")
+        for chip in (self._chip_conn, self._chip_output):
+            status_row.addWidget(chip)
+        status_row.addStretch(1)
+        root.addLayout(status_row)
+
         # ── Safety / compliance ────────────────────────────────────────
         safe_box = QGroupBox("⚠ Compliance (current limit)")
         safe_form = QFormLayout(safe_box)
@@ -224,17 +244,25 @@ class BiasPanel(QWidget):
         self._spin_comp.valueChanged.connect(self._on_compliance_changed)
         self._lbl_comp_warn = QLabel("")
         self._lbl_comp_warn.setStyleSheet("color: red; font-weight: bold;")
+        self._chip_comp_limit = StatusChip("Limit OK", "good")
 
         safe_form.addRow("Compliance:", self._spin_comp)
+        safe_form.addRow("Limit state:", self._chip_comp_limit)
         safe_form.addRow(self._lbl_comp_warn)
 
         self._btn_set_comp = QPushButton("Apply Compliance")
+        set_button_icon(self._btn_set_comp, "mdi.check")
         self._btn_set_comp.clicked.connect(self._apply_compliance)
         safe_form.addRow(self._btn_set_comp)
         root.addWidget(safe_box)
 
         # ── Voltage control ────────────────────────────────────────────
+        # Bias-axis rail (gui.style.axis_color("bias", ...)) marks this as
+        # the panel's primary bias-axis control; the Live-Readout voltage
+        # label and the two plots below echo the same amber (_restyle_bias_axis).
         volt_box = QGroupBox("Bias Voltage")
+        volt_box.setObjectName("biasRail")
+        self._volt_box = volt_box
         volt_form = QFormLayout(volt_box)
 
         vlim = abs(float(getattr(self._supply, "voltage_range_V", None) or 1100.0))
@@ -263,9 +291,14 @@ class BiasPanel(QWidget):
 
         btn_row = QHBoxLayout()
         self._btn_apply = QPushButton("▶ Ramp to Voltage")
+        set_button_icon(self._btn_apply, "mdi.trending-up")
         self._btn_apply.clicked.connect(self._apply_voltage)
         self._btn_off = QPushButton("⏹ Output OFF (0 V)")
-        self._btn_off.setStyleSheet("background-color: #c0392b; color: white; font-weight: bold;")
+        # Reuse the shared dangerBtn hook instead of a hardcoded hex (same
+        # red language as STOP/ALL-OFF, plus working hover/pressed states
+        # the old inline style didn't have).
+        self._btn_off.setObjectName("dangerBtn")
+        set_button_icon(self._btn_off, "mdi.power", color="white")
         self._btn_off.clicked.connect(self._emergency_off)
         btn_row.addWidget(self._btn_apply)
         btn_row.addWidget(self._btn_off)
@@ -278,7 +311,7 @@ class BiasPanel(QWidget):
 
         self._lbl_v = QLabel("— V")
         self._lbl_i = QLabel("— A")
-        self._lbl_comp_status = QLabel("OK")
+        self._lbl_comp_status = StatusChip("—", "neutral")
         self._lbl_comp_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         read_form.addRow("Voltage:", self._lbl_v)
@@ -350,7 +383,9 @@ class BiasPanel(QWidget):
             self._iv_plot.setLabel("left",   "Current", units="A")
             self._iv_plot.setLabel("bottom", "Voltage", units="V")
             self._iv_plot.setMaximumHeight(160)
-            self._iv_curve = self._iv_plot.plot(pen=pg.mkPen("y", width=2))
+            self._iv_curve = self._iv_plot.plot(
+                pen=pg.mkPen(axis_color("bias", self._theme_mode), width=2)
+            )
             iv_form.addRow(self._iv_plot)
 
         root.addWidget(iv_box)
@@ -385,12 +420,45 @@ class BiasPanel(QWidget):
             self._vscan_plot.setLabel("bottom", "Bias", units="V")
             self._vscan_plot.setMaximumHeight(160)
             self._vscan_curve = self._vscan_plot.plot(
-                pen=pg.mkPen("c", width=2), symbol="o", symbolSize=4
+                pen=pg.mkPen(axis_color("bias", self._theme_mode), width=2),
+                symbol="o", symbolSize=4,
             )
             vscan_form.addRow(self._vscan_plot)
 
         root.addWidget(vscan_box)
         self._on_compliance_changed(self._spin_comp.value())
+        self._restyle_bias_axis()
+
+    # ------------------------------------------------------------------ #
+    # Bias-axis styling (gui.style.axis_color) — re-run by refresh_theme() #
+    # ------------------------------------------------------------------ #
+
+    def _restyle_bias_axis(self) -> None:
+        """Tint the bias-axis accents (gui.style.axis_color): the voltage
+        card's rail, the live-voltage readout, and the IV/Vscan plot curves.
+        Bias reads amber in both themes, everywhere in this panel."""
+        color = axis_color("bias", self._theme_mode)
+        self._volt_box.setStyleSheet(f"#biasRail {{ border-left: 3px solid {color}; }}")
+        self._lbl_v.setStyleSheet(f"color: {color}; font-weight: 600;")
+        if _HAS_PG:
+            self._iv_curve.setPen(pg.mkPen(color, width=2))
+            self._vscan_curve.setPen(pg.mkPen(color, width=2))
+
+    def refresh_theme(self, mode: str | None = None) -> None:
+        """Re-resolve the bias axis-rail accent after a light/dark switch.
+
+        ``gui.style.apply_theme(app, mode)`` repaints every objectName-based
+        QSS hook (statusChip, dangerBtn, ...) automatically; the amber
+        accents above are baked in as instance-level inline styles/pen
+        colours at construction time, so they need this explicit refresh.
+
+        Called live via ``tct_gui._toggle_theme`` →
+        ``MultiBiasPanel.refresh_theme()``, which forwards to every tab's
+        panel; see ``MotorPanel.refresh_theme()`` for the same pattern.
+        """
+        if mode:
+            self._theme_mode = str(mode)
+        self._restyle_bias_axis()
 
     # ------------------------------------------------------------------ #
     # Slots                                                               #
@@ -398,24 +466,28 @@ class BiasPanel(QWidget):
 
     def _on_compliance_changed(self, value: float) -> None:
         if value * 1e-6 > self._COMPLIANCE_WARN_A:
+            self._chip_comp_limit.set_status("Limit high", "crit")
             self._lbl_comp_warn.setText(
                 f"⚠ Compliance > {self._COMPLIANCE_WARN_A*1e3:.0f} mA — risk of sensor damage!"
             )
         else:
+            self._chip_comp_limit.set_status("Limit OK", "good")
             self._lbl_comp_warn.setText("")
 
     def _apply_compliance(self) -> None:
         compliance_A = self._spin_comp.value() * 1e-6
-        self._run_supply_call(
+        started = self._run_supply_call(
             lambda: self._supply.set_compliance(compliance_A),
             self._on_apply_compliance_done,
         )
+        if started:
+            set_button_busy(self._btn_set_comp, True, "Applying...")
 
     def _apply_voltage(self) -> None:
         target_V = self._spin_volt.value()
         step_V = self._spin_step.value()
         delay_s = self._spin_delay.value()
-        self._run_supply_call(
+        started = self._run_supply_call(
             lambda: self._supply.ramp_to(
                 target_V,
                 step_V=step_V,
@@ -423,19 +495,28 @@ class BiasPanel(QWidget):
             ),
             self._on_apply_voltage_done,
         )
+        if started:   # not already busy with another supply call
+            set_button_busy(self._btn_apply, True, "Ramping...")
+            self._chip_output.set_status("HV RAMPING", "busy")
 
     def _emergency_off(self) -> None:
-        self._run_supply_call(
+        started = self._run_supply_call(
             self._do_emergency_off,
             self._on_emergency_off_done,
         )
+        if started:
+            set_button_busy(self._btn_off, True, "Turning off...")
+            self._chip_output.set_status("HV OFF...", "busy")
 
     def set_reading(self, r) -> None:
         if r is None:
             self._lbl_v.setText("— V")
             self._lbl_i.setText("— A")
             self._lbl_comp_status.setText("—")
-            self._lbl_comp_status.setStyleSheet("")
+            set_chip_state(self._lbl_comp_status, "neutral")
+            self._chip_conn.setText("Disconnected")
+            set_chip_state(self._chip_conn, "neutral")
+            self._chip_output.set_status("HV UNKNOWN", "neutral")
             return
         try:
             self._lbl_v.setText(f"{r.voltage_V:.2f} V")
@@ -443,14 +524,27 @@ class BiasPanel(QWidget):
             self._lbl_i.setText(f"{i_uA:.3f} µA")
             if r.compliant:
                 self._lbl_comp_status.setText("⚠ COMPLIANCE HIT")
-                self._lbl_comp_status.setStyleSheet(
-                    "background-color: red; color: white; font-weight: bold;"
-                )
+                set_chip_state(self._lbl_comp_status, "crit")
             else:
                 self._lbl_comp_status.setText("OK")
-                self._lbl_comp_status.setStyleSheet(
-                    "background-color: green; color: white;"
-                )
+                set_chip_state(self._lbl_comp_status, "good")
+        except Exception:
+            pass
+        # Connection chip: a live reading only ever arrives once the poller
+        # observes supply.connected (see _ReadoutPoller._poll) — reading the
+        # flag directly here is the same cheap, no-I/O check other panels
+        # already do on the GUI thread (e.g. MotorPanel._test_connection).
+        connected = bool(getattr(self._supply, "connected", False))
+        self._chip_conn.setText("Connected" if connected else "Disconnected")
+        set_chip_state(self._chip_conn, "good" if connected else "neutral")
+        # Stale-OFF guard: the Output chip is last-command bookkeeping, but an
+        # actor this panel doesn't hear about (e.g. the plan executor ramping
+        # HV) can energize the output behind it.  A live |V| that contradicts
+        # a displayed OFF/UNKNOWN must never read as safe — warn instead.
+        try:
+            if abs(r.voltage_V) > 1.0 and self._chip_output.text() in (
+                    "HV OFF", "HV UNKNOWN"):
+                self._chip_output.set_status("HV LIVE?", "warn")
         except Exception:
             pass
 
@@ -472,6 +566,9 @@ class BiasPanel(QWidget):
         self._vscan_q.append(charge_pC)
         if _HAS_PG:
             self._vscan_curve.setData(self._vscan_v, self._vscan_q)
+        # The scan controller (not this panel) drives the ramp during a
+        # bias+waveform scan; a point arriving means the output is live.
+        self._chip_output.set_status("HV ON", "armed")
 
     @staticmethod
     def _make_dspin(lo: float, hi: float, val: float, suffix: str = "") -> QDoubleSpinBox:
@@ -504,6 +601,7 @@ class BiasPanel(QWidget):
         self._iv_progress.setMaximum(len(voltages))
         self._iv_progress.setValue(0)
         self._btn_iv.setEnabled(False)
+        self._chip_output.set_status("IV scan", "busy")
 
         self._iv_worker = _IVWorker(
             supply=self._supply,
@@ -521,6 +619,7 @@ class BiasPanel(QWidget):
         self._iv_worker.progress.connect(self._iv_progress.setValue)
         self._iv_worker.finished.connect(self._iv_thread.quit)
         self._iv_worker.finished.connect(lambda: self._btn_iv.setEnabled(True))
+        self._iv_worker.finished.connect(self._on_iv_finished_chip)
         self._iv_worker.error.connect(
             lambda msg: self._lbl_v.setText(f"IV Error: {msg}")
         )
@@ -534,6 +633,16 @@ class BiasPanel(QWidget):
         self._iv_i.append(i)
         if _HAS_PG:
             self._iv_curve.setData(self._iv_v, self._iv_i)
+
+    def _on_iv_finished_chip(self) -> None:
+        """Best-effort output-chip refresh once an IV scan stops.
+
+        _IVWorker ramps the output on but never explicitly switches it off
+        (see _IVWorker.run), so it is still on at the last swept setpoint
+        whether the sweep completed or stopped on a compliance trip.
+        """
+        if self._iv_v:   # at least one point was taken -> ramp_to() ran
+            self._chip_output.set_status("HV ON", "armed")
 
     def _run_supply_call(self, fn: Callable[[], None], on_done) -> bool:
         if self._op_thread is not None and self._op_thread.isRunning():
@@ -621,18 +730,31 @@ class BiasPanel(QWidget):
             self._supply.output_off()
 
     def _on_apply_compliance_done(self, err: str) -> None:
+        set_button_busy(self._btn_set_comp, False)
         if err:
             self._lbl_comp_warn.setText(f"Error: {err}")
             return
         self._on_compliance_changed(self._spin_comp.value())
+        flash_button(self._btn_set_comp, "good", "Applied")
 
     def _on_apply_voltage_done(self, err: str) -> None:
+        set_button_busy(self._btn_apply, False)
         if err:
             self._lbl_v.setText(f"Error: {err}")
+            self._chip_output.set_status("HV ERROR", "crit")
+        else:
+            # ramp_to() always leaves the output on (see BiasSupplyBase.ramp_to).
+            self._chip_output.set_status("HV ON", "armed")
+            flash_button(self._btn_apply, "good", "Ramped")
 
     def _on_emergency_off_done(self, err: str) -> None:
+        set_button_busy(self._btn_off, False)
         if err:
             self._lbl_v.setText(f"Error: {err}")
+            self._chip_output.set_status("HV ERROR", "crit")
+        else:
+            self._chip_output.set_status("HV OFF", "good")
+            flash_button(self._btn_off, "good", "Off")
 
     def shutdown(self) -> None:
         try:
@@ -662,4 +784,3 @@ class BiasPanel(QWidget):
                 thread.wait(2000)
         except Exception:
             pass
-

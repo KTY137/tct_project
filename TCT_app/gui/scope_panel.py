@@ -48,6 +48,7 @@ from devices.oscilloscope import Oscilloscope
 from analysis.waveform_analysis import analyse_waveform
 from gui.scope_measurements import MeasurementPanel
 from gui.status_bus import notify
+from gui.status_widgets import StatusChip, StatusLamp
 
 logger = logging.getLogger(__name__)
 
@@ -242,8 +243,11 @@ class _ChannelCard(QFrame):
         swatch = QLabel()
         swatch.setFixedSize(12, 12)
         swatch.setStyleSheet(f"background: rgb({r},{g},{b}); border-radius: 6px;")
+        self._lamp = StatusLamp("good" if state.enabled else "neutral")
         title = QLabel(f"<b>CH{state.number}</b>")
         title.setToolTip(state.label)
+        self._role_chip = StatusChip(state.role if state.role != "—" else "No role",
+                                     "info" if state.role != "—" else "neutral")
 
         if _HAS_SUPERQT:
             self._enable = QToggleSwitch()
@@ -264,19 +268,24 @@ class _ChannelCard(QFrame):
 
         lay.addWidget(swatch,       0, 0)
         lay.addWidget(title,        0, 1)
-        lay.addWidget(self._enable, 0, 2, Qt.AlignRight)
+        lay.addWidget(self._role_chip, 0, 2)
+        lay.addWidget(self._lamp,   0, 3, Qt.AlignRight)
+        lay.addWidget(self._enable, 0, 4, Qt.AlignRight)
         lay.addWidget(QLabel("Role:"), 1, 0, 1, 1)
-        lay.addWidget(self._role,   1, 1, 1, 2)
-        lay.addWidget(self._readout, 2, 0, 1, 3)
+        lay.addWidget(self._role,   1, 1, 1, 4)
+        lay.addWidget(self._readout, 2, 0, 1, 5)
         lay.setColumnStretch(1, 1)
 
     def _on_toggle(self, checked: bool) -> None:
         self._state.enabled = bool(checked)
+        self._lamp.set_state("good" if checked else "neutral")
         self.toggled.emit(self._state.number, bool(checked))
         self.changed.emit()
 
     def _on_role(self, role: str) -> None:
         self._state.role = role
+        self._role_chip.set_status(role if role != "—" else "No role",
+                                   "info" if role != "—" else "neutral")
         self.changed.emit()
 
     def set_readout(self, text: str) -> None:
@@ -465,6 +474,7 @@ class ScopePanel(QWidget):
         self._pending_trigger: tuple[str, float, str, _TriggerDialog | None] | None = None
         self._build_ui()
         self._apply_view()
+        self._refresh_status_chips()
 
         self._sync_timer = QTimer(self)
         self._sync_timer.setSingleShot(True)
@@ -602,6 +612,21 @@ class ScopePanel(QWidget):
         v.setContentsMargins(4, 0, 0, 0)
         v.setSpacing(8)
 
+        status_row = QHBoxLayout()
+        status_row.setSpacing(6)
+        self._chip_scope_conn = StatusChip("Scope offline", "neutral")
+        self._chip_scope_live = StatusChip("Live off", "neutral")
+        self._chip_scope_trigger = StatusChip("Trigger --", "neutral")
+        self._chip_scope_avg = StatusChip("Avg --", "neutral")
+        self._chip_scope_channels = StatusChip("Channels --", "neutral")
+        for chip in (
+            self._chip_scope_conn, self._chip_scope_live, self._chip_scope_trigger,
+            self._chip_scope_avg, self._chip_scope_channels,
+        ):
+            status_row.addWidget(chip)
+        status_row.addStretch(1)
+        v.addLayout(status_row)
+
         # Trigger badge
         self._btn_trigger = QPushButton()
         ico = _icon("mdi.flash", "#f0a020")
@@ -612,10 +637,12 @@ class ScopePanel(QWidget):
         self._refresh_trigger_badge()
         v.addWidget(self._btn_trigger)
 
-        # Channel cards
+        # Channel cards.  Keep the layout so rebuild_channels() can add/remove
+        # cards when the scope's n_channels is refined (connect) or reconfigured.
         ch_box = QGroupBox("Channels")
         ch_lay = QVBoxLayout(ch_box)
         ch_lay.setSpacing(6)
+        self._ch_layout = ch_lay
         for n, st in self._channels.items():
             card = _ChannelCard(st)
             card.changed.connect(self._on_channel_changed)
@@ -750,6 +777,26 @@ class ScopePanel(QWidget):
     # Channel handling                                                     #
     # ------------------------------------------------------------------ #
 
+    def _refresh_status_chips(self) -> None:
+        connected = bool(getattr(self._scope, "connected", False))
+        self._chip_scope_conn.set_status(
+            "Scope connected" if connected else "Scope offline",
+            "good" if connected else "neutral",
+        )
+        live = bool(getattr(self, "_btn_live", None) and self._btn_live.isChecked())
+        self._chip_scope_live.set_status("Live on" if live else "Live off",
+                                         "busy" if live else "neutral")
+        src = getattr(self._scope, "trig_source", "EXT")
+        lvl = float(getattr(self._scope, "trig_level_V", 0.0))
+        self._chip_scope_trigger.set_status(f"Trig {src} {lvl:g} V", "info")
+        avg = int(getattr(self._scope, "n_averages", 1) or 1)
+        self._chip_scope_avg.set_status("Avg off" if avg <= 1 else f"Avg x{avg}",
+                                        "neutral" if avg <= 1 else "info")
+        enabled = len(self._enabled_channels())
+        total = len(self._channels)
+        self._chip_scope_channels.set_status(f"{enabled}/{total} channels",
+                                             "good" if enabled else "warn")
+
     def _enabled_channels(self) -> frozenset[int]:
         return frozenset(n for n, st in self._channels.items() if st.enabled)
 
@@ -761,6 +808,67 @@ class ScopePanel(QWidget):
 
     def _sync_reader_channels(self) -> None:
         self._reader.set_enabled_channels(self._enabled_channels())
+
+    def rebuild_channels(self) -> None:
+        """Re-derive the channel cards, plot curves and trigger sources from the
+        scope's CURRENT ``n_channels`` — e.g. after connect refined 4→2 via
+        *IDN?, or a config reload changed the count — without an app restart.
+
+        Reads only the ``n_channels`` attribute; never queries the instrument,
+        so it is safe to call with hardware attached.  Enabled/role state is
+        preserved for the channels that survive the change.
+        """
+        n_ch = int(getattr(self._scope, "n_channels", 4) or 4)
+        desired = [n for n in _CHAN_DEFAULTS if n <= n_ch]
+        if sorted(self._channels) == desired:
+            return                      # unchanged — keep cards/curves/state
+
+        # Drop channels the instrument no longer exposes.
+        for n in sorted(self._channels):
+            if n in desired:
+                continue
+            self._channels.pop(n, None)
+            card = self._cards.pop(n, None)
+            if card is not None:
+                self._ch_layout.removeWidget(card)
+                card.setParent(None)
+                card.deleteLater()
+            curve = self._curves.pop(n, None)
+            if curve is not None and _HAS_PG:
+                self._plot.removeItem(curve)
+
+        # Add newly-available channels (seed from the per-channel defaults;
+        # survivors keep their existing _ChannelState, so state is preserved).
+        for n in desired:
+            if n in self._channels:
+                continue
+            col, role, en, lab = _CHAN_DEFAULTS[n]
+            st = _ChannelState(number=n, color=col, role=role, enabled=en, label=lab)
+            self._channels[n] = st
+            if _HAS_PG:
+                curve = self._plot.plot(
+                    pen=pg.mkPen(st.color, width=2 if st.role == "DUT" else 1),
+                    name=f"CH{n} {st.label}",
+                )
+                curve.setVisible(st.enabled)
+                self._curves[n] = curve
+            card = _ChannelCard(st)
+            card.changed.connect(self._on_channel_changed)
+            card.toggled.connect(self._on_channel_toggled)
+            self._cards[n] = card
+            self._ch_layout.addWidget(card)
+
+        # The trigger dialog snapshots the source list (CH1..CHn, AUX, LINE) at
+        # construction; discard the cached one so it rebuilds with the new count.
+        if self._trigger_dialog is not None:
+            self._trigger_dialog.close()
+            self._trigger_dialog.deleteLater()
+            self._trigger_dialog = None
+
+        # Reflect the new enabled set into the reader thread and repaint.
+        self._sync_reader_channels()
+        if self._last:
+            self._render(self._last)
 
     def _on_channel_toggled(self, channel: int, on: bool) -> None:
         """Drive the scope's channel display to match the card toggle.
@@ -778,9 +886,11 @@ class ScopePanel(QWidget):
 
     def _on_avg_changed(self, idx: int) -> None:
         n = int(self._avg_combo.itemData(idx))
+        self._scope.n_averages = n
         if self._scope.connected:
             self._avg_requested.emit(n)
         _save_scope_keys_to_yaml(self._config_path, n_averages=n)
+        self._refresh_status_chips()
 
     def _on_display_done(self, channel: int, on: bool, err: str) -> None:
         if err:
@@ -799,6 +909,7 @@ class ScopePanel(QWidget):
                 self._curves[n].setPen(pg.mkPen(
                     st.color, width=2 if st.role == "DUT" else 1))
         self._sync_reader_channels()
+        self._refresh_status_chips()
         if self._last:
             self._render(self._last)
 
@@ -829,6 +940,8 @@ class ScopePanel(QWidget):
         slope = getattr(self._scope, "trig_slope", "FALL")
         arrow = "↑" if str(slope).upper().startswith("R") else "↓"
         self._btn_trigger.setText(f"  Trig: {src} {arrow} {lvl:g} V")
+        if hasattr(self, "_chip_scope_trigger"):
+            self._refresh_status_chips()
 
     def _open_trigger(self) -> None:
         if self._trigger_dialog is None:
@@ -1149,6 +1262,7 @@ class ScopePanel(QWidget):
                 self._autoscale()
             else:
                 self._render(results)
+            self._refresh_status_chips()
         except Exception as exc:
             self._on_acquire_failed(str(exc))
 
@@ -1214,6 +1328,8 @@ class ScopePanel(QWidget):
         if msg != getattr(self, "_last_acq_err", None):
             self._last_acq_err = msg
             notify(f"Oscilloscope acquire failed: {msg}", "warn")
+        if hasattr(self, "_chip_scope_conn"):
+            self._chip_scope_conn.set_status("Scope error", "warn", msg)
 
     def _toggle_live(self, checked: bool) -> None:
         if checked:
@@ -1225,6 +1341,7 @@ class ScopePanel(QWidget):
             ico = _icon("mdi.stop" if checked else "mdi.play")
             if ico is not None:
                 self._btn_live.setIcon(ico)
+        self._refresh_status_chips()
 
     def _on_test_done(self, msg: str) -> None:
         QMessageBox.information(self, "Oscilloscope Test", msg)

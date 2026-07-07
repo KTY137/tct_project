@@ -38,12 +38,13 @@ from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
     QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
-    QSpinBox, QTabWidget, QToolButton, QVBoxLayout, QWidget,
+    QSpinBox, QTabWidget, QToolButton, QVBoxLayout, QWidget, QApplication,
 )
 
 logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).parent.parent / "configs" / "devices.yaml"
+from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -145,12 +146,16 @@ class _VisaPicker(QWidget):
         lan.setText("🔎 LAN")
         lan.setToolTip("Auto-discover LAN/LXI instruments (mDNS), or enter an IP")
         lan.clicked.connect(self._add_lan)
+        self._chip_scan = StatusChip("Scan ready", "neutral", min_width=82)
         h.addWidget(self._combo, 1)
         h.addWidget(btn)
         h.addWidget(lan)
+        h.addWidget(self._chip_scan)
         # Scan once on open so suggestions are offered immediately.
         found, _err = self._scan()
         self._fill(current, found)
+        self._chip_scan.set_status(f"{len(found)} found" if found else "No VISA",
+                                   "good" if found else "warn")
         self._combo.editTextChanged.connect(self.changed)
         # Normalise a bare IP to a TCPIP address when the user finishes editing.
         self._combo.lineEdit().editingFinished.connect(self._commit)
@@ -234,13 +239,17 @@ class _VisaPicker(QWidget):
         self._combo.blockSignals(False)
 
     def _refresh(self) -> None:
+        self._chip_scan.set_status("Scanning...", "busy")
+        QApplication.processEvents()
         found, err = self._scan()
         keep = "" if self._looks_placeholder(self.text()) else self.text()
         self._fill(keep, found)
         self.changed.emit()
         if found:
+            self._chip_scan.set_status(f"{len(found)} found", "good")
             self._combo.showPopup()          # show the discovered list
         else:
+            self._chip_scan.set_status("No VISA", "warn")
             QMessageBox.information(
                 self.window(), "VISA scan",
                 err or "No VISA instruments found.\n"
@@ -845,6 +854,8 @@ class SettingsWindow(QDialog):
         self.resize(820, 680)
         self._config_path = config_path
         self._suppress_yaml_update = False
+        self._dirty = False
+        self._base_tab_titles: dict[int, str] = {}
         self._build_ui()
         self._load_file()
 
@@ -862,6 +873,16 @@ class SettingsWindow(QDialog):
         self._lbl_path.setStyleSheet("color: #555; font-style: italic;")
         path_row.addWidget(self._lbl_path, 1)
         root.addLayout(path_row)
+
+        state_row = QHBoxLayout()
+        self._chip_yaml = StatusChip("YAML unknown", "neutral")
+        self._chip_dirty = StatusChip("Saved", "good")
+        self._chip_sim = StatusChip("Simulation --", "neutral")
+        self._chip_reconnect = StatusChip("No reconnect pending", "neutral")
+        for chip in (self._chip_yaml, self._chip_dirty, self._chip_sim, self._chip_reconnect):
+            state_row.addWidget(chip)
+        state_row.addStretch(1)
+        root.addLayout(state_row)
 
         # ── Tabs ──────────────────────────────────────────────────────
         self._tabs = QTabWidget()
@@ -881,6 +902,10 @@ class SettingsWindow(QDialog):
         self._wfg_scroll   = _device_tab("Waveform Gen")
         self._cam_scroll   = _device_tab("Camera")
         self._data_scroll  = _device_tab("Data Saving")
+        self._base_tab_titles = {
+            i: self._tabs.tabText(i)
+            for i in range(self._tabs.count())
+        }
 
         self._scope_section:  _OscilloscopeSection | None = None
         self._motor_section:  _MotorSection | None = None
@@ -905,6 +930,7 @@ class SettingsWindow(QDialog):
         yaml_layout.addWidget(self._editor)
         yaml_layout.addWidget(self._parse_error_label)
         self._yaml_tab_index = self._tabs.addTab(yaml_widget, "Full YAML")
+        self._base_tab_titles[self._yaml_tab_index] = "Full YAML"
 
         self._prev_tab_index = self._tabs.currentIndex()
         self._tabs.currentChanged.connect(self._on_tab_changed)
@@ -923,21 +949,57 @@ class SettingsWindow(QDialog):
         # ── Buttons ───────────────────────────────────────────────────
         btn_row = QHBoxLayout()
         self._btn_reload = QPushButton("Reload from File")
+        set_button_icon(self._btn_reload, "mdi.reload")
         self._btn_reload.clicked.connect(self._load_file)
-        btn_save = QPushButton("Save")
-        btn_save.setDefault(True)
-        btn_save.clicked.connect(self._save)
+        self._btn_save = QPushButton("Save")
+        set_button_icon(self._btn_save, "mdi.content-save")
+        self._btn_save.setDefault(True)
+        self._btn_save.clicked.connect(self._save)
         btn_close = QPushButton("Close")
         btn_close.clicked.connect(self.close)
         btn_row.addWidget(self._btn_reload)
         btn_row.addStretch()
-        btn_row.addWidget(btn_save)
+        btn_row.addWidget(self._btn_save)
         btn_row.addWidget(btn_close)
         root.addLayout(btn_row)
 
     # ------------------------------------------------------------------ #
     # Loading                                                             #
     # ------------------------------------------------------------------ #
+
+    def _set_dirty(self, dirty: bool, *, reconnect_needed: bool = False) -> None:
+        self._dirty = bool(dirty)
+        if self._dirty:
+            self._chip_dirty.set_status("Unsaved", "warn")
+            self._chip_reconnect.set_status("Reconnect after save", "warn")
+        else:
+            self._chip_dirty.set_status("Saved", "good")
+            if reconnect_needed:
+                self._chip_reconnect.set_status("Reconnect needed", "warn")
+            else:
+                self._chip_reconnect.set_status("No reconnect pending", "neutral")
+
+    def _set_yaml_valid(self, valid: bool, text: str | None = None) -> None:
+        self._chip_yaml.set_status(text or ("Valid YAML" if valid else "Invalid YAML"),
+                                   "good" if valid else "crit")
+        self._set_tab_badge(self._yaml_tab_index, "invalid" if not valid else None)
+
+    def _set_tab_badge(self, index: int, badge: str | None) -> None:
+        if index < 0:
+            return
+        base = self._base_tab_titles.get(index, self._tabs.tabText(index).rstrip(" *!"))
+        suffix = {"dirty": " *", "invalid": " !"}.get(str(badge), "")
+        self._tabs.setTabText(index, base + suffix)
+
+    def _update_sim_chip(self, cfg: dict) -> None:
+        sim_count = 0
+        for value in cfg.values():
+            if isinstance(value, dict) and bool(value.get("simulation", False)):
+                sim_count += 1
+        if sim_count:
+            self._chip_sim.set_status(f"Simulation {sim_count}", "simulated")
+        else:
+            self._chip_sim.set_status("Real config", "neutral")
 
     def _load_file(self) -> None:
         """Read devices.yaml and populate both tabs."""
@@ -960,6 +1022,12 @@ class SettingsWindow(QDialog):
             return
 
         self._parse_error_label.setVisible(False)
+        self._editor.setStyleSheet("")
+        self._set_yaml_valid(True)
+        self._set_dirty(False, reconnect_needed=False)
+        for idx in range(self._tabs.count()):
+            self._set_tab_badge(idx, None)
+        self._update_sim_chip(cfg)
         self._rebuild_quick_settings(cfg)
 
     def _rebuild_quick_settings(self, cfg: dict) -> None:
@@ -1042,6 +1110,10 @@ class SettingsWindow(QDialog):
             "# Generated by Quick Settings — edit freely below\n" + new_text
         )
         self._suppress_yaml_update = False
+        self._set_yaml_valid(True)
+        self._set_dirty(True)
+        self._update_sim_chip(cfg)
+        self._set_tab_badge(self._tabs.currentIndex(), "dirty")
 
     # ------------------------------------------------------------------ #
     # YAML → parse validation                                            #
@@ -1052,9 +1124,12 @@ class SettingsWindow(QDialog):
             return
         text = self._editor.toPlainText()
         try:
-            yaml.safe_load(text)
+            cfg = yaml.safe_load(text) or {}
             self._parse_error_label.setVisible(False)
             self._editor.setStyleSheet("")
+            self._set_yaml_valid(True)
+            self._set_dirty(True)
+            self._update_sim_chip(cfg)
         except yaml.YAMLError as exc:
             self._show_parse_error(str(exc))
 
@@ -1062,6 +1137,8 @@ class SettingsWindow(QDialog):
         self._parse_error_label.setText(f"YAML parse error: {msg}")
         self._parse_error_label.setVisible(True)
         self._editor.setStyleSheet("border: 2px solid #c0392b;")
+        self._set_yaml_valid(False)
+        self._set_dirty(True)
 
     # ------------------------------------------------------------------ #
     # Save                                                                #
@@ -1069,9 +1146,12 @@ class SettingsWindow(QDialog):
 
     def _save(self) -> None:
         text = self._editor.toPlainText()
+        set_button_busy(self._btn_save, True, "Saving...")
         try:
-            yaml.safe_load(text)   # validate before writing
+            cfg = yaml.safe_load(text) or {}   # validate before writing
         except yaml.YAMLError as exc:
+            set_button_busy(self._btn_save, False)
+            self._show_parse_error(str(exc))
             QMessageBox.critical(self, "Save Failed",
                                  f"Cannot save: YAML is not valid.\n\n{exc}")
             return
@@ -1079,10 +1159,18 @@ class SettingsWindow(QDialog):
         try:
             self._config_path.write_text(text, encoding="utf-8")
         except OSError as exc:
+            set_button_busy(self._btn_save, False)
             QMessageBox.critical(self, "Save Failed",
                                  f"Could not write to file:\n{exc}")
             return
 
+        set_button_busy(self._btn_save, False)
+        flash_button(self._btn_save, "good", "Saved")
+        self._set_yaml_valid(True)
+        self._set_dirty(False, reconnect_needed=True)
+        self._update_sim_chip(cfg)
+        for idx in range(self._tabs.count()):
+            self._set_tab_badge(idx, None)
         logger.info("Settings saved to %s", self._config_path)
         self.saved.emit(str(self._config_path))
         QMessageBox.information(
