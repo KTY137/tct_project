@@ -111,6 +111,10 @@ auto-wrapped to `TCPIP0::<ip>::INSTR`) or use **+ LAN**. Tektronix scopes use on
 `vendor: tektronix` for both TBS-1000C (USB) and 4000-series (LAN); the driver
 tries `WFMOutpre?` then `WFMPre?` for the waveform preamble.
 
+For this lab's actual bench LAN (isolated static-IP instrument network,
+switch/PC/DG4162 addresses, and connectivity troubleshooting), see
+[`docs/BENCH_SETUP.md`](../docs/BENCH_SETUP.md).
+
 ## Real-hardware-only SDKs (not on PyPI)
 
 These are vendor binary SDKs; install them separately when using that hardware.
@@ -118,7 +122,7 @@ Everything else installs from `requirements.txt`.
 
 | Hardware | SDK |
 |----------|-----|
-| FLIR Blackfly camera | FLIR Spinnaker SDK + PySpin (`spinnaker-python`) |
+| FLIR Blackfly camera | FLIR Spinnaker SDK + PySpin (`spinnaker-python`) — needs the **64-bit** SDK and a **direct USB-3 port** (no hub); see [`docs/BENCH_SETUP.md`](../docs/BENCH_SETUP.md) §6 |
 | PSI DRS4 oscilloscope | DRS4 evaluation-board driver |
 | Any VISA instrument (scope/WFG) | NI-VISA (or another VISA implementation) |
 
