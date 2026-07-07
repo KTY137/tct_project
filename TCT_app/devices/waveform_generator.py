@@ -43,11 +43,22 @@ _WFG_CMDS: dict[str, dict[str, str]] = {
         "function_square": ":SOURce{ch}:FUNCtion SQUare",       # square trigger (note Q2)
         "frequency":       ":SOURce{ch}:FREQuency {val:.6f}",
         "pulse_width":     ":SOURce{ch}:FUNCtion:PULSe:WIDTh {val:.3e}",
-        # Square-wave duty (note p.345).  Range is frequency-dependent and is
-        # validated/clamped in set_duty_cycle().  NOTE: previously addressed as
-        # FUNCtion:PULSe:DCYCle, which is NOT in the sourced manual — corrected
-        # to the sourced SQUare form.
-        "duty":            ":SOURce{ch}:FUNCtion:SQUare:DCYCle {val:.3f}",
+        # Duty cycle is stored PER-FUNCTION on the DG4000: the ACTIVE function's
+        # node must be addressed.  Writing SQUare:DCYCle while the function is
+        # PULSe touches the wrong register AND garbles the pulse width — verified
+        # live on the real DG4162 (fw 00.01.14).  set_duty_cycle() queries the
+        # active function and picks the matching node.  On PULSe, PULSe:DCYCle
+        # 20/30/60 read back exactly (verified); the SQUare form stays the
+        # manual-sourced one (note p.345) for the square-trigger path.
+        "duty_pulse":      ":SOURce{ch}:FUNCtion:PULSe:DCYCle {val:.3f}",
+        "duty_square":     ":SOURce{ch}:FUNCtion:SQUare:DCYCle {val:.3f}",
+        # Read-back queries — the '?' counterparts of the SET nodes above.  Used
+        # to store the value the instrument ACTUALLY applied: it silently clamps
+        # duty/width to the frequency-dependent minimum pulse width.
+        "function_q":      ":SOURce{ch}:FUNCtion?",
+        "duty_pulse_q":    ":SOURce{ch}:FUNCtion:PULSe:DCYCle?",
+        "duty_square_q":   ":SOURce{ch}:FUNCtion:SQUare:DCYCle?",
+        "pulse_width_q":   ":SOURce{ch}:FUNCtion:PULSe:WIDTh?",
         # Amplitude (Vpp): short form of VOLTage[:LEVel][:IMMediate][:AMPLitude]
         # (note p.518).
         "amplitude":       ":SOURce{ch}:VOLTage {val:.4f}",
@@ -77,7 +88,13 @@ _WFG_CMDS: dict[str, dict[str, str]] = {
         "function_square": "SOURce{ch}:FUNCtion SQUare",
         "frequency":       "SOURce{ch}:FREQuency {val:.6f}",
         "pulse_width":     "SOURce{ch}:PULSe:WIDTh {val:.3e}",
-        "duty":            "SOURce{ch}:FUNCtion:SQUare:DCYCle {val:.3f}",
+        # Function-aware duty (mirrors the Rigol block; SCPI-99 / Keysight nodes).
+        "duty_pulse":      "SOURce{ch}:FUNCtion:PULSe:DCYCle {val:.3f}",
+        "duty_square":     "SOURce{ch}:FUNCtion:SQUare:DCYCle {val:.3f}",
+        "function_q":      "SOURce{ch}:FUNCtion?",
+        "duty_pulse_q":    "SOURce{ch}:FUNCtion:PULSe:DCYCle?",
+        "duty_square_q":   "SOURce{ch}:FUNCtion:SQUare:DCYCle?",
+        "pulse_width_q":   "SOURce{ch}:PULSe:WIDTh?",
         "amplitude":       "SOURce{ch}:VOLTage:AMPLitude {val:.4f}",
         "offset":          "SOURce{ch}:VOLTage:OFFSet {val:.4f}",
         "level_high":      "SOURce{ch}:VOLTage:HIGH {val:.4f}",
@@ -208,6 +225,11 @@ class WaveformGenerator(BaseDevice):
         self._address = visa_address
         self._frequency = frequency_hz
         self._pulse_width = pulse_width_s
+        # Last applied duty cycle (%).  Set by set_duty_cycle(); None until then
+        # (the configured pulse is specified as a width, not a duty).  The laser
+        # panel reflects this back into the duty spinbox after an apply so the
+        # GUI shows what the instrument really did, not the rejected request.
+        self._duty_cycle: float | None = None
         self._amplitude = amplitude_V
         self._offset = offset_V
         # Output load the generator is told it drives.  Default High-Z matches
@@ -311,8 +333,27 @@ class WaveformGenerator(BaseDevice):
         self._send("frequency", val=frequency_hz)
 
     def set_pulse_width(self, width_s: float) -> None:
-        self._pulse_width = width_s
-        self._send("pulse_width", val=width_s)
+        """Set the pulse width (s) and store what the instrument ACTUALLY applied.
+
+        The DG4162 enforces a frequency-dependent MINIMUM pulse width: e.g. at
+        1 kHz a 200 ns request is silently applied as 3.125 µs (verified live);
+        10 µs / 50 µs apply exactly.  The driver sends the request correctly,
+        then reads the width back so ``self._pulse_width`` reflects reality and
+        the laser panel can show the applied value instead of the rejected one.
+        Warns (does not raise) when the instrument clamped the request.
+        """
+        requested = float(width_s)
+        self._pulse_width = requested
+        self._send("pulse_width", val=requested)
+        applied = self._query_float(self._cmd("pulse_width_q"))
+        if applied is not None:
+            self._pulse_width = applied
+            if abs(applied - requested) > max(1e-12, 1e-2 * abs(requested)):
+                logger.warning(
+                    "WFGEN pulse width applied %.6g s differs from requested "
+                    "%.6g s — the instrument clamped it; the minimum pulse width "
+                    "is frequency-dependent, raise the frequency or the width.",
+                    applied, requested)
 
     @staticmethod
     def _square_duty_limits(freq_hz: float) -> tuple[float, float]:
@@ -324,23 +365,71 @@ class WaveformGenerator(BaseDevice):
             return (40.0, 60.0)
         return (50.0, 50.0)
 
-    def set_duty_cycle(self, percent: float) -> None:
-        """Set the square-wave duty cycle (%).
+    def _active_function(self) -> str:
+        """Best-effort read of the active function; ``"SQU"`` or ``"PULSE"``.
 
-        Clamped to the DG4000's frequency-dependent valid range
-        (docs/research/pdl800_trigger_wavegen_lan.md, manual p.345) instead of
-        forwarding an out-of-range value the instrument would reject. Emits the
-        sourced ``:FUNCtion:SQUare:DCYCle`` command.
+        Queries ``:FUNCtion?`` and normalises the reply.  When there is no
+        session (simulation / disconnected) or the query fails, falls back to
+        ``"PULSE"`` — the driver's configured default (``_apply_defaults`` sends
+        ``FUNCtion PULSe``) — so the duty write targets the node the device is
+        actually on.  Anything that is not square is treated as pulse (a laser
+        trigger is PULSe or SQUare only).
         """
-        lo, hi = self._square_duty_limits(self._frequency)
-        clamped = max(lo, min(hi, float(percent)))
-        if clamped != float(percent):
-            logger.warning(
-                "WFGEN duty %.3f%% out of range for %.4g Hz; clamped to %.3f%% "
-                "(valid %.0f–%.0f%%, DG4000 manual p.345).",
-                percent, self._frequency, clamped, lo, hi)
-        self._duty_cycle = clamped
-        self._send("duty", val=clamped)
+        reply = self._query(self._cmd("function_q"))
+        if reply and "SQU" in reply.upper():
+            return "SQU"
+        return "PULSE"
+
+    def set_duty_cycle(self, percent: float) -> None:
+        """Set the duty cycle (%), addressing the ACTIVE function's node.
+
+        The DG4162 stores duty per-function: writing ``SQUare:DCYCle`` while the
+        active function is PULSe touches the wrong register and garbles the pulse
+        width (verified live, fw 00.01.14).  So we query the active function and
+        pick the matching node:
+
+          * SQUare → ``FUNCtion:SQUare:DCYCle`` + the frequency-dependent
+            20–80/40–60/50 % clamp (docs/research/pdl800_trigger_wavegen_lan.md,
+            manual p.345);
+          * PULSe (default, and what a laser wants — LOW duty) →
+            ``FUNCtion:PULSe:DCYCle`` with only a broad 0.001–99.999 % sanity
+            clamp; the real floor is the frequency-dependent minimum pulse width,
+            which the instrument itself enforces.
+
+        After writing, reads the duty back so ``self._duty_cycle`` holds what the
+        instrument ACTUALLY applied (the panel reflects it); warns on a clamp.
+        """
+        requested = float(percent)
+        if self._active_function() == "SQU":
+            lo, hi = self._square_duty_limits(self._frequency)
+            commanded = max(lo, min(hi, requested))
+            if commanded != requested:
+                logger.warning(
+                    "WFGEN square duty %.3f%% out of range for %.4g Hz; clamped "
+                    "to %.3f%% (valid %.0f–%.0f%%, DG4000 manual p.345).",
+                    requested, self._frequency, commanded, lo, hi)
+            write_key, query_key = "duty_square", "duty_square_q"
+        else:
+            # PULSE: broad sanity clamp only — the instrument enforces the real,
+            # frequency-dependent minimum (do NOT apply the SQUare 20–80 clamp;
+            # a laser wants LOW duty, e.g. ~0.3 % at 1 kHz).
+            commanded = max(0.001, min(99.999, requested))
+            if commanded != requested:
+                logger.warning(
+                    "WFGEN pulse duty %.3f%% outside 0.001–99.999%%; clamped to "
+                    "%.3f%%.", requested, commanded)
+            write_key, query_key = "duty_pulse", "duty_pulse_q"
+        self._duty_cycle = commanded
+        self._send(write_key, val=commanded)
+        applied = self._query_float(self._cmd(query_key))
+        if applied is not None:
+            self._duty_cycle = applied
+            if abs(applied - commanded) > 0.05:
+                logger.warning(
+                    "WFGEN duty applied %.3f%% differs from requested %.3f%% — "
+                    "the instrument clamped it; the duty floor is the "
+                    "frequency-dependent minimum pulse width, raise the "
+                    "frequency or the duty.", applied, commanded)
 
     def set_amplitude(self, amplitude_V: float) -> None:
         self._amplitude = amplitude_V
@@ -446,12 +535,17 @@ class WaveformGenerator(BaseDevice):
             self.set_amplitude(self._amplitude)
             self.set_offset(self._offset)
 
-    def _send(self, key: str, **kw: Any) -> None:
-        """Format a vendor SCPI template and write it."""
+    def _cmd(self, key: str, **kw: Any) -> str | None:
+        """Return the formatted vendor SCPI template for *key*, or None."""
         cmds = _WFG_CMDS.get(self._vendor, _WFG_CMDS["generic"])
         tmpl = cmds.get(key)
-        if tmpl is not None:
-            self._write(tmpl.format(ch=self._ch, **kw))
+        return tmpl.format(ch=self._ch, **kw) if tmpl is not None else None
+
+    def _send(self, key: str, **kw: Any) -> None:
+        """Format a vendor SCPI template and write it."""
+        cmd = self._cmd(key, **kw)
+        if cmd is not None:
+            self._write(cmd)
 
     def _write(self, cmd: str) -> None:
         if self.simulation:
@@ -460,3 +554,31 @@ class WaveformGenerator(BaseDevice):
         if self._instr is not None:
             with self.io_lock:  # laser panel + scan thread share the session
                 self._instr.write(cmd)
+
+    def _query(self, cmd: str | None) -> str | None:
+        """Query the instrument, guarded for sim / no-session / errors.
+
+        Returns the stripped reply, or None when there is nothing to ask
+        (simulation, no VISA session, missing template) or the query fails.
+        Never raises — a read-back is best-effort and must never break a setter
+        or arm anything.  Uses the shared io_lock like _write.
+        """
+        if cmd is None or self.simulation or self._instr is None:
+            return None
+        try:
+            with self.io_lock:
+                return str(self._instr.query(cmd)).strip()
+        except Exception as exc:
+            logger.debug("WFGEN query failed (%s): %s", cmd, exc)
+            return None
+
+    def _query_float(self, cmd: str | None) -> float | None:
+        """Query and parse a single float; None if unavailable/non-numeric."""
+        reply = self._query(cmd)
+        if reply is None:
+            return None
+        try:
+            return float(reply.split(",")[0])
+        except (ValueError, IndexError):
+            logger.debug("WFGEN non-numeric reply to %s: %r", cmd, reply)
+            return None

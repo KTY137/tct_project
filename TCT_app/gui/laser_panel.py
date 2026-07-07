@@ -283,9 +283,39 @@ class LaserPanel(QWidget):
             return
         try:
             setter(value)
+            # Reflect what the instrument ACTUALLY applied — the DG4162 clamps
+            # pulse width / duty to its frequency-dependent minimum, so the
+            # request the user typed may not be what the device did.
+            self._reflect_applied()
             self._chip_wfg.set_status("Wavegen configured", "good")
         except Exception as exc:
             self._chip_wfg.set_status("Wavegen error", "crit", str(exc))
+
+    def _reflect_applied(self) -> None:
+        """Sync the width/duty spinboxes to the driver's ACTUALLY-applied values.
+
+        The instrument silently clamps pulse width / duty to its frequency-
+        dependent minimum (e.g. 200 ns → 3.125 µs at 1 kHz).  The driver reads
+        the applied value back into ``_pulse_width`` / ``_duty_cycle``; reflect
+        that here so the GUI shows what the instrument really did, not the
+        rejected request.  ``blockSignals`` around ``setValue`` so this cannot
+        re-fire ``editingFinished`` and re-send the value in a loop.
+        """
+        applied_w = getattr(self._wfg, "_pulse_width", None)
+        if applied_w is not None:
+            self._spin_width.blockSignals(True)
+            try:
+                self._spin_width.setValue(float(applied_w))
+            finally:
+                self._spin_width.blockSignals(False)
+        applied_d = getattr(self._wfg, "_duty_cycle", None)
+        if applied_d is not None:
+            self._spin_duty.blockSignals(True)
+            try:
+                self._spin_duty.setValue(float(applied_d))
+            finally:
+                self._spin_duty.blockSignals(False)
+        self._update_pulse_hint()
 
     def _apply_wfg(self) -> None:
         set_button_busy(self._btn_apply, True, "Applying...")
@@ -309,6 +339,9 @@ class LaserPanel(QWidget):
                 self._wfg.set_pulse_width(self._spin_width.value())
             self._wfg.set_amplitude(self._spin_ampl.value())
             self._wfg.set_offset(self._spin_offset.value())
+            # Reflect the instrument's actually-applied width/duty back into the
+            # spinboxes (it clamps to a frequency-dependent minimum).
+            self._reflect_applied()
             if live:
                 self._chip_wfg.set_status("Wavegen configured", "good")
                 ok = True
