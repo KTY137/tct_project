@@ -14,12 +14,20 @@ import threading
 import time
 from dataclasses import dataclass, asdict, is_dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable
 
 import numpy as np
 
 from controller.state_machine import StateMachine, AppState
 from controller.device_manager import DeviceManager
+from controller.scan_plan import ScanPlan
+from controller.plan_compiler import (
+    compile_plan, MoveStep, BiasStep, AcquireStep, SaveStep,
+    WaitStep, ManualPauseStep, ReadSlowControlStep,
+)
+from controller.scan_plan_validator import validate_plan, errors, PlanLimits
+from controller.danger_gate import DangerGate, DangerAction
 from devices.base import DeviceError
 from devices.bias_channel import BiasChannel
 from analysis.waveform_analysis import analyse_waveform, WaveformResult
@@ -183,6 +191,18 @@ class ScanController:
         self._pause_event.set()
         self._abort_event = threading.Event()
 
+        # Per-run HV arm latch (plan executor).  Only ever set True by
+        # arm_hv(True) after a real user confirmation; cleared at the end of
+        # every run so arming is never sticky across runs.
+        self._hv_armed = False
+        # Consecutive unreadable-bias counter, shared by the classic scan loop
+        # and the plan executor via _check_compliance; reset at each run start.
+        self._bias_read_failures = 0
+        # Set whenever the run is paused (pause() or a ManualPauseStep); the
+        # plan executor re-asserts HV on the following resume (the compiled
+        # BiasStep list is deduped, so a resume must re-establish bias itself).
+        self._reassert_pending = False
+
         # Public callbacks
         self.on_point_done: Callable[[ScanResult], None] | None = None
         self.on_progress:   Callable[[int, int], None]   | None = None
@@ -190,6 +210,11 @@ class ScanController:
         self.on_error:      Callable[[str], None]        | None = None
         # Voltage scan callback: (voltage_V, dut_charge_pC, current_A)
         self.on_vscan_point: Callable[[float, float, float], None] | None = None
+        # Manual-pause prompt surfacing.  ManualPauseStep clears the pause event
+        # and fires this so the GUI can show the operator what to do (on_progress
+        # carries no message).  Controller-owned hook; the GUI wires a dialog to
+        # it and calls resume() when the operator is done.
+        self.on_manual_pause: Callable[[str], None] | None = None
 
     # ------------------------------------------------------------------ #
     # Run-directory / writer allocation                                   #
@@ -298,11 +323,112 @@ class ScanController:
         )
         self._thread.start()
 
+    def arm_hv(self, confirmed: bool) -> None:
+        """Latch permission for the next plan run to drive HV.
+
+        Sets the private ``_hv_armed`` latch that :meth:`start_plan` requires
+        before it will accept a plan containing a ``BiasStep``.  **Only ever
+        call this with ``True`` after a real user confirmation** (the HV-arm
+        checkbox / dialog on the UI thread).  The latch is per-run — every run
+        clears it on completion (:meth:`_run_plan` ``finally``) — so arming is
+        never sticky across runs.
+        """
+        self._hv_armed = bool(confirmed)
+
+    def start_plan(
+        self, plan: ScanPlan, limits: PlanLimits, gate: DangerGate
+    ) -> None:
+        """Validate, arm-check, and launch a compiled :class:`ScanPlan`.
+
+        Mirrors :meth:`start`: the same ``can(RUNNING)`` guard, the same
+        refuse-*before*-any-state-change discipline, the same daemon thread and
+        cooperative pause/abort.  On top of that it adds the plan's fail-closed
+        HV gate:
+
+        1. ``can(AppState.RUNNING)`` else ``RuntimeError`` (identical to
+           :meth:`start`).
+        2. :func:`validate_plan` against *limits* — any ERROR raises
+           ``ValueError`` and refuses to start (fail closed, before any state
+           change or hardware action).
+        3. If the compiled plan contains a ``BiasStep`` and HV is not armed,
+           raise ``RuntimeError`` — a bias-driving plan needs an explicit
+           :meth:`arm_hv` after a user confirmation.
+        4. Resolve the bias channel BEFORE any state change (via the existing
+           :meth:`_resolve_bias`, using ``plan.safety['bias_channel']`` when
+           present, else the primary proxy — same validation semantics).
+        5. Clear abort / set pause, transition ``RUNNING``, spawn ``_run_plan``.
+
+        Any refusal in the pre-flight clears the per-run HV arm latch, so a
+        failed *armed* start never leaks arming into a later plan (RISK, M2.2
+        review); a successful start keeps the arm until the run consumes it.
+        The plan is compiled exactly once here and the compiled steps are handed
+        to :meth:`_run_plan` (no re-compile downstream).
+
+        Every ``BiasStep`` and the first stage move is *additionally* gated
+        through *gate* at run time — validation and arming are the paper gate,
+        *gate* is the live per-danger confirmation.
+        """
+        # Pre-flight — every refusal below clears the per-run HV arm latch so a
+        # failed *armed* start is never sticky into a later plan.  A SUCCESSFUL
+        # start keeps the arm; it is consumed at run end (_run_plan finally).
+        try:
+            # 1. State guard (identical to start).
+            if not self._sm.can(AppState.RUNNING):
+                raise RuntimeError("Cannot start scan in current state.")
+
+            # 2. Pure pre-flight — refuse a bad plan before touching anything.
+            errs = errors(validate_plan(plan, limits))
+            if errs:
+                raise ValueError(
+                    "Scan plan failed validation — refusing to start:\n"
+                    + "\n".join(f"  • {e}" for e in errs)
+                )
+
+            # 3. Compile ONCE — the single source of truth handed to _run_plan.
+            steps = compile_plan(plan)
+
+            # 4. Fail-closed HV arm check for a bias-driving plan.  (When this
+            #    raises the latch is already False, so the reset below is a
+            #    harmless no-op.)
+            if any(isinstance(s, BiasStep) for s in steps) and not self._hv_armed:
+                raise RuntimeError(
+                    "Plan drives HV but HV is not armed — call arm_hv(True) after "
+                    "a user confirmation before starting."
+                )
+
+            # 5. Resolve the bias channel BEFORE any state change / hardware.  A
+            #    plan selects its channel via safety['bias_channel'];
+            #    _resolve_bias validates it (out-of-range / wrong-type raises).
+            bias = self._resolve_bias(
+                SimpleNamespace(bias_channel=(plan.safety or {}).get("bias_channel"))
+            )
+        except Exception:
+            self._hv_armed = False        # a refused start never leaves HV armed
+            raise
+
+        self._abort_event.clear()
+        self._pause_event.set()
+        self._sm.transition(AppState.RUNNING)
+        self._thread = threading.Thread(
+            target=self._run_plan, args=(plan, steps, bias, gate), daemon=True,
+            name="PlanThread",
+        )
+        self._thread.start()
+
     def pause(self) -> None:
         self._pause_event.clear()
+        # Remember that we paused so the plan executor re-asserts HV on resume
+        # (harmless no-op for the classic scan loops, which ignore the flag).
+        self._reassert_pending = True
         self._sm.transition(AppState.PAUSED)
 
     def resume(self) -> None:
+        # No-op unless actually paused: a resume racing a run that already
+        # finished/aborted (e.g. the manual-pause dialog answered late) must
+        # not attempt an illegal PAUSED->RUNNING transition and raise into
+        # the caller's (GUI) thread.
+        if self._sm.state is not AppState.PAUSED:
+            return
         self._pause_event.set()
         self._sm.transition(AppState.RUNNING)
 
@@ -365,7 +491,7 @@ class ScanController:
         total = len(points)
         logger.info("Scan started: %d points", total)
 
-        bias_read_failures = 0
+        self._bias_read_failures = 0
         try:
             self._begin_run("xy_scan", cfg)
             for point in points:
@@ -380,47 +506,12 @@ class ScanController:
                 if self._abort_event.is_set():
                     break
 
-                # Compliance-trip safety check during scan.  This is the only
-                # protection against cooking a sensor mid-scan, so a failing
-                # bias read must not be silently ignored: tolerate transient
-                # glitches, abort after 3 consecutive failures.
-                if bias.connected:
-                    try:
-                        bias_reading = bias.read()
-                        bias_read_failures = 0
-                        if bias_reading.compliant:
-                            logger.warning("Compliance hit during scan at point %d — aborting", point.index)
-                            self._abort_event.set()
-                            if self.on_error:
-                                self.on_error(
-                                    f"Bias compliance trip at point {point.index} "
-                                    f"({bias_reading.voltage_V:.1f} V, "
-                                    f"I={bias_reading.current_A*1e6:.2f} µA).\n"
-                                    "Scan aborted. Bias ramped to 0 V."
-                                )
-                            # Disable the output even if the ramp raises — the
-                            # output-off is the safety-critical step after a
-                            # compliance trip and must not be skipped.
-                            try:
-                                bias.ramp_to(0.0, step_V=20.0, delay_s=0.05)
-                            except Exception:
-                                logger.warning("Post-compliance bias ramp-down failed", exc_info=True)
-                            try:
-                                bias.output_off()
-                            except Exception:
-                                logger.warning("Post-compliance bias output-off failed", exc_info=True)
-                            break
-                    except Exception as exc:
-                        bias_read_failures += 1
-                        logger.warning(
-                            "Bias read failed during scan (%d/3): %s",
-                            bias_read_failures, exc,
-                        )
-                        if bias_read_failures >= 3:
-                            raise DeviceError(
-                                "Bias supply unreadable for 3 consecutive points — "
-                                "compliance protection unavailable, scan aborted."
-                            ) from exc
+                # Compliance-trip safety check during scan (shared helper): the
+                # only protection against cooking a sensor mid-scan, so it
+                # aborts + ramps down on a trip and fails safe after 3
+                # consecutive unreadable reads.
+                if self._check_compliance(bias, context=f" at point {point.index}"):
+                    break
 
                 self._writer.save_point(result)
 
@@ -447,6 +538,11 @@ class ScanController:
             if self.on_error:
                 self.on_error(str(exc))
         finally:
+            # Fail-safe rule 5 ('stop motion'): halt any in-flight stage move on
+            # an exception-driven exit (abort() already stops the motor, but a
+            # fault DURING a move does not).  Best-effort/isolated; no-op on a
+            # clean finish.
+            self._motor_stop_safe()
             self._end_run()
             # Always turn off laser trigger after scan
             try:
@@ -538,6 +634,7 @@ class ScanController:
                 dev.waveform_generator.output_off()
             except Exception:
                 pass
+            self._motor_stop_safe()
             self._end_run()
             if self.on_finished:
                 self.on_finished()
@@ -631,6 +728,7 @@ class ScanController:
                 dev.waveform_generator.output_off()
             except Exception:
                 pass
+            self._motor_stop_safe()
             self._end_run()
             if self.on_finished:
                 self.on_finished()
@@ -712,15 +810,365 @@ class ScanController:
             if self.on_error:
                 self.on_error(str(exc))
         finally:
+            # Isolated best-effort blocks: a wavegen fault must not skip the
+            # HV ramp-down, and a failed ramp must not skip output-off (same
+            # layering as _bias_failsafe / the M1 emergency-off fix).
             try:
                 dev.waveform_generator.output_off()
+            except Exception:
+                pass
+            try:
                 bias.ramp_to(0.0, step_V=20.0, delay_s=0.05)
+            except Exception:
+                pass
+            try:
                 bias.output_off()
             except Exception:
                 pass
+            self._motor_stop_safe()
             self._end_run()
             if self.on_finished:
                 self.on_finished()
+
+    # ------------------------------------------------------------------ #
+    # Plan executor (runs in background thread)                           #
+    # ------------------------------------------------------------------ #
+
+    def _run_plan(
+        self, plan: ScanPlan, steps: list, bias: BiasChannel, gate: DangerGate
+    ) -> None:
+        """Execute a compiled :class:`ScanPlan` on the worker thread.
+
+        Modeled on :meth:`_run`: cooperative pause/abort between every step, the
+        same terminal-state resolution, and a fail-safe ``finally``.  Danger
+        steps are gated through *gate* — HV ramp per ``BiasStep``, stage motion
+        once at run level (see :meth:`_move_action`) — and a denied confirmation
+        is treated as a clean user abort.  On resume from a pause the last
+        commanded HV set point is re-asserted (:meth:`_reassert_bias`) because
+        the compiled ``BiasStep`` list is deduped and would otherwise skip the
+        re-ramp.
+
+        Documented deviation from _run (safety-driven): because a plan *drives*
+        HV, the ``finally`` additionally leaves HV safe (ramp to 0 + output off)
+        whenever the run contained a ``BiasStep`` — mirroring the HV-active
+        :meth:`_run_voltage_scan`, not the HV-passive :meth:`_run`.
+        """
+        self._bias_read_failures = 0
+        self._reassert_pending = False
+        has_bias_step = False
+        last_result: ScanResult | None = None
+        last_bias_target: float | None = None
+        move_confirmed = False
+        acq_index = -1
+        saved = 0
+
+        try:
+            # steps are compiled once in start_plan and handed in — no recompile.
+            has_bias_step = any(isinstance(s, BiasStep) for s in steps)
+            total_saves = sum(1 for s in steps if isinstance(s, SaveStep))
+            logger.info("Plan started: %d steps (%d save point(s))",
+                        len(steps), total_saves)
+            self._begin_run("recipe_plan", plan)
+
+            for step in steps:
+                # -- cooperative pause / resume-with-HV-reassert / abort ------
+                self._pause_event.wait()
+                if self._abort_event.is_set():
+                    break
+                if self._reassert_pending:
+                    self._reassert_pending = False
+                    self._reassert_bias(bias, last_bias_target)
+
+                # -- explicit dispatch (fail closed on anything unknown) ------
+                if isinstance(step, MoveStep):
+                    # One authoritative motion confirm per run (not per point).
+                    if not move_confirmed:
+                        if not gate.confirm(self._move_action(steps)):
+                            self._deny_abort(
+                                bias, has_bias_step,
+                                "Stage motion not confirmed — plan aborted.")
+                            break
+                        move_confirmed = True
+                    self._command_move(step)
+
+                elif isinstance(step, BiasStep):
+                    if not self._hv_armed:            # defense in depth
+                        self._deny_abort(
+                            bias, has_bias_step,
+                            "HV not armed — refusing bias ramp mid-plan.")
+                        break
+                    action = DangerAction(
+                        kind="hv_ramp",
+                        summary=f"Ramp CH{bias.channel} to {step.target_V:g} V",
+                        detail={"channel": bias.channel, "target_V": step.target_V},
+                    )
+                    if not gate.confirm(action):
+                        self._deny_abort(
+                            bias, has_bias_step,
+                            f"HV ramp to {step.target_V:g} V not confirmed — "
+                            "plan aborted.")
+                        break
+                    bias.ramp_to(step.target_V)
+                    last_bias_target = step.target_V
+
+                elif isinstance(step, AcquireStep):
+                    pos = self._dev.motor.get_position()
+                    acq_index += 1
+                    point = ScanPoint(x_mm=pos.x_mm, y_mm=pos.y_mm,
+                                      z_mm=pos.z_mm, index=acq_index)
+                    last_result = self._acquire_core(point, step.n_averages, bias)
+                    if self._check_compliance(bias, context=f" at acquire {acq_index}"):
+                        break
+
+                elif isinstance(step, SaveStep):
+                    # SAVE_POINT persists the most recent acquire; a save with
+                    # nothing acquired is a no-op (validator already WARNs).
+                    if last_result is not None:
+                        self._writer.save_point(last_result)
+                        saved += 1
+                        if self.on_point_done:
+                            self.on_point_done(last_result)
+                        if self.on_progress:
+                            self.on_progress(saved, total_saves)
+
+                elif isinstance(step, WaitStep):
+                    self._abortable_sleep(step.seconds)
+
+                elif isinstance(step, ManualPauseStep):
+                    # Block for a human action; resumes via the existing
+                    # resume().  Surface the prompt so the operator knows what to
+                    # do (on_progress carries no message).
+                    self._pause_event.clear()
+                    self._reassert_pending = True
+                    if self._sm.can(AppState.PAUSED):
+                        self._sm.transition(AppState.PAUSED)
+                    if self.on_manual_pause:
+                        self.on_manual_pause(step.prompt)
+
+                elif isinstance(step, ReadSlowControlStep):
+                    self._read_slow_control_snapshot()
+
+                else:  # pragma: no cover - Step is a closed union
+                    raise ValueError(f"unhandled plan step: {type(step).__name__}")
+
+            # -- terminal state (mirror _run) --------------------------------
+            if self._sm.state in (AppState.RUNNING, AppState.PAUSED):
+                if self._abort_event.is_set():
+                    self._sm.transition(AppState.ABORTED)
+                    logger.info("Plan aborted")
+                else:
+                    # A plan whose last executable step is a ManualPauseStep exits
+                    # the loop in PAUSED with everything acquired/saved.  PAUSED
+                    # cannot transition straight to FINISHED, so promote it back
+                    # through RUNNING first (both legal) — otherwise the clean run
+                    # is mislabeled ABORTED + on_error (BUG, M2.2 review).
+                    if self._sm.state is AppState.PAUSED:
+                        self._sm.transition(AppState.RUNNING)
+                    self._sm.transition(AppState.FINISHED)
+                    logger.info("Plan finished")
+
+        except Exception as exc:
+            logger.exception("Plan error")
+            # PAUSED cannot transition straight to ERROR (a ManualPauseStep can
+            # leave us there); fall back to ABORTED so a terminal state is always
+            # reached and the error transition never itself raises.
+            if self._sm.state not in (AppState.ERROR, AppState.FINISHED, AppState.ABORTED):
+                try:
+                    self._sm.transition(AppState.ERROR)
+                except ValueError:
+                    if self._sm.can(AppState.ABORTED):
+                        self._abort_event.set()
+                        self._sm.transition(AppState.ABORTED)
+            if self.on_error:
+                self.on_error(str(exc))
+        finally:
+            self._hv_armed = False        # arm is per-run; never sticky
+            # Fail-safe rule 5 ('stop motion'): halt any in-flight stage move on
+            # EVERY exit path.  A fault DURING a move (e.g. wait_until_ready
+            # raising) would otherwise let the stage keep driving to target.
+            # Isolated best-effort (see _motor_stop_safe) so a dead motor link
+            # can neither mask the original error nor skip the HV/wavegen
+            # fail-safe below; a no-op on a clean finish.
+            self._motor_stop_safe()
+            try:
+                self._dev.waveform_generator.output_off()
+            except Exception:
+                logger.warning("Waveform-generator output_off failed", exc_info=True)
+            if has_bias_step:
+                # This run energized HV — leave it safe on EVERY exit path.
+                self._bias_failsafe(bias)
+            self._end_run()
+            if self.on_finished:
+                self.on_finished()
+
+    # ------------------------------------------------------------------ #
+    # Plan-executor helpers (shared / pure where possible)                #
+    # ------------------------------------------------------------------ #
+
+    def _command_move(self, step: MoveStep) -> None:
+        """Command a plan ``MoveStep``, honoring None = "do not command".
+
+        ``move_to`` needs absolute x/y/z, but a ``MoveStep`` leaves undriven
+        axes ``None``.  We read the CURRENT position and substitute it for every
+        None axis — **never 0.0** (that would drive an undriven axis to the
+        hard-stop edge; the M2.2 BLOCKER regression).  Then wait for motion to
+        finish.
+        """
+        cur = self._dev.motor.get_position()
+        x = cur.x_mm if step.x_mm is None else step.x_mm
+        y = cur.y_mm if step.y_mm is None else step.y_mm
+        z = cur.z_mm if step.z_mm is None else step.z_mm
+        self._dev.motor.move_to(x, y, z)
+        self._dev.motor.wait_until_ready()
+
+    def _move_action(self, steps: list) -> DangerAction:
+        """Build the ONE run-level stage-motion confirmation.
+
+        Design decision: the executor asks for a SINGLE motion confirmation
+        before the first move of the run, not one per ``MoveStep``.  A raster is
+        thousands of moves; per-move dialogs are unusable, and every individual
+        move is already bounded by the motor's software limits
+        (``SoftwareLimits.check`` runs inside ``move_to``).  So the operator
+        authorizes "the stage will move within this envelope" once, and the
+        driver limits protect each step.  The summary carries the real per-axis
+        travel envelope so the operator sees where the stage will go.
+        """
+        n_moves = 0
+        acc: dict[str, list[float]] = {"x_mm": [], "y_mm": [], "z_mm": []}
+        for s in steps:
+            if isinstance(s, MoveStep):
+                n_moves += 1
+                for name, val in (("x_mm", s.x_mm), ("y_mm", s.y_mm), ("z_mm", s.z_mm)):
+                    if val is not None:
+                        acc[name].append(val)
+        env: dict[str, tuple[float, float] | None] = {"x_mm": None, "y_mm": None, "z_mm": None}
+        parts: list[str] = []
+        for name in ("x_mm", "y_mm", "z_mm"):
+            vals = acc[name]
+            if vals:
+                env[name] = (min(vals), max(vals))
+                parts.append(f"{name[0].upper()} {min(vals):g}..{max(vals):g} mm")
+        span = "; ".join(parts) if parts else "current position"
+        return DangerAction(
+            kind="move",
+            summary=f"Move stage within [{span}] ({n_moves} move(s))",
+            detail={"envelope": env, "n_moves": n_moves},
+        )
+
+    def _reassert_bias(self, bias: BiasChannel, target_V: float | None) -> None:
+        """Re-establish the last commanded HV set point after a pause→resume.
+
+        ``compile_plan`` dedups BiasSteps, so resuming "from step N" would skip
+        the re-ramp and keep acquiring at a bias the executor only *assumes* is
+        still applied (TECH_DEBT RISK, M2.2).  We never trust the deduped list:
+        on resume we re-read the supply (surfacing a dead link) and re-ramp to
+        the last commanded target.  No-op when nothing was commanded yet or HV
+        is not armed.  A failing re-ramp propagates → the run fails safe (ERROR +
+        HV-safe ``finally``).
+        """
+        if target_V is None or not self._hv_armed:
+            return
+        logger.info("Resume: re-asserting HV to last commanded %.3g V", target_V)
+        try:
+            bias.read()
+        except Exception:
+            logger.warning("Bias re-read on resume failed", exc_info=True)
+        bias.ramp_to(target_V)
+
+    def _deny_abort(self, bias: BiasChannel, has_bias_step: bool, msg: str) -> None:
+        """Treat a refused danger confirmation as a clean user abort.
+
+        Sets the abort event and surfaces *msg* via ``on_error``; if this run
+        energized HV, runs the bias fail-safe so a denied ramp never leaves the
+        supply hot.  The caller then ``break``s and the terminal block resolves
+        ABORTED.
+        """
+        logger.info("Danger confirmation denied: %s", msg)
+        self._abort_event.set()
+        if self.on_error:
+            self.on_error(msg)
+        if has_bias_step:
+            self._bias_failsafe(bias)
+
+    def _check_compliance(self, bias: BiasChannel, context: str = "") -> bool:
+        """Post-acquire bias compliance / readability guard (shared by both loops).
+
+        Extracted verbatim from the classic scan loop so :meth:`_run` and
+        :meth:`_run_plan` share ONE implementation.  Returns ``True`` when the
+        run must STOP after a compliance trip — the caller ``break``s; the abort
+        event is already set and the supply already ramped down.  Returns
+        ``False`` to continue.  Raises :class:`DeviceError` after 3 consecutive
+        unreadable reads (compliance protection is then unavailable, so the run
+        fails safe rather than cook a sensor blind).  A single failing read is
+        tolerated as a transient glitch; the counter resets on any good read.
+        """
+        if not bias.connected:
+            return False
+        try:
+            reading = bias.read()
+        except Exception as exc:
+            self._bias_read_failures += 1
+            logger.warning("Bias read failed during scan (%d/3): %s",
+                           self._bias_read_failures, exc)
+            if self._bias_read_failures >= 3:
+                raise DeviceError(
+                    "Bias supply unreadable for 3 consecutive points — "
+                    "compliance protection unavailable, scan aborted."
+                ) from exc
+            return False
+        self._bias_read_failures = 0
+        if not reading.compliant:
+            return False
+        logger.warning("Compliance hit during scan%s — aborting", context)
+        self._abort_event.set()
+        if self.on_error:
+            self.on_error(
+                f"Bias compliance trip{context} "
+                f"({reading.voltage_V:.1f} V, I={reading.current_A*1e6:.2f} µA).\n"
+                "Scan aborted. Bias ramped to 0 V."
+            )
+        self._bias_failsafe(bias)
+        return True
+
+    def _bias_failsafe(self, bias: BiasChannel) -> None:
+        """Ramp bias to 0 V then open the output — best-effort, SEPARATE tries.
+
+        The output-off is the safety-critical step after a trip / deny / abort
+        and must run even if the ramp-down raises, so the two are independently
+        guarded (the same discipline as the original inline compliance block).
+        """
+        try:
+            bias.ramp_to(0.0, step_V=20.0, delay_s=0.05)
+        except Exception:
+            logger.warning("Fail-safe bias ramp-down failed", exc_info=True)
+        try:
+            bias.output_off()
+        except Exception:
+            logger.warning("Fail-safe bias output-off failed", exc_info=True)
+
+    def _motor_stop_safe(self) -> None:
+        """Best-effort halt of all stage axes; never raises.
+
+        Fail-safe rule 5 ('stop motion'): on a fault- or abort-driven exit an
+        in-flight move must be halted.  Isolated in its own try/except (the same
+        discipline as :meth:`_bias_failsafe`) so a dead motor link can neither
+        mask the original error nor skip the bias fail-safe.  ``stop()`` is
+        documented safe-to-call-at-any-time, so this is a harmless no-op on a
+        clean finish or when the stage is already idle.
+        """
+        try:
+            self._dev.motor.stop()
+        except Exception:
+            logger.warning("Fail-safe motor stop failed", exc_info=True)
+
+    def _abortable_sleep(self, seconds: float) -> None:
+        """Sleep up to *seconds*, in <=0.1 s slices, returning early on abort."""
+        deadline = time.monotonic() + max(0.0, float(seconds))
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0 or self._abort_event.is_set():
+                return
+            time.sleep(min(0.1, remaining))
 
     def _acquire_point(self, point: ScanPoint, cfg: ScanConfig, bias: BiasChannel) -> ScanResult:
         dev = self._dev
@@ -731,6 +1179,25 @@ class ScanController:
 
         # 2. Settle
         time.sleep(cfg.settle_time_s)
+
+        # 3+. Camera + averaged waveform acquisition (shared with the plan
+        #     executor — see _acquire_core).
+        return self._acquire_core(point, max(cfg.n_averages, 1), bias)
+
+    def _acquire_core(
+        self, point: ScanPoint, n_averages: int, bias: BiasChannel
+    ) -> ScanResult:
+        """Camera frame + averaged waveform acquisition at the CURRENT position.
+
+        Factored out of :meth:`_acquire_point` so the classic scan loop and the
+        plan executor share ONE acquisition body.  The **caller owns move +
+        settle** (the plan does them as separate ``MoveStep`` / ``WaitStep``);
+        this does the camera grab, the ``n_averages`` acquire/average loop, the
+        per-point bias/slow-control context, the charge calibration, and builds
+        the :class:`ScanResult`.
+        """
+        dev = self._dev
+        n = max(int(n_averages), 1)
 
         # 3. Camera frame
         try:
@@ -745,7 +1212,7 @@ class ScanController:
         ref_readings = []
         dut_results: list[WaveformResult] = []
 
-        for _ in range(max(cfg.n_averages, 1)):
+        for _ in range(n):
             ref = dev.intensity_monitor.read()
             ref_readings.append(ref)
 

@@ -197,3 +197,27 @@ def test_errors_and_warnings_partition_by_severity():
     assert warnings(issues) and errors(issues) == []
     # every issue is one severity or the other, no overlap
     assert len(issues) == len([i for i in issues if i.severity in (ERROR, WARNING)])
+
+
+def test_trailing_manual_pause_warns():
+    # A pause as the very last executable step gates nothing — WARNING, not
+    # ERROR (the executor finishes such a run cleanly).
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0, 1.0],
+                     children=[_acq(), _save()])
+    pause = ActionBlock(action=ActionType.MANUAL_PAUSE,
+                        params={"prompt": "flip sample"})
+    plan = ScanPlan(name="t", root=[loop, pause])
+    issues = validate_plan(plan, limits())
+    assert errors(issues) == []
+    assert any("MANUAL_PAUSE" in w and "gates nothing" in w
+               for w in warnings(issues))
+
+
+def test_mid_plan_manual_pause_does_not_warn():
+    pause = ActionBlock(action=ActionType.MANUAL_PAUSE,
+                        params={"prompt": "insert filter"})
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0, 1.0],
+                     children=[_acq(), _save()])
+    plan = ScanPlan(name="t", root=[pause, loop])
+    issues = validate_plan(plan, limits())
+    assert not any("MANUAL_PAUSE" in w for w in warnings(issues))

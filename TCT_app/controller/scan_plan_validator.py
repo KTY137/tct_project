@@ -136,6 +136,22 @@ def validate_plan(plan: ScanPlan, limits: PlanLimits) -> list[PlanIssue]:
             "plan drives bias voltage but safety.require_hv_confirmation is not "
             "True — refusing (HV requires explicit confirmation, fail-closed)"))
 
+    # (i) trailing manual pause: legal (the executor promotes the final PAUSED
+    # to a clean FINISHED) but almost always a recipe mistake — the pause gates
+    # nothing.  iter_leaf_contexts materializes internally, so wrap it; a bad
+    # range is already reported by (a).
+    try:
+        last_action = None
+        for _ctx, action in plan.iter_leaf_contexts():
+            last_action = action
+        if last_action is not None and last_action.action == ActionType.MANUAL_PAUSE:
+            issues.append(PlanIssue(
+                WARNING, "root",
+                "plan ends on a MANUAL_PAUSE — it gates nothing (the run just "
+                "finishes); move it before the steps it should gate"))
+    except ValueError:
+        pass
+
     return issues
 
 
