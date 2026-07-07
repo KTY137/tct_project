@@ -38,6 +38,9 @@ class ScanPanel(QWidget):
     pause_requested   = Signal(bool)   # True = pause, False = resume
     z_focus_requested = Signal(ZFocusScanConfig)
     vscan_requested   = Signal(VoltageScanConfig)
+    # Hand the current quick-scan parameters to the Scan Planner as an
+    # editable routine (tct_gui converts via plan_from_scan_config).
+    open_in_planner_requested = Signal(ScanConfig)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -164,6 +167,16 @@ class ScanPanel(QWidget):
         btn_row.addWidget(self._btn_start)
         btn_row.addWidget(self._btn_pause)
         btn_row.addWidget(self._btn_abort)
+        # Quick path stays here; the planner is the routine editor — this
+        # hands the SAME parameters over instead of retyping them there.
+        self._btn_to_planner = QPushButton("⧉ Open in Planner")
+        set_button_icon(self._btn_to_planner, "mdi.file-tree")
+        self._btn_to_planner.setToolTip(
+            "Convert these scan parameters into an editable routine in the "
+            "Scan Planner (same points, same order — refine or extend there)."
+        )
+        self._btn_to_planner.clicked.connect(self._emit_open_in_planner)
+        btn_row.addWidget(self._btn_to_planner)
         root.addLayout(btn_row)
 
         # ── Z-focus (focal-point calibration) ──────────────────────────────
@@ -441,8 +454,10 @@ class ScanPanel(QWidget):
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "Load Error", str(exc))
 
-    def _emit_start(self) -> None:
-        cfg = ScanConfig(
+    def _current_config(self) -> ScanConfig:
+        """The ScanConfig described by the form right now (single source for
+        both Start and Open-in-Planner, so they can never diverge)."""
+        return ScanConfig(
             x_start_mm=self._spin_x0.value(),
             x_stop_mm=self._spin_x1.value(),
             x_step_mm=self._spin_dx.value(),
@@ -453,7 +468,12 @@ class ScanPanel(QWidget):
             n_averages=self._spin_nav.value(),
             settle_time_s=self._spin_settle.value(),
         )
-        self.start_requested.emit(cfg)
+
+    def _emit_start(self) -> None:
+        self.start_requested.emit(self._current_config())
+
+    def _emit_open_in_planner(self) -> None:
+        self.open_in_planner_requested.emit(self._current_config())
 
     def _redraw_map(self) -> None:
         if not _HAS_PG or not self._map_data:

@@ -44,6 +44,7 @@ from gui.status_widgets import StatusChip, StatusPill
 from gui.planner_panel import PlannerPanel
 from gui.qt_danger_gate import QtDangerGate
 from controller.scan_plan_validator import PlanLimits
+from controller.plan_from_config import plan_from_scan_config
 
 logger = logging.getLogger(__name__)
 
@@ -347,6 +348,8 @@ class TCTMainWindow(QMainWindow):
         self._planner_panel.arm_hv_requested.connect(self._on_arm_hv_requested)
         self._planner_panel.start_plan_requested.connect(self._start_plan_from_planner)
         self._planner_panel.abort_requested.connect(self._scanner.abort)
+        # Scan panel → Planner handoff: same parameters, editable as a routine.
+        self._scan_panel.open_in_planner_requested.connect(self._open_in_planner)
 
         self._scan_panel.start_requested.connect(self._start_scan)
         self._scan_panel.abort_requested.connect(self._scanner.abort)
@@ -1060,6 +1063,23 @@ class TCTMainWindow(QMainWindow):
             voltage_range_V=float(rng) if rng else 3000.0,
             max_points=250_000,
         )
+
+    @Slot(object)
+    def _open_in_planner(self, cfg) -> None:
+        """Convert the Scan panel's current quick-scan parameters into an
+        editable ScanPlan and load it into the Scan Planner tab (proven
+        point-order equivalence — same scan, now refinable)."""
+        try:
+            plan = plan_from_scan_config(cfg)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Cannot convert scan", str(exc))
+            return
+        self._planner_panel.set_plan(plan)
+        for i in range(self._tabs.count()):
+            if self._tabs.tabText(i) == "Scan Planner":
+                self._tabs.setCurrentIndex(i)
+                break
+        notify("Quick-scan parameters opened in the Scan Planner", "info")
 
     @Slot()
     def _on_arm_hv_requested(self) -> None:
