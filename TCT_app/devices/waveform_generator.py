@@ -87,6 +87,12 @@ def discover_lan_instruments(timeout: float = 2.5) -> list[str]:
     Browses the standard LXI service types (``_lxi``, ``_vxi-11``, ``_scpi-raw``,
     ``_hislip``).  Returns ``TCPIP0::<ip>::INSTR`` strings.  Requires the pure-
     Python ``zeroconf`` package.
+
+    **Blocks for ``timeout`` seconds** (the browse window) — call it OFF the GUI
+    thread, or it freezes the dialog.  On a **managed switch** mDNS multicast is
+    frequently dropped by IGMP-snooping / multicast filtering, so this legitimately
+    returns ``[]`` there; treat an empty result as "none found, enter the address
+    manually", not as an error.
     """
     try:
         from zeroconf import Zeroconf, ServiceBrowser
@@ -115,15 +121,32 @@ def discover_lan_instruments(timeout: float = 2.5) -> list[str]:
         def remove_service(self, *_):
             pass
 
-    zc = Zeroconf()
+    try:
+        zc = Zeroconf()
+    except Exception as exc:
+        # No usable multicast interface (VPN/firewall/permission) — surface a
+        # clean, actionable error instead of a raw OSError bubbling to the GUI.
+        raise DeviceError(
+            f"Could not start mDNS discovery ({exc}). Enter the instrument's "
+            "IP / VISA address manually."
+        ) from exc
     listener = _Listener()
     services = ["_lxi._tcp.local.", "_vxi-11._tcp.local.",
                 "_scpi-raw._tcp.local.", "_hislip._tcp.local."]
+    # Hold a reference to every ServiceBrowser for the whole browse window:
+    # a dropped reference can be garbage-collected mid-scan, silently ending
+    # discovery before anything is found.
+    browsers: list[Any] = []
     try:
         for svc in services:
-            ServiceBrowser(zc, svc, listener)
+            browsers.append(ServiceBrowser(zc, svc, listener))
         time.sleep(timeout)
     finally:
+        for b in browsers:
+            try:
+                b.cancel()
+            except Exception:
+                pass
         zc.close()
     return sorted(found.values())
 
@@ -163,7 +186,14 @@ class WaveformGenerator(BaseDevice):
         self._timeout_ms = int(timeout_ms)
         self._instr: Any = None
         self._rm: Any = None
-        self._output_on = False
+        # Tri-state output record: True = on/armed, False = off, None = unknown.
+        # It is the DRIVER's authoritative record of the last *commanded* state
+        # (output_on/output_off), not a live query — the laser panel's armed
+        # indicator reads it so it tracks real transitions (including
+        # scan-thread arming) instead of independent button bookkeeping.
+        # Starts None: until we command or read it back, the state is genuinely
+        # unknown (real hardware can retain a prior ON state across sessions).
+        self._output_on: bool | None = None
 
     # ------------------------------------------------------------------ #
     # BaseDevice                                                          #
@@ -172,6 +202,9 @@ class WaveformGenerator(BaseDevice):
     def connect(self) -> None:
         if self.simulation:
             self._connected = True
+            # Simulated hardware has no retained state — it is off until the
+            # user (or a scan) explicitly enables it, so this is a known False.
+            self._output_on = False
             logger.info("WaveformGenerator connected (simulation)")
             return
         try:
@@ -195,6 +228,14 @@ class WaveformGenerator(BaseDevice):
         logger.info("WaveformGenerator connected (%s): %s", self._vendor, idn)
         self._apply_defaults()
         self._connected = True
+        # _apply_defaults() does NOT touch the output on/off state (connecting
+        # must never arm the laser trigger — safety rule), so the real output
+        # state is whatever the instrument retained: leave it unknown (None) so
+        # the panel shows "unknown" rather than a possibly-false "off".
+        # TODO(manual needed): read it back with the DG4000 output-state query
+        # (":OUTPut{ch}:STATe?" is the SCPI-99 counterpart of the set command in
+        # _WFG_CMDS but is unverified against the DG4162 manual) to resolve the
+        # unknown into a real True/False on connect.
 
     def test_connection(self) -> str:
         """Query *IDN? and return the reply — confirms the VISA link."""
@@ -263,6 +304,20 @@ class WaveformGenerator(BaseDevice):
         self._send("output_off")
         self._output_on = False
         logger.debug("WaveformGenerator CH%d output OFF", self._ch)
+
+    @property
+    def output_is_on(self) -> bool | None:
+        """Best-known output state: ``True`` on/armed, ``False`` off, ``None``
+        unknown.
+
+        The DRIVER's authoritative record of the last commanded state, not a
+        live instrument query — so a UI armed indicator can track real
+        transitions (button presses AND scan-thread arming) instead of keeping
+        its own independent bookkeeping.  ``None`` means genuinely unknown (see
+        the connect() note): freshly connected hardware may retain a prior ON
+        state that was neither commanded here nor read back.
+        """
+        return self._output_on
 
     def burst(self, n_pulses: int) -> None:
         """Output exactly *n_pulses* pulses then stop."""

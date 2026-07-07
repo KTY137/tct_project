@@ -1,7 +1,7 @@
 """Laser / trigger panel (PDL 800 manual settings + waveform generator control)."""
 from __future__ import annotations
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QLineEdit, QDoubleSpinBox,
@@ -33,6 +33,18 @@ class LaserPanel(QWidget):
         # BiasPanel; see refresh_theme() below.
         self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
         self._build_ui()
+        # The output/armed chip must reflect the REAL driver output state, not
+        # last-button bookkeeping — otherwise a scan arming the trigger, or a
+        # failed apply while disconnected, leaves the chip lying.  Poll the
+        # driver's cached state (a plain attribute read — no hardware I/O) so the
+        # indicator tracks transitions the panel didn't initiate (e.g. the scan
+        # thread's output_on()).  QTimer(self) stops itself when the panel is
+        # destroyed on a soft-reload, so no explicit teardown is needed.
+        self._output_poll = QTimer(self)
+        self._output_poll.setInterval(750)
+        self._output_poll.timeout.connect(self._refresh_output_chip)
+        self._output_poll.start()
+        self._refresh_output_chip()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -238,8 +250,19 @@ class LaserPanel(QWidget):
 
     def _apply_wfg(self) -> None:
         set_button_busy(self._btn_apply, True, "Applying...")
+        # A disconnected real driver silently drops every write (the setters
+        # no-op when there is no VISA session), so "configured" would be a lie —
+        # the exact "settings couldn't pass to the wavegen" bench failure.
+        # Detect it up front and report "staged" instead of a false success.
+        live = bool(getattr(self._wfg, "connected", False)
+                    or getattr(self._wfg, "simulation", False))
         ok = False
         try:
+            # Load first: it changes how the generator interprets the amplitude
+            # that follows (High-Z vs 50 Ω is a silent up-to-2x error), so the
+            # whole batch stays self-consistent — mirrors the driver's
+            # _apply_defaults() ordering.
+            self._wfg.set_output_load(self._load_combo.currentData())
             self._wfg.set_frequency(self._spin_freq.value())
             if self._pulse_mode.currentText() == "Duty cycle":
                 self._wfg.set_duty_cycle(self._spin_duty.value())
@@ -247,8 +270,13 @@ class LaserPanel(QWidget):
                 self._wfg.set_pulse_width(self._spin_width.value())
             self._wfg.set_amplitude(self._spin_ampl.value())
             self._wfg.set_offset(self._spin_offset.value())
-            self._chip_wfg.set_status("Wavegen configured", "good")
-            ok = True
+            if live:
+                self._chip_wfg.set_status("Wavegen configured", "good")
+                ok = True
+            else:
+                self._chip_wfg.set_status(
+                    "Staged — wavegen not connected", "warn",
+                    "Values cached; they are sent when you Connect the wavegen.")
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
             self._chip_wfg.set_status("Wavegen error", "crit", str(exc))
@@ -257,6 +285,8 @@ class LaserPanel(QWidget):
             set_button_busy(self._btn_apply, False)
         if ok:
             flash_button(self._btn_apply, "good", "Applied")
+        elif not live:
+            flash_button(self._btn_apply, "warn", "Staged")
 
     def _on_load_changed(self, idx: int) -> None:
         try:
@@ -271,7 +301,9 @@ class LaserPanel(QWidget):
     def _output_on(self) -> None:
         try:
             self._wfg.output_on()
-            self._chip_output.set_status("Output armed", "armed")
+            # Reflect the driver's real post-command state rather than assuming
+            # success (the driver flips its record only after the write path).
+            self._refresh_output_chip()
             flash_button(self._btn_on, "warn", "Armed")
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
@@ -281,12 +313,42 @@ class LaserPanel(QWidget):
     def _output_off(self) -> None:
         try:
             self._wfg.output_off()
-            self._chip_output.set_status("Output off", "good")
+            self._refresh_output_chip()
             flash_button(self._btn_off, "good", "Off")
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
             self._chip_output.set_status("Output error", "crit", str(exc))
             QMessageBox.warning(self, "WFG Error", str(exc))
+
+    def _refresh_output_chip(self) -> None:
+        """Repaint the armed/output chip from the driver's REAL output record.
+
+        Safety-relevant: the wavegen output is the PDL 800 laser trigger, so the
+        indicator must never show "off" while the output is actually armed
+        (e.g. a scan enabled it).  Reads only cached driver state — no hardware
+        I/O — so it is safe to call from a timer.  Tri-state:
+          * connected + on   -> "Output ARMED" (armed)
+          * connected + off  -> "Output off" (good)
+          * connected + None -> "Output state unknown" (warn): hardware may
+            retain a prior ON state we neither commanded nor read back.
+          * not connected    -> "Output --" (neutral): no session to trust.
+        """
+        try:
+            live = bool(getattr(self._wfg, "connected", False)
+                        or getattr(self._wfg, "simulation", False))
+            state = getattr(self._wfg, "output_is_on", None)
+        except Exception:
+            return
+        if not live:
+            self._chip_output.set_status("Output --", "neutral")
+        elif state is True:
+            self._chip_output.set_status("Output ARMED", "armed")
+        elif state is False:
+            self._chip_output.set_status("Output off", "good")
+        else:
+            self._chip_output.set_status("Output state unknown", "warn",
+                                         "Wavegen output state not read back on "
+                                         "connect — toggle Output ON/OFF to define it.")
 
     def _test_connection(self) -> None:
         from PySide6.QtCore import Qt
