@@ -40,6 +40,10 @@ from gui.device_panel import DeviceManagerWindow, device_state
 from gui.liveness import LivenessMonitor
 from gui.settings_window import SettingsWindow
 from gui.status_bus import notify
+from gui.status_widgets import StatusChip, StatusPill
+from gui.planner_panel import PlannerPanel
+from gui.qt_danger_gate import QtDangerGate
+from controller.scan_plan_validator import PlanLimits
 
 logger = logging.getLogger(__name__)
 
@@ -95,46 +99,6 @@ class _QtDeviceDebugHandler(logging.Handler):
             self.bridge.record.emit(self.format(record))
         except Exception:
             pass
-
-
-class _StatusLight(QFrame):
-    """Small coloured dot + label showing one device's connection state.
-
-    Colours match the Device Manager window:
-        green  = connected (real hardware)
-        purple = connected in simulation mode
-        grey   = disconnected
-    """
-
-    _COLORS = {
-        "connected":    "#27ae60",   # green
-        "simulated":    "#8e44ad",   # purple
-        "disconnected": "#b0b6bf",   # grey
-    }
-
-    def __init__(self, name: str) -> None:
-        super().__init__()
-        self.setObjectName("statusLight")
-        # A bordered pill so every device reads as its own distinct chip.
-        self.setStyleSheet(
-            "#statusLight { border: 1px solid rgba(128,128,128,0.40); "
-            "border-radius: 9px; }"
-        )
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(9, 2, 10, 2)
-        lay.setSpacing(6)
-        self._dot = QLabel("●")
-        self._dot.setStyleSheet(f"color: {self._COLORS['disconnected']}; font-size: 14px;")
-        lay.addWidget(self._dot)
-        lbl = QLabel(name)
-        lbl.setStyleSheet("font-weight: 600;")
-        lay.addWidget(lbl)
-
-    def set_state(self, state: str) -> None:
-        self._dot.setStyleSheet(
-            f"color: {self._COLORS.get(state, self._COLORS['disconnected'])}; font-size: 14px;"
-        )
-        self.setToolTip(state.capitalize())
 
 
 class _BgTask(QObject):
@@ -199,11 +163,16 @@ class _ScanBridge(QObject):
     z_focus_pt   = Signal(float, float)  # z_mm, amplitude_V
     z_focus_done = Signal(float)         # best_z_mm
     vscan_point  = Signal(float, float, float)  # voltage_V, charge_pC, current_A
+    manual_pause = Signal(str)           # plan executor ManualPauseStep prompt
 
 
 class TCTMainWindow(QMainWindow):
     _bias_poll_stop_requested = Signal()
     _liveness_stop_requested = Signal()
+    # State-machine transitions fire synchronously from the scan worker
+    # thread; this signal hops them onto the GUI thread (queued) before any
+    # widget is touched (StatusChip repolish / setEnabled are not thread-safe).
+    _state_changed_sig = Signal(object, object)   # old, new AppState
 
     def __init__(self, config_path: str = "configs/devices.yaml") -> None:
         super().__init__()
@@ -225,7 +194,12 @@ class TCTMainWindow(QMainWindow):
         self._settings_window: SettingsWindow | None = None
         self._settings = QSettings("TCT", "TCTSetup")
         self._theme_mode = str(self._settings.value("theme", "light"))
-        self._sm.add_callback(self._on_state_change)
+        self._state_changed_sig.connect(self._on_state_change)
+        self._sm.add_callback(
+            lambda old, new: self._state_changed_sig.emit(old, new))
+        # True while the active run was launched from the Scan Planner —
+        # gates which panel receives progress/finished/error (see dispatchers).
+        self._plan_run_active = False
         self._build_log_dock()
         self._build_device_debug_dock()
         self._build_menu_and_toolbar()
@@ -260,6 +234,12 @@ class TCTMainWindow(QMainWindow):
         )
         self._analysis_panel  = AnalysisPanel()
         self._calib_panel     = CalibrationPanel(self._devices)
+        # Scan-routine planner (Recipe Tree) + its danger-confirm gate.  The
+        # gate lives here (parented to the window) because the plan executor
+        # calls gate.confirm() from the scan worker thread; teardown must
+        # shutdown() it so a pending confirm can never block app exit.
+        self._planner_panel   = PlannerPanel(parent=self)
+        self._danger_gate     = QtDangerGate(parent=self)
 
         # ── Layout ────────────────────────────────────────────────────
         central = QWidget()
@@ -275,16 +255,27 @@ class TCTMainWindow(QMainWindow):
         # Always visible regardless of the active tab (bias is safety-critical).
         status_strip = QHBoxLayout()
         status_strip.setSpacing(6)
-        self._lights: dict[str, _StatusLight] = {}
+        self._lights: dict[str, StatusPill] = {}
         for name in self._devices.named_devices():
-            light = _StatusLight(name)
+            light = StatusPill(name, "neutral")
             self._lights[name] = light
             status_strip.addWidget(light)
         status_strip.addStretch()
-        self._lbl_bias = QLabel("Bias: —")
-        self._lbl_bias.setToolTip("Live bias voltage / current / compliance")
-        self._lbl_bias.setStyleSheet("font-weight:600; padding:2px 8px;")
-        status_strip.addWidget(self._lbl_bias)
+        self._chip_bias_v = StatusChip("HV --", "neutral", min_width=84)
+        self._chip_bias_v.setToolTip("Live bias voltage on the primary HV channel")
+        self._chip_bias_i = StatusChip("I --", "neutral", min_width=86)
+        self._chip_bias_i.setToolTip("Live leakage/current on the primary HV channel")
+        self._chip_bias_comp = StatusChip("Compliance --", "neutral", min_width=112)
+        self._chip_bias_comp.setToolTip("Primary HV channel compliance state")
+        self._chip_motion = StatusChip("Motion offline", "neutral", min_width=112)
+        self._chip_motion.setToolTip("Motor connection and homing state")
+        self._chip_scan = StatusChip(f"Scan {self._sm.state.name}", "neutral", min_width=96)
+        self._chip_scan.setToolTip("Application scan state")
+        for chip in (
+            self._chip_bias_v, self._chip_bias_i, self._chip_bias_comp,
+            self._chip_motion, self._chip_scan,
+        ):
+            status_strip.addWidget(chip)
         strip_frame = QFrame()
         strip_frame.setLayout(status_strip)
         # Horizontal scroll so the device lights + bias readout never clip on a
@@ -309,6 +300,7 @@ class TCTMainWindow(QMainWindow):
         self._tabs.addTab(_scrollable(self._scope_panel), "Oscilloscope")
         self._tabs.addTab(_scrollable(self._laser_panel), "Laser / Trigger")
         self._tabs.addTab(_scrollable(self._scan_panel), "Scan")
+        self._tabs.addTab(_scrollable(self._planner_panel), "Scan Planner")
         self._tabs.addTab(_scrollable(self._bias_panel), "Bias Supply")
         self._tabs.addTab(_scrollable(self._calib_panel), "Calibration")
         self._tabs.addTab(_scrollable(self._monitor_panel), "Monitor")
@@ -336,6 +328,25 @@ class TCTMainWindow(QMainWindow):
         self._scanner.on_finished   = lambda:         self._bridge.finished.emit()
         self._scanner.on_error      = lambda msg:     self._bridge.error.emit(msg)
         self._scanner.on_vscan_point = lambda v, c, i: self._bridge.vscan_point.emit(v, c, i)
+        self._scanner.on_manual_pause = lambda msg:   self._bridge.manual_pause.emit(msg)
+
+        # Planner panel: a plan run fires the same controller callbacks, so it
+        # subscribes via small dispatchers that forward only when the active
+        # run was launched from the planner (no cross-talk from classic scans).
+        # Bridge signals are queued → GUI thread; the panel's own requests
+        # route back into the safety-gated controller here — never device
+        # access from the panel itself.
+        self._bridge.progress.connect(
+            lambda d, t: self._plan_run_active
+            and self._planner_panel.on_progress(d, t))
+        self._bridge.finished.connect(self._on_plan_maybe_finished)
+        self._bridge.error.connect(
+            lambda msg: self._plan_run_active
+            and self._planner_panel.on_error(msg))
+        self._bridge.manual_pause.connect(self._on_plan_manual_pause)
+        self._planner_panel.arm_hv_requested.connect(self._on_arm_hv_requested)
+        self._planner_panel.start_plan_requested.connect(self._start_plan_from_planner)
+        self._planner_panel.abort_requested.connect(self._scanner.abort)
 
         self._scan_panel.start_requested.connect(self._start_scan)
         self._scan_panel.abort_requested.connect(self._scanner.abort)
@@ -558,8 +569,7 @@ class TCTMainWindow(QMainWindow):
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tb.addWidget(spacer)
-        self._lbl_state = QLabel(f"State: {self._sm.state.name}")
-        self._lbl_state.setStyleSheet("padding: 0 10px; font-weight: 600;")
+        self._lbl_state = StatusChip(f"State: {self._sm.state.name}", "neutral")
         tb.addWidget(self._lbl_state)
         # objectNames for the green/red QSS accents
         for act, name in ((self._act_connect, "connectBtn"),
@@ -573,6 +583,17 @@ class TCTMainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             apply_theme(app, self._theme_mode)
+        # apply_theme() repaints every QSS hook globally, but axis_color()-based
+        # instance styles (motor axis rails, bias amber, plot pens) are baked at
+        # construction — panels expose refresh_theme() to re-resolve them live.
+        for panel in (getattr(self, "_motor_panel", None),
+                      getattr(self, "_bias_panel", None),
+                      getattr(self, "_planner_panel", None)):
+            if panel is not None and hasattr(panel, "refresh_theme"):
+                try:
+                    panel.refresh_theme(self._theme_mode)
+                except Exception:
+                    logger.debug("panel refresh_theme failed", exc_info=True)
         self._settings.setValue("theme", self._theme_mode)
 
     def _about(self) -> None:
@@ -618,7 +639,21 @@ class TCTMainWindow(QMainWindow):
         for disp, light in self._lights.items():
             dev = named.get(disp)
             if dev is not None:
-                light.set_state(device_state(dev))
+                state = device_state(dev)
+                label = {
+                    "connected": f"{disp} on",
+                    "simulated": f"{disp} sim",
+                    "disconnected": f"{disp} off",
+                }.get(state, disp)
+                light.set_status(label, state, state.capitalize())
+        motor = getattr(self._devices, "motor", None)
+        if hasattr(self, "_chip_motion"):
+            if motor is None or not getattr(motor, "connected", False):
+                self._chip_motion.set_status("Motion offline", "neutral")
+            elif getattr(motor, "homed", False):
+                self._chip_motion.set_status("Motion homed", "good")
+            else:
+                self._chip_motion.set_status("Motion not homed", "warn")
 
     @Slot(str)
     def _on_device_lost(self, name: str) -> None:
@@ -637,8 +672,9 @@ class TCTMainWindow(QMainWindow):
         """Update the bias strip from a reading delivered by the _BiasPoller
         thread (None = supply unavailable).  Pure widget work — no I/O here."""
         if r is None:
-            self._lbl_bias.setText("Bias: —")
-            self._lbl_bias.setStyleSheet("font-weight:600; padding:2px 8px;")
+            self._chip_bias_v.set_status("HV --", "neutral")
+            self._chip_bias_i.set_status("I --", "neutral")
+            self._chip_bias_comp.set_status("Compliance --", "neutral")
             return
         compliant = bool(getattr(r, "compliant", False))
         # Log once on the transition into compliance (don't spam the 1 s timer).
@@ -646,12 +682,13 @@ class TCTMainWindow(QMainWindow):
             logger.warning("Bias supply hit COMPLIANCE: %.1f V, %.3f µA",
                            r.voltage_V, r.current_A * 1e6)
         self._bias_compliant_prev = compliant
-        flag = "COMPLIANT" if compliant else "OK"
-        color = "#c0392b" if compliant else "#27ae60"
-        self._lbl_bias.setText(
-            f"Bias: {r.voltage_V:+.1f} V   I: {r.current_A*1e6:+.3f} µA   {flag}"
+        hv_state = "armed" if abs(float(r.voltage_V)) > 1.0 else "good"
+        self._chip_bias_v.set_status(f"HV {r.voltage_V:+.1f} V", hv_state)
+        self._chip_bias_i.set_status(f"I {r.current_A*1e6:+.3f} uA", hv_state)
+        self._chip_bias_comp.set_status(
+            "Compliance HIT" if compliant else "Compliance OK",
+            "crit" if compliant else "good",
         )
-        self._lbl_bias.setStyleSheet(f"font-weight:600; padding:2px 8px; color:{color};")
 
     def _safe_bias_shutdown(self) -> None:
         """Ramp the bias to 0 V and disable the output before any teardown, so
@@ -742,6 +779,13 @@ class TCTMainWindow(QMainWindow):
             self._liveness_thread.wait(4000)
             self._liveness_thread = None
             self._liveness = None
+        # Release any gate.confirm() blocked in the scan thread FIRST, so a
+        # pending danger dialog can never hold up abort/teardown.
+        if getattr(self, "_danger_gate", None) is not None:
+            try:
+                self._danger_gate.shutdown()
+            except Exception:
+                pass
         try:
             self._scanner.abort()
         except Exception:
@@ -751,6 +795,7 @@ class TCTMainWindow(QMainWindow):
                       (getattr(self, "_intensity_panel", None), "shutdown"),
                               (getattr(self, "_scope_panel", None),   "shutdown"),
                               (getattr(self, "_calib_panel", None),   "shutdown"),
+                              (getattr(self, "_planner_panel", None), "shutdown"),
                               (getattr(self, "_monitor_panel", None), "stop_polling")):
             if panel is not None and hasattr(panel, method):
                 try:
@@ -834,6 +879,19 @@ class TCTMainWindow(QMainWindow):
             self._bias_panel.rebuild(self._devices.bias_channels)
         except Exception:
             logger.debug("bias panel rebuild failed", exc_info=True)
+        # Connect may have refined scope.n_channels from *IDN? (capability
+        # clamp); resize the scope panel's channel cards to match (no-op when
+        # the channel set is unchanged, reads the attribute only — no I/O).
+        try:
+            self._scope_panel.rebuild_channels()
+        except Exception:
+            logger.debug("scope panel rebuild failed", exc_info=True)
+        # Push real device-derived plan limits to the planner (it starts with
+        # conservative defaults; this re-locks Start against the new limits).
+        try:
+            self._planner_panel.set_limits(self._plan_limits())
+        except Exception:
+            logger.debug("planner set_limits failed", exc_info=True)
         if err:
             QMessageBox.critical(self, "Connection Failed", err)
             self._act_connect.setEnabled(True)
@@ -976,8 +1034,106 @@ class TCTMainWindow(QMainWindow):
     # State updates                                                       #
     # ------------------------------------------------------------------ #
 
+    # ------------------------------------------------------------------ #
+    # Scan-routine planner wiring                                          #
+    # ------------------------------------------------------------------ #
+
+    def _plan_limits(self) -> PlanLimits:
+        """PlanLimits from the live device config — the motor's SoftwareLimits
+        and the bias supply's voltage range (conservative defaults when a
+        device doesn't expose them)."""
+        lim = getattr(self._devices.motor, "limits", None)
+        try:
+            rng = self._devices.bias_supply.voltage_range_V
+        except Exception:
+            rng = None
+        return PlanLimits(
+            x_min_mm=lim.x_min if lim else -5.0,
+            x_max_mm=lim.x_max if lim else 5.0,
+            y_min_mm=lim.y_min if lim else -5.0,
+            y_max_mm=lim.y_max if lim else 5.0,
+            z_min_mm=lim.z_min if lim else -5.0,
+            z_max_mm=lim.z_max if lim else 5.0,
+            voltage_range_V=float(rng) if rng else 3000.0,
+            max_points=250_000,
+        )
+
+    @Slot()
+    def _on_arm_hv_requested(self) -> None:
+        """Panel Arm-HV (already user-confirmed in the panel's own dialog) →
+        controller latch, reflected back so the panel can unlock Start."""
+        try:
+            self._scanner.arm_hv(True)
+            self._planner_panel.set_hv_armed(True)
+        except Exception as exc:
+            notify(f"Arm HV failed: {exc}", "error")
+            self._planner_panel.set_hv_armed(False)
+
+    @Slot(object)
+    def _start_plan_from_planner(self, plan) -> None:
+        if not self._sm.can(AppState.RUNNING):
+            # Any refusal un-arms, same as the exception path below — the
+            # documented contract is "a refused start never leaves HV armed".
+            self._scanner.arm_hv(False)
+            self._planner_panel.set_hv_armed(False)
+            QMessageBox.warning(self, "Not ready",
+                                "Cannot start a plan in the current state.")
+            return
+        try:
+            self._scanner.start_plan(plan, self._plan_limits(), self._danger_gate)
+            self._plan_run_active = True
+        except Exception as exc:
+            # A refused start consumes the arm latch (controller side) — keep
+            # the panel's Start locked in step.
+            self._planner_panel.set_hv_armed(False)
+            QMessageBox.critical(self, "Plan refused", str(exc))
+
+    @Slot()
+    def _on_plan_maybe_finished(self) -> None:
+        """bridge.finished for the planner: forward only for a plan run, and
+        clear the flag so later classic scans don't leak into the panel."""
+        if self._plan_run_active:
+            self._plan_run_active = False
+            self._planner_panel.on_finished()
+
+    @Slot(str)
+    def _on_plan_manual_pause(self, prompt: str) -> None:
+        """The plan executor hit a ManualPauseStep: surface the operator
+        prompt; Resume continues the plan, Abort stops it fail-safe."""
+        box = QMessageBox(QMessageBox.Information, "Manual step",
+                          prompt or "Manual intervention required.", parent=self)
+        resume = box.addButton("Resume plan", QMessageBox.AcceptRole)
+        box.addButton("Abort plan", QMessageBox.RejectRole)
+        box.exec()
+        if box.clickedButton() is resume:
+            self._scanner.resume()
+        else:
+            self._scanner.abort()
+
     def _on_state_change(self, old: AppState, new: AppState) -> None:
-        self._lbl_state.setText(f"State: {new.name}")
+        state_map = {
+            AppState.DISCONNECTED: "neutral",
+            AppState.CONNECTED: "info",
+            AppState.HOMED: "info",
+            AppState.CONFIGURED: "info",
+            AppState.READY: "good",
+            AppState.RUNNING: "busy",
+            AppState.PAUSED: "warn",
+            AppState.FINISHED: "good",
+            AppState.ABORTED: "warn",
+            AppState.ERROR: "crit",
+        }
+        visual = state_map.get(new, "neutral")
+        self._lbl_state.set_status(f"State: {new.name}", visual)
+        if hasattr(self, "_chip_scan"):
+            self._chip_scan.set_status(f"Scan {new.name}", visual)
+        panel = getattr(self, "_planner_panel", None)
+        if panel is not None:
+            # Only a planner-launched run drives the panel's running state; a
+            # terminal transition always releases it (flag already cleared).
+            running = getattr(self, "_plan_run_active", False) and \
+                new in (AppState.RUNNING, AppState.PAUSED)
+            panel.set_running(running)
         self._status.showMessage(f"State: {new.name}")
 
     def _on_status_message(self, text: str, level: str) -> None:
