@@ -83,11 +83,14 @@ def test_no_setter_enables_output_as_side_effect() -> None:
 
 def test_apply_defaults_sends_offset_and_load() -> None:
     """offset_V and output_load are the bipolar-square / amplitude-scaling
-    knobs — verify they are actually written, not silently dropped."""
+    knobs — verify they are actually written, not silently dropped.  The load
+    must go out as the SOURCED :OUTPut:LOAD, never :OUTPut:IMPedance (which is
+    not in the DG4000 manual — docs/research/pdl800_trigger_wavegen_lan.md)."""
     wfg, fake = _wired_wfg(offset_V=1.65, output_load="INFinity")
     wfg._apply_defaults()
     assert any("OFFS" in w.upper() and "1.65" in w for w in fake.writes), fake.writes
-    assert any("IMP" in w.upper() and "INF" in w.upper() for w in fake.writes), fake.writes
+    assert any("LOAD" in w.upper() and "INF" in w.upper() for w in fake.writes), fake.writes
+    assert not any("IMP" in w.upper() for w in fake.writes), fake.writes
 
 
 def test_setters_reach_instrument_when_connected() -> None:
@@ -151,3 +154,136 @@ def test_disconnect_only_disables_a_known_on_output() -> None:
     assert wfg.output_is_on is None
     wfg.disconnect()
     assert not any("STAT" in w.upper() for w in fake.writes), fake.writes
+
+
+# --------------------------------------------------------------------------- #
+# Load: sourced :OUTP:LOAD, applied BEFORE amplitude (the half/2x trap)        #
+# --------------------------------------------------------------------------- #
+
+def test_output_load_applied_before_amplitude() -> None:
+    """LOAD reinterprets every voltage that follows, so it must be written
+    before the amplitude — otherwise the displayed≠delivered 2x error persists
+    (docs/research/pdl800_trigger_wavegen_lan.md, DG4000 manual p.202/518)."""
+    wfg, fake = _wired_wfg(output_load=50, amplitude_V=2.0)
+    wfg._apply_defaults()
+    load_idx = next(i for i, w in enumerate(fake.writes) if "LOAD" in w.upper())
+    ampl_idx = next(i for i, w in enumerate(fake.writes)
+                    if "VOLT" in w.upper()
+                    and not any(t in w.upper() for t in ("OFFS", "HIGH", "LOW")))
+    assert load_idx < ampl_idx, fake.writes
+    assert any("LOAD" in w.upper() and "50" in w for w in fake.writes), fake.writes
+    assert not any("IMP" in w.upper() for w in fake.writes), fake.writes
+
+
+def test_config_output_load_50_roundtrips_to_wire() -> None:
+    """The shipped devices.yaml sets output_load: 50 (the 50 Ω PDL trigger
+    input) and that value reaches the wire as the sourced :OUTP:LOAD 50."""
+    import yaml
+    from pathlib import Path
+    cfg_path = Path(__file__).resolve().parents[1] / "configs" / "devices.yaml"
+    wfg_cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["waveform_generator"]
+    assert wfg_cfg["output_load"] == 50, wfg_cfg["output_load"]
+    wfg, fake = _wired_wfg(output_load=wfg_cfg["output_load"],
+                           vendor=wfg_cfg.get("vendor", "rigol"))
+    wfg._apply_defaults()
+    assert any("LOAD" in w.upper() and "50" in w for w in fake.writes), fake.writes
+    assert not any("IMP" in w.upper() for w in fake.writes), fake.writes
+
+
+# --------------------------------------------------------------------------- #
+# Duty cycle: sourced SQUare:DCYCle node, clamped to the manual's valid range  #
+# --------------------------------------------------------------------------- #
+
+def test_duty_cycle_uses_sourced_square_node() -> None:
+    wfg, fake = _wired_wfg(frequency_hz=1000.0)
+    fake.writes.clear()
+    wfg.set_duty_cycle(50.0)
+    duty = [w for w in fake.writes if "DCYC" in w.upper()]
+    assert duty, fake.writes
+    assert all("SQU" in w.upper() for w in duty), duty      # not FUNCtion:PULSe:DCYCle
+    assert any("50.000" in w for w in duty), duty
+
+
+def test_duty_cycle_clamped_below_floor() -> None:
+    """≤10 MHz → valid 20–80 %; a 10 % request must clamp to 20 %, never sent
+    raw (DG4000 manual p.345)."""
+    wfg, fake = _wired_wfg(frequency_hz=1000.0)
+    fake.writes.clear()
+    wfg.set_duty_cycle(10.0)
+    duty = [w for w in fake.writes if "DCYC" in w.upper()]
+    assert any("20.000" in w for w in duty), duty
+    assert not any("10.000" in w for w in duty), duty
+
+
+def test_duty_cycle_clamped_above_ceiling() -> None:
+    wfg, fake = _wired_wfg(frequency_hz=1000.0)
+    fake.writes.clear()
+    wfg.set_duty_cycle(95.0)
+    duty = [w for w in fake.writes if "DCYC" in w.upper()]
+    assert any("80.000" in w for w in duty), duty
+
+
+def test_duty_cycle_range_narrows_with_frequency() -> None:
+    """10 MHz < f ≤ 40 MHz → 40–60 %; a 20 % request clamps to 40 %."""
+    wfg, fake = _wired_wfg(frequency_hz=20e6)
+    fake.writes.clear()
+    wfg.set_duty_cycle(20.0)
+    duty = [w for w in fake.writes if "DCYC" in w.upper()]
+    assert any("40.000" in w for w in duty), duty
+
+
+# --------------------------------------------------------------------------- #
+# Levels path: sourced VOLT:HIGH / VOLT:LOW clean 0→+V square                  #
+# --------------------------------------------------------------------------- #
+
+def test_set_levels_emits_sourced_high_low_and_bookkeeping() -> None:
+    wfg, fake = _wired_wfg()
+    fake.writes.clear()
+    wfg.set_levels(0.0, 2.5)
+    assert any("HIGH" in w.upper() and "2.5" in w for w in fake.writes), fake.writes
+    assert any("LOW" in w.upper() and "0.0000" in w for w in fake.writes), fake.writes
+    assert wfg._amplitude == pytest.approx(2.5)     # high - low
+    assert wfg._offset == pytest.approx(1.25)       # (high + low) / 2
+    # Setting rails must never arm the trigger.
+    assert not any("STAT" in w.upper() for w in fake.writes), fake.writes
+    assert wfg.output_is_on is None
+
+
+def test_set_levels_rejects_high_not_above_low() -> None:
+    from devices.base import DeviceError
+    wfg, _ = _wired_wfg()
+    with pytest.raises(DeviceError):
+        wfg.set_levels(2.5, 2.5)
+    with pytest.raises(DeviceError):
+        wfg.set_levels(1.0, 0.0)
+
+
+def test_levels_config_takes_square_path_not_amplitude() -> None:
+    """When both rails are configured, connect()/_apply_defaults drives a
+    SQUare via VOLT:HIGH/LOW and does NOT emit amplitude or offset."""
+    wfg, fake = _wired_wfg(level_low_V=0.0, level_high_V=2.5)
+    wfg._apply_defaults()
+    assert any("FUNC" in w.upper() and "SQU" in w.upper() for w in fake.writes), fake.writes
+    assert any("HIGH" in w.upper() and "2.5" in w for w in fake.writes), fake.writes
+    assert any("LOW" in w.upper() and "0.0000" in w for w in fake.writes), fake.writes
+    assert not any("OFFS" in w.upper() for w in fake.writes), fake.writes
+    bare_ampl = [w for w in fake.writes if "VOLT" in w.upper()
+                 and not any(t in w.upper() for t in ("HIGH", "LOW", "OFFS"))]
+    assert not bare_ampl, bare_ampl
+    # Load still first, and the levels path still never arms the output.
+    load_idx = next(i for i, w in enumerate(fake.writes) if "LOAD" in w.upper())
+    high_idx = next(i for i, w in enumerate(fake.writes) if "HIGH" in w.upper())
+    assert load_idx < high_idx, fake.writes
+    assert not any("STAT" in w.upper() for w in fake.writes), fake.writes
+    assert wfg.output_is_on is None
+
+
+def test_levels_absent_keeps_legacy_amplitude_path() -> None:
+    """Default (no rails) is byte-for-byte the legacy amplitude+offset PULSe
+    path — the new option changes nothing unless it is set."""
+    wfg, fake = _wired_wfg(amplitude_V=3.3, offset_V=0.0)
+    wfg._apply_defaults()
+    assert any("FUNC" in w.upper() and "PULS" in w.upper() for w in fake.writes), fake.writes
+    assert any("VOLT" in w.upper() and "3.3" in w for w in fake.writes), fake.writes
+    assert any("OFFS" in w.upper() for w in fake.writes), fake.writes
+    assert not any("HIGH" in w.upper() or ":LOW" in w.upper() for w in fake.writes), fake.writes

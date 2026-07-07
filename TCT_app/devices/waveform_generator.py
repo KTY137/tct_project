@@ -9,7 +9,16 @@ Config keys (devices.yaml → waveform_generator section):
     frequency_hz:  1000
     pulse_width_s: 100e-9
     amplitude_V:   3.3
+    offset_V:      0.0
+    output_load:   50            # Ohm the generator assumes it drives (or INFinity/High-Z)
     output_channel: 1
+
+Optional clean-square trigger (opt-in; both must be set):
+    level_low_V:   0.0           # square "low" rail  (VOLT:LOW)
+    level_high_V:  2.5           # square "high" rail (VOLT:HIGH) → 0..+2.5 V
+When both are provided, connect() drives a defined ``low → high`` square via the
+sourced VOLT:HIGH/VOLT:LOW path instead of amplitude+offset.  See
+docs/research/pdl800_trigger_wavegen_lan.md.
 """
 from __future__ import annotations
 
@@ -26,38 +35,60 @@ logger = logging.getLogger(__name__)
 # ``{val}`` the value.  The Rigol DG4000 dialect differs from the generic one
 # for pulse width and amplitude — sending the generic forms to a DG4162 errors.
 _WFG_CMDS: dict[str, dict[str, str]] = {
-    "rigol": {   # Rigol DG4000 series (DG4162) programming guide
-        "function":    ":SOURce{ch}:FUNCtion PULSe",
-        "frequency":   ":SOURce{ch}:FREQuency {val:.6f}",
-        "pulse_width": ":SOURce{ch}:FUNCtion:PULSe:WIDTh {val:.3e}",
-        "duty":        ":SOURce{ch}:FUNCtion:PULSe:DCYCle {val:.3f}",
-        "amplitude":   ":SOURce{ch}:VOLTage {val:.4f}",
-        "offset":      ":SOURce{ch}:VOLTage:OFFSet {val:.4f}",
-        # Output load the generator assumes it is driving.  Rigol pre-halves
-        # the amplitude for a 50Ω load; into a High-Z scope input that reads
-        # 2× high, so this must match the real load.  "INFinity" = High-Z.
-        "load":        ":OUTPut{ch}:IMPedance {val}",
-        "output_on":   ":OUTPut{ch}:STATe ON",
-        "output_off":  ":OUTPut{ch}:STATe OFF",
-        "burst_ncyc":  ":SOURce{ch}:BURSt:NCYCles {val}",
-        "burst_on":    ":SOURce{ch}:BURSt:STATe ON",
-        "burst_mode":  ":SOURce{ch}:BURSt:MODE TRIGgered",
-        "trigger":     "*TRG",
+    # Rigol DG4000 series (DG4162).  Every command below is sourced from
+    # docs/research/pdl800_trigger_wavegen_lan.md; page refs are to the RIGOL
+    # DG4000 Series Programming Manual (ManualsLib 2521186).
+    "rigol": {
+        "function":        ":SOURce{ch}:FUNCtion PULSe",
+        "function_square": ":SOURce{ch}:FUNCtion SQUare",       # square trigger (note Q2)
+        "frequency":       ":SOURce{ch}:FREQuency {val:.6f}",
+        "pulse_width":     ":SOURce{ch}:FUNCtion:PULSe:WIDTh {val:.3e}",
+        # Square-wave duty (note p.345).  Range is frequency-dependent and is
+        # validated/clamped in set_duty_cycle().  NOTE: previously addressed as
+        # FUNCtion:PULSe:DCYCle, which is NOT in the sourced manual — corrected
+        # to the sourced SQUare form.
+        "duty":            ":SOURce{ch}:FUNCtion:SQUare:DCYCle {val:.3f}",
+        # Amplitude (Vpp): short form of VOLTage[:LEVel][:IMMediate][:AMPLitude]
+        # (note p.518).
+        "amplitude":       ":SOURce{ch}:VOLTage {val:.4f}",
+        # DC offset (note p.524).
+        "offset":          ":SOURce{ch}:VOLTage:OFFSet {val:.4f}",
+        # Explicit high/low rails — the unambiguous way to make a clean 0→+V
+        # square with no half/sign arithmetic (note p.520 / p.523).
+        "level_high":      ":SOURce{ch}:VOLTage:HIGH {val:.4f}",
+        "level_low":       ":SOURce{ch}:VOLTage:LOW {val:.4f}",
+        # Output load the generator assumes it drives (note p.202).  The DG4000
+        # command is :OUTPut:LOAD, *not* :OUTPut:IMPedance (explicit in the
+        # note).  If LOAD=High-Z (INFinity) but the cable drives the 50 Ω PDL
+        # trigger input, the delivered voltage is HALF the displayed value.
+        # "INFinity" = High-Z; must match the real cabling.
+        "load":            ":OUTPut{ch}:LOAD {val}",
+        "output_on":       ":OUTPut{ch}:STATe ON",
+        "output_off":      ":OUTPut{ch}:STATe OFF",
+        "burst_ncyc":      ":SOURce{ch}:BURSt:NCYCles {val}",
+        "burst_on":        ":SOURce{ch}:BURSt:STATe ON",
+        "burst_mode":      ":SOURce{ch}:BURSt:MODE TRIGgered",
+        "trigger":         "*TRG",
     },
-    "generic": {  # Siglent / Keysight 33xxx / Tektronix AFG style
-        "function":    "SOURce{ch}:FUNCtion PULSe",
-        "frequency":   "SOURce{ch}:FREQuency {val:.6f}",
-        "pulse_width": "SOURce{ch}:PULSe:WIDTh {val:.3e}",
-        "duty":        "SOURce{ch}:FUNCtion:PULSe:DCYCle {val:.3f}",
-        "amplitude":   "SOURce{ch}:VOLTage:AMPLitude {val:.4f}",
-        "offset":      "SOURce{ch}:VOLTage:OFFSet {val:.4f}",
-        "load":        "OUTPut{ch}:LOAD {val}",
-        "output_on":   "OUTPut{ch}:STATe ON",
-        "output_off":  "OUTPut{ch}:STATe OFF",
-        "burst_ncyc":  "SOURce{ch}:BURSt:NCYCles {val}",
-        "burst_on":    "SOURce{ch}:BURSt:STATe ON",
-        "burst_mode":  "SOURce{ch}:BURSt:MODE TRIGgered",
-        "trigger":     "*TRG",
+    # Siglent / Keysight 33xxx / Tektronix AFG (SCPI-99 standard forms; the
+    # research note sources the Rigol dialect — these mirror the SCPI-99 nodes).
+    "generic": {
+        "function":        "SOURce{ch}:FUNCtion PULSe",
+        "function_square": "SOURce{ch}:FUNCtion SQUare",
+        "frequency":       "SOURce{ch}:FREQuency {val:.6f}",
+        "pulse_width":     "SOURce{ch}:PULSe:WIDTh {val:.3e}",
+        "duty":            "SOURce{ch}:FUNCtion:SQUare:DCYCle {val:.3f}",
+        "amplitude":       "SOURce{ch}:VOLTage:AMPLitude {val:.4f}",
+        "offset":          "SOURce{ch}:VOLTage:OFFSet {val:.4f}",
+        "level_high":      "SOURce{ch}:VOLTage:HIGH {val:.4f}",
+        "level_low":       "SOURce{ch}:VOLTage:LOW {val:.4f}",
+        "load":            "OUTPut{ch}:LOAD {val}",
+        "output_on":       "OUTPut{ch}:STATe ON",
+        "output_off":      "OUTPut{ch}:STATe OFF",
+        "burst_ncyc":      "SOURce{ch}:BURSt:NCYCles {val}",
+        "burst_on":        "SOURce{ch}:BURSt:STATe ON",
+        "burst_mode":      "SOURce{ch}:BURSt:MODE TRIGgered",
+        "trigger":         "*TRG",
     },
 }
 
@@ -167,6 +198,8 @@ class WaveformGenerator(BaseDevice):
         offset_V: float = 0.0,
         output_load: str | float = "INFinity",
         output_channel: int = 1,
+        level_low_V: float | None = None,
+        level_high_V: float | None = None,
         vendor: str = "rigol",
         timeout_ms: int = 5000,
         simulation: bool = False,
@@ -182,6 +215,12 @@ class WaveformGenerator(BaseDevice):
         # a silent 2× amplitude error.
         self._output_load = output_load
         self._ch = output_channel
+        # Optional explicit square rails (VOLT:HIGH / VOLT:LOW).  When BOTH are
+        # provided, connect() drives a defined ``low → high`` square (e.g.
+        # 0 → +2.5 V) for the PDL trigger instead of the amplitude+offset pulse.
+        # Default None → unchanged legacy behaviour (amplitude+offset PULSe).
+        self._level_low = level_low_V
+        self._level_high = level_high_V
         self._vendor = vendor.lower() if vendor else "rigol"
         self._timeout_ms = int(timeout_ms)
         self._instr: Any = None
@@ -232,10 +271,14 @@ class WaveformGenerator(BaseDevice):
         # must never arm the laser trigger — safety rule), so the real output
         # state is whatever the instrument retained: leave it unknown (None) so
         # the panel shows "unknown" rather than a possibly-false "off".
-        # TODO(manual needed): read it back with the DG4000 output-state query
-        # (":OUTPut{ch}:STATe?" is the SCPI-99 counterpart of the set command in
-        # _WFG_CMDS but is unverified against the DG4162 manual) to resolve the
-        # unknown into a real True/False on connect.
+        # TODO(manual needed): resolve the unknown into a real True/False by
+        # reading the DG4000 output state on connect.  The research note
+        # docs/research/pdl800_trigger_wavegen_lan.md sources the SET commands
+        # (LOAD / VOLT / VOLT:HIGH / VOLT:LOW / SQU:DCYCle) but NOT an
+        # output-state QUERY, so ":OUTPut{ch}:STATe?" (the SCPI-99 counterpart
+        # of output_on/output_off) stays UNVERIFIED for the DG4162 — do not emit
+        # it until the manual confirms the exact query form.  Until then the
+        # panel shows an honest "unknown".
 
     def test_connection(self) -> str:
         """Query *IDN? and return the reply — confirms the VISA link."""
@@ -271,10 +314,33 @@ class WaveformGenerator(BaseDevice):
         self._pulse_width = width_s
         self._send("pulse_width", val=width_s)
 
+    @staticmethod
+    def _square_duty_limits(freq_hz: float) -> tuple[float, float]:
+        """DG4000 square-wave duty limits, frequency-dependent (note p.345):
+        ≤10 MHz → 20–80 %; ≤40 MHz → 40–60 %; >40 MHz → locked 50 %."""
+        if freq_hz <= 10e6:
+            return (20.0, 80.0)
+        if freq_hz <= 40e6:
+            return (40.0, 60.0)
+        return (50.0, 50.0)
+
     def set_duty_cycle(self, percent: float) -> None:
-        """Set the pulse duty cycle in percent (0–100)."""
-        self._duty_cycle = percent
-        self._send("duty", val=percent)
+        """Set the square-wave duty cycle (%).
+
+        Clamped to the DG4000's frequency-dependent valid range
+        (docs/research/pdl800_trigger_wavegen_lan.md, manual p.345) instead of
+        forwarding an out-of-range value the instrument would reject. Emits the
+        sourced ``:FUNCtion:SQUare:DCYCle`` command.
+        """
+        lo, hi = self._square_duty_limits(self._frequency)
+        clamped = max(lo, min(hi, float(percent)))
+        if clamped != float(percent):
+            logger.warning(
+                "WFGEN duty %.3f%% out of range for %.4g Hz; clamped to %.3f%% "
+                "(valid %.0f–%.0f%%, DG4000 manual p.345).",
+                percent, self._frequency, clamped, lo, hi)
+        self._duty_cycle = clamped
+        self._send("duty", val=clamped)
 
     def set_amplitude(self, amplitude_V: float) -> None:
         self._amplitude = amplitude_V
@@ -283,6 +349,37 @@ class WaveformGenerator(BaseDevice):
     def set_offset(self, offset_V: float) -> None:
         self._offset = offset_V
         self._send("offset", val=offset_V)
+
+    def set_levels(self, low_V: float, high_V: float) -> None:
+        """Define the square-wave rails directly (``VOLT:HIGH`` / ``VOLT:LOW``).
+
+        The sourced, unambiguous way to make a clean ``low_V → high_V`` square —
+        e.g. ``set_levels(0.0, 2.5)`` for a 0 → +2.5 V PDL trigger — avoiding the
+        amplitude/offset half-arithmetic
+        (docs/research/pdl800_trigger_wavegen_lan.md, manual p.520 / p.523).
+
+        Does NOT enable the output (arming stays an explicit caller action).
+        """
+        low = float(low_V)
+        high = float(high_V)
+        if high <= low:
+            raise DeviceError(
+                f"set_levels: high ({high} V) must be greater than low ({low} V).")
+        # PDL 800 trigger absolute-max is ±5 V at the connector (note Q1); warn
+        # if a rail could exceed it (delivered value also depends on load match).
+        if max(abs(low), abs(high)) > 5.0:
+            logger.warning(
+                "WFGEN level %.3f/%.3f V exceeds the PDL 800 trigger abs-max "
+                "(±5 V); verify the load/attenuation before enabling output.",
+                low, high)
+        # Set HIGH before LOW so raising into a 0→+V window never transiently
+        # places LOW above the old HIGH (which the instrument would reject).
+        self._send("level_high", val=high)
+        self._send("level_low", val=low)
+        self._level_low, self._level_high = low, high
+        # Keep amplitude/offset bookkeeping consistent for any UI that reads them.
+        self._amplitude = high - low
+        self._offset = (high + low) / 2.0
 
     def set_output_load(self, load: str | float) -> None:
         """Set the load impedance the generator assumes it drives.
@@ -331,14 +428,23 @@ class WaveformGenerator(BaseDevice):
     # ------------------------------------------------------------------ #
 
     def _apply_defaults(self) -> None:
-        # Load first: it changes how the generator interprets the amplitude
-        # that follows, so it must be set before set_amplitude.
+        # Load first: it changes how the generator interprets every voltage that
+        # follows (High-Z vs 50 Ω is a silent up-to-2× error), so it must be set
+        # before any amplitude/level command.  Never touches OUTPut:STATe —
+        # connecting must not arm the trigger.
         self.set_output_load(self._output_load)
-        self._send("function")
-        self.set_frequency(self._frequency)
-        self.set_pulse_width(self._pulse_width)
-        self.set_amplitude(self._amplitude)
-        self.set_offset(self._offset)
+        if self._level_low is not None and self._level_high is not None:
+            # Opt-in clean square trigger via explicit rails (note Q2).
+            self._send("function_square")
+            self.set_frequency(self._frequency)
+            self.set_levels(self._level_low, self._level_high)
+        else:
+            # Legacy default: amplitude+offset PULSe (emitted output unchanged).
+            self._send("function")
+            self.set_frequency(self._frequency)
+            self.set_pulse_width(self._pulse_width)
+            self.set_amplitude(self._amplitude)
+            self.set_offset(self._offset)
 
     def _send(self, key: str, **kw: Any) -> None:
         """Format a vendor SCPI template and write it."""

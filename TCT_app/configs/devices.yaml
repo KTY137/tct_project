@@ -66,7 +66,14 @@ waveform_generator:
   pulse_width_s: 1.0e-07
   amplitude_V: 3.3
   offset_V: 0.0
-  output_load: INFinity
+  # Load impedance the DG4162 assumes it is driving. The PDL 800 external
+  # trigger input is 50 Ohm (PicoQuant manual; docs/research/pdl800_trigger_wavegen_lan.md).
+  # If left High-Z (INFinity) while the cable actually terminates into the
+  # 50 Ohm PDL trigger input, the DG4162 delivers HALF the displayed amplitude.
+  # This is BENCH-CABLING-SPECIFIC and MUST match reality: use 50 when driving
+  # the PDL trigger directly; use INFinity only if the output truly sees a
+  # High-Z load (e.g. a 1 MOhm scope input).
+  output_load: 50
   output_channel: 1
   simulation: false
 laser:
