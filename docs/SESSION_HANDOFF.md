@@ -62,15 +62,35 @@ marquee feature (item 1 in "What's NEXT" below). Noah is ready to build.
   4/4 findings fixed + independently probe-verified. Suite **218 passed**.
 - **Phase 3 kickoff** — `config_validator` now covers all 11 `devices.yaml`
   sections (14 tests). Mary-approved.
+- **P2.2 steps 2+3 (executor & planner, complete):** `controller/danger_gate.py`
+  (DangerAction/DangerGate protocol, AutoConfirmGate/DenyAllGate/QtDangerGate);
+  `ScanController.arm_hv()` latch, `start_plan()`/`_run_plan()` with shared
+  fail-safe helpers, motor.stop() in all finallys, HV re-assertion on resume.
+  Fault-injection suite (`test_fault_injection.py` + `test_fault_injection_legacy.py`)
+  proves safety under disconnect/HV-trip/motor-fault/abort. `gui/planner_panel.py`
+  v2 (Recipe-Tree, drag-drop palette, movable nodes, right-click ops, 20-deep undo,
+  live estimate); `gui/qt_danger_gate.py` (worker→GUI confirm bridge, timeout
+  fail-closed); `gui/status_widgets.py` (StatusChip/StatusPill/flash_button).
+  `Oscilloscope.n_channels` modular (config-settable, *IDN?-clamped, validator
+  checks 1..8); `ScopePanel.rebuild_channels()` at connect. Design-system tokens
+  rolled across all panels. **4-commit checkpoint on experimental-wip. Suite 293
+  passed.**
 
 ## What's NEXT (in order)
 
-**P2.2 step 2** — `DangerGate` protocol + `ScanController.arm_hv()` latch +
-`start_plan()`/`_run_plan()` (reuse daemon-thread/`_pause_event`/`_abort_event`/
-`_ScanBridge`/`_resolve_bias` patterns; factor out `_check_compliance` + acquire
-body; **MUST re-assert HV on resume** per Mary's note in TECH_DEBT). Then
-**P2.2 step 3** = native `gui/planner_panel.py`; visual reference =
-`artifacts_claude/` files (see `docs/ROADMAP.md` 2.3).
+**(a) Typography & QSS refinement pass — IN PROGRESS (Noah):** polish planner
+panel design, statusChip/statusPill spacing & contrast, adjust warn-token contrast
+on light theme.
+
+**(b) GUI direction decision:** native-panel approach (v1+v2 now feature-rich:
+planner, scope, bias, calibration) vs QWebEngineView embed for live-HTML views
+(originally planned for live analysis plots). Native may now be sufficient; embed
+deprioritized pending real use-case pressure.
+
+**(c) Tech-debt resolution (see `docs/TECH_DEBT.md`):** Teardown JOIN the scan
+worker thread (concurrent bias ramp risk); QtDangerGate stray emit on timeout;
+Noah's 3 MINOR M1 findings (per-panel control disabling, poller leak, vscan
+on non-primary tabs).
 
 ## Open items / tech-debt (see `docs/TECH_DEBT.md`)
 

@@ -85,7 +85,18 @@ Core design rules (verified in code):
   channel selection is never allowed to silently fall back to another
   channel. `start()` and `start_voltage_scan()` both call `_resolve_bias`
   up front and pass the resolved `BiasChannel` into the scan thread
-  (`_run`/`_run_voltage_scan`).
+  (`_run`/`_run_voltage_scan`). P2.2 step 2 added plan executor:
+  `arm_hv()` latch, `start_plan()`/`_run_plan()` entry points, shared helpers
+  (`_acquire_core`/`_check_compliance`/`_bias_failsafe`/`_reassert_bias`/
+  `_command_move`/`_motor_stop_safe`), fail-safe hardening (motor.stop() in
+  all five run-path finallys, isolated try-blocks in vscan finally, refused
+  starts clear `_hv_armed`, trailing ManualPause finishes cleanly, `resume()`
+  no-op unless PAUSED, HV re-assertion on resume).
+- `danger_gate.py` — danger action protocol and authorization gates. `DangerAction`
+  dataclass (action kind, `requires_confirm: bool`); `DangerGate` protocol (async
+  request/confirm workflow). `AutoConfirmGate` (auto-approves in simulation);
+  `DenyAllGate` (always refuses); `QtDangerGate` (worker→GUI bridge, timeout
+  fail-closed). Used by executor step 2 to gate HV ramps and moves.
 - `scan_plan.py` — `ScanPlan` tree dataclass: fail-closed nested parameter loops
   (Axis, Bias, Delay loops), action leaves (Move, Settle, Acquire, Extract, Save),
   guard nodes, and danger nodes. YAML round-trip via `load()`/`save()`;
@@ -132,9 +143,11 @@ Core design rules (verified in code):
 - `slow_control_manager.py` — environment/slow-control channels; feeds
   `data/influx_writer` and the HDF5 `slow_control` group.
 - `config_validator.py` — validates `devices.yaml` before use. `_KNOWN_KEYS`
-  checks all sections: motor_stage, intensity_monitor, oscilloscope, bias_supply,
+  checks all 11 sections: motor_stage, intensity_monitor, oscilloscope, bias_supply,
   waveform_generator, camera, laser, slow_control, influx, output, charge_calibration
-  (unknown keys → WARNING; silent typos never escape).
+  (unknown keys → WARNING; silent typos never escape). Phase 3: oscilloscope
+  `n_channels` must be a whole number in range 1..8, else validation fails (clamped
+  to *IDN?-detected capability at runtime).
 - `repeatability.py` — stage repeatability measurement logic.
 
 ## devices/ (one family = base + backends)
@@ -253,14 +266,18 @@ no FastFrame support), driven by the default `oscilloscope.py` VISA backend
 Panels: `motor_panel`, `bias_panel`, `multi_bias_panel`, `scope_panel`,
 `scan_panel`, `laser_panel`, `intensity_panel`, `camera_panel`,
 `monitor_panel`, `analysis_panel`, `calibration_panel`, `device_panel`
-(`DeviceManagerWindow`, `device_state`), `settings_window`. Support:
-`status_bus.py` (cross-panel status),
+(`DeviceManagerWindow`, `device_state`), `settings_window`, `planner_panel`
+(Recipe-Tree QTreeWidget, editable loop rows, live estimate, validate/dry-run/
+arm/start latch chain; v2: drag-drop palette, movable nodes, right-click ops,
+20-deep undo). Support: `status_bus.py` (cross-panel status),
+`status_widgets.py` (StatusChip, StatusPill, flash_button design-system tokens),
 `scan_map_window.py` (live scan map), `stage_view.py` (3D GL stage view),
 `scope_measurements.py`, `detachable_tabs.py`, `style.py` (token design system:
 scope-cyan accent, tokens for UI states, spacing/radius/type scales, axis-rail
-palette, `axis_color()` helper, `statusChip`/`eyebrow` objectName hooks),
-`liveness.py` (`LivenessMonitor` — background device-liveness sweep, owned by
-`TCTMainWindow`, see Big picture and Entry point).
+palette, `axis_color()` helper, `statusChip`/`statusPill`/`eyebrow` objectName
+hooks), `qt_danger_gate.py` (`QtDangerGate`: worker→GUI confirm bridge, timeout
+fail-closed), `liveness.py` (`LivenessMonitor` — background device-liveness
+sweep, owned by `TCTMainWindow`, see Big picture and Entry point).
 Long-running work never runs on the main thread; log records cross threads via
 the `_LogBridge` signal.
 
@@ -269,7 +286,10 @@ independently and reports per-channel errors, so one dead channel (display
 off, timeout) no longer blanks the channels that read fine. Channel-card
 toggles drive `SELect:CH<x>` on the instrument, gated on the panel's "Drive
 scope" switch. The acquire row's averaging combo drives
-`Oscilloscope.set_averaging()` (`ACQuire:NUMAVg`).
+`Oscilloscope.set_averaging()` (`ACQuire:NUMAVg`). Phase 3: `rebuild_channels()`
+dynamically rebuilds the channel cards from `Oscilloscope.n_channels` at
+connect time (modular channel count per oscilloscope backend; DRS4/FastFrame
+declare 4, TBS1052C defaults to 2, heuristic from *IDN? as fallback).
 
 `multi_bias_panel.py:MultiBiasPanel` (`QWidget`, replaces the old
 single-`BiasPanel` top-level widget in `tct_gui.py`) presents one
@@ -369,6 +389,8 @@ Details: `docs/REFERENCE_MATERIAL.md`.
       registries beyond MOTOR/INTENSITY).
 
 ## Changelog
+
+- 2026-07-07 — **P2.2 executor & planner (steps 2+3), fault injection, scope modularity, design-system rollout:** `controller/danger_gate.py` (DangerAction/DangerGate protocol, AutoConfirmGate/DenyAllGate/QtDangerGate); `ScanController.arm_hv()` latch, `start_plan()`/`_run_plan()` with shared fail-safe helpers, motor.stop() in all finallys, HV re-assertion on resume; `tests/test_fault_injection.py` + `test_fault_injection_legacy.py` prove safety under disconnect/HV-trip/motor-fault/abort; `gui/planner_panel.py` v2 (Recipe-Tree, drag-drop, movable nodes, 20-deep undo, live estimate); `gui/qt_danger_gate.py` (worker→GUI confirm bridge); `gui/status_widgets.py` (StatusChip/StatusPill/flash_button); `Oscilloscope.n_channels` modular (config-settable, *IDN?-clamped, validator checks 1..8); `ScopePanel.rebuild_channels()` at connect; design-system tokens rolled across all panels. Suite **293 passed**.
 
 - 2026-07-06 — **M2.1 design-system foundation:** `gui/style.py` evolved to a
   token design system (scope-cyan accent `#33c8ff` dark / `#0d8ba6` light;
