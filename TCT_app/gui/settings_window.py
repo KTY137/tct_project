@@ -30,13 +30,13 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from PySide6.QtCore import Qt, QRegularExpression, Signal
+from PySide6.QtCore import Qt, QRegularExpression, QSettings, Signal
 from PySide6.QtGui import (
     QColor, QFont, QSyntaxHighlighter, QTextCharFormat,
 )
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
-    QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
     QMessageBox, QPlainTextEdit, QPushButton, QScrollArea,
     QSpinBox, QTabWidget, QToolButton, QVBoxLayout, QWidget, QApplication,
 )
@@ -44,7 +44,9 @@ from PySide6.QtWidgets import (
 logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).parent.parent / "configs" / "devices.yaml"
+from gui.panel_kit import Card, form_row, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
+from gui.style import DARK, FONT_XS, LIGHT, SPACE_SM
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -260,18 +262,62 @@ class _VisaPicker(QWidget):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Theme-token styling helpers (gui.style) — the Card-ified section pattern
+# ─────────────────────────────────────────────────────────────────────
+
+def _palette(theme_mode: str) -> dict:
+    return DARK if theme_mode == "dark" else LIGHT
+
+
+def _hint_label(text: str, theme_mode: str) -> QLabel:
+    """Muted informational note — theme-token styled.
+
+    Replaces the hardcoded ``color:#888; font-size:11px;`` idiom that was
+    duplicated across every per-device Quick-Settings section.
+    """
+    lbl = QLabel(text)
+    lbl.setWordWrap(True)
+    lbl.setStyleSheet(f"color: {_palette(theme_mode)['muted']}; font-size: {FONT_XS}px;")
+    return lbl
+
+
+def _accent_rail(card: Card, theme_mode: str) -> None:
+    """Tint *card*'s left edge with the shared UI accent colour.
+
+    ``panel_kit.Card.set_rail()`` only covers the ``AXIS_RAIL`` tokens
+    (bias / x / y / z / laser / delay / hazard) — there is no neutral
+    "accent" rail for a Card that isn't tied to a scan parameter axis (the
+    Oscilloscope Quick-Settings card is a device-identity accent, not a
+    scan axis). This mirrors ``Card.set_rail()``'s exact CSS shape with the
+    shared accent token instead of an axis colour, without touching
+    panel_kit.py — see the gap noted in the rollout report.
+    """
+    p = _palette(theme_mode)
+    card.setProperty("railAxis", "accent")
+    card.setStyleSheet(
+        f'QFrame#cardPane[railAxis="accent"] {{ border-left: 3px solid {p["accent"]}; }}'
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Quick-settings sections
 # ─────────────────────────────────────────────────────────────────────
 
-class _OscilloscopeSection(QGroupBox):
+class _OscilloscopeSection(QWidget):
     changed = Signal()
 
-    def __init__(self, cfg: dict) -> None:
-        super().__init__("Oscilloscope")
+    def __init__(self, cfg: dict, theme_mode: str = "light") -> None:
+        super().__init__()
+        self._theme_mode = theme_mode
         self._build(cfg)
 
     def _build(self, cfg: dict) -> None:
-        form = QFormLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        card = Card("Oscilloscope", "VISA / DRS4 backend")
+        _accent_rail(card, self._theme_mode)
+        outer.addWidget(card)
+        form = QFormLayout()
 
         self._backend = _combo(["visa", "drs4"], cfg.get("backend", "visa"))
         form.addRow("Backend:", self._backend)
@@ -287,11 +333,8 @@ class _OscilloscopeSection(QGroupBox):
         vf.addRow("VISA address:", self._visa_addr)
         vf.addRow("Vendor:", self._vendor)
         vf.addRow("Timeout (ms):", self._timeout_ms)
-        _trig_note = QLabel("Trigger (source / level / slope) is set in the "
-                            "Oscilloscope panel → Trigger Settings.")
-        _trig_note.setWordWrap(True)
-        _trig_note.setStyleSheet("color:#888; font-size:11px;")
-        vf.addRow(_trig_note)
+        vf.addRow(_hint_label("Trigger (source / level / slope) is set in the "
+                              "Oscilloscope panel → Trigger Settings.", self._theme_mode))
         form.addRow(self._visa_frame)
 
         # ── DRS4 fields ───────────────────────────────────────────────
@@ -317,6 +360,7 @@ class _OscilloscopeSection(QGroupBox):
                                 "true" if cfg.get("simulation", True) else "false")
         form.addRow("Averages:", self._n_avg)
         form.addRow("Simulation:", self._sim)
+        card.add_layout(form)
 
         self._backend.currentTextChanged.connect(self._on_backend)
         self._on_backend(self._backend.currentText())
@@ -362,17 +406,22 @@ class _OscilloscopeSection(QGroupBox):
         return d
 
 
-class _MotorSection(QGroupBox):
+class _MotorSection(QWidget):
     changed = Signal()
 
-    def __init__(self, cfg: dict) -> None:
-        super().__init__("Motor Stage")
+    def __init__(self, cfg: dict, theme_mode: str = "light") -> None:
+        super().__init__()
+        self._theme_mode = theme_mode
         self._build(cfg)
 
     def _build(self, cfg: dict) -> None:
         from devices.printer_presets import PRINTER_PRESETS, get_preset
 
-        form = QFormLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        card = Card("Motor Stage", "printer preset · backend · travel limits")
+        outer.addWidget(card)
+        form = QFormLayout()
 
         # ── Printer model preset ──────────────────────────────────────
         # Picking a machine fills in backend, firmware dialect, feed rate and
@@ -444,20 +493,21 @@ class _MotorSection(QGroupBox):
         gf.addRow("Serial port:", self._serial_port)
         gf.addRow("Feed rate (mm/min):", self._feed_rate)
         gf.addRow("Marlin firmware:", self._marlin)
-        gf.addRow("X limits min / max (mm):", _pair(self._lim_xmin, self._lim_xmax))
-        gf.addRow("Y limits min / max (mm):", _pair(self._lim_ymin, self._lim_ymax))
-        gf.addRow("Z limits min / max (mm):", _pair(self._lim_zmin, self._lim_zmax))
+        gf.addRow(form_row("X limits min / max (mm)", _pair(self._lim_xmin, self._lim_xmax),
+                            axis="x", theme_mode=self._theme_mode))
+        gf.addRow(form_row("Y limits min / max (mm)", _pair(self._lim_ymin, self._lim_ymax),
+                            axis="y", theme_mode=self._theme_mode))
+        gf.addRow(form_row("Z limits min / max (mm)", _pair(self._lim_zmin, self._lim_zmax),
+                            axis="z", theme_mode=self._theme_mode))
         gf.addRow("Steps/mm X·Y·Z:", _triple(self._spm_x, self._spm_y, self._spm_z))
         gf.addRow("Microsteps (jumper):", self._microsteps)
         gf.addRow("Snap to detents:", self._snap_mode)
         gf.addRow("Push steps/mm on connect:", self._push_steps)
-        _note = QLabel("A4988: 1/16 max via jumpers; current via Vref pot "
-                       "(I = Vref / 0.4 with R050) — not software-settable. "
-                       "Snap=full parks the motor on stable detents (~0.2 mm grid) "
-                       "to stop hunting/overheating.")
-        _note.setWordWrap(True)
-        _note.setStyleSheet("color:#888; font-size:11px;")
-        gf.addRow(_note)
+        gf.addRow(_hint_label(
+            "A4988: 1/16 max via jumpers; current via Vref pot "
+            "(I = Vref / 0.4 with R050) — not software-settable. "
+            "Snap=full parks the motor on stable detents (~0.2 mm grid) "
+            "to stop hunting/overheating.", self._theme_mode))
         form.addRow(self._grbl_frame)
 
         # PI
@@ -473,6 +523,7 @@ class _MotorSection(QGroupBox):
         self._sim = _combo(["false", "true"],
                             "true" if cfg.get("simulation", False) else "false")
         form.addRow("Simulation:", self._sim)
+        card.add_layout(form)
 
         self._model.currentIndexChanged.connect(self._apply_preset)
         self._backend.currentTextChanged.connect(self._on_backend)
@@ -556,15 +607,21 @@ class _MotorSection(QGroupBox):
         return d
 
 
-class _BiasSection(QGroupBox):
+class _BiasSection(QWidget):
     changed = Signal()
 
-    def __init__(self, cfg: dict) -> None:
-        super().__init__("Bias Supply")
+    def __init__(self, cfg: dict, theme_mode: str = "light") -> None:
+        super().__init__()
+        self._theme_mode = theme_mode
         self._build(cfg)
 
     def _build(self, cfg: dict) -> None:
-        form = QFormLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        card = Card("Bias Supply", "connection · compliance")
+        card.set_rail("bias", self._theme_mode)
+        outer.addWidget(card)
+        form = QFormLayout()
         self._backend = _combo(["simulated", "keithley", "e4control", "iseg"],
                                 cfg.get("backend", "simulated"))
         form.addRow("Backend:", self._backend)
@@ -575,10 +632,9 @@ class _BiasSection(QGroupBox):
         kf.setContentsMargins(0, 0, 0, 0)
         self._k_visa = _VisaPicker(str(cfg.get("visa_address", "")))
         kf.addRow("VISA address:", self._k_visa)
-        _k_note = QLabel("USB, GPIB, or LAN via VISA (e.g. USB0::0x05e6::0x2410::...::INSTR)")
-        _k_note.setWordWrap(True)
-        _k_note.setStyleSheet("color:#888; font-size:11px;")
-        kf.addRow(_k_note)
+        kf.addRow(_hint_label(
+            "USB, GPIB, or LAN via VISA (e.g. USB0::0x05e6::0x2410::...::INSTR)",
+            self._theme_mode))
         form.addRow(self._keithley_frame)
 
         # ── e4control (special wrapper — host/port, not VISA) ────────
@@ -609,14 +665,11 @@ class _BiasSection(QGroupBox):
         self._iseg_ch   = _ispin(cfg.get("channel", 0), 0, 15)
         self._iseg_ramp = _dspin(cfg.get("ramp_speed_V_s", 50.0), 0.1, 5000.0, 1)
         gf.addRow("VISA address:", self._iseg_visa)
-        _iseg_note = QLabel(
+        gf.addRow(_hint_label(
             "USB/serial (ASRL5::INSTR for COM5, or ASRL/dev/ttyUSB0::INSTR on Linux) "
             "or LAN socket (TCPIP0::192.168.1.30::10001::SOCKET). "
-            "iseg USB appears as a virtual COM port (CDC/VCP), NOT as USB0::..."
-        )
-        _iseg_note.setWordWrap(True)
-        _iseg_note.setStyleSheet("color:#888; font-size:11px;")
-        gf.addRow(_iseg_note)
+            "iseg USB appears as a virtual COM port (CDC/VCP), NOT as USB0::...",
+            self._theme_mode))
         gf.addRow("Channel (HV-OUT):", self._iseg_ch)
         gf.addRow("Ramp (V/s):", self._iseg_ramp)
         form.addRow(self._iseg_frame)
@@ -629,6 +682,7 @@ class _BiasSection(QGroupBox):
         comp_widget = QWidget()
         comp_widget.setLayout(comp_row)
         form.addRow("Compliance:", comp_widget)
+        card.add_layout(form)
 
         self._backend.currentTextChanged.connect(self._on_backend)
         self._on_backend(self._backend.currentText())
@@ -674,7 +728,7 @@ class _BiasSection(QGroupBox):
         return d
 
 
-class _DataSavingSection(QGroupBox):
+class _DataSavingSection(QWidget):
     """Choose the output directory and which dataset groups each scan saves.
 
     ``waveforms`` and ``positions`` are mandatory and shown locked-on.  ``bias``
@@ -695,12 +749,17 @@ class _DataSavingSection(QGroupBox):
         ("run_metadata", "Run metadata (config snapshot)",     True,  False, ""),
     ]
 
-    def __init__(self, cfg: dict) -> None:
-        super().__init__("Data / Saving")
+    def __init__(self, cfg: dict, theme_mode: str = "light") -> None:
+        super().__init__()
+        self._theme_mode = theme_mode
         self._build(cfg)
 
     def _build(self, cfg: dict) -> None:
-        form = QFormLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        card = Card("Data / Saving", "output directory · saved dataset groups")
+        outer.addWidget(card)
+        form = QFormLayout()
 
         self._data_dir = _line(cfg.get("data_dir", "runs"))
         browse = QPushButton("Browse…")
@@ -714,6 +773,7 @@ class _DataSavingSection(QGroupBox):
 
         save = cfg.get("save", {})
         self._checks: dict[str, QCheckBox] = {}
+        p = _palette(self._theme_mode)
         for key, label, default, locked, note in self._ROWS:
             cb = QCheckBox(label)
             cb.setChecked(True if locked else bool(save.get(key, default)))
@@ -725,8 +785,11 @@ class _DataSavingSection(QGroupBox):
             if note:
                 lbl = QLabel(note)
                 warn = "NOT recomputable" in note
+                # Warn notes stay loud (crit token); informational notes read
+                # muted — both theme-token, replacing the old hardcoded
+                # "#c0392b"/"#888" pair.
                 lbl.setStyleSheet(
-                    "color:%s; font-size:11px;" % ("#c0392b" if warn else "#888")
+                    f"color: {p['crit'] if warn else p['muted']}; font-size: {FONT_XS}px;"
                 )
                 row = QHBoxLayout()
                 row.addWidget(cb); row.addStretch(); row.addWidget(lbl)
@@ -734,6 +797,7 @@ class _DataSavingSection(QGroupBox):
                 form.addRow(cont)
             else:
                 form.addRow(cb)
+        card.add_layout(form)
 
     def _browse(self) -> None:
         start = self._data_dir.text() or str(Path.cwd())
@@ -748,13 +812,22 @@ class _DataSavingSection(QGroupBox):
         }
 
 
-class _WaveformSection(QGroupBox):
+class _WaveformSection(QWidget):
     """Waveform generator (trigger / rep-rate source — Rigol DG4000, Tek, …)."""
     changed = Signal()
 
-    def __init__(self, cfg: dict) -> None:
-        super().__init__("Waveform Generator")
-        form = QFormLayout(self)
+    def __init__(self, cfg: dict, theme_mode: str = "light") -> None:
+        super().__init__()
+        self._theme_mode = theme_mode
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        # "delay" rail — matches LaserPanel's own Waveform Generator card
+        # (gui/laser_panel.py): it drives the laser's trigger/rep-rate, the
+        # classic edge-TCT delay axis.
+        card = Card("Waveform Generator", "trigger / rep-rate source")
+        card.set_rail("delay", theme_mode)
+        outer.addWidget(card)
+        form = QFormLayout()
         self._addr   = _VisaPicker(str(cfg.get("visa_address", "")))
         self._vendor = _combo(["rigol", "tektronix", "keysight", "siglent", "generic"],
                               str(cfg.get("vendor", "rigol")))
@@ -765,11 +838,9 @@ class _WaveformSection(QGroupBox):
         form.addRow("Vendor:", self._vendor)
         form.addRow("Output channel:", self._ch)
         form.addRow("Simulation:", self._sim)
-        note = QLabel("Frequency / pulse width / amplitude are live controls on "
-                      "the Laser/Trigger panel.")
-        note.setWordWrap(True)
-        note.setStyleSheet("color:#888; font-size:11px;")
-        form.addRow(note)
+        form.addRow(_hint_label("Frequency / pulse width / amplitude are live controls on "
+                                "the Laser/Trigger panel.", theme_mode))
+        card.add_layout(form)
         for w in (self._addr, self._vendor, self._ch, self._sim):
             _connect_changed(w, self.changed)
 
@@ -784,13 +855,18 @@ class _WaveformSection(QGroupBox):
         }
 
 
-class _CameraSection(QGroupBox):
+class _CameraSection(QWidget):
     """FLIR Blackfly camera (beam / repeatability imaging)."""
     changed = Signal()
 
-    def __init__(self, cfg: dict) -> None:
-        super().__init__("Camera")
-        form = QFormLayout(self)
+    def __init__(self, cfg: dict, theme_mode: str = "light") -> None:
+        super().__init__()
+        self._theme_mode = theme_mode
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        card = Card("Camera", "FLIR Blackfly — connection & acquisition")
+        outer.addWidget(card)
+        form = QFormLayout()
         self._serial   = _line(str(cfg.get("serial_number", "")))
         self._exposure = _dspin(cfg.get("exposure_us", 5000.0), 1.0, 1e7, 1)
         self._gain     = _dspin(cfg.get("gain_db", 0.0), 0.0, 48.0, 2)
@@ -804,6 +880,7 @@ class _CameraSection(QGroupBox):
         form.addRow("Binning:", self._binning)
         form.addRow("FPS:", self._fps)
         form.addRow("Simulation:", self._sim)
+        card.add_layout(form)
         for w in (self._serial, self._exposure, self._gain,
                   self._binning, self._fps, self._sim):
             _connect_changed(w, self.changed)
@@ -856,6 +933,14 @@ class SettingsWindow(QDialog):
         self._suppress_yaml_update = False
         self._dirty = False
         self._base_tab_titles: dict[int, str] = {}
+        # Theme mode for the Quick-Settings Card rails (bias amber, x/y/z
+        # limit rows, waveform-gen "delay") and the muted/danger chrome
+        # labels below — same QSettings key main.py/tct_gui.py use, mirroring
+        # MotorPanel/BiasPanel/ScopePanel. Not yet wired into
+        # tct_gui._toggle_theme's live-refresh loop (tct_gui.py is out of
+        # this module's scope) — see refresh_theme() for a caller-driven
+        # re-tint path.
+        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
         self._build_ui()
         self._load_file()
 
@@ -866,11 +951,12 @@ class SettingsWindow(QDialog):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
+        root.addWidget(panel_header("TCT Control — Configuration", "Settings"))
+
         # ── File path label ───────────────────────────────────────────
         path_row = QHBoxLayout()
         path_row.addWidget(QLabel("Config file:"))
         self._lbl_path = QLabel(str(self._config_path))
-        self._lbl_path.setStyleSheet("color: #555; font-style: italic;")
         path_row.addWidget(self._lbl_path, 1)
         root.addLayout(path_row)
 
@@ -914,9 +1000,13 @@ class SettingsWindow(QDialog):
         self._bias_section:   _BiasSection | None = None
         self._data_section:   _DataSavingSection | None = None
 
-        # Last tab: Full YAML
+        # Last tab: Full YAML — Card frame around the editor surface, header
+        # gives the file its own title/subtitle (highlighter/parse-validation
+        # plumbing below is untouched — only the surrounding chrome changed).
         yaml_widget = QWidget()
         yaml_layout = QVBoxLayout(yaml_widget)
+        yaml_card = Card("devices.yaml", str(self._config_path))
+        yaml_card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
         self._editor = QPlainTextEdit()
         font = QFont("Consolas", 10)
         font.setStyleHint(QFont.Monospace)
@@ -924,11 +1014,11 @@ class SettingsWindow(QDialog):
         self._editor.setLineWrapMode(QPlainTextEdit.NoWrap)
         self._highlighter = _YamlHighlighter(self._editor.document())
         self._parse_error_label = QLabel("")
-        self._parse_error_label.setStyleSheet("color: #c0392b; font-weight: bold;")
         self._parse_error_label.setVisible(False)
         self._editor.textChanged.connect(self._on_yaml_changed)
-        yaml_layout.addWidget(self._editor)
-        yaml_layout.addWidget(self._parse_error_label)
+        yaml_card.add_widget(self._editor)
+        yaml_card.add_widget(self._parse_error_label)
+        yaml_layout.addWidget(yaml_card)
         self._yaml_tab_index = self._tabs.addTab(yaml_widget, "Full YAML")
         self._base_tab_titles[self._yaml_tab_index] = "Full YAML"
 
@@ -937,14 +1027,14 @@ class SettingsWindow(QDialog):
         root.addWidget(self._tabs)
 
         # ── Status bar / info ─────────────────────────────────────────
-        info = QLabel(
+        self._info_label = QLabel(
             "Backend changes (e.g. visa → drs4) take effect on the next app launch.  "
             "Parameter changes (compliance, speed, averages) can be applied live via "
             "Disconnect → Save → Connect All."
         )
-        info.setWordWrap(True)
-        info.setStyleSheet("color: #666; font-size: 11px;")
-        root.addWidget(info)
+        self._info_label.setWordWrap(True)
+        root.addWidget(self._info_label)
+        self._restyle_chrome_tokens()
 
         # ── Buttons ───────────────────────────────────────────────────
         btn_row = QHBoxLayout()
@@ -962,6 +1052,41 @@ class SettingsWindow(QDialog):
         btn_row.addWidget(self._btn_save)
         btn_row.addWidget(btn_close)
         root.addLayout(btn_row)
+
+    def _restyle_chrome_tokens(self) -> None:
+        """Re-resolve the dialog-level muted/danger label colours from the
+        current theme (the "Config file:" path label, the bottom info note,
+        and the YAML parse-error banner) — theme-token styled instead of the
+        old hardcoded greys/red, mirroring the per-instance colour pattern
+        ``ScopePanel._restyle_theme_tokens`` / ``BiasPanel`` use. The parse-
+        error label keeps reading the loud "crit" token (danger labels stay
+        loud)."""
+        p = _palette(self._theme_mode)
+        self._lbl_path.setStyleSheet(f"color: {p['muted']}; font-style: italic;")
+        self._info_label.setStyleSheet(f"color: {p['muted']}; font-size: {FONT_XS}px;")
+        self._parse_error_label.setStyleSheet(f"color: {p['crit']}; font-weight: bold;")
+
+    def refresh_theme(self, mode: str | None = None) -> None:
+        """Re-resolve theme-token colours after a light/dark switch — the
+        Quick-Settings section Cards are rebuilt (cheap: they are already
+        torn down/rebuilt on every load/tab-switch-back via
+        ``_rebuild_quick_settings``) so their axis rails re-resolve, and the
+        dialog chrome labels are restyled directly.
+
+        Not currently called by ``tct_gui._toggle_theme`` — wiring the main
+        window's live theme-refresh loop is outside this module's scope
+        (``tct_gui.py``); until that's wired, the rails resolve once from
+        QSettings at dialog construction. Provided so a caller can opt in.
+        """
+        if mode:
+            self._theme_mode = str(mode)
+        self._restyle_chrome_tokens()
+        text = self._editor.toPlainText()
+        try:
+            cfg = yaml.safe_load(text) or {}
+        except yaml.YAMLError:
+            return
+        self._rebuild_quick_settings(cfg)
 
     # ------------------------------------------------------------------ #
     # Loading                                                             #
@@ -1032,12 +1157,13 @@ class SettingsWindow(QDialog):
 
     def _rebuild_quick_settings(self, cfg: dict) -> None:
         """Tear down and recreate the per-device section widgets."""
-        self._scope_section = _OscilloscopeSection(cfg.get("oscilloscope", {}))
-        self._motor_section = _MotorSection(cfg.get("motor_stage", {}))
-        self._wfg_section   = _WaveformSection(cfg.get("waveform_generator", {}))
-        self._cam_section   = _CameraSection(cfg.get("camera", {}))
-        self._bias_section  = _BiasSection(cfg.get("bias_supply", {}))
-        self._data_section  = _DataSavingSection(cfg.get("output", {}))
+        tm = self._theme_mode
+        self._scope_section = _OscilloscopeSection(cfg.get("oscilloscope", {}), tm)
+        self._motor_section = _MotorSection(cfg.get("motor_stage", {}), tm)
+        self._wfg_section   = _WaveformSection(cfg.get("waveform_generator", {}), tm)
+        self._cam_section   = _CameraSection(cfg.get("camera", {}), tm)
+        self._bias_section  = _BiasSection(cfg.get("bias_supply", {}), tm)
+        self._data_section  = _DataSavingSection(cfg.get("output", {}), tm)
 
         # QScrollArea.setWidget() takes ownership of the new widget and
         # deletes whatever widget it previously held — no manual teardown
