@@ -345,11 +345,9 @@ class LaserPanel(QWidget):
         rail colours above are baked in as instance-level inline styles at
         construction time, so they need this explicit refresh.
 
-        Not yet called by ``tct_gui._toggle_theme`` (its panel list is
-        outside this panel's file-ownership scope for the M2.4 pilot) — the
-        colours above resolve correctly on construction and will re-resolve
-        immediately once that one-line wiring is added; see the panel_kit
-        rollout notes.
+        Called live by ``tct_gui._toggle_theme`` (wired alongside the
+        motor/bias/planner panels), so a theme switch re-resolves these
+        instance-level colours immediately.
         """
         if mode:
             self._theme_mode = str(mode)

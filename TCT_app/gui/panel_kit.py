@@ -206,8 +206,17 @@ class Card(QFrame):
     def set_rail(self, axis: str, theme_mode: str, *, width: int = 3) -> None:
         """Tint this card's left edge with an axis-rail colour (see
         :func:`axis_rail_css`) — call again from the panel's own
-        ``refresh_theme()`` after a light/dark switch to keep it resolved."""
-        self.setStyleSheet(axis_rail_css(axis, theme_mode, selector="#cardPane", width=width))
+        ``refresh_theme()`` after a light/dark switch to keep it resolved.
+
+        The selector is scoped via a dynamic ``railAxis`` property so the
+        instance stylesheet tints THIS card only: a bare ``#cardPane``
+        selector would cascade onto any same-objectName Card nested inside
+        (reviewer-verified), double-railing it.  A nested card that rails
+        itself sets its own property + sheet, which takes precedence."""
+        self.setProperty("railAxis", axis)
+        self.setStyleSheet(axis_rail_css(
+            axis, theme_mode, selector=f'QFrame#cardPane[railAxis="{axis}"]',
+            width=width))
 
 
 # --------------------------------------------------------------------------- #
