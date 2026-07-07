@@ -18,7 +18,7 @@ from typing import Optional
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QSettings, QTimer
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
-    QGroupBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -40,7 +40,9 @@ from PySide6.QtWidgets import (
 )
 
 from devices.camera_blackfly import BlackflyCamera, FrameMeta
+from gui.panel_kit import Card, panel_header, readout_cell
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
+from gui.style import DARK, LIGHT, PLOT_BG, SPACE_MD, SPACE_SM, WARN_AMBER, WARN_RED
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +105,10 @@ class CameraPanel(QWidget):
         self._last_meta     : Optional[FrameMeta]   = None
         self._show_crosshair = True
         self._show_overlay   = True   # beam centroid + 2-σ ellipse
+        # Theme mode for the histogram bar's accent colour (gui.style tokens).
+        # Read once from the same QSettings key main.py/tct_gui.py use,
+        # mirroring MotorPanel/MonitorPanel; see refresh_theme() below.
+        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
 
         self._build_ui()
 
@@ -115,11 +121,19 @@ class CameraPanel(QWidget):
     # ──────────────────────────────────────────────────────────────────── #
 
     def _build_ui(self) -> None:
-        root = QHBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
+        outer.setSpacing(SPACE_MD)
+        outer.addWidget(panel_header("TCT Control · Instrument", "Camera"))
+
+        content = QHBoxLayout()
+        content.setSpacing(SPACE_MD)
+        outer.addLayout(content, 1)
 
         # ── Left: image + histogram + stats ───────────────────────────
         left = QVBoxLayout()
-        root.addLayout(left, stretch=3)
+        left.setSpacing(SPACE_MD)
+        content.addLayout(left, stretch=3)
 
         status_row = QHBoxLayout()
         status_row.setSpacing(6)
@@ -137,18 +151,26 @@ class CameraPanel(QWidget):
         status_row.addStretch(1)
         left.addLayout(status_row)
 
-        # Live image
+        # Live image — a bare Card (no title) so the "instrument screen"
+        # image sits level with every other card instead of floating
+        # unframed; the dark canvas colour itself is the PLOT_BG token (the
+        # same "dark instrument screen in both themes" idiom the plot canvas
+        # uses everywhere else — see gui/style.py).  Hot-path widget: no
+        # QGraphicsEffect/shadow/glow, ever — static border + surface only.
+        view_card = Card()
+        view_card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
         self._img_label = QLabel("No image")
         self._img_label.setAlignment(Qt.AlignCenter)
         self._img_label.setMinimumSize(480, 320)
         self._img_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._img_label.setStyleSheet("background: #111;")
-        left.addWidget(self._img_label, stretch=3)
+        self._img_label.setStyleSheet(f"background: {PLOT_BG};")
+        view_card.add_widget(self._img_label)
+        left.addWidget(view_card, stretch=3)
 
-        # Histogram
-        hist_box = QGroupBox("Histogram")
-        hist_lay = QVBoxLayout(hist_box)
-        self._hist_plot = pg.PlotWidget(background="#1a1a1a")
+        # Histogram — hot-path plot: dark canvas via the PLOT_BG token only,
+        # no drop-shadow/glow effects.
+        hist_card = Card("Histogram")
+        self._hist_plot = pg.PlotWidget(background=PLOT_BG)
         self._hist_plot.setMinimumHeight(90)
         self._hist_plot.setMaximumHeight(130)
         self._hist_plot.getAxis("left").setStyle(tickFont=None)
@@ -157,42 +179,50 @@ class CameraPanel(QWidget):
             x=np.arange(self._HIST_BINS),
             height=np.zeros(self._HIST_BINS),
             width=1.0,
-            brush=pg.mkBrush(80, 180, 255, 180),
+            brush=self._hist_brush(),
         )
         self._hist_plot.addItem(self._hist_bar)
-        hist_lay.addWidget(self._hist_plot)
-        left.addWidget(hist_box)
+        hist_card.add_widget(self._hist_plot)
+        left.addWidget(hist_card)
 
-        # Beam stats
-        stats_box = QGroupBox("Beam Statistics")
-        stats_lay = QHBoxLayout(stats_box)
-        self._lbl_cx    = self._stat_label("Cx")
-        self._lbl_cy    = self._stat_label("Cy")
-        self._lbl_sx    = self._stat_label("σx")
-        self._lbl_sy    = self._stat_label("σy")
-        self._lbl_peak  = self._stat_label("Peak")
-        self._lbl_mean  = self._stat_label("Mean")
-        self._lbl_std   = self._stat_label("Std")
-        for w in (self._lbl_cx, self._lbl_cy, self._lbl_sx, self._lbl_sy,
-                  self._lbl_peak, self._lbl_mean, self._lbl_std):
-            stats_lay.addWidget(w)
-        left.addWidget(stats_box)
+        # Beam stats — instrument-style readout cells (title + monospace
+        # value), replacing the old hand-rolled QLabel boxes.
+        stats_card = Card("Beam Statistics")
+        stats_lay = QHBoxLayout()
+        self._ro_cx    = readout_cell("Cx", min_width=64)
+        self._ro_cy    = readout_cell("Cy", min_width=64)
+        self._ro_sx    = readout_cell("σx", min_width=64)
+        self._ro_sy    = readout_cell("σy", min_width=64)
+        self._ro_peak  = readout_cell("Peak", min_width=64)
+        self._ro_mean  = readout_cell("Mean", min_width=64)
+        self._ro_std   = readout_cell("Std", min_width=64)
+        for ro in (self._ro_cx, self._ro_cy, self._ro_sx, self._ro_sy,
+                   self._ro_peak, self._ro_mean, self._ro_std):
+            stats_lay.addWidget(ro)
+        stats_lay.addStretch(1)
+        stats_card.add_layout(stats_lay)
+        left.addWidget(stats_card)
 
-        # Frame metadata
-        meta_box = QGroupBox("Frame Info")
-        meta_lay = QHBoxLayout(meta_box)
-        self._lbl_frame_id   = self._stat_label("Frame")
-        self._lbl_ts         = self._stat_label("Time")
-        self._lbl_act_exp    = self._stat_label("Exp")
-        self._lbl_act_gain   = self._stat_label("Gain")
-        self._lbl_temp       = self._stat_label("Temp")
-        self._lbl_fps        = self._stat_label("FPS")
-        for w in (self._lbl_frame_id, self._lbl_ts, self._lbl_act_exp,
-                  self._lbl_act_gain, self._lbl_temp, self._lbl_fps):
+        # Frame metadata — same readout-cell treatment; Temp is a hand-built
+        # look-alike so its tri-state good/warn/crit colour swap has a hook
+        # ReadoutCell itself doesn't expose (see _build_temp_readout()).
+        meta_card = Card("Frame Info")
+        meta_lay = QHBoxLayout()
+        self._ro_frame_id = readout_cell("Frame", min_width=64)
+        self._ro_ts       = readout_cell("T (ms)", min_width=64)
+        self._ro_act_exp  = readout_cell("Exp (µs)", min_width=64)
+        self._ro_act_gain = readout_cell("Gain (dB)", min_width=64)
+        self._temp_frame, self._lbl_temp = self._build_temp_readout()
+        self._ro_fps       = readout_cell("FPS", min_width=64)
+        for w in (self._ro_frame_id, self._ro_ts, self._ro_act_exp,
+                  self._ro_act_gain, self._temp_frame, self._ro_fps):
             meta_lay.addWidget(w)
-        left.addWidget(meta_box)
+        meta_lay.addStretch(1)
+        meta_card.add_layout(meta_lay)
+        left.addWidget(meta_card)
 
         # Action buttons
+        actions_card = Card("View & Capture")
         btn_row = QHBoxLayout()
         self._chk_crosshair = QCheckBox("Crosshair")
         self._chk_crosshair.setChecked(True)
@@ -224,15 +254,17 @@ class CameraPanel(QWidget):
         self._btn_roi.clicked.connect(self._open_roi_dialog)
         btn_row.addWidget(self._btn_roi)
 
-        left.addLayout(btn_row)
+        actions_card.add_layout(btn_row)
+        left.addWidget(actions_card)
 
         # ── Right: acquisition controls ───────────────────────────────
         right = QVBoxLayout()
-        root.addLayout(right, stretch=1)
+        right.setSpacing(SPACE_MD)
+        content.addLayout(right, stretch=1)
 
         # ── Exposure ──────────────────────────────────────────────────
-        acq_box = QGroupBox("Acquisition")
-        acq_form = QFormLayout(acq_box)
+        acq_card = Card("Acquisition")
+        acq_form = QFormLayout()
 
         self._spin_exp = QDoubleSpinBox()
         self._spin_exp.setRange(10, 100_000)
@@ -298,11 +330,12 @@ class CameraPanel(QWidget):
         fps_row.addWidget(btn_fps)
         acq_form.addRow("Frame rate:", fps_row)
 
-        right.addWidget(acq_box)
+        acq_card.add_layout(acq_form)
+        right.addWidget(acq_card)
 
         # ── Image processing ──────────────────────────────────────────
-        img_box = QGroupBox("Image Processing")
-        img_form = QFormLayout(img_box)
+        img_card = Card("Image Processing")
+        img_form = QFormLayout()
 
         self._chk_gamma = QCheckBox("Enable")
         self._chk_gamma.setChecked(True)
@@ -317,30 +350,93 @@ class CameraPanel(QWidget):
         self._spin_gamma.valueChanged.connect(self._apply_gamma)
         img_form.addRow("γ value:", self._spin_gamma)
 
-        right.addWidget(img_box)
+        img_card.add_layout(img_form)
+        right.addWidget(img_card)
 
         # ── Trigger ───────────────────────────────────────────────────
-        trig_box = QGroupBox("Trigger")
-        trig_form = QFormLayout(trig_box)
+        trig_card = Card("Trigger")
+        trig_form = QFormLayout()
         self._chk_trigger = QCheckBox("Hardware trigger (Line0 ↓)")
         self._chk_trigger.toggled.connect(
             lambda v: self._camera.set_trigger(v)
         )
         trig_form.addRow(self._chk_trigger)
-        right.addWidget(trig_box)
+        trig_card.add_layout(trig_form)
+        right.addWidget(trig_card)
 
         # ── Camera info ───────────────────────────────────────────────
-        info_box = QGroupBox("Camera Info")
-        info_lay = QVBoxLayout(info_box)
+        # objectName "cardSubtitle" reuses the shared muted/monospace QSS
+        # hook (gui/style.py) instead of a hand-rolled "color: #aaa" — it
+        # repaints on a live theme switch automatically via the app-wide
+        # stylesheet, so this label needs no entry in refresh_theme().
+        info_card = Card("Camera Info")
         self._lbl_info = QLabel("–")
+        self._lbl_info.setObjectName("cardSubtitle")
         self._lbl_info.setWordWrap(True)
-        self._lbl_info.setStyleSheet("font-size: 10px; color: #aaa;")
-        info_lay.addWidget(self._lbl_info)
-        right.addWidget(info_box)
+        info_card.add_widget(self._lbl_info)
+        right.addWidget(info_card)
         right.addStretch()
+
+        self._restyle_theme_tokens()
 
         # Populate info once connected
         QTimer.singleShot(500, self._update_camera_info)
+
+    @staticmethod
+    def _build_temp_readout() -> tuple[QFrame, QLabel]:
+        """A Temp readout that LOOKS like a ``readout_cell()`` (same
+        ``readoutCell``/``readoutCellTitle``/``readoutCellValue`` QSS hooks —
+        gui/style.py) but is hand-built instead of a ``ReadoutCell`` instance:
+        the tri-state good/warn/crit colour swap in ``_update_stats`` needs a
+        per-instance override on the value label, which ``ReadoutCell`` has
+        no hook for.  Returns ``(frame, value_label)``."""
+        frame = QFrame()
+        frame.setObjectName("readoutCell")
+        frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        lay = QVBoxLayout(frame)
+        lay.setContentsMargins(10, 5, 10, 6)
+        lay.setSpacing(1)
+        title = QLabel("TEMP")
+        title.setObjectName("readoutCellTitle")
+        title.setAlignment(Qt.AlignCenter)
+        value = QLabel("–")
+        value.setObjectName("readoutCellValue")
+        value.setAlignment(Qt.AlignCenter)
+        lay.addWidget(title)
+        lay.addWidget(value)
+        frame.setMinimumWidth(64)
+        return frame, value
+
+    # ──────────────────────────────────────────────────────────────────── #
+    # Theme-token styling (gui.style) — re-run by refresh_theme()          #
+    # ──────────────────────────────────────────────────────────────────── #
+
+    def _hist_brush(self):
+        """Histogram bar fill: the theme accent colour (replaces the old
+        hardcoded ``pg.mkBrush(80, 180, 255, 180)``) — same idiom as
+        MonitorPanel's history-curve accent (see its ``_history_accent``)."""
+        accent = (DARK if self._theme_mode == "dark" else LIGHT)["accent"]
+        color = pg.mkColor(accent)
+        color.setAlpha(180)
+        return pg.mkBrush(color)
+
+    def _restyle_theme_tokens(self) -> None:
+        """Re-resolve the histogram bar's accent colour, baked as a
+        pyqtgraph brush at construction time (a theme switch does not
+        otherwise touch it)."""
+        if hasattr(self, "_hist_bar"):
+            self._hist_bar.setOpts(brush=self._hist_brush())
+
+    def refresh_theme(self, mode: str | None = None) -> None:
+        """Re-resolve theme-token colours after a light/dark switch (same
+        pattern as ``MotorPanel.refresh_theme`` / ``MonitorPanel.refresh_theme``).
+        Structural chrome (``cardPane``/``cardHeader``/``statusChip``/...)
+        already repaints via the app-wide stylesheet
+        ``gui.style.apply_theme()`` reapplies; only the histogram brush baked
+        by ``_restyle_theme_tokens`` needs this explicit refresh."""
+        if mode:
+            self._theme_mode = str(mode)
+        self._restyle_theme_tokens()
 
     # ──────────────────────────────────────────────────────────────────── #
     # Timer callback                                                       #
@@ -443,44 +539,46 @@ class CameraPanel(QWidget):
         )
 
     def _update_stats(self, meta: FrameMeta) -> None:
-        self._lbl_cx.setText(   f"Cx\n{meta.centroid_x:.1f} px")
-        self._lbl_cy.setText(   f"Cy\n{meta.centroid_y:.1f} px")
-        self._lbl_sx.setText(   f"σx\n{meta.sigma_x:.1f} px")
-        self._lbl_sy.setText(   f"σy\n{meta.sigma_y:.1f} px")
-        self._lbl_peak.setText( f"Peak\n{meta.pix_max:.0f}")
-        self._lbl_mean.setText( f"Mean\n{meta.pix_mean:.1f}")
-        self._lbl_std.setText(  f"Std\n{meta.pix_std:.1f}")
+        self._ro_cx.set_value(   f"{meta.centroid_x:.1f} px")
+        self._ro_cy.set_value(   f"{meta.centroid_y:.1f} px")
+        self._ro_sx.set_value(   f"{meta.sigma_x:.1f} px")
+        self._ro_sy.set_value(   f"{meta.sigma_y:.1f} px")
+        self._ro_peak.set_value( f"{meta.pix_max:.0f}")
+        self._ro_mean.set_value( f"{meta.pix_mean:.1f}")
+        self._ro_std.set_value(  f"{meta.pix_std:.1f}")
 
-        self._lbl_frame_id.setText( f"Frame\n{meta.frame_id}")
+        self._ro_frame_id.set_value(f"{meta.frame_id}")
         ts_ms = meta.timestamp_ns / 1e6
-        self._lbl_ts.setText(       f"T (ms)\n{ts_ms:.1f}")
-        self._lbl_act_exp.setText(  f"Exp (µs)\n{meta.exposure_us:.0f}")
-        self._lbl_act_gain.setText( f"Gain (dB)\n{meta.gain_db:.2f}")
+        self._ro_ts.set_value(      f"{ts_ms:.1f}")
+        self._ro_act_exp.set_value( f"{meta.exposure_us:.0f}")
+        self._ro_act_gain.set_value(f"{meta.gain_db:.2f}")
 
         temp = self._camera.get_temperature()
         if math.isnan(temp):
-            self._lbl_temp.setText("Temp\n–")
+            self._lbl_temp.setText("–")
             self._lbl_temp.setStyleSheet("")
             self._chip_temp.set_status("Temp --", "neutral")
         elif temp >= 65.0:
-            self._lbl_temp.setText(f"Temp\n{temp:.1f} °C ⚠")
-            self._lbl_temp.setStyleSheet("color: #ff4444; font-weight: bold;")
+            self._lbl_temp.setText(f"{temp:.1f} °C ⚠")
+            self._lbl_temp.setStyleSheet(
+                f"#readoutCellValue {{ color: {WARN_RED}; }}")
             self._chip_temp.set_status(f"Temp {temp:.1f} C", "crit")
         elif temp >= 55.0:
-            self._lbl_temp.setText(f"Temp\n{temp:.1f} °C")
-            self._lbl_temp.setStyleSheet("color: #ffaa00; font-weight: bold;")
+            self._lbl_temp.setText(f"{temp:.1f} °C")
+            self._lbl_temp.setStyleSheet(
+                f"#readoutCellValue {{ color: {WARN_AMBER}; }}")
             self._chip_temp.set_status(f"Temp {temp:.1f} C", "warn")
         else:
-            self._lbl_temp.setText(f"Temp\n{temp:.1f} °C")
+            self._lbl_temp.setText(f"{temp:.1f} °C")
             self._lbl_temp.setStyleSheet("")
             self._chip_temp.set_status(f"Temp {temp:.1f} C", "good")
 
         fps = self._camera.get_fps_actual()
         if math.isnan(fps):
-            self._lbl_fps.setText("FPS\n–")
+            self._ro_fps.set_value("–")
             self._chip_fps.set_status("FPS --", "neutral")
         else:
-            self._lbl_fps.setText(f"FPS\n{fps:.1f}")
+            self._ro_fps.set_value(f"{fps:.1f}")
             self._chip_fps.set_status(f"FPS {fps:.1f}", "busy")
 
     # ──────────────────────────────────────────────────────────────────── #
@@ -594,17 +692,3 @@ class CameraPanel(QWidget):
             self._chip_roi.set_status("ROI active" if active else "ROI full",
                                       "info" if active else "neutral")
             flash_button(self._btn_roi, "good", "ROI set")
-
-    # ──────────────────────────────────────────────────────────────────── #
-    # Helper                                                               #
-    # ──────────────────────────────────────────────────────────────────── #
-
-    @staticmethod
-    def _stat_label(title: str) -> QLabel:
-        lbl = QLabel(f"{title}\n–")
-        lbl.setAlignment(Qt.AlignCenter)
-        lbl.setStyleSheet(
-            "font-size: 10px; background: #222; border-radius: 3px; padding: 2px 4px;"
-        )
-        lbl.setMinimumWidth(58)
-        return lbl

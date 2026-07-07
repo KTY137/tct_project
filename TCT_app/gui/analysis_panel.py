@@ -16,7 +16,7 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QGroupBox, QLabel, QPushButton, QComboBox,
+    QLabel, QPushButton, QComboBox,
     QDoubleSpinBox, QFileDialog, QTabWidget,
 )
 
@@ -32,7 +32,9 @@ try:
 except ImportError:
     _HAS_H5 = False
 
+from gui.panel_kit import Card, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
+from gui.style import SPACE_MD, SPACE_SM
 
 
 class AnalysisPanel(QWidget):
@@ -50,8 +52,13 @@ class AnalysisPanel(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
+        root.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
+        root.setSpacing(SPACE_MD)
+
+        root.addWidget(panel_header("TCT Control · Analysis", "Run Analysis"))
 
         # ── File loader ───────────────────────────────────────────────
+        file_card = Card("Run File")
         file_row = QHBoxLayout()
         self._lbl_file = QLabel("No file loaded")
         self._lbl_file.setWordWrap(True)
@@ -60,7 +67,7 @@ class AnalysisPanel(QWidget):
         self._btn_open.clicked.connect(self._open_file)
         file_row.addWidget(self._btn_open)
         file_row.addWidget(self._lbl_file, stretch=1)
-        root.addLayout(file_row)
+        file_card.add_layout(file_row)
 
         chip_row = QHBoxLayout()
         self._chip_file = StatusChip("No file", "neutral")
@@ -70,14 +77,16 @@ class AnalysisPanel(QWidget):
         for chip in (self._chip_file, self._chip_dataset, self._chip_map, self._chip_export):
             chip_row.addWidget(chip)
         chip_row.addStretch(1)
-        root.addLayout(chip_row)
+        file_card.add_layout(chip_row)
+        root.addWidget(file_card)
 
         inner_tabs = QTabWidget()
-        root.addWidget(inner_tabs)
+        root.addWidget(inner_tabs, 1)
 
         # ── Tab A: 2D map re-plot ─────────────────────────────────────
         map_tab = QWidget()
         map_layout = QVBoxLayout(map_tab)
+        map_layout.setSpacing(SPACE_MD)
         map_ctrl = QHBoxLayout()
         map_ctrl.addWidget(QLabel("Quantity:"))
         self._combo_qty = QComboBox()
@@ -98,6 +107,11 @@ class AnalysisPanel(QWidget):
         map_ctrl.addWidget(self._btn_export_csv)
         map_layout.addLayout(map_ctrl)
 
+        # Bare (title-only) Card so the pyqtgraph ImageView — a hot-path
+        # plot widget — sits level with the other cards instead of floating
+        # unframed; static border/surface only, no drop-shadow/glow effects.
+        map_card = Card("Map View")
+        map_card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
         if _HAS_PG:
             self._map_view = pg.ImageView()
             self._map_view.setMinimumHeight(300)
@@ -107,17 +121,25 @@ class AnalysisPanel(QWidget):
             for _h in list(_roi.handles):
                 if _h["type"] == "r":
                     _roi.removeHandle(_h["item"])
-            map_layout.addWidget(self._map_view)
+            map_card.add_widget(self._map_view)
         else:
-            map_layout.addWidget(QLabel("(install pyqtgraph for map display)"))
+            map_card.add_widget(QLabel("(install pyqtgraph for map display)"))
+        map_layout.addWidget(map_card, 1)
 
+        # objectName "cardSubtitle" reuses the shared muted/monospace QSS
+        # hook (gui/style.py) instead of a hand-rolled inline colour — it
+        # repaints on a live theme switch automatically via the app-wide
+        # stylesheet, so this label needs no explicit refresh_theme().
         self._lbl_map_info = QLabel("")
+        self._lbl_map_info.setObjectName("cardSubtitle")
+        self._lbl_map_info.setWordWrap(True)
         map_layout.addWidget(self._lbl_map_info)
         inner_tabs.addTab(map_tab, "2D Map")
 
         # ── Tab B: CCE vs. bias ───────────────────────────────────────
         cce_tab = QWidget()
         cce_layout = QVBoxLayout(cce_tab)
+        cce_layout.setSpacing(SPACE_MD)
         cce_ctrl = QFormLayout()
 
         self._spin_ref_charge = QDoubleSpinBox()
@@ -144,6 +166,8 @@ class AnalysisPanel(QWidget):
         cce_layout.addLayout(cce_btn_row)
 
         if _HAS_PG:
+            cce_card = Card("CCE Curve")
+            cce_card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
             self._cce_plot = pg.PlotWidget(title="CCE / Q vs. Bias Voltage")
             self._cce_plot.setLabel("left",   "CCE / Norm. Charge")
             self._cce_plot.setLabel("bottom", "Bias Voltage", units="V")
@@ -156,10 +180,12 @@ class AnalysisPanel(QWidget):
                 pen=pg.mkPen("r", width=1), symbol="t", symbolSize=4,
                 name="Leakage (µA, scaled)",
             )
-            cce_layout.addWidget(self._cce_plot)
+            cce_card.add_widget(self._cce_plot)
+            cce_layout.addWidget(cce_card, 1)
 
             # V_dep estimate label
             self._lbl_vdep = QLabel("V_dep estimate: —")
+            self._lbl_vdep.setObjectName("cardSubtitle")
             cce_layout.addWidget(self._lbl_vdep)
 
         inner_tabs.addTab(cce_tab, "CCE vs. Bias")
