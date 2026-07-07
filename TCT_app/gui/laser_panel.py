@@ -172,6 +172,24 @@ class LaserPanel(QWidget):
         for _w in (self._spin_freq, self._spin_width, self._spin_duty):
             _w.valueChanged.connect(self._update_pulse_hint)
         self._on_pulse_mode(self._pulse_mode.currentText())
+
+        # Live-apply each setting the moment the user finishes editing it, so a
+        # changed value reaches the instrument WITHOUT a separate "Apply" click.
+        # This matches the output-load combo (already live) and the Output ON/OFF
+        # buttons — the previous apply-only-on-button behaviour is exactly the
+        # "I change it in the GUI but it doesn't send" bench complaint.
+        # ``editingFinished`` fires on Enter / focus-out, never per keystroke, so
+        # it does not spam the device.  ``.value()`` is read at call time.
+        self._spin_freq.editingFinished.connect(
+            lambda: self._live_apply(self._wfg.set_frequency, self._spin_freq.value()))
+        self._spin_ampl.editingFinished.connect(
+            lambda: self._live_apply(self._wfg.set_amplitude, self._spin_ampl.value()))
+        self._spin_offset.editingFinished.connect(
+            lambda: self._live_apply(self._wfg.set_offset, self._spin_offset.value()))
+        self._spin_width.editingFinished.connect(
+            lambda: self._live_apply(self._wfg.set_pulse_width, self._spin_width.value()))
+        self._spin_duty.editingFinished.connect(
+            lambda: self._live_apply(self._wfg.set_duty_cycle, self._spin_duty.value()))
         _load_label = self._load_combo.currentText()
         self._chip_load.set_status(f"Load {_load_label}",
                                    "good" if _load_label == "50 Ω" else "warn")
@@ -247,6 +265,27 @@ class LaserPanel(QWidget):
             duty = self._spin_width.value() * f * 100.0 if f > 0 else 0.0
             self._pulse_hint.setText(f"≈ {duty:.3g} % duty  @ {f:g} Hz")
             self._chip_pulse.set_status(f"Width {self._fmt_time(self._spin_width.value())}", "info")
+
+    def _live_apply(self, setter, value) -> None:
+        """Send ONE wavegen setting immediately (a control's editingFinished).
+
+        No-op with a 'staged' hint when the wavegen is not connected — the
+        driver's setters silently drop writes with no VISA session, so we
+        surface that rather than imply success (the earlier bench failure).
+        Never enables the output.
+        """
+        live = bool(getattr(self._wfg, "connected", False)
+                    or getattr(self._wfg, "simulation", False))
+        if not live:
+            self._chip_wfg.set_status(
+                "Staged — wavegen not connected", "warn",
+                "Value cached; sent when you Connect the wavegen.")
+            return
+        try:
+            setter(value)
+            self._chip_wfg.set_status("Wavegen configured", "good")
+        except Exception as exc:
+            self._chip_wfg.set_status("Wavegen error", "crit", str(exc))
 
     def _apply_wfg(self) -> None:
         set_button_busy(self._btn_apply, True, "Applying...")
