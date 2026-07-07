@@ -36,6 +36,8 @@ Config keys  (devices.yaml → camera)
 from __future__ import annotations
 
 import logging
+import os
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -45,6 +47,78 @@ import numpy as np
 from .base import BaseDevice, DeviceError
 
 logger = logging.getLogger(__name__)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FLIR GenTL producer environment auto-locate
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# ``PySpin.System.GetInstance()`` needs the GenTL producer path in the *process*
+# environment (``FLIR_GENTL64_CTI_VS140`` → …\FLIR_GenTL_v140.cti).  The Spinnaker
+# installer sets this system-wide, but a process that was already running when the
+# SDK was installed does not inherit it until it is restarted — hence the
+# "restart VS Code / the app" requirement.  We probe standard install locations
+# and, if the var is unset, point it at an existing producer so GetInstance()
+# succeeds without a restart.  This is Windows-only and never raises.
+
+_GENTL_ENV_VAR  = "FLIR_GENTL64_CTI_VS140"
+_GENTL_PATH_VAR = "GENICAM_GENTL64_PATH"
+_GENTL_CTI_NAME = "FLIR_GenTL_v140.cti"
+
+
+def _default_gentl_probe_paths(env: Optional[dict] = None) -> list[str]:
+    """Candidate full paths to ``FLIR_GenTL_v140.cti`` on a Windows install.
+
+    Order: the confirmed FLIR install location, the Teledyne rebrand tree, then
+    any directory already listed in ``GENICAM_GENTL64_PATH``.  All are probed for
+    existence before use, so extra/wrong candidates are harmless.
+    """
+    if env is None:
+        env = dict(os.environ)
+    paths = [
+        r"C:\Program Files\FLIR Systems\Spinnaker\cti\vs2015\FLIR_GenTL_v140.cti",
+        r"C:\Program Files\Teledyne\Spinnaker\cti64\vs2015\FLIR_GenTL_v140.cti",
+        r"C:\Program Files\Teledyne\Spinnaker\cti64\FLIR_GenTL_v140.cti",
+    ]
+    for d in (env.get(_GENTL_PATH_VAR, "") or "").split(os.pathsep):
+        d = d.strip()
+        if d:
+            paths.append(os.path.join(d, _GENTL_CTI_NAME))
+    return paths
+
+
+def _ensure_gentl_env(probe_paths: list[str], env: dict) -> dict:
+    """Point ``FLIR_GENTL64_CTI_VS140`` at an existing .cti if it is unset.
+
+    Pure / injectable helper (``env`` is mutated in place; pass ``os.environ`` in
+    production or a plain dict in tests).  If the var is already set and non-empty
+    it is respected and nothing changes.  Otherwise the first ``probe_paths`` entry
+    that exists on disk becomes the value, and its directory is prepended to
+    ``GENICAM_GENTL64_PATH``.  Never raises; returns a dict of the keys it set
+    (empty when it changed nothing).
+    """
+    changed: dict = {}
+    existing = env.get(_GENTL_ENV_VAR, "")
+    if existing and existing.strip():
+        return changed  # already provided by the environment — respect it
+    for path in probe_paths:
+        try:
+            if path and os.path.isfile(path):
+                env[_GENTL_ENV_VAR] = path
+                changed[_GENTL_ENV_VAR] = path
+                directory = os.path.dirname(path)
+                prev = env.get(_GENTL_PATH_VAR, "") or ""
+                if directory and directory not in prev.split(os.pathsep):
+                    env[_GENTL_PATH_VAR] = (
+                        directory if not prev
+                        else directory + os.pathsep + prev
+                    )
+                    changed[_GENTL_PATH_VAR] = env[_GENTL_PATH_VAR]
+                break
+        except Exception:
+            # A bad probe entry must never block GetInstance from running.
+            continue
+    return changed
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -148,6 +222,20 @@ class BlackflyCamera(BaseDevice):
             return
 
         ps = self._pyspin
+
+        # Ensure the GenTL producer path is visible to *this* process before
+        # GetInstance() — otherwise a process that started before the Spinnaker
+        # installer ran fails until it is restarted.  Windows-only, never raises.
+        if sys.platform == "win32":
+            try:
+                changed = _ensure_gentl_env(
+                    _default_gentl_probe_paths(os.environ), os.environ
+                )
+                for key, val in changed.items():
+                    logger.info("FLIR GenTL: set %s=%s", key, val)
+            except Exception as exc:  # pragma: no cover — probe is best-effort
+                logger.debug("GenTL env probe skipped: %s", exc)
+
         self._system = ps.System.GetInstance()
         cam_list = self._system.GetCameras()
         if cam_list.GetSize() == 0:
@@ -292,18 +380,24 @@ class BlackflyCamera(BaseDevice):
             logger.debug("BlackLevel not settable: %s", exc)
 
     def set_binning(self, n: int) -> None:
-        """Set symmetric horizontal + vertical binning (1, 2, or 4)."""
+        """Set symmetric horizontal + vertical binning (1, 2, or 4).
+
+        BinningVertical / BinningHorizontal are acquisition-format nodes: on the
+        BFLY-U3-23S6M they are only writable while acquisition is stopped, and one
+        of them can be read-only (slaved to the other) depending on model / mode.
+        Each write is therefore guarded by an ``IsWritable`` check — a non-writable
+        node is an expected condition, logged at INFO and skipped, not an error.
+        Vertical is set first because on FLIR USB3 cameras it commonly drives the
+        (read-only) horizontal value.
+        """
         self._binning = int(n)
         if self._cam is None:
             return
         was = self._acquiring
         if was:
             self._stop_acquisition()
-        try:
-            self._cam.BinningHorizontal.SetValue(n)
-            self._cam.BinningVertical.SetValue(n)
-        except Exception as exc:
-            logger.warning("Binning set failed: %s", exc)
+        self._set_node_if_writable(self._cam.BinningVertical, n, "BinningVertical")
+        self._set_node_if_writable(self._cam.BinningHorizontal, n, "BinningHorizontal")
         if was:
             self._start_acquisition()
 
@@ -537,6 +631,32 @@ class BlackflyCamera(BaseDevice):
     # ──────────────────────────────────────────────────────────────────── #
     # Internal helpers                                                     #
     # ──────────────────────────────────────────────────────────────────── #
+
+    def _set_node_if_writable(self, node: Any, value: Any, label: str) -> bool:
+        """Set a QuickSpin node only if it is available and writable.
+
+        Format nodes (binning, some ROI controls) are read-only on certain models
+        or only writable while acquisition is stopped.  A non-writable node is an
+        expected, benign condition — log at INFO and skip rather than raise or emit
+        a scary warning.  Returns True iff the value was written.
+        """
+        ps = self._pyspin
+        try:
+            if ps is not None:
+                if not ps.IsAvailable(node):
+                    logger.info("%s not available on this model; skipping", label)
+                    return False
+                if not ps.IsWritable(node):
+                    logger.info(
+                        "%s not writable (read-only or acquisition running); "
+                        "skipping", label,
+                    )
+                    return False
+            node.SetValue(value)
+            return True
+        except Exception as exc:
+            logger.info("%s not set (%s); skipping", label, exc)
+            return False
 
     def _configure_transport_layer(self) -> None:
         """Keep only the newest buffer to avoid latency build-up."""
