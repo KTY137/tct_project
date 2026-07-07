@@ -17,10 +17,10 @@ from pathlib import Path
 
 import numpy as np
 import yaml
-from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QObject, QSettings, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
-    QGroupBox, QLabel, QPushButton, QCheckBox, QSlider, QLineEdit,
+    QLabel, QPushButton, QCheckBox, QSlider, QLineEdit,
     QComboBox, QDoubleSpinBox, QDialog, QDialogButtonBox, QMessageBox,
     QSplitter, QScrollArea, QFrame, QSizePolicy,
 )
@@ -46,9 +46,11 @@ except ImportError:
 
 from devices.oscilloscope import Oscilloscope
 from analysis.waveform_analysis import analyse_waveform
+from gui.panel_kit import Card, panel_header
 from gui.scope_measurements import MeasurementPanel
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, StatusLamp
+from gui.style import DARK, LIGHT, SPACE_MD, SPACE_SM, axis_color
 
 logger = logging.getLogger(__name__)
 
@@ -445,6 +447,11 @@ class ScopePanel(QWidget):
         super().__init__(parent)
         self._scope = scope
         self._config_path = config_path
+        # Theme mode for the panel's theme-token accents (DUT Analysis stat
+        # colours, the "delay"-axis time readouts, the probe-attenuation
+        # warning).  Read once from the same QSettings key main.py/tct_gui.py
+        # use, mirroring MotorPanel/BiasPanel — see refresh_theme() below.
+        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
         # Waveform-analysis parameters from devices.yaml (analysis: block) so
         # the live readout uses the same window/termination as the scans.
         self._analysis_kwargs = dict(analysis_kwargs or {})
@@ -520,7 +527,10 @@ class ScopePanel(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(4, 4, 4, 4)
+        root.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
+        root.setSpacing(SPACE_MD)
+
+        root.addWidget(panel_header("TCT Control · Instrument", "Oscilloscope"))
 
         split = QSplitter(Qt.Horizontal)
         split.addWidget(self._build_plot())
@@ -534,7 +544,9 @@ class ScopePanel(QWidget):
 
     def _build_plot(self) -> QWidget:
         if not _HAS_PG:
-            return QLabel("(install pyqtgraph for live waveforms)")
+            card = Card("Live Trace")
+            card.add_widget(QLabel("(install pyqtgraph for live waveforms)"))
+            return card
         self._plot = pg.PlotWidget()
         self._plot.setLabel("left",   "Amplitude", units="V")
         # units="s" lets pyqtgraph auto-pick ns/µs/ms.  Data is plotted in seconds.
@@ -604,28 +616,37 @@ class ScopePanel(QWidget):
 
         self._cur_t1, self._cur_t2 = _pair(90, (0, 200, 255))   # Δt (time)
         self._cur_v1, self._cur_v2 = _pair(0, (255, 200, 0))    # ΔV (volts)
-        return self._plot
+
+        card = Card("Live Trace", "amplitude (V) vs. time (s) · channel cards set colour + role")
+        card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
+        card.add_widget(self._plot)
+        return card
 
     def _build_side_column(self) -> QWidget:
         col = QWidget()
         v = QVBoxLayout(col)
-        v.setContentsMargins(4, 0, 0, 0)
-        v.setSpacing(8)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(SPACE_MD)
 
-        status_row = QHBoxLayout()
-        status_row.setSpacing(6)
+        # Two columns, not one long row: the narrow side column (~360-400 px)
+        # can't fit 5 status chips on one line without either clipping (a
+        # disabled horizontal scrollbar) or crowding the DUT Analysis values
+        # beside them (same width squeeze) — a pre-existing overflow this
+        # composition pass fixes while keeping every chip.
+        status_grid = QGridLayout()
+        status_grid.setHorizontalSpacing(6)
+        status_grid.setVerticalSpacing(6)
         self._chip_scope_conn = StatusChip("Scope offline", "neutral")
         self._chip_scope_live = StatusChip("Live off", "neutral")
         self._chip_scope_trigger = StatusChip("Trigger --", "neutral")
         self._chip_scope_avg = StatusChip("Avg --", "neutral")
         self._chip_scope_channels = StatusChip("Channels --", "neutral")
-        for chip in (
+        for i, chip in enumerate((
             self._chip_scope_conn, self._chip_scope_live, self._chip_scope_trigger,
             self._chip_scope_avg, self._chip_scope_channels,
-        ):
-            status_row.addWidget(chip)
-        status_row.addStretch(1)
-        v.addLayout(status_row)
+        )):
+            status_grid.addWidget(chip, i // 2, i % 2, Qt.AlignLeft)
+        v.addLayout(status_grid)
 
         # Trigger badge
         self._btn_trigger = QPushButton()
@@ -639,17 +660,15 @@ class ScopePanel(QWidget):
 
         # Channel cards.  Keep the layout so rebuild_channels() can add/remove
         # cards when the scope's n_channels is refined (connect) or reconfigured.
-        ch_box = QGroupBox("Channels")
-        ch_lay = QVBoxLayout(ch_box)
-        ch_lay.setSpacing(6)
-        self._ch_layout = ch_lay
+        ch_card = Card("Channels", "enable · role · live readout")
+        self._ch_layout = ch_card.body
         for n, st in self._channels.items():
             card = _ChannelCard(st)
             card.changed.connect(self._on_channel_changed)
             card.toggled.connect(self._on_channel_toggled)
             self._cards[n] = card
-            ch_lay.addWidget(card)
-        v.addWidget(ch_box)
+            self._ch_layout.addWidget(card)
+        v.addWidget(ch_card)
 
         # DUT analysis stats
         v.addWidget(self._build_stats_box())
@@ -660,14 +679,15 @@ class ScopePanel(QWidget):
 
         # Cursor readout
         self._lbl_cursor = QLabel("Cursor: off")
-        self._lbl_cursor.setStyleSheet("color:#888;")
         v.addWidget(self._lbl_cursor)
 
         # Display / scale controls
         if _HAS_PG:
             v.addWidget(self._build_scale_box())
+            v.addWidget(self._build_chan_setup_box())
 
         v.addStretch(1)
+        self._restyle_theme_tokens()
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -677,18 +697,19 @@ class ScopePanel(QWidget):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         return scroll
 
-    def _build_stats_box(self) -> QGroupBox:
-        stats_box = QGroupBox("DUT Analysis")
-        grid = QGridLayout(stats_box)
+    def _build_stats_box(self) -> Card:
+        stats_card = Card("DUT Analysis", "amplitude · charge · timing")
+        grid = QGridLayout()
         grid.setColumnStretch(1, 1)
         grid.setVerticalSpacing(3)
 
         # Single column (label left, value right): fits the narrow side column
-        # without clipping.  Colour-code the value the same cyan as the DUT trace.
+        # without clipping.  Amplitude/charge/RMS read the theme accent; the
+        # three time-domain quantities read the "delay" axis-rail colour
+        # (gui.style.axis_color) — see _restyle_theme_tokens().
         def _stat(row: int, label: str) -> QLabel:
             grid.addWidget(QLabel(label), row, 0)
             lbl = QLabel("—")
-            lbl.setStyleSheet("font-weight: 700; color: #33c8ff;")
             lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             grid.addWidget(lbl, row, 1)
             return lbl
@@ -715,7 +736,8 @@ class ScopePanel(QWidget):
             self._chk_cfd.toggled.connect(self._line_cfd.setVisible)
             self._chk_intwin.toggled.connect(self._int_region.setVisible)
         grid.addLayout(marker_row, 6, 0, 1, 2)
-        return stats_box
+        stats_card.add_layout(grid)
+        return stats_card
 
     def _build_acquire_row(self) -> QHBoxLayout:
         ctrl = QHBoxLayout()
@@ -1026,9 +1048,9 @@ class ScopePanel(QWidget):
     # Display / scale controls                                            #
     # ------------------------------------------------------------------ #
 
-    def _build_scale_box(self) -> QGroupBox:
-        box = QGroupBox("Display / Scale")
-        g = QGridLayout(box)
+    def _build_scale_box(self) -> Card:
+        box = Card("Display / Scale")
+        g = QGridLayout()
 
         self._tdiv_slider = QSlider(Qt.Horizontal)
         self._tdiv_slider.setRange(0, len(self._tdiv_seq) - 1)
@@ -1083,15 +1105,17 @@ class ScopePanel(QWidget):
         row.addWidget(btn_read)
         g.addLayout(row, 4, 0, 1, 3)
         g.addWidget(self._chk_sync, 5, 0, 1, 3)
-        g.addWidget(self._build_chan_setup_box(), 6, 0, 1, 3)
+        box.add_layout(g)
         return box
 
-    def _build_chan_setup_box(self) -> QGroupBox:
+    def _build_chan_setup_box(self) -> Card:
         """Probe attenuation / coupling / bandwidth-limit for the enabled
         channels — the bench "wrong voltage scale" bug was a 10x probe factor
-        left set on a bare BNC cable, silently multiplying every reading."""
-        box = QGroupBox("Channel setup")
-        form = QFormLayout(box)
+        left set on a bare BNC cable, silently multiplying every reading.
+        A sibling card of "Display / Scale" (not nested inside it) so the
+        safety warning below has room to read clearly."""
+        box = Card("Channel Setup", "probe · coupling · bandwidth")
+        form = QFormLayout()
 
         self._probe_combo = QComboBox()
         for label, factor in (("1x", 1.0), ("10x", 10.0), ("100x", 100.0)):
@@ -1118,9 +1142,10 @@ class ScopePanel(QWidget):
         form.addRow(btn_apply_chan)
 
         self._lbl_probe_warn = QLabel("")
-        self._lbl_probe_warn.setStyleSheet("color:#e0a020; font-weight: 600;")
+        self._lbl_probe_warn.setStyleSheet("font-weight: 600;")
         self._lbl_probe_warn.setVisible(False)
         form.addRow(self._lbl_probe_warn)
+        box.add_layout(form)
         return box
 
     def _apply_chan_config(self) -> None:
@@ -1393,6 +1418,54 @@ class ScopePanel(QWidget):
             self._refresh_trigger_badge()
         else:
             notify(f"Trigger apply failed: {err}", "warn")
+
+    # ------------------------------------------------------------------ #
+    # Theme-token styling (gui.style) — re-run by refresh_theme()         #
+    # ------------------------------------------------------------------ #
+
+    def _restyle_theme_tokens(self) -> None:
+        """Re-resolve theme-token colours baked as per-instance QLabel
+        styles: the DUT Analysis stat readouts (amplitude/charge/RMS read
+        the theme accent, the three time-domain quantities read the "delay"
+        axis-rail colour — a TCT drift/rise/CFD time genuinely is a delay
+        measurement), the cursor readout, and the probe-attenuation safety
+        warning. Everything else in this panel repaints automatically via
+        the app-wide stylesheet ``gui.style.apply_theme()`` reapplies."""
+        p = DARK if self._theme_mode == "dark" else LIGHT
+        accent = p["accent"]
+        delay = axis_color("delay", self._theme_mode)
+        for lbl in (getattr(self, "_lbl_amp", None), getattr(self, "_lbl_chg", None),
+                    getattr(self, "_lbl_rms", None)):
+            if lbl is not None:
+                lbl.setStyleSheet(f"font-weight: 700; color: {accent};")
+        for lbl in (getattr(self, "_lbl_drift", None), getattr(self, "_lbl_rise", None),
+                    getattr(self, "_lbl_cfd", None)):
+            if lbl is not None:
+                lbl.setStyleSheet(f"font-weight: 700; color: {delay};")
+        cursor = getattr(self, "_lbl_cursor", None)
+        if cursor is not None:
+            cursor.setStyleSheet(f"color: {p['muted']};")
+        warn = getattr(self, "_lbl_probe_warn", None)
+        if warn is not None:
+            warn.setStyleSheet(f"color: {p['warn']}; font-weight: 600;")
+
+    def refresh_theme(self, mode: str | None = None) -> None:
+        """Re-resolve theme-token colours after a light/dark switch (same
+        pattern as ``MotorPanel.refresh_theme`` / ``BiasPanel.refresh_theme``).
+        Structural chrome (``cardPane``/``cardHeader``/``statusChip``/...)
+        already repaints via the app-wide stylesheet
+        ``gui.style.apply_theme()`` reapplies; only the per-instance colours
+        painted by ``_restyle_theme_tokens`` need this explicit refresh.
+
+        Not yet called by ``tct_gui._toggle_theme`` (its panel list is
+        outside this panel's file-ownership scope for the M2.4 pilot) — the
+        colours above resolve correctly on construction and will re-resolve
+        immediately once that one-line wiring is added; see the panel_kit
+        rollout notes.
+        """
+        if mode:
+            self._theme_mode = str(mode)
+        self._restyle_theme_tokens()
 
     def shutdown(self) -> None:
         """Stop the acquisition thread — call before discarding the panel."""

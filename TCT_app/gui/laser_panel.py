@@ -1,15 +1,18 @@
 """Laser / trigger panel (PDL 800 manual settings + waveform generator control)."""
 from __future__ import annotations
 
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QGroupBox, QLabel, QLineEdit, QDoubleSpinBox,
+    QLabel, QLineEdit, QDoubleSpinBox,
     QPushButton, QComboBox,
 )
 
 from devices.laser_manual import LaserManualMetadata
 from devices.waveform_generator import WaveformGenerator, list_visa_resources
+from gui.panel_kit import Card, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
+from gui.style import SPACE_MD
 
 
 class LaserPanel(QWidget):
@@ -22,10 +25,21 @@ class LaserPanel(QWidget):
         super().__init__(parent)
         self._laser = laser
         self._wfg = wfg
+        # Theme mode for the axis-rail accents (gui.style.axis_color): the
+        # PDL 800 card reads "laser" (purple), the Waveform Generator card
+        # reads "delay" (green) — it drives the laser's trigger/pulse timing,
+        # the classic edge-TCT delay axis.  Read once from the same
+        # QSettings key main.py/tct_gui.py use, mirroring MotorPanel/
+        # BiasPanel; see refresh_theme() below.
+        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
         self._build_ui()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
+        root.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
+        root.setSpacing(SPACE_MD)
+
+        root.addWidget(panel_header("TCT Control · Instrument", "Laser & Trigger"))
 
         status_row = QHBoxLayout()
         status_row.setSpacing(6)
@@ -41,8 +55,8 @@ class LaserPanel(QWidget):
         root.addLayout(status_row)
 
         # ── PDL 800 manual metadata ───────────────────────────────────
-        pdl_box = QGroupBox("PDL 800 (manual settings — recorded in metadata)")
-        form = QFormLayout(pdl_box)
+        self._card_pdl = Card("PDL 800", "manual settings — recorded in metadata")
+        form = QFormLayout()
 
         self._ed_wavelength = QDoubleSpinBox()
         self._ed_wavelength.setRange(200, 1100)
@@ -72,11 +86,12 @@ class LaserPanel(QWidget):
         set_button_icon(btn_save, "mdi.content-save")
         btn_save.clicked.connect(self._save_metadata)
         form.addRow(btn_save)
-        root.addWidget(pdl_box)
+        self._card_pdl.add_layout(form)
+        root.addWidget(self._card_pdl)
 
         # ── Waveform generator (trigger / rep rate) ───────────────────
-        wfg_box = QGroupBox("Waveform Generator (trigger / rep rate)")
-        wfg_form = QFormLayout(wfg_box)
+        self._card_wfg = Card("Waveform Generator", "trigger / rep rate")
+        wfg_form = QFormLayout()
 
         # Live signal controls — initialised from the device's configured values
         # (devices.yaml).  This is the single place these parameters live; the
@@ -180,7 +195,10 @@ class LaserPanel(QWidget):
         diag_row.addWidget(btn_test)
         diag_row.addWidget(btn_visa)
         wfg_form.addRow(diag_row)
-        root.addWidget(wfg_box)
+        self._card_wfg.add_layout(wfg_form)
+        root.addWidget(self._card_wfg)
+        root.addStretch(1)
+        self._restyle_theme_tokens()
 
     # ------------------------------------------------------------------ #
     # Slots                                                               #
@@ -303,3 +321,36 @@ class LaserPanel(QWidget):
         """Return a snapshot of the current laser metadata."""
         self._save_metadata()
         return self._laser
+
+    # ------------------------------------------------------------------ #
+    # Axis-rail styling (gui.style.axis_color) — re-run by refresh_theme() #
+    # ------------------------------------------------------------------ #
+
+    def _restyle_theme_tokens(self) -> None:
+        """Tint the two cards with their axis-rail identity: the PDL 800
+        (the physical laser) reads "laser" (purple); the Waveform Generator
+        (pulse width / frequency / trigger — the classic edge-TCT delay
+        axis) reads "delay" (green). Same idiom as MotorPanel/BiasPanel's
+        axis-rail accents, applied to a whole Card via ``Card.set_rail``."""
+        self._card_pdl.set_rail("laser", self._theme_mode)
+        self._card_wfg.set_rail("delay", self._theme_mode)
+
+    def refresh_theme(self, mode: str | None = None) -> None:
+        """Re-resolve the axis-rail accents after a light/dark switch (same
+        pattern as ``MotorPanel.refresh_theme`` / ``BiasPanel.refresh_theme``).
+
+        ``gui.style.apply_theme(app, mode)`` re-applies the QApplication-wide
+        stylesheet, which already repaints every objectName-based QSS hook
+        (``cardPane``, ``statusChip``, ``armedBtn``, ...) automatically; the
+        rail colours above are baked in as instance-level inline styles at
+        construction time, so they need this explicit refresh.
+
+        Not yet called by ``tct_gui._toggle_theme`` (its panel list is
+        outside this panel's file-ownership scope for the M2.4 pilot) — the
+        colours above resolve correctly on construction and will re-resolve
+        immediately once that one-line wiring is added; see the panel_kit
+        rollout notes.
+        """
+        if mode:
+            self._theme_mode = str(mode)
+        self._restyle_theme_tokens()

@@ -508,6 +508,23 @@ QLabel#eyebrow {{
     color: {p['muted']}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0.07em;
 }}
 
+/* ---------------------------------------------------------------------
+   Panel composition kit (gui/panel_kit.py) — the design-preview's titled-
+   card header (see artifacts_claude/scan_planner_preview_claude.html
+   ``.card-hd``), generalised from the bespoke header gui/planner_panel.py
+   builds by hand so later panels (starting with the M2.4 scope/laser pilot)
+   can reuse one ``Card`` widget instead of re-deriving the same header/
+   divider/spacing by eye.  Sits on top of the existing ``cardPane`` surface
+   above — a Card IS a cardPane with a structured header prepended.
+   --------------------------------------------------------------------- */
+QFrame#cardHeader {{
+    background: transparent; border-bottom: 1px solid {p['border']};
+}}
+QLabel#cardTitle {{ font-weight: 600; }}
+QLabel#cardSubtitle {{
+    font-family: {MONO_FAMILY}; font-size: {FONT_XS}px; color: {p['muted']};
+}}
+
 /* Status chip — a small pill communicating a status.  Drive the look with a
    dynamic property ``state`` in {{neutral, good, warn, crit}}.  To restyle live
    after changing the property, unpolish THEN polish (polish alone can keep the
