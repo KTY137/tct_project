@@ -20,17 +20,20 @@ As Adam you:
 
 The actual application lives at **`TCT_app/`**:
 
-| Path | Purpose |
-|---|---|
-| `main.py`, `tct_gui.py` | Entry point and main window |
-| `devices/` | Instrument drivers: `*_base.py` abstract interfaces + real (`motor_grbl.py`, `bias_supply_iseg.py`, `oscilloscope.py`, …) and simulated (`*_simulated.py`) backends |
-| `controller/` | `scan_controller.py`, `state_machine.py`, `device_manager.py`, `slow_control_manager.py`, `config_validator.py` |
-| `gui/` | PySide6 panels (scan, motor, bias, scope, camera, …), `status_bus.py`, `style.py` |
-| `data/` | `hdf5_writer.py`, `influx_writer.py`, `save_options.py` |
-| `analysis/` | Offline analysis (e.g. `laser_normalization.py`) |
-| `configs/devices.yaml` | Device configuration (validated by `config_validator.py`) |
-| `tests/` | pytest suite — runs headless against simulated devices |
-| `SCAN_DATA_FORMAT.md` | The HDF5 data-format contract — read before touching data layout |
+| Path | Purpose | Default owner |
+|---|---|---|
+| `main.py`, `tct_gui.py` | Entry point and main window (composition root — no logic) | Noah |
+| `devices/` | Instrument drivers: `*_base.py` abstract interfaces + real (`motor_grbl.py`, `bias_supply_iseg.py`, `oscilloscope.py`, …) and simulated (`*_simulated.py`) backends | Paul |
+| `controller/` | `scan_controller.py`, `state_machine.py`, `device_manager.py`, `slow_control_manager.py`, `config_validator.py` | Abel (device_manager internals: Paul) |
+| `gui/` | PySide6 panels (scan, motor, bias, scope, camera, …), `status_bus.py`, `style.py` | Noah (scan run-control logic inside gui files: Abel) |
+| `data/` | `hdf5_writer.py`, `influx_writer.py`, `save_options.py` | Jonathan |
+| `analysis/` | Offline analysis (e.g. `laser_normalization.py`) — all named physics formulas live here | Jonathan |
+| `configs/devices.yaml` | Device configuration (validated by `config_validator.py`) | Abel + Paul |
+| `tests/` | pytest suite — runs headless against simulated devices (`pytest.ini`: 60 s timeout per test) | change author |
+| `SCAN_DATA_FORMAT.md` | The HDF5 data-format contract — read before touching data layout | Jonathan |
+
+Cross-cutting tie-breaks (route by responsibility, not directory) live in
+`.claude/AGENT_PROTOCOL.md` §"Routing tie-breaks".
 
 Sibling folders under `reference/` and `lab_assets/` are **local-only reference
 material**. They are intentionally ignored by Git to avoid publishing third-party
@@ -75,7 +78,15 @@ python -m pytest tests/ -q   # tests — must pass headless, no hardware
   interface and tests) before changing code.
 - **Prefer small patches over rewrites.** Keep every change minimal and reviewable.
 - **Always keep the app runnable** — in simulation mode with zero hardware attached.
-- Before finalizing any substantial change, have **`qa-critic`** review it.
+- Before finalizing any substantial change, have **`qa-critic`** review it —
+  with a *pre-scoped review brief*: **Mamoru pre-runs the suite** (cheap,
+  timeout-guarded), Mary gets the changed-file list, the pre-run result, and
+  specific concerns (template in `.claude/AGENT_PROTOCOL.md` §"Review briefs").
+  Mary re-runs tests only to reproduce a concern, never to establish a baseline.
+- **Noah model override:** for Qt threading, worker lifecycle/teardown, or
+  danger-gate/confirmation work, dispatch `ui-ux-dev` with `model: opus`
+  (his real bug class is concurrency); Sonnet stays his default for
+  layout/theming/panels.
 - When a task needs an instrument manual, protocol spec, library behavior, or physics
   reference that is not already in the repo, dispatch **`researcher`** *first* and pass
   its notes (saved under `docs/research/`) to the implementing agent. Subagents cannot
@@ -145,6 +156,16 @@ boundary-triggered standups over a tight clock).
   role above. Adam can still override per-dispatch via the Agent tool's `model`
   parameter when a specific task is unusually large or trivial for its agent's
   default.
+- **Crew tuning 2026-07-08** (all-hands meta-review; decisions in
+  `docs/DECISIONS.md`): no new agent seats — unanimous. Instead: routing
+  tie-breaks by responsibility (`.claude/AGENT_PROTOCOL.md`), pre-scoped Mary
+  review briefs with Mamoru pre-runs, `pytest-timeout` (60 s per test,
+  `TCT_app/pytest.ini`) so a hung test can never silently wedge the suite,
+  per-agent Bash allowlists in the four code agents, Kiroku-curated
+  `docs/BENCH_CHECKLIST.md` for human bench verification, and maintained
+  lookup registries `docs/signal_registry.md` + `docs/config_keys.md`.
+  Explicitly rejected: test-engineer seat, autonomous bench agent (violates
+  safety rule 6), release/git agent.
 
 ## Hardware safety rules (non-negotiable)
 

@@ -4,7 +4,7 @@ description: >
   Prometheus, stateless research specialist and architecture advisor. Use for
   external manuals, datasheets, protocol specs, library docs, physics references,
   licensing questions, and design stress-tests before large changes.
-tools: WebSearch, WebFetch, Read, Grep, Glob, Write
+tools: WebSearch, WebFetch, Read, Grep, Glob, Edit, Write
 model: opus
 ---
 

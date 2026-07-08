@@ -8,7 +8,15 @@ Purpose: keep subagents useful without burning the full parent conversation.
 - Invoke one specialist at a time unless the tasks are truly independent.
 - Pass only the immediate task, relevant paths, constraints, and short state.
 - Do not pass the full user chat history.
-- Treat each subagent call as stateless.
+- Treat each *new* subagent dispatch as stateless — but **reuse a live instance
+  for iterative rounds on the same task** (2026-07-08): a spawned agent keeps
+  its context within the session and can be continued with follow-up messages.
+  Review→fix→re-verify loops go to the SAME implementer and the SAME reviewer
+  (no re-derivation tax, reviewer knows their own findings). Switch back to a
+  fresh dispatch when the task/domain changes, when the instance's transcript
+  has grown large (a continued agent carries its whole history as cost), or
+  when fresh adversarial eyes are the point. Cross-session state lives in repo
+  files only (agent defs, registries, DECISIONS.md, ledgers).
 - Ask for JSON-style structured reports, not conversational prose.
 - Use `docs/ARCHITECTURE.md` as shared memory instead of replaying context.
 - For external/manual knowledge, call `researcher` first and pass only the note path.
@@ -26,9 +34,47 @@ routine work so the senior crew is reserved for judgment.
 
 Defaults: a "where/what/which" question → **Shiori** (not a raw grep dump). A
 structural change (new module/signal/config key/HDF5 group) → have **Kiroku**
-update the index/changelog in the same task. A health/drift check → **Mamoru**.
-None of these run on their own — they are "always on" only because Adam calls them
-by default.
+update the index/changelog + registries in the same task. A health/drift check
+→ **Mamoru**. None of these run on their own — they are "always on" only
+because Adam calls them by default.
+
+## Routing tie-breaks — by responsibility, not directory
+
+(2026-07-08 crew meta-review.) When a task spans seats, split it; don't let the
+file's directory pick the owner:
+
+- **Scan run-control logic** (sequencing, run-state gating, pause/abort
+  semantics) is **Abel's wherever it lives** — including `tct_gui.py` handlers
+  and the future `gui/scan_coordinator.py`. Paired task: Abel authors logic,
+  Noah wires widgets. Never author abort/pause-race logic at GUI tier alone.
+- **Driver contract vs plumbing:** constructor signature/SCPI behavior = Paul;
+  `device_manager.py` wiring + `config_validator.py` entries = Abel. A change
+  spanning both gets both seats in the same beat.
+- **Physics formulas** (CCE, charge, depletion voltage, calibration math) =
+  Jonathan in `analysis/`; GUI panels call, never inline, them (Noah).
+- Anything under `data/`, `analysis/`, or touching `SCAN_DATA_FORMAT.md` —
+  including config keys consumed by data writers — = Jonathan.
+- **Model override:** Noah runs Sonnet by default; for Qt threading, worker
+  lifecycle/teardown, or danger-gate/confirmation work, Adam dispatches him
+  with `model: opus` (targeted override, not a blanket bump).
+
+## Review briefs (Mary) — pre-scoped, never blind
+
+Sequence for a substantial change: **Mamoru pre-runs the suite** (cheap,
+timeout-guarded) → Adam hands Mary a *review brief* → Mary re-runs tests only
+to reproduce a specific concern, not to establish a baseline.
+
+```json
+{
+  "task_id": "review-<short-id>",
+  "changed_files": ["paths or `git diff` scope"],
+  "pre_run": "Mamoru's result, e.g. '468 passed in 97s' + timings",
+  "specific_concerns": ["what Adam wants stress-tested"],
+  "scoped_test_cmd": "pytest tests/test_x.py -q for the touched area",
+  "base_interfaces": ["matching *_base.py / contract files"],
+  "known_flakes": ["timing_sensitive tests to not report as regressions"]
+}
+```
 
 ## Coffee Break / Standup protocol (opt-in cadence)
 

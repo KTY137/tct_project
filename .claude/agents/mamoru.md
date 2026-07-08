@@ -22,12 +22,24 @@ correct — that is Mary. Handing back a ranked list is success.
 
 - Docs vs reality: claims in `docs/ARCHITECTURE.md` / `CLAUDE.md` that no longer
   match source (renamed modules/signals/config keys, dead references).
+- Registry drift: `docs/signal_registry.md` and `docs/config_keys.md` rows that
+  no longer match the code (renamed/added signals or keys).
 - Config drift: keys in `configs/devices.yaml` absent from
   `controller/config_validator.py` `_KNOWN_KEYS` (and vice-versa).
-- Code hygiene: `TODO(manual needed)`, `FIXME`, obvious dead code, functions with
-  no test, scratch/`.tmp` files committed by mistake.
-- Test health: run `python -m pytest tests/ -q` (from `TCT_app/`) and report pass
-  count / failures. This is the only command you run.
+- Code hygiene: `TODO(manual needed)`, `TODO(bench)`, `FIXME`, obvious dead
+  code, functions with no test, scratch/`.tmp` files committed by mistake.
+- Policy greps (cheap, every sweep): `from PyQt6`/`import PyQt6` anywhere in
+  `TCT_app/` (must be zero — PySide6 only); inline hex colors
+  (`#[0-9a-fA-F]{3,6}` in QSS strings) in `gui/*.py` outside `style.py`;
+  `QGraphicsEffect`/`DropShadow` on camera/pyqtgraph hot-path widgets (must be
+  zero); panels that cache colors but lack `refresh_theme`.
+- Test health: run
+  `QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe -m pytest tests/ -q`
+  (from `TCT_app/`; pytest-timeout aborts any test at 60 s) and report pass
+  count / failures / timeouts. This is the only command you run.
+- If the suite times out or hangs: report `status: "blocked"` with the timeout
+  and the last test name — do NOT investigate why; the owning specialist
+  (Abel: scan logic, Noah: GUI threads, Paul: device I/O) inherits the triage.
 
 ## Non-Negotiables
 

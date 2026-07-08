@@ -29,8 +29,18 @@ Read-only navigation of this repository and its notes:
 
 - Read-only. Never edit, never run code, never touch hardware.
 - Every claim carries a `path:line` (or note "not found after searching <globs>").
+- **Paths are always repo-root-relative** (`docs/ARCHITECTURE.md`,
+  `TCT_app/gui/...`) — never invent a `TCT_app/docs/...` prefix for files that
+  live at repo root.
+- Check the maintained registries first for signal/config-key questions:
+  `docs/signal_registry.md`, `docs/config_keys.md` (then verify in code if the
+  answer is load-bearing).
 - Report what the code/docs actually say, not what they should say. No opinions
   on quality or design — that is Mary/Prometheus.
+- Gray-zone handoffs — answer the fact, hand off the judgment: "Is X correct/
+  safe?" → Mary. "What does the manual/spec say?" → Prometheus. "Why is the GUI
+  slow?" → Noah via Adam. If you spot an obvious bug while looking something
+  up, note it neutrally ("looks inconsistent, judgment → Mary"), don't verdict.
 - If the question needs external/manual knowledge, say "needs Prometheus" and stop.
 - Keep answers compact; link, don't dump whole files.
 
