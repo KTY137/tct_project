@@ -23,7 +23,8 @@ robustness, more Scan Planner features, be creative.*
 ## Sequence ledger (append one line per beat)
 
 - **S0 DONE 2026-07-08:** viewer-prerequisites round committed+pushed (5922dbc..d990d4d, 7 commits): crew tuning, G1 ramp shaping, analysis grid/CCE, cockpit kit, pytest-timeout, pyvisa+armed fix, theme-apply AV fix. Suite 571 passed.
-- **S1 (in progress):** shared scan-map-view widget (Noah) + plan_estimate ramp preview (Abel, DONE, 17 passed). Then Mary review → commit.
+- **S1 DONE 2026-07-08:** shared map widget + ramp-aware estimate + PNG-export fix (7cba862, bc59250). Mary APPROVE-WITH-NITS. Suite 594.
+- **S2a DONE 2026-07-08:** scan_coordinator extracted from tct_gui (behavior-preserving, Mary byte-identical HV verify) + AnalysisPanel.load_run seam (412abe1, 3d3b4b8). Suite 611. Next: S2b ScanViewerPanel, S2c retire ScanPanel.
 
 ## Theme backlog (ranked; I pull sequences from here top-down)
 

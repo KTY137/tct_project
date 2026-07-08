@@ -36,6 +36,29 @@ Organization: **one section per module**, signals listed in definition order. Fo
 
 ---
 
+## gui/scan_coordinator.py
+
+| Signal | Signature | Defined at | Connected to |
+|--------|-----------|-----------|--------------|
+| `ScanCoordinator.point_done` | `(object)` — ScanResult | `scan_coordinator.py:102` | `gui/scan_map_view` / TBD ScanViewerPanel |
+| `ScanCoordinator.progress` | `(int, int)` — done, total | `scan_coordinator.py:103` | ? (live progress display) |
+| `ScanCoordinator.scan_started` | `()` | `scan_coordinator.py:104` | ? |
+| `ScanCoordinator.scan_finished` | `()` | `scan_coordinator.py:105` | ? |
+| `ScanCoordinator.z_focus_pt` | `(float, float)` — z_mm, amplitude_V | `scan_coordinator.py:106` | ? (TBD Z-focus panel) |
+| `ScanCoordinator.z_focus_done` | `(float)` — best_z_mm | `scan_coordinator.py:107` | ? |
+| `ScanCoordinator.vscan_point` | `(float, float, float)` — voltage_V, charge_pC, current_A | `scan_coordinator.py:109` | `BiasPanel` (AnalysisPanel plot on vscan) |
+| `ScanCoordinator.plan_progress` | `(int, int)` — done, total | `scan_coordinator.py:111` | ? (live planner progress) |
+| `ScanCoordinator.plan_error` | `(str)` | `scan_coordinator.py:112` | ? |
+| `ScanCoordinator.plan_finished` | `()` | `scan_coordinator.py:113` | ? |
+| `ScanCoordinator.plan_running` | `(bool)` | `scan_coordinator.py:114` | ? |
+| `ScanCoordinator.hv_armed` | `(bool)` | `scan_coordinator.py:115` | ? |
+| `ScanCoordinator.manual_pause` | `(str)` — plan executor ManualPauseStep prompt | `scan_coordinator.py:117` | ? (plan executor pause-point dialog) |
+| `ScanCoordinator.warn_dialog` | `(str, str)` — (title, message) | `scan_coordinator.py:118` | ? (status-bus warning) |
+| `ScanCoordinator.error_dialog` | `(str, str)` — (title, message) | `scan_coordinator.py:119` | ? (status-bus error) |
+| `ScanCoordinator.status_message` | `(str)` | `scan_coordinator.py:120` | ? (status bar) |
+
+---
+
 ## gui/device_panel.py
 
 | Signal | Signature | Defined at | Connected to |
