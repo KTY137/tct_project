@@ -24,7 +24,7 @@ from gui.detachable_tabs import DetachableTabWidget
 
 from controller.device_manager import DeviceManager
 from controller.state_machine import StateMachine, AppState
-from controller.scan_controller import ScanController, ScanConfig, ZFocusScanConfig, VoltageScanConfig
+from controller.scan_controller import ScanController
 
 from gui.motor_panel import MotorPanel
 from gui.intensity_panel import IntensityPanel
@@ -43,6 +43,7 @@ from gui.status_bus import notify
 from gui.status_widgets import StatusChip, StatusPill
 from gui.planner_panel import PlannerPanel
 from gui.qt_danger_gate import QtDangerGate
+from gui.scan_coordinator import ScanCoordinator
 from controller.scan_plan_validator import PlanLimits
 from controller.plan_from_config import plan_from_scan_config
 
@@ -151,22 +152,6 @@ class _BiasPoller(QObject):
             self.reading.emit(None)
 
 
-class _ScanBridge(QObject):
-    """
-    Marshals ScanController callbacks (called from background threads) onto
-    the Qt main thread via queued signal/slot delivery.  This prevents
-    PySide6 from crashing when a scan thread tries to update GUI widgets.
-    """
-    point_done   = Signal(object)        # ScanResult
-    progress     = Signal(int, int)      # done, total
-    finished     = Signal()
-    error        = Signal(str)
-    z_focus_pt   = Signal(float, float)  # z_mm, amplitude_V
-    z_focus_done = Signal(float)         # best_z_mm
-    vscan_point  = Signal(float, float, float)  # voltage_V, charge_pC, current_A
-    manual_pause = Signal(str)           # plan executor ManualPauseStep prompt
-
-
 class TCTMainWindow(QMainWindow):
     _bias_poll_stop_requested = Signal()
     _liveness_stop_requested = Signal()
@@ -198,9 +183,6 @@ class TCTMainWindow(QMainWindow):
         self._state_changed_sig.connect(self._on_state_change)
         self._sm.add_callback(
             lambda old, new: self._state_changed_sig.emit(old, new))
-        # True while the active run was launched from the Scan Planner —
-        # gates which panel receives progress/finished/error (see dispatchers).
-        self._plan_run_active = False
         self._build_log_dock()
         self._build_device_debug_dock()
         self._build_menu_and_toolbar()
@@ -314,62 +296,68 @@ class TCTMainWindow(QMainWindow):
         self.setStatusBar(self._status)
         self._status.showMessage("Disconnected")
 
-        # ── Thread-safe scan callback bridge ──────────────────────────────
-        # ScanController runs in a daemon threading.Thread; all GUI updates
-        # must go through Qt queued signals to avoid cross-thread crashes.
-        self._bridge = _ScanBridge()
-        self._bridge.point_done.connect(self._scan_panel.on_point_done)
-        self._bridge.progress.connect(self._scan_panel.on_progress)
-        self._bridge.finished.connect(self._on_scan_finished)
-        self._bridge.error.connect(self._on_scan_error)
-        self._bridge.vscan_point.connect(self._bias_panel.on_vscan_point)
+        # ── Scan run-control coordinator ──────────────────────────────────
+        # The ScanCoordinator owns the run-control logic (bridge, plan-vs-classic
+        # dispatch, start/pause/abort/arm-HV) that used to live inline here; this
+        # window is now a composition root that only wires panel signals into the
+        # coordinator's methods and the coordinator's signals into panel slots
+        # (plus a couple of dialog / status shims).  See gui/scan_coordinator.py.
+        # Not parented to the window: like the old _ScanBridge it is held alive
+        # only by this attribute, so a soft config-reload's reassignment lets the
+        # previous coordinator (bound to the discarded ScanController) be
+        # collected instead of accumulating on every reload.  Created on the GUI
+        # thread → GUI-thread affinity → queued delivery of the daemon-thread
+        # scan callbacks is preserved.
+        self._coordinator = ScanCoordinator(
+            self._scanner, self._sm, self._danger_gate, self._plan_limits,
+        )
+        coord = self._coordinator
 
-        self._scanner.on_point_done = lambda r:       self._bridge.point_done.emit(r)
-        self._scanner.on_progress   = lambda d, t:    self._bridge.progress.emit(d, t)
-        self._scanner.on_finished   = lambda:         self._bridge.finished.emit()
-        self._scanner.on_error      = lambda msg:     self._bridge.error.emit(msg)
-        self._scanner.on_vscan_point = lambda v, c, i: self._bridge.vscan_point.emit(v, c, i)
-        self._scanner.on_manual_pause = lambda msg:   self._bridge.manual_pause.emit(msg)
+        # Coordinator → classic Scan panel (fired for every run — plan or classic).
+        coord.point_done.connect(self._scan_panel.on_point_done)
+        coord.progress.connect(self._scan_panel.on_progress)
+        coord.scan_started.connect(self._scan_panel.on_scan_started)
+        coord.scan_finished.connect(self._scan_panel.on_scan_finished)
+        # Z-focus results are connected once here (connecting them per-run
+        # duplicated the slots: double plot points and spin_z written twice).
+        coord.z_focus_pt.connect(self._scan_panel.on_z_focus_point)
+        coord.z_focus_done.connect(self._scan_panel.on_z_focus_done)
+        # Coordinator → bias panel (voltage-scan IV points).
+        coord.vscan_point.connect(self._bias_panel.on_vscan_point)
+        # Coordinator → Scan Planner (forwarded only for a planner-launched run;
+        # the gating lives in the coordinator so no cross-talk from classic scans).
+        coord.plan_progress.connect(self._planner_panel.on_progress)
+        coord.plan_error.connect(self._planner_panel.on_error)
+        coord.plan_finished.connect(self._planner_panel.on_finished)
+        coord.plan_running.connect(self._planner_panel.set_running)
+        coord.hv_armed.connect(self._planner_panel.set_hv_armed)
+        # Coordinator → composition-root dialog / status shims.
+        coord.manual_pause.connect(self._on_plan_manual_pause)
+        coord.warn_dialog.connect(self._show_warn_dialog)
+        coord.error_dialog.connect(self._show_error_dialog)
+        coord.status_message.connect(self._status.showMessage)
 
-        # Planner panel: a plan run fires the same controller callbacks, so it
-        # subscribes via small dispatchers that forward only when the active
-        # run was launched from the planner (no cross-talk from classic scans).
-        # Bridge signals are queued → GUI thread; the panel's own requests
-        # route back into the safety-gated controller here — never device
-        # access from the panel itself.
-        self._bridge.progress.connect(
-            lambda d, t: self._plan_run_active
-            and self._planner_panel.on_progress(d, t))
-        self._bridge.finished.connect(self._on_plan_maybe_finished)
-        self._bridge.error.connect(
-            lambda msg: self._plan_run_active
-            and self._planner_panel.on_error(msg))
-        self._bridge.manual_pause.connect(self._on_plan_manual_pause)
-        self._planner_panel.arm_hv_requested.connect(self._on_arm_hv_requested)
-        self._planner_panel.start_plan_requested.connect(self._start_plan_from_planner)
-        self._planner_panel.abort_requested.connect(self._scanner.abort)
+        # Scan panel → coordinator.
+        self._scan_panel.start_requested.connect(coord.start_scan)
+        self._scan_panel.abort_requested.connect(coord.abort)
+        self._scan_panel.z_focus_requested.connect(coord.start_z_focus)
+        self._scan_panel.vscan_requested.connect(coord.start_voltage_scan)
+        self._scan_panel.pause_requested.connect(coord.toggle_pause)
         # Scan panel → Planner handoff: same parameters, editable as a routine.
         self._scan_panel.open_in_planner_requested.connect(self._open_in_planner)
 
-        self._scan_panel.start_requested.connect(self._start_scan)
-        self._scan_panel.abort_requested.connect(self._scanner.abort)
-        self._scan_panel.z_focus_requested.connect(self._start_z_focus)
-        self._scan_panel.vscan_requested.connect(self._start_voltage_scan)
-        self._bias_panel.vscan_requested.connect(self._start_voltage_scan)
+        # Planner panel → coordinator.
+        self._planner_panel.arm_hv_requested.connect(coord.arm_hv)
+        self._planner_panel.start_plan_requested.connect(coord.start_plan)
+        self._planner_panel.abort_requested.connect(coord.abort)
+
+        # Bias panel → coordinator (voltage scan also starts from the bias panel).
+        self._bias_panel.vscan_requested.connect(coord.start_voltage_scan)
 
         # Motor → Scan panel: "Set as Start"
         self._motor_panel.set_as_scan_start.connect(
             self._scan_panel.set_start_position
         )
-
-        # Z-focus results go through the bridge like every other scan signal —
-        # connected once here (connecting them in _start_z_focus duplicated the
-        # slots on every run: double plot points and spin_z written twice).
-        self._bridge.z_focus_pt.connect(self._scan_panel.on_z_focus_point)
-        self._bridge.z_focus_done.connect(self._scan_panel.on_z_focus_done)
-
-        # Pause / resume the running scan from the Scan panel.
-        self._scan_panel.pause_requested.connect(self._toggle_pause)
 
         # ── Live bias readout (dedicated thread — instrument I/O must never
         #    run on the GUI thread; a hung GPIB read froze the window) ─────
@@ -980,72 +968,19 @@ class TCTMainWindow(QMainWindow):
         except Exception:
             logger.debug("state sync failed", exc_info=True)
 
-    @Slot(bool)
-    def _toggle_pause(self, pause: bool) -> None:
-        try:
-            if pause:
-                self._scanner.pause()
-                self._status.showMessage("Scan paused")
-            else:
-                self._scanner.resume()
-                self._status.showMessage("Scan resumed")
-        except Exception as exc:
-            logger.warning("Pause/resume failed: %s", exc)
-
     # ------------------------------------------------------------------ #
-    # Scan                                                                #
+    # Scan run-control dialog / status shims (coordinator → widgets)      #
     # ------------------------------------------------------------------ #
 
-    @Slot(ScanConfig)
-    def _start_scan(self, cfg: ScanConfig) -> None:
-        if not self._sm.can(AppState.RUNNING):
-            QMessageBox.warning(self, "Cannot Start",
-                                f"Cannot start scan in state {self._sm.state.name}.\n"
-                                "Ensure devices are connected and stage is homed.")
-            return
+    @Slot(str, str)
+    def _show_warn_dialog(self, title: str, message: str) -> None:
+        """Coordinator asked for a warning box (e.g. a refused start)."""
+        QMessageBox.warning(self, title, message)
 
-        # The ScanController allocates its own run directory + writer per run
-        # (see ScanController._begin_run), so no writer is created here.
-        self._scan_panel.on_scan_started()
-        self._scanner.start(cfg)
-
-    def _on_scan_finished(self) -> None:
-        self._scan_panel.on_scan_finished()
-        self._status.showMessage(f"Scan finished — state: {self._sm.state.name}")
-
-    def _on_scan_error(self, msg: str) -> None:
-        self._scan_panel.on_scan_finished()
-        QMessageBox.critical(self, "Scan Error", msg)
-
-    @Slot(ZFocusScanConfig)
-    def _start_z_focus(self, cfg: ZFocusScanConfig) -> None:
-        if not self._sm.can(AppState.RUNNING):
-            QMessageBox.warning(self, "Cannot Start",
-                                f"Cannot start Z-focus scan in state {self._sm.state.name}.\n"
-                                "Ensure devices are connected.")
-            return
-        self._status.showMessage("Z-focus scan running…")
-        # Bridge signals are connected once in _build_central — connecting them
-        # here leaked a duplicate connection per run.
-        self._scanner.start_z_focus_scan(
-            cfg,
-            on_point=lambda z, a: self._bridge.z_focus_pt.emit(z, a),
-            on_done=lambda z:     self._bridge.z_focus_done.emit(z),
-        )
-
-    @Slot(VoltageScanConfig)
-    def _start_voltage_scan(self, cfg: VoltageScanConfig) -> None:
-        if not self._sm.can(AppState.RUNNING):
-            QMessageBox.warning(self, "Cannot Start",
-                                f"Cannot start voltage scan in state {self._sm.state.name}.\n"
-                                "Ensure devices are connected.")
-            return
-        self._status.showMessage("Voltage scan running…")
-        self._scanner.start_voltage_scan(cfg)
-
-    # ------------------------------------------------------------------ #
-    # State updates                                                       #
-    # ------------------------------------------------------------------ #
+    @Slot(str, str)
+    def _show_error_dialog(self, title: str, message: str) -> None:
+        """Coordinator asked for a critical box (scan error / plan refused)."""
+        QMessageBox.critical(self, title, message)
 
     # ------------------------------------------------------------------ #
     # Scan-routine planner wiring                                          #
@@ -1088,65 +1023,21 @@ class TCTMainWindow(QMainWindow):
                 break
         notify("Quick-scan parameters opened in the Scan Planner", "info")
 
-    @Slot()
-    def _on_arm_hv_requested(self) -> None:
-        """Panel Arm-HV (already user-confirmed in the panel's own dialog) →
-        controller latch, reflected back so the panel can unlock Start."""
-        try:
-            self._scanner.arm_hv(True)
-            self._planner_panel.set_hv_armed(True)
-        except Exception as exc:
-            notify(f"Arm HV failed: {exc}", "error")
-            self._planner_panel.set_hv_armed(False)
-
-    @Slot(object)
-    def _start_plan_from_planner(self, plan) -> None:
-        if not self._sm.can(AppState.RUNNING):
-            # Any refusal un-arms, same as the exception path below — the
-            # documented contract is "a refused start never leaves HV armed".
-            self._scanner.arm_hv(False)
-            self._planner_panel.set_hv_armed(False)
-            QMessageBox.warning(self, "Not ready",
-                                "Cannot start a plan in the current state.")
-            return
-        try:
-            self._scanner.start_plan(plan, self._plan_limits(), self._danger_gate)
-            self._plan_run_active = True
-        except Exception as exc:
-            # A refused start consumes the arm latch (controller side) — keep
-            # the panel's Start locked in step.
-            self._planner_panel.set_hv_armed(False)
-            QMessageBox.critical(self, "Plan refused", str(exc))
-
-    @Slot()
-    def _on_plan_maybe_finished(self) -> None:
-        """bridge.finished for the planner: forward only for a plan run, and
-        clear the flag so later classic scans don't leak into the panel.
-
-        The green "Run finished" paint is reserved for a genuinely FINISHED
-        terminal — after an abort / denied confirm / fault the run must not
-        be repainted as a clean finish (on_error already carried the message
-        and the crit styling); just release the panel's running state."""
-        if self._plan_run_active:
-            self._plan_run_active = False
-            if self._sm.state is AppState.FINISHED:
-                self._planner_panel.on_finished()
-            else:
-                self._planner_panel.set_running(False)
-
     @Slot(str)
     def _on_plan_manual_pause(self, prompt: str) -> None:
         """The plan executor hit a ManualPauseStep: surface the operator
-        prompt; Resume continues the plan, Abort stops it fail-safe."""
+        prompt; Resume continues the plan, Abort stops it fail-safe.  The
+        Resume/Abort decision routes back through the coordinator (which owns the
+        ScanController); this slot is a pure modal-dialog shim."""
         box = QMessageBox(QMessageBox.Information, "Manual step",
                           prompt or "Manual intervention required.", parent=self)
         resume = box.addButton("Resume plan", QMessageBox.AcceptRole)
         box.addButton("Abort plan", QMessageBox.RejectRole)
         box.exec()
         if box.clickedButton() is resume:
-            self._scanner.resume()
+            self._coordinator.resume()
         else:
-            self._scanner.abort()
+            self._coordinator.abort()
 
     def _on_state_change(self, old: AppState, new: AppState) -> None:
         state_map = {
@@ -1169,7 +1060,8 @@ class TCTMainWindow(QMainWindow):
         if panel is not None:
             # Only a planner-launched run drives the panel's running state; a
             # terminal transition always releases it (flag already cleared).
-            running = getattr(self, "_plan_run_active", False) and \
+            coord = getattr(self, "_coordinator", None)
+            running = bool(coord is not None and coord.plan_run_active) and \
                 new in (AppState.RUNNING, AppState.PAUSED)
             panel.set_running(running)
         self._status.showMessage(f"State: {new.name}")
