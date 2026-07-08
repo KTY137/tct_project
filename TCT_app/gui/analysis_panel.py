@@ -32,9 +32,11 @@ try:
 except ImportError:
     _HAS_H5 = False
 
+from analysis.cce import cce_vs_reference
+from analysis.scan_grid import grid_extent, points_to_grid
 from gui.panel_kit import Card, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
-from gui.style import SPACE_MD, SPACE_SM
+from gui.style import PLOT_BG, SPACE_MD, SPACE_SM
 
 
 class AnalysisPanel(QWidget):
@@ -168,7 +170,8 @@ class AnalysisPanel(QWidget):
         if _HAS_PG:
             cce_card = Card("CCE Curve")
             cce_card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
-            self._cce_plot = pg.PlotWidget(title="CCE / Q vs. Bias Voltage")
+            self._cce_plot = pg.PlotWidget(title="CCE / Q vs. Bias Voltage", background=PLOT_BG)
+            self._cce_plot.showGrid(x=True, y=True, alpha=0.25)
             self._cce_plot.setLabel("left",   "CCE / Norm. Charge")
             self._cce_plot.setLabel("bottom", "Bias Voltage", units="V")
             self._cce_plot.addLegend()
@@ -252,29 +255,30 @@ class AnalysisPanel(QWidget):
             self._chip_map.set_status("Map invalid", "crit")
             return
 
-        xs = np.unique(x)
-        ys = np.unique(y)
-        arr = np.full((len(xs), len(ys)), np.nan)
-        xi = {v: i for i, v in enumerate(xs)}
-        yi = {v: i for i, v in enumerate(ys)}
-        for xi_, yi_, val in zip(x, y, z):
-            arr[xi[xi_], yi[yi_]] = val
+        try:
+            result = points_to_grid(x, y, z)
+        except ValueError as exc:
+            # e.g. a truncated/partially-written HDF5 where x_mm, y_mm,
+            # and the quantity column ended up different lengths.
+            self._lbl_map_info.setText(f"Map invalid: {exc}")
+            self._chip_map.set_status("Map invalid", "crit")
+            return
+        xs, ys = result.x_mm, result.y_mm
+        pos, scale = grid_extent(result)
 
         self._map_view.setImage(
-            np.nan_to_num(arr),
+            np.nan_to_num(result.grid),
             autoRange=True,
             autoLevels=True,
             # Map pixel coordinates → mm so the built-in ROI axes show mm
-            pos=(float(xs[0]), float(ys[0])),
-            scale=(
-                float((xs[-1] - xs[0]) / max(len(xs) - 1, 1)),
-                float((ys[-1] - ys[0]) / max(len(ys) - 1, 1)),
-            ),
+            pos=pos,
+            scale=scale,
         )
         self._lbl_map_info.setText(
             f"{qty}  |  {len(xs)} × {len(ys)} points  "
             f"|  min={np.nanmin(z):.4g}  max={np.nanmax(z):.4g}  "
             f"|  X [{xs[0]:.3f}, {xs[-1]:.3f}] mm  Y [{ys[0]:.3f}, {ys[-1]:.3f}] mm"
+            f"  |  {result.n_missing} missing, {result.n_duplicate_points} duplicate pts"
         )
         self._chip_map.set_status(f"Map {len(xs)}x{len(ys)}", "good")
         self._chip_export.set_status("Export ready", "good")
@@ -302,10 +306,10 @@ class AnalysisPanel(QWidget):
             )
             return
 
-        q_ref = self._spin_ref_charge.value()
-        # TCT pulses are usually negative → raw charge_pC is signed.  CCE is a
-        # ratio of collected-charge magnitudes, so compare |Q| against |Q_ref|.
-        cce = np.abs(np.array(charges)) / max(abs(q_ref), 1e-12)
+        # CCE(i) = |Q(i)| / |Q_ref| — see analysis.cce for the sign/guard
+        # rationale (TCT pulses are usually negative → raw charge_pC is
+        # signed; CCE compares magnitudes).
+        cce = cce_vs_reference(charges, self._spin_ref_charge.value())
 
         self._cce_curve_cce.setData(voltages, cce)
 
@@ -335,12 +339,12 @@ class AnalysisPanel(QWidget):
         path, _ = QFileDialog.getSaveFileName(self, "Export CCE", "", "CSV (*.csv)")
         if not path:
             return
-        q_ref = max(abs(self._spin_ref_charge.value()), 1e-12)
+        cce = cce_vs_reference(charges, self._spin_ref_charge.value())
         with open(path, "w", newline="") as fh:
             w = csv.writer(fh)
             w.writerow(["bias_V", "dut_charge_pC", "CCE"])
-            for v, q in zip(voltages, charges):
-                w.writerow([f"{v:.2f}", f"{q:.6f}", f"{abs(q)/q_ref:.6f}"])
+            for v, q, c in zip(voltages, charges, cce):
+                w.writerow([f"{v:.2f}", f"{q:.6f}", f"{c:.6f}"])
         flash_button(self._btn_export_cce, "good", "Exported")
 
     def _export_csv(self) -> None:

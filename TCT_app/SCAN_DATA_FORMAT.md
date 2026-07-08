@@ -102,7 +102,7 @@ Reconstruct the 2-D map from the actual `points/x_mm` / `points/y_mm` datasets â
 
 ```python
 import h5py, numpy as np, json
-import scipy.interpolate as si
+from analysis.scan_grid import points_to_grid
 
 with h5py.File("runs/run_00001/waveforms.h5", "r") as f:
     info = {k: f["run_info"].attrs[k] for k in f["run_info"].attrs} if "run_info" in f else {}
@@ -110,8 +110,8 @@ with h5py.File("runs/run_00001/waveforms.h5", "r") as f:
     q = f["analysis/dut_charge_pC"][:]
     t = f["waveforms/time_s"][:]; dut = f["waveforms/dut_ch2"][:]
 
-# 2-D charge map (handles serpentine ordering)
-xi = np.unique(np.round(x, 4)); yi = np.unique(np.round(y, 4))
-gx, gy = np.meshgrid(xi, yi)
-grid = si.griddata((x, y), q, (gx, gy), method="nearest")
+# 2-D charge map (handles serpentine ordering; unsampled cells are NaN, not
+# dropped â€” see analysis/scan_grid.py for the full NaN-counting contract).
+result = points_to_grid(x, y, q)
+grid, xi, yi = result.grid, result.x_mm, result.y_mm
 ```

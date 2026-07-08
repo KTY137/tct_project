@@ -140,6 +140,27 @@ def test_analysis_panel_hooks_survive_card_swap():
     assert hasattr(panel, "_cce_plot")
 
 
+def test_analysis_panel_replot_map_mismatched_lengths_surfaces_crit_not_raise():
+    """gui/analysis_panel.py::_replot_map wraps analysis.scan_grid.points_to_grid
+    in try/except ValueError (Mary review finding, 2026-07-08): a truncated /
+    partially-written HDF5 (x_mm, y_mm, quantity columns of different
+    lengths) must surface as 'Map invalid' / crit, not raise out of the Qt
+    slot."""
+    _app()
+    panel = AnalysisPanel()
+    panel._data = {
+        "x_mm": [0.0, 1.0, 2.0],
+        "y_mm": [0.0, 1.0],          # deliberately shorter -> ValueError inside points_to_grid
+        "dut_charge_pC": [1.0, 2.0, 3.0],
+    }
+    panel._combo_qty.setCurrentText("dut_charge_pC")
+
+    panel._replot_map()   # must not raise
+
+    assert panel._chip_map.text() == "Map invalid"
+    assert panel._chip_map.property("state") == "crit"
+
+
 def test_hot_path_widgets_have_no_graphics_effect():
     """Laser/perf safety rule: no QGraphicsDropShadow/glow/animated effect on
     a camera frame view or any pyqtgraph plot/histogram — static depth
