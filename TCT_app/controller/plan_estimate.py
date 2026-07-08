@@ -18,6 +18,7 @@ conservative upper bound (sequential-axis motion, initial approach excluded).
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from controller.plan_compiler import (
@@ -107,7 +108,6 @@ def estimate_plan(
     prev_bias = 0.0            # HV starts off / at 0 V
     bias_targets: list[float] = []
     speed = timing.motor_speed_mm_s if timing.motor_speed_mm_s > 0 else 1.0
-    ramp_step = timing.bias_ramp_step_V if timing.bias_ramp_step_V > 0 else 1.0
     n_manual = 0
 
     for step in steps:
@@ -126,7 +126,7 @@ def estimate_plan(
         elif isinstance(step, BiasStep):
             bias_targets.append(step.target_V)
             dv = abs(step.target_V - prev_bias)
-            runtime += (dv / ramp_step) * timing.bias_ramp_delay_s + timing.bias_hold_s
+            runtime += _bias_ramp_seconds(dv, step, timing) + timing.bias_hold_s
             prev_bias = step.target_V
         elif isinstance(step, AcquireStep):
             runtime += step.n_averages * timing.s_per_average
@@ -158,3 +158,35 @@ def estimate_plan(
         hv_range_V=hv_range,
         warnings=warnings,
     )
+
+
+def _bias_ramp_seconds(dv: float, step: BiasStep, timing: Timing) -> float:
+    """Wall-clock estimate for one ``BiasStep``'s ramp of magnitude *dv*.
+
+    *dv* is measured from the previous compiled bias set point (0 V at run
+    start), which the walk tracks in ``prev_bias`` — the estimate never needs a
+    conservative guess.
+
+    Two regimes, so a plan-driven shaped ramp is estimated with the shape it
+    will actually use:
+
+    * **No per-step shaping** (``ramp_step_V`` and ``ramp_delay_s`` both None):
+      byte-identical to the historic estimate ``(dv / global_step) *
+      global_delay`` — a float step count against the ``Timing`` defaults.  This
+      keeps every existing preview unchanged.
+    * **Per-step shaping** (either field set): the ramp is modelled as the real
+      DISCRETE step count the driver walks, ``ceil(dv / step) * delay``.  Each
+      field independently falls back to the ``Timing`` global when only the
+      other is set (mirroring the executor's ``_ramp_bias`` fallback).
+    """
+    if step.ramp_step_V is None and step.ramp_delay_s is None:
+        gstep = timing.bias_ramp_step_V if timing.bias_ramp_step_V > 0 else 1.0
+        return (dv / gstep) * timing.bias_ramp_delay_s
+
+    eff_step = (step.ramp_step_V if step.ramp_step_V is not None
+                else timing.bias_ramp_step_V)
+    eff_step = eff_step if eff_step > 0 else 1.0
+    eff_delay = (step.ramp_delay_s if step.ramp_delay_s is not None
+                 else timing.bias_ramp_delay_s)
+    n_steps = math.ceil(dv / eff_step) if dv > 0 else 0
+    return n_steps * eff_delay

@@ -132,3 +132,57 @@ def test_custom_timing_scales_runtime():
     fast = estimate_plan(simple_plan(), Timing(motor_speed_mm_s=1000.0))
     slow = estimate_plan(simple_plan(), Timing(motor_speed_mm_s=1.0))
     assert slow.est_runtime_s > fast.est_runtime_s
+
+
+# --------------------------------------------------------------------------- #
+# G1 follow-up: per-BiasStep HV ramp shaping feeds the runtime estimate        #
+# --------------------------------------------------------------------------- #
+
+def _bias_only_plan(target, ramp_step_V=None, ramp_delay_s=None):
+    """A move-free bias plan: one BIAS_V setpoint, acquire+save (no stage loop
+    so the estimate isolates the ramp + hold + one acquire)."""
+    b = LoopBlock(axis=Axis.BIAS_V, values=[float(target)],
+                  ramp_step_V=ramp_step_V, ramp_delay_s=ramp_delay_s,
+                  children=[_acq(), _save()])
+    return ScanPlan(root=[b], safety={"require_hv_confirmation": True})
+
+
+# ramp + hold + one default acquire, for a move-free single-bias plan.
+_HOLD = 1.0
+_ACQ = 1 * 0.02
+
+
+def test_absent_shaping_matches_historic_estimate():
+    """No ramp fields → byte-identical to the pre-shaping estimate:
+    ramp = (|ΔV| / 5) * 0.1 against the Timing defaults."""
+    est = estimate_plan(_bias_only_plan(-50.0))
+    assert est.est_runtime_s == pytest.approx((50.0 / 5.0) * 0.1 + _HOLD + _ACQ)
+
+
+def test_shaped_ramp_changes_estimate_vs_global_default():
+    """A coarser shaped step (25 V) makes the ETA shorter than the 5 V default —
+    the preview follows the shape the executor will actually apply."""
+    default = estimate_plan(_bias_only_plan(-50.0))
+    shaped = estimate_plan(_bias_only_plan(-50.0, ramp_step_V=25.0, ramp_delay_s=0.1))
+    assert shaped.est_runtime_s != default.est_runtime_s
+    # default ramp (50/5)*0.1 = 1.0 s ; shaped ramp ceil(50/25)*0.1 = 0.2 s.
+    assert shaped.est_runtime_s == pytest.approx(default.est_runtime_s - (1.0 - 0.2))
+
+
+def test_shaped_ramp_exact_runtime():
+    est = estimate_plan(_bias_only_plan(-50.0, ramp_step_V=25.0, ramp_delay_s=0.1))
+    # ceil(50/25) = 2 discrete steps * 0.1 s + hold + one acquire.
+    assert est.est_runtime_s == pytest.approx(2 * 0.1 + _HOLD + _ACQ)
+
+
+def test_shaped_ramp_rounds_step_count_up():
+    """A non-integer step count is ceil'd: ceil(30/20) = 2, not 1.5."""
+    est = estimate_plan(_bias_only_plan(-30.0, ramp_step_V=20.0, ramp_delay_s=0.1))
+    assert est.est_runtime_s == pytest.approx(2 * 0.1 + _HOLD + _ACQ)
+
+
+def test_partial_shaping_falls_back_to_global_step():
+    """Only ramp_delay_s set → step uses the Timing global (5 V), delay uses the
+    per-step value: ceil(50/5) = 10 steps * 0.2 s."""
+    est = estimate_plan(_bias_only_plan(-50.0, ramp_delay_s=0.2))
+    assert est.est_runtime_s == pytest.approx(10 * 0.2 + _HOLD + _ACQ)
