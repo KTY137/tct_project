@@ -71,6 +71,21 @@ LIGHT = {
     "bg": "#f4f6f9", "panel": "#ffffff", "border": "#d6dbe3",
     "text": "#1f2a37", "muted": "#6b7280",
     "pressed": "#e6f4f8", "disabled_bg": "#f0f1f3",
+    # Cockpit kit (Phase 0, docs/design/cockpit_style_overhaul.md §2) —
+    # additive layering/emphasis tokens. panel_2/panel_3 step progressively
+    # deeper than "panel" (nested card bodies); "sunk" is a recessed/inset
+    # surface (input wells, dial recesses); "border_strong" is an emphasized
+    # border for hover/active/focus rings; "hover"/"active" are neutral
+    # interaction washes distinct from the accent-tinted "pressed" above.
+    "panel_2": "#f6f8fb", "panel_3": "#eef1f6", "sunk": "#e6eaf0",
+    "border_strong": "#b7c0cc", "hover": "#e9edf2", "active": "#d8eef5",
+    # Plot chrome tokens (grid/overlay) — kept identical in both dicts on
+    # purpose, same idiom as good/warn/crit above: the plot canvas itself
+    # (PLOT_BG/PLOT_FG, below) is a fixed dark "instrument screen" in BOTH
+    # themes, so its grid/overlay accents don't repaint on a theme switch
+    # either. Present in both dicts so FigureCard/panels can resolve them
+    # via palette(mode) without a fixed-vs-per-theme special case.
+    "plot_grid": None, "plot_overlay": None,
 }
 
 DARK = {
@@ -80,6 +95,10 @@ DARK = {
     "bg": "#1f242b", "panel": "#272d36", "border": "#3a424d",
     "text": "#e6e9ee", "muted": "#9aa4b2",
     "pressed": "#243743", "disabled_bg": "#2b313a",
+    # See the matching comment in LIGHT above.
+    "panel_2": "#2d333d", "panel_3": "#333a45", "sunk": "#191d23",
+    "border_strong": "#4d5765", "hover": "#323944", "active": "#25414c",
+    "plot_grid": None, "plot_overlay": None,
 }
 
 # ---------------------------------------------------------------------------
@@ -104,6 +123,44 @@ def axis_color(axis: str, mode: str = "dark") -> str:
     """Return the axis-rail hex for *axis* in the given theme *mode*."""
     key = "light" if str(mode).lower() == "light" else "dark"
     return AXIS_RAIL.get(str(axis).lower(), AXIS_RAIL["bias"])[key]
+
+
+def palette(mode: str) -> dict:
+    """Return the ``LIGHT``/``DARK`` token dict for *mode*.
+
+    Generalises the ``p = DARK if theme_mode == "dark" else LIGHT`` idiom
+    every panel/``settings_window._palette`` already hand-rolls into one
+    shared helper, for cockpit-kit widgets (``gui/panel_kit.py``) that need
+    to resolve a token (e.g. ``palette(mode)["panel_2"]``) outside of
+    ``build_qss``.
+    """
+    return DARK if str(mode).lower() == "dark" else LIGHT
+
+
+# ---------------------------------------------------------------------------
+# Static "glow"/emphasis accent set — cockpit kit (Phase 0). Deliberately
+# NOT per-theme (same hex in light and dark, unlike the palette dicts above):
+# it marks non-hot-path emphasis (e.g. a CheckableCard/MetricTile "armed"
+# state's static border) with one fixed, always-legible language rather than
+# a colour that would shift on a theme toggle. This is a *token*, not an
+# effect — rule 3 (cockpit_style_overhaul.md §1) still forbids any
+# QGraphicsDropShadow/glow QGraphicsEffect on a hot-path widget; nothing here
+# creates one, and this set must never be applied to the camera view or a
+# pyqtgraph plot/container.
+# ---------------------------------------------------------------------------
+GLOW = {
+    "accent": ACCENT_DARK,
+    "good": OK_GREEN,
+    "warn": WARN_AMBER,
+    "crit": WARN_RED,
+    "armed": WARN_AMBER,
+}
+
+
+def glow_color(kind: str = "accent") -> str:
+    """Return the static glow/emphasis hex for *kind* (non-hot-path chrome
+    only — see the ``GLOW`` module docstring above)."""
+    return GLOW.get(str(kind).lower(), GLOW["accent"])
 
 
 def repolish(widget) -> None:
@@ -225,10 +282,11 @@ QPushButton:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outline-offs
 QPushButton:disabled {{
     color: {p['muted']}; background: {p['disabled_bg']}; border-color: {p['border']};
 }}
-QPushButton:default {{
+QPushButton:default, QPushButton[state="primary"] {{
     background: {p['accent']}; color: white; border: 1px solid {p['accent_strong']};
 }}
-QPushButton:default:hover {{ background: {p['accent_strong']}; }}
+QPushButton:default:hover, QPushButton[state="primary"]:hover {{ background: {p['accent_strong']}; }}
+QPushButton[state="primary"]:pressed {{ background: {_darken(p['accent_strong'], 0.15)}; }}
 QPushButton[state="busy"] {{
     background: {_rgba(p['accent'], 0.16)}; color: {p['accent']};
     border: 1px solid {_rgba(p['accent'], 0.55)};
@@ -237,7 +295,7 @@ QPushButton[state="good"] {{
     background: {_rgba(p['good'], 0.16)}; color: {p['good']};
     border: 1px solid {_rgba(p['good'], 0.55)};
 }}
-QPushButton[state="warn"], QPushButton#armedBtn {{
+QPushButton[state="warn"], QPushButton#armedBtn, QPushButton[state="armed"] {{
     background: {_rgba(p['warn'], 0.18)}; color: {p['warn']};
     border: 1px solid {_rgba(p['warn'], 0.65)};
     font-weight: 700;
@@ -246,6 +304,32 @@ QPushButton[state="crit"] {{
     background: {_rgba(p['crit'], 0.16)}; color: {p['crit']};
     border: 1px solid {_rgba(p['crit'], 0.55)};
 }}
+
+/* Cockpit-kit button variants (gui/panel_kit.py ActionBar) — "secondary" and
+   "ghost" are new looks; "primary"/"armed"/"danger" (below, folded into the
+   existing :default/warn/#dangerBtn rules) and "busy" (above) reuse rules
+   that already existed so every variant maps to exactly one visual language
+   app-wide (cockpit_style_overhaul.md §1 rule 1/2) instead of a second,
+   parallel button-colour system. */
+QPushButton[state="secondary"] {{
+    background: transparent; color: {p['accent']};
+    border: 1px solid {_rgba(p['accent'], 0.55)};
+}}
+QPushButton[state="secondary"]:hover {{
+    background: {_rgba(p['accent'], 0.10)}; border-color: {p['accent']};
+}}
+QPushButton[state="secondary"]:pressed {{ background: {_rgba(p['accent'], 0.18)}; }}
+QPushButton[state="secondary"]:disabled {{
+    color: {p['muted']}; background: transparent; border-color: {p['border']};
+}}
+QPushButton[state="ghost"] {{
+    background: transparent; color: {p['muted']}; border: 1px solid transparent;
+}}
+QPushButton[state="ghost"]:hover {{
+    background: {p['pressed']}; color: {p['text']}; border-color: {p['border']};
+}}
+QPushButton[state="ghost"]:pressed {{ background: {_rgba(p['accent'], 0.14)}; }}
+QPushButton[state="ghost"]:disabled {{ color: {p['muted']}; background: transparent; }}
 
 /* Toolbuttons (toolbar actions, tab corner "detach" button, ...) get the same
    quiet hover/pressed/checked language as QPushButton so a toolbar reads as
@@ -415,17 +499,20 @@ QTreeWidget::item:hover, QListWidget::item:hover {{ background: {p['pressed']}; 
 /* Danger action button (STOP / immediate hardware abort). Same red language
    as the toolbar Disconnect button, under its own name so any panel can mark
    an "abort now" control this way without borrowing the connect/disconnect
-   semantics. */
-QPushButton#dangerBtn {{
+   semantics. QPushButton[state="danger"] (gui/panel_kit.py ActionBar) is
+   folded into the same selectors byte-for-byte — an opt-in via the state
+   property reaches the identical look instead of a second danger language
+   (cockpit_style_overhaul.md §1 rule 2: one danger visual language). */
+QPushButton#dangerBtn, QPushButton[state="danger"] {{
     background: {p['crit']}; color: white; border: 1px solid {p['crit']};
     font-weight: 700;
 }}
-QPushButton#dangerBtn:hover {{
+QPushButton#dangerBtn:hover, QPushButton[state="danger"]:hover {{
     background: {_darken(p['crit'], 0.12)}; border-color: {_darken(p['crit'], 0.12)};
 }}
-QPushButton#dangerBtn:pressed {{ background: {_darken(p['crit'], 0.22)}; }}
-QPushButton#dangerBtn:focus {{ outline: 2px solid {_rgba(p['crit'], 0.40)}; outline-offset: 1px; }}
-QPushButton#dangerBtn:disabled {{
+QPushButton#dangerBtn:pressed, QPushButton[state="danger"]:pressed {{ background: {_darken(p['crit'], 0.22)}; }}
+QPushButton#dangerBtn:focus, QPushButton[state="danger"]:focus {{ outline: 2px solid {_rgba(p['crit'], 0.40)}; outline-offset: 1px; }}
+QPushButton#dangerBtn:disabled, QPushButton[state="danger"]:disabled {{
     background: {p['disabled_bg']}; color: {p['muted']}; border: 1px solid {p['border']};
 }}
 
@@ -453,6 +540,15 @@ QLabel#readoutCellValue {{
     color: {p['accent']}; font-family: {MONO_FAMILY};
     font-size: {FONT_SM}px; font-weight: 700;
 }}
+/* Tri-state (+ "armed") value-colour hook — drive with a dynamic ``state``
+   property in {{good, warn, crit}} via gui.status_widgets.ReadoutCell.set_state()
+   (or {{normal, warn, armed}} via gui.panel_kit.MetricTile, which is built on
+   ReadoutCell and reuses this exact hook). "normal"/no property falls through
+   to the bare rule above, the same graceful-unknown idiom as statusChip. */
+QLabel#readoutCellValue[state="good"] {{ color: {p['good']}; }}
+QLabel#readoutCellValue[state="warn"] {{ color: {p['warn']}; }}
+QLabel#readoutCellValue[state="crit"] {{ color: {p['crit']}; }}
+QLabel#readoutCellValue[state="armed"] {{ color: {p['warn']}; font-weight: 800; }}
 
 /* Recessed control cluster — groups related buttons (e.g. a jog pad) into
    one visual unit inside a QGroupBox, the way a physical jog controller
@@ -653,26 +749,45 @@ QLabel#plannerGhostHint {{
 PLOT_BG = "#0e1116"
 PLOT_FG = "#c8cdd6"
 
+# Plot chrome (grid/overlay) — cockpit kit (Phase 0). Same "fixed in both
+# themes" reasoning as PLOT_BG/PLOT_FG above: FigureCard's hosted plot always
+# sits on the dark canvas regardless of app theme, so its grid-line and
+# overlay-marker (crosshair/ROI/cursor) accents stay fixed too. Backfilled
+# into LIGHT/DARK's "plot_grid"/"plot_overlay" placeholders (declared next to
+# the other per-theme tokens, above) so callers can resolve every cockpit-kit
+# token the same way via palette(mode) instead of a special case for these two.
+PLOT_GRID = "#2a323d"
+PLOT_OVERLAY = "#ffb454"
+for _p in (LIGHT, DARK):
+    _p["plot_grid"] = PLOT_GRID
+    _p["plot_overlay"] = PLOT_OVERLAY
+del _p
+
 
 def _apply_pyqtgraph(p: dict) -> None:
-    """Give pyqtgraph plots a dark canvas + grid so they're always visible."""
+    """Set pyqtgraph's global canvas defaults so every plot built afterwards
+    inherits the dark "instrument screen" colours (PLOT_BG/PLOT_FG).
+
+    NOTE: this intentionally does *not* walk ``QApplication.allWidgets()`` to
+    restyle already-live plots. That walk was a native crash vector — after
+    many widgets have been created/destroyed in one process (windows closed,
+    panels detached, deferred deletions not yet flushed), ``allWidgets()`` can
+    enumerate wrappers whose C++ QWidget is mid/post-destruction, and touching
+    (or even materialising) such a corpse access-violates natively — an AV the
+    surrounding ``try/except`` cannot catch. It also silently clobbered plots
+    that deliberately opt out of PLOT_BG (e.g. ScanMapWindow's transparent
+    axis overlay). Since PLOT_BG/PLOT_FG are *fixed in both themes*, the walk
+    never did any theme-dependent work: each plot instead owns its own canvas
+    (``pg.PlotWidget(background=PLOT_BG)`` + ``showGrid(...)`` at construction),
+    and per-theme accents are re-resolved by each panel's ``refresh_theme``.
+    This keeps ``apply_theme`` safe to call at any time (e.g. the settings
+    toggle) even with closed / half-destroyed windows still around."""
     try:
         import pyqtgraph as pg
-        from PySide6.QtWidgets import QApplication
     except Exception:
         return
     pg.setConfigOption("background", PLOT_BG)   # default for plots built later
     pg.setConfigOption("foreground", PLOT_FG)
-    app = QApplication.instance()
-    if app is None:
-        return
-    for w in app.allWidgets():
-        if isinstance(w, pg.PlotWidget):
-            try:
-                w.setBackground(PLOT_BG)
-                w.showGrid(x=True, y=True, alpha=0.25)   # empty plot still looks like a plot
-            except Exception:
-                pass
 
 
 def apply_theme(app, mode: str = "light") -> str:

@@ -154,12 +154,36 @@ class ReadoutCell(QFrame):
         self._value.setAlignment(Qt.AlignmentFlag.AlignCenter)
         lay.addWidget(self._title)
         lay.addWidget(self._value)
+        self._state = "normal"
 
     def set_value(self, value: str) -> None:
         self._value.setText(value)
 
     def value(self) -> str:
         return self._value.text()
+
+    def set_state(self, state: str | None) -> None:
+        """Tri-state tone hook for the value text (e.g. a bench overheat
+        cue) — the tokenized replacement for hand-rolling
+        ``label.setStyleSheet(f"#readoutCellValue {{ color: {WARN_RED} }}")``
+        per call site (see ``gui/camera_panel.py``'s temperature readout,
+        which this generalises for future migration).
+
+        Typical values are ``{"normal", "good", "warn", "crit"}``, driving
+        the ``QLabel#readoutCellValue[state=...]`` QSS hook in
+        ``gui/style.py``. ``gui.panel_kit.MetricTile`` (built on this class)
+        reuses the exact same hook with ``{"normal", "warn", "armed"}``
+        instead — any state string without a matching QSS rule simply falls
+        through to the default accent colour, the same graceful-unknown
+        idiom ``gui.style.set_chip_state`` already uses for ``StatusChip``.
+        """
+        key = str(state or "normal").strip().lower()
+        self._state = key
+        self._value.setProperty("state", "" if key == "normal" else key)
+        repolish(self._value)
+
+    def state(self) -> str:
+        return self._state
 
 
 def add_chips(layout: QHBoxLayout, chips: Iterable[QWidget], stretch: bool = True) -> None:

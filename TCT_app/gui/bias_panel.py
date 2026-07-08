@@ -31,7 +31,7 @@ from devices.bias_supply_base import BiasSupplyBase
 from controller.scan_controller import VoltageScanConfig
 from gui.panel_kit import Card
 from gui.status_bus import notify
-from gui.style import WARN_RED, axis_color, set_chip_state
+from gui.style import PLOT_BG, WARN_RED, axis_color, set_chip_state
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 
 
@@ -385,7 +385,8 @@ class BiasPanel(QWidget):
         iv_form.addRow(self._btn_iv)
 
         if _HAS_PG:
-            self._iv_plot = pg.PlotWidget(title="IV Curve")
+            self._iv_plot = pg.PlotWidget(title="IV Curve", background=PLOT_BG)
+            self._iv_plot.showGrid(x=True, y=True, alpha=0.25)
             self._iv_plot.setLabel("left",   "Current", units="A")
             self._iv_plot.setLabel("bottom", "Voltage", units="V")
             self._iv_plot.setMaximumHeight(160)
@@ -421,7 +422,8 @@ class BiasPanel(QWidget):
         vscan_form.addRow(self._btn_vscan)
 
         if _HAS_PG:
-            self._vscan_plot = pg.PlotWidget(title="Charge vs. Bias")
+            self._vscan_plot = pg.PlotWidget(title="Charge vs. Bias", background=PLOT_BG)
+            self._vscan_plot.showGrid(x=True, y=True, alpha=0.25)
             self._vscan_plot.setLabel("left",   "Charge", units="pC")
             self._vscan_plot.setLabel("bottom", "Bias", units="V")
             self._vscan_plot.setMaximumHeight(160)

@@ -24,7 +24,7 @@ except ImportError:
 from devices.intensity_base import IntensityMonitorBase
 from gui.panel_kit import Card, panel_header
 from gui.status_widgets import ReadoutCell, StatusChip, flash_button, set_button_icon
-from gui.style import OK_GREEN, WARN_RED
+from gui.style import OK_GREEN, PLOT_BG, WARN_RED
 
 logger = logging.getLogger(__name__)
 
@@ -146,7 +146,8 @@ class IntensityPanel(QWidget):
 
         # ── Waveform plot ─────────────────────────────────────────────
         if _HAS_PG:
-            self._plot = pg.PlotWidget(title="Reference waveform")
+            self._plot = pg.PlotWidget(title="Reference waveform", background=PLOT_BG)
+            self._plot.showGrid(x=True, y=True, alpha=0.25)
             self._plot.setLabel("left",   "Amplitude", units="V")
             self._plot.setLabel("bottom", "Time",      units="s")
             self._curve = self._plot.plot(pen=pg.mkPen("y", width=1))

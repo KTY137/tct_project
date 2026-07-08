@@ -22,6 +22,7 @@ except ImportError:
 
 from controller.scan_controller import ScanConfig, ScanResult, ZFocusScanConfig, VoltageScanConfig
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
+from gui.style import PLOT_BG
 
 
 class ScanPanel(QWidget):
@@ -236,7 +237,8 @@ class ScanPanel(QWidget):
 
         # Plot: sharpness (edge mode) or amplitude (amplitude mode) vs Z
         if _HAS_PG:
-            self._zf_plot  = pg.PlotWidget(title="Edge sharpness vs Z")
+            self._zf_plot  = pg.PlotWidget(title="Edge sharpness vs Z", background=PLOT_BG)
+            self._zf_plot.showGrid(x=True, y=True, alpha=0.25)
             self._zf_plot.setLabel("left",   "Sharpness (pC/mm)")
             self._zf_plot.setLabel("bottom", "Z", units="mm")
             self._zf_plot.setMaximumHeight(150)

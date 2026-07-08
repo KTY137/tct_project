@@ -409,8 +409,12 @@ class TCTMainWindow(QMainWindow):
         self._liveness.device_lost.connect(self._on_device_lost)
         self._liveness_thread.start()
 
-        # Re-apply the theme now that the pyqtgraph plots exist, so they get the
-        # dark canvas + grid (they didn't exist when apply_theme ran at startup).
+        # Re-assert the theme now that every panel exists so the global QSS is
+        # consistent for the fully-built window. Plots no longer depend on this
+        # call for their canvas: each pg.PlotWidget self-styles at construction
+        # (background=PLOT_BG + showGrid), and apply_theme() only sets the
+        # pyqtgraph config defaults — it deliberately never walks live widgets
+        # (see gui.style._apply_pyqtgraph for the removed AV vector).
         app = QApplication.instance()
         if app is not None:
             apply_theme(app, getattr(self, "_theme_mode", "light"))

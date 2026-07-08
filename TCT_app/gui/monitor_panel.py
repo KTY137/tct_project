@@ -29,7 +29,7 @@ except ImportError:
 from devices.slow_control_base import AlarmStatus, SlowControlReading
 from gui.panel_kit import Card, panel_header
 from gui.status_widgets import StatusChip, set_button_icon
-from gui.style import DARK, LIGHT, SPACE_SM
+from gui.style import DARK, LIGHT, PLOT_BG, SPACE_SM
 
 if TYPE_CHECKING:
     from controller.slow_control_manager import SlowControlManager
@@ -127,7 +127,8 @@ class MonitorPanel(QWidget):
         plot_card = Card("History")
         plot_card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
         if _HAS_PG:
-            self._plot = pg.PlotWidget(title="Channel history")
+            self._plot = pg.PlotWidget(title="Channel history", background=PLOT_BG)
+            self._plot.showGrid(x=True, y=True, alpha=0.25)
             self._plot.setLabel("left",   "Value")
             self._plot.setLabel("bottom", "Time", units="s ago")
             self._curve = self._plot.plot(pen=pg.mkPen(self._history_accent(), width=2))
