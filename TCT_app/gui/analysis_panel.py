@@ -208,19 +208,50 @@ class AnalysisPanel(QWidget):
         )
         if not path:
             return
+        if self.load_run(path):
+            flash_button(self._btn_open, "good", "Loaded")
+        else:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, "Load Error", self._chip_file.toolTip())
+
+    def load_run(self, path: str | Path) -> bool:
+        """Public load entry point for programmatic hand-off (e.g. a future
+        ScanViewer's "Open in Analysis" button, passing
+        ``ScanController.last_run_path`` once a scan finishes).
+
+        Loads *path* through the same parser (``_load_h5``) and updates the
+        same UI state (file header/chips/map/CCE) as the file-dialog flow
+        (``_open_file``) — there is exactly one load path underneath both.
+
+        Never raises: any failure (missing path, missing h5py, unreadable/
+        malformed HDF5) is caught, surfaced via the existing file chip +
+        tooltip, and reported by returning ``False``. Returns ``True`` on a
+        successful load.
+        """
+        path = str(path)
+        if not _HAS_H5:
+            self._chip_file.set_status(
+                "Load error", "crit", "h5py is not installed"
+            )
+            return False
+        if not Path(path).exists():
+            self._chip_file.set_status(
+                "Load error", "crit", f"File not found: {path}"
+            )
+            return False
         try:
             self._load_h5(path)
             self._run_path = path
             self._lbl_file.setText(Path(path).name)
             self._chip_file.set_status("File loaded", "good")
-            self._chip_dataset.set_status(f"{len(self._data)} arrays",
-                                          "good" if self._data else "warn")
-            flash_button(self._btn_open, "good", "Loaded")
+            self._chip_dataset.set_status(
+                f"{len(self._data)} arrays", "good" if self._data else "warn"
+            )
             self._replot_map()
+            return True
         except Exception as exc:
-            from PySide6.QtWidgets import QMessageBox
             self._chip_file.set_status("Load error", "crit", str(exc))
-            QMessageBox.critical(self, "Load Error", str(exc))
+            return False
 
     def _load_h5(self, path: str) -> None:
         self._data = {}
