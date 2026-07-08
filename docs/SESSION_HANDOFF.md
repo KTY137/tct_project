@@ -4,7 +4,7 @@
 
 ## TL;DR state
 
-- **All work is committed to the working tree only** (nothing git-committed unless you did so manually). Full test suite was **153 passing** at last check (`cd TCT_app && .venv\Scripts\python.exe -m pytest tests/ -q`).
+- **All work is committed to the working tree only** (nothing git-committed unless you did so manually). Full test suite was **468 passing** at last check (`cd TCT_app && .venv\Scripts\python.exe -m pytest tests/ -q`). Branch experimental-wip pushed through 1500fc0 (2026-07-08).
 - We are mid **Milestone 2** of the GUI roadmap (see `docs/design/gui_architecture_plan.md` and the roadmap artifact "TCT Control — GUI Direction & Roadmap").
 
 ## ⚠ First actions on resume
@@ -96,14 +96,24 @@ marquee feature (item 1 in "What's NEXT" below). Noah is ready to build.
 
 ## What's NEXT (in order)
 
-**(a) USER DECISIONS pending:** Confirm three design choices before batch-2 rollout:
-  1. **Axis semantics**: drift/rise/CFD naming — should CFD always green=delay (earliest timing) or is there a toggle/context?
-  2. **scan_panel fate**: style as-is (dual-channel raster) or fold into planner-driven workflow?
-  3. **Batch-2 panel order**: camera vs. settings window — each should own its session; confirm priority.
+**(a) USER DECISIONS RESOLVED (2026-07-08):**
+  1. **Axis semantics**: drift/rise/CFD naming — to be finalized per cockpit-design review.
+  2. **scan_panel fate — DECIDED**: ScanPanel **will be RETIRED**. Planner is the only scan config/start surface; new **ScanViewerPanel** (live run monitor, separate from AnalysisPanel) planned. See `docs/design/cockpit_style_overhaul.md` Phase 2 + `docs/research/scan_viewer_design_review.md`.
+  3. **Batch-2 panel order — RESOLVED**: camera_panel + analysis_panel prioritized.
 
-**(b) Batch-2 rollout** (after decisions above): remaining 3 core panels (scan_panel, camera_panel, analysis_panel) + consistency pass (legacy panel checks in style.py/QSS). Target suite 330+.
+**(b) Batch-2 rollout — MOSTLY DONE (2026-07-08):** camera_panel + analysis_panel migrated (batch 3), all 12 core panels now on design system (committed 3a0b8a8, pushed). ScanPanel retires instead of being styled. Consistency pass deferred to next phase. Suite **468 passed**.
 
-**(c) Push unpushed commits**: 12 commits remain on experimental-wip; push to main when user confirms decisions.
+**(c) IN FLIGHT (2026-07-08, crew dispatched):**
+  - **Abel** (acquisition-dev): G1 HV ramp shaping in plan model + last_run_path seam.
+  - **Jonathan** (data-analysis-dev): shared points→2D-grid helper + CCE move to analysis/.
+  - **Noah** (ui-ux-dev): pytest-timeout infrastructure.
+
+**(d) NEXT ROADMAP (pilot order, start after in-flight clears):**
+  1. Cockpit-kit primitives (panel-kit extensions for scan UI).
+  2. Shared map widget (AbortHandler + plan-run state shared to all panels).
+  3. **Scan-coordinator extraction** (paired Abel+Noah, M2.3 pilot).
+  4. **ScanViewerPanel** launch (live run monitor).
+  5. Retire ScanPanel.
 
 ## Open items / tech-debt (see `docs/TECH_DEBT.md`)
 
@@ -113,9 +123,10 @@ marquee feature (item 1 in "What's NEXT" below). Noah is ready to build.
 - **Bench-only (real HV/scope, never run by agents)**: confirm iseg polarity
   relay settle time (`_POL_CONFIRM_BUDGET_S`=0.5 s is a guess) + SCPI token forms
   on the real module; confirm `CH1:PRObe:GAIN?`/`CH1:COUPling?` query forms on
-  the TBS1052C.
+  the TBS1052C. See `docs/BENCH_CHECKLIST.md` (consolidated 2026-07-08).
 - `tek_fastframe` backend is non-functional (vendored `dustin_scope` missing);
   motor/bias/camera still use flag-based `is_alive` (only the scope has a probe).
+- **Crew tuned 2026-07-08** per meta-review: see `docs/DECISIONS.md` + CLAUDE.md ("Crew tuning 2026-07-08").
 
 **Note:** `docs/ROADMAP.md` is the strategic map (phases, north star, ordering rationale); this handoff is the tactical resume point (immediate next steps, what broke, where we left the code).
 
