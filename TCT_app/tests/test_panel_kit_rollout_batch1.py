@@ -19,6 +19,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PySide6.QtWidgets import QApplication, QFrame, QPushButton
 
 from controller.device_manager import DeviceManager
@@ -38,6 +39,17 @@ from gui.motor_panel import MotorPanel
 from gui.multi_bias_panel import MultiBiasPanel
 from gui.settings_window import SettingsWindow
 from gui.style import apply_theme
+
+
+@pytest.fixture(autouse=True)
+def _stub_visa_scan(monkeypatch):
+    """test_settings_window_still_constructs_untouched() below builds a real
+    ``SettingsWindow``, whose ``_VisaScanManager`` fires a real
+    ``list_visa_resources()`` VISA bus enumeration off-thread unless stubbed
+    — real hardware I/O during a test run, and (per the 2026-07-08 pyvisa
+    access-violation diagnosis) part of the concurrent-first-import AV
+    trigger. Mirrors the existing stub in test_settings_window_visa_scan.py."""
+    monkeypatch.setattr("devices.waveform_generator.list_visa_resources", lambda: [])
 
 
 def _app() -> QApplication:
@@ -176,5 +188,12 @@ def test_camera_panel_still_constructs_untouched():
 def test_settings_window_still_constructs_untouched():
     _app()
     win = SettingsWindow()
-    pm = win.grab()
-    assert not pm.isNull()
+    try:
+        pm = win.grab()
+        assert not pm.isNull()
+    finally:
+        # Orphaning this window to GC leaves its _VisaScanManager scan
+        # QThread still running when the C++ object gets collected — a
+        # still-running QThread destroyed that way is a hard Qt6 abort, not
+        # a catchable Python exception. close() runs closeEvent's shutdown.
+        win.close()

@@ -23,6 +23,7 @@ docs/research/pdl800_trigger_wavegen_lan.md.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from typing import Any
 
@@ -76,6 +77,10 @@ _WFG_CMDS: dict[str, dict[str, str]] = {
         "load":            ":OUTPut{ch}:LOAD {val}",
         "output_on":       ":OUTPut{ch}:STATe ON",
         "output_off":      ":OUTPut{ch}:STATe OFF",
+        # Read-only output-state query (the '?' counterpart of output_on/off).
+        # DG4000 manual returns "ON"/"OFF"; sourced from the identical sibling
+        # :OUTPut:NOISe[:STATe]? — docs/research/dg4000_tbs1000c_query_forms.md Q1a.
+        "output_state_q":  ":OUTPut{ch}:STATe?",
         "burst_ncyc":      ":SOURce{ch}:BURSt:NCYCles {val}",
         "burst_on":        ":SOURce{ch}:BURSt:STATe ON",
         "burst_mode":      ":SOURce{ch}:BURSt:MODE TRIGgered",
@@ -102,6 +107,7 @@ _WFG_CMDS: dict[str, dict[str, str]] = {
         "load":            "OUTPut{ch}:LOAD {val}",
         "output_on":       "OUTPut{ch}:STATe ON",
         "output_off":      "OUTPut{ch}:STATe OFF",
+        "output_state_q":  "OUTPut{ch}:STATe?",
         "burst_ncyc":      "SOURce{ch}:BURSt:NCYCles {val}",
         "burst_on":        "SOURce{ch}:BURSt:STATe ON",
         "burst_mode":      "SOURce{ch}:BURSt:MODE TRIGgered",
@@ -110,17 +116,62 @@ _WFG_CMDS: dict[str, dict[str, str]] = {
 }
 
 
+# Process-wide, once-only pyvisa import guard.  ``_pyvisa_primed`` flips True
+# after the first import attempt (success or ImportError); ``_pyvisa_available``
+# caches whether pyvisa is importable at all.  Guarded by ``_pyvisa_lock`` so a
+# GUI-thread ``prime_pyvisa()`` and a worker-thread ``list_visa_resources()``
+# racing on the very first import serialise instead of both entering it.
+_pyvisa_lock = threading.Lock()
+_pyvisa_primed = False
+_pyvisa_available: bool | None = None   # None == not yet primed
+
+
+def prime_pyvisa() -> bool:
+    """Import pyvisa exactly once, on whatever thread calls this first.
+
+    Windows access-violation guard (2026-07-08): the first ``import pyvisa``
+    triggers a ctypes load of the VISA runtime, and doing that first load on a
+    non-main thread while the Qt event loop runs on the main thread is a
+    documented AV vector.  The GUI calls ``prime_pyvisa()`` on the main thread
+    (before any VISA-scan QThread is spawned) so the first import always lands
+    on the main thread, exactly once.  Idempotent and thread-safe.
+
+    This is a pure import warm-up: it **never** creates a ``ResourceManager`` or
+    enumerates the bus (no ``list_resources``), so it is instrument-safe.
+    Returns ``True`` if pyvisa is importable, ``False`` if it is not installed
+    (simulation / no-VISA host) — callers keep their existing "pyvisa missing"
+    behaviour.
+    """
+    global _pyvisa_primed, _pyvisa_available
+    if _pyvisa_primed:
+        return bool(_pyvisa_available)
+    with _pyvisa_lock:
+        if _pyvisa_primed:                       # lost the race — already primed
+            return bool(_pyvisa_available)
+        try:
+            import pyvisa  # noqa: F401  # ctypes VISA-runtime load happens here
+            _pyvisa_available = True
+        except ImportError:
+            _pyvisa_available = False
+        _pyvisa_primed = True
+    return bool(_pyvisa_available)
+
+
 def list_visa_resources() -> list[str]:
     """Return the VISA resource strings the active backend can see.
 
     Used by the GUI to discover e.g. the Rigol's USB address
     (``USB0::0x1AB1::0x0641::DG4xxxxxxxx::INSTR``).  Requires pyvisa **and** a
     VISA implementation (NI-VISA / Rigol UltraSigma / pyvisa-py).
+
+    Routes the first import through ``prime_pyvisa()`` (the shared once-only
+    guard) before touching ``ResourceManager`` — so whether it is called from
+    the GUI thread or a scan worker, the pyvisa import is serialised through the
+    same primitive.  Only *this* function enumerates the bus, never the primer.
     """
-    try:
-        import pyvisa  # type: ignore[import]
-    except ImportError as exc:
-        raise DeviceError("pyvisa is not installed.") from exc
+    if not prime_pyvisa():
+        raise DeviceError("pyvisa is not installed.")
+    import pyvisa  # type: ignore[import]  # already imported by prime_pyvisa()
     try:
         return list(pyvisa.ResourceManager().list_resources())
     except Exception as exc:
@@ -289,18 +340,14 @@ class WaveformGenerator(BaseDevice):
         logger.info("WaveformGenerator connected (%s): %s", self._vendor, idn)
         self._apply_defaults()
         self._connected = True
-        # _apply_defaults() does NOT touch the output on/off state (connecting
-        # must never arm the laser trigger — safety rule), so the real output
-        # state is whatever the instrument retained: leave it unknown (None) so
-        # the panel shows "unknown" rather than a possibly-false "off".
-        # TODO(manual needed): resolve the unknown into a real True/False by
-        # reading the DG4000 output state on connect.  The research note
-        # docs/research/pdl800_trigger_wavegen_lan.md sources the SET commands
-        # (LOAD / VOLT / VOLT:HIGH / VOLT:LOW / SQU:DCYCle) but NOT an
-        # output-state QUERY, so ":OUTPut{ch}:STATe?" (the SCPI-99 counterpart
-        # of output_on/output_off) stays UNVERIFIED for the DG4162 — do not emit
-        # it until the manual confirms the exact query form.  Until then the
-        # panel shows an honest "unknown".
+        # _apply_defaults() never touches OUTPut:STATe (connecting must not arm
+        # the laser trigger — safety rule), so the output is whatever the
+        # instrument retained across sessions.  Resolve that retained state into
+        # the armed tri-state with a READ-ONLY :OUTPut{ch}:STATe? query (manual-
+        # confirmed ON/OFF reply, docs/research/dg4000_tbs1000c_query_forms.md
+        # Q1a) — read-only, so it never arms anything.  A missing/unparseable
+        # reply keeps the honest "unknown" (None).
+        self._resolve_output_state()
 
     def test_connection(self) -> str:
         """Query *IDN? and return the reply — confirms the VISA link."""
@@ -504,6 +551,53 @@ class WaveformGenerator(BaseDevice):
         state that was neither commanded here nor read back.
         """
         return self._output_on
+
+    @staticmethod
+    def _parse_output_state(reply: str | None) -> bool | None:
+        """Map a :OUTPut:STATe? reply to True/False, or None if unrecognised.
+
+        The DG4000 manual documents an ``ON``/``OFF`` keyword reply
+        (docs/research/dg4000_tbs1000c_query_forms.md Q1a).  Parse defensively:
+        also accept numeric ``1``/``0`` in case a firmware answers numerically,
+        and tolerate a header-prefixed reply (``:OUTP1:STATE ON``) by taking the
+        last whitespace token — mirroring the scope coupling read path.  Any
+        other reply → ``None`` (keep the honest "unknown").
+        """
+        if not reply:
+            return None
+        token = reply.strip().split()[-1].upper().strip(";:")
+        if token in ("ON", "1"):
+            return True
+        if token in ("OFF", "0"):
+            return False
+        return None
+
+    def _resolve_output_state(self) -> None:
+        """Read the instrument's retained output on/off state into the armed
+        tri-state on connect.
+
+        READ-ONLY (:OUTPut{ch}:STATe?) — must never change the output (arming
+        stays an explicit caller action, safety rule).  ON/1 → True, OFF/0 →
+        False; anything unparseable (or no session, e.g. simulation) leaves the
+        honest "unknown" (None) and warns on a non-empty-but-unrecognised reply.
+
+        TODO(bench): confirm :OUTPut1:STATe? answers "ON"/"OFF" on the real
+        DG4162 (fw 00.01.14) — the manual's STATe detail page is image-only, so
+        the ON/OFF reply is sourced from the identical sibling
+        :OUTPut:NOISe[:STATe]? (docs/research/dg4000_tbs1000c_query_forms.md
+        Q1a).  The defensive parse already tolerates ON/OFF/1/0 and a
+        header-prefixed reply, so a differing form degrades to "unknown", never
+        to a wrong armed state.
+        """
+        reply = self._query(self._cmd("output_state_q"))
+        state = self._parse_output_state(reply)
+        if state is None:
+            if reply is not None:
+                logger.warning(
+                    "WFGEN output-state query returned unparseable %r; armed "
+                    "state stays unknown.", reply)
+            return
+        self._output_on = state
 
     def burst(self, n_pulses: int) -> None:
         """Output exactly *n_pulses* pulses then stop."""

@@ -21,6 +21,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from pathlib import Path
 
+import pytest
 import yaml
 from PySide6.QtWidgets import QApplication, QFrame, QLabel
 
@@ -30,6 +31,18 @@ from gui.settings_window import SettingsWindow
 from gui.style import apply_theme
 
 _REAL_CONFIG = Path(__file__).resolve().parents[1] / "configs" / "devices.yaml"
+
+
+@pytest.fixture(autouse=True)
+def _stub_visa_scan(monkeypatch):
+    """Every test here builds a real (untouched-config) ``SettingsWindow``,
+    whose ``_VisaScanManager`` fires a real ``list_visa_resources()`` VISA
+    bus enumeration off-thread unless stubbed — real hardware I/O during a
+    test run, and (per the 2026-07-08 pyvisa access-violation diagnosis) the
+    actual trigger for many concurrent first-ever pyvisa imports racing
+    across ~13 SettingsWindow instances in this file. Mirrors the existing
+    stub in test_settings_window_visa_scan.py."""
+    monkeypatch.setattr("devices.waveform_generator.list_visa_resources", lambda: [])
 
 
 def _app() -> QApplication:

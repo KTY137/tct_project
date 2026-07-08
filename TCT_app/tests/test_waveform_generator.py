@@ -44,12 +44,15 @@ class FakeWfgInstr:
 
     def __init__(self, function: str = "PULSE",
                  duty_readback: float | None = None,
-                 width_readback: float | None = None) -> None:
+                 width_readback: float | None = None,
+                 output_state: str = "OFF") -> None:
         self.timeout = 5000
         self.writes: list[str] = []
         self.function = function
         self.duty_readback = duty_readback
         self.width_readback = width_readback
+        # Scripted reply to :OUTPut{ch}:STATe? (the connect-time armed resolve).
+        self.output_state = output_state
         self._last_duty: float | None = None
         self._last_width: float | None = None
 
@@ -71,6 +74,8 @@ class FakeWfgInstr:
         up = cmd.upper()
         if "IDN" in up:
             return "RIGOL TECHNOLOGIES,DG4162,DG4E000000000,00.01.14\n"
+        if "STAT" in up:                        # :OUTPut{ch}:STATe? read-back
+            return f"{self.output_state}\n"
         if "DCYC" in up:
             val = self.duty_readback if self.duty_readback is not None else self._last_duty
             return f"{(val if val is not None else 0.0):.3f}\n"
@@ -469,3 +474,178 @@ def test_config_levels_absent_is_none_bipolar_default(tmp_path) -> None:
     wfg = dm.waveform_generator
     assert wfg._level_low is None
     assert wfg._level_high is None
+
+
+# --------------------------------------------------------------------------- #
+# prime_pyvisa(): once-only, thread-safe pyvisa import warm-up (Windows AV     #
+# guard) — idempotent, and it must NEVER enumerate the bus (no ResourceManager #
+# / list_resources). list_visa_resources() routes its first import through it. #
+# --------------------------------------------------------------------------- #
+
+import builtins
+
+import devices.waveform_generator as wfg_mod
+
+
+@pytest.fixture
+def reset_prime():
+    """Save/restore the module-level prime flags so each test starts un-primed
+    and can't leak its state into the rest of the suite."""
+    saved = (wfg_mod._pyvisa_primed, wfg_mod._pyvisa_available)
+    wfg_mod._pyvisa_primed = False
+    wfg_mod._pyvisa_available = None
+    try:
+        yield
+    finally:
+        wfg_mod._pyvisa_primed, wfg_mod._pyvisa_available = saved
+
+
+def test_prime_pyvisa_idempotent_and_available(reset_prime) -> None:
+    pytest.importorskip("pyvisa")
+    assert wfg_mod.prime_pyvisa() is True
+    assert wfg_mod._pyvisa_primed is True
+    # Second call returns the cached verdict without re-entering the import.
+    assert wfg_mod.prime_pyvisa() is True
+
+
+def test_prime_pyvisa_never_enumerates_bus(reset_prime, monkeypatch) -> None:
+    """The warm-up imports pyvisa but must not touch the VISA bus — no
+    ResourceManager construction, no list_resources (instrument-safe)."""
+    pyvisa = pytest.importorskip("pyvisa")
+    calls: list[str] = []
+
+    class _Boom:
+        def __init__(self, *a, **k) -> None:
+            calls.append("ResourceManager")
+
+        def list_resources(self, *a, **k):
+            calls.append("list_resources")
+            return []
+
+    monkeypatch.setattr(pyvisa, "ResourceManager", _Boom)
+    assert wfg_mod.prime_pyvisa() is True
+    assert calls == [], f"prime_pyvisa touched the bus: {calls}"
+
+
+def test_prime_pyvisa_reports_unavailable_when_missing(reset_prime, monkeypatch) -> None:
+    """pyvisa not installed → prime swallows the ImportError and marks it
+    unavailable (callers keep their 'pyvisa missing' behaviour)."""
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **k):
+        if name == "pyvisa" or name.startswith("pyvisa."):
+            raise ImportError("simulated missing pyvisa")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    assert wfg_mod.prime_pyvisa() is False
+    assert wfg_mod._pyvisa_available is False
+
+
+def test_list_visa_resources_raises_when_pyvisa_missing(reset_prime, monkeypatch) -> None:
+    from devices.base import DeviceError
+    monkeypatch.setattr(wfg_mod, "prime_pyvisa", lambda: False)
+    with pytest.raises(DeviceError):
+        wfg_mod.list_visa_resources()
+
+
+def test_list_visa_resources_enumerates_via_prime(reset_prime, monkeypatch) -> None:
+    """list_visa_resources primes first (shared once-only guard), then it — and
+    only it — creates the ResourceManager and enumerates."""
+    pyvisa = pytest.importorskip("pyvisa")
+    primed = {"n": 0}
+    real_prime = wfg_mod.prime_pyvisa
+
+    def counting_prime():
+        primed["n"] += 1
+        return real_prime()
+
+    monkeypatch.setattr(wfg_mod, "prime_pyvisa", counting_prime)
+
+    class _FakeRM:
+        def list_resources(self):
+            return ("USB0::0x1AB1::0x0641::DG4162::INSTR",)
+
+    monkeypatch.setattr(pyvisa, "ResourceManager", lambda *a, **k: _FakeRM())
+    res = wfg_mod.list_visa_resources()
+    assert res == ["USB0::0x1AB1::0x0641::DG4162::INSTR"]
+    assert primed["n"] == 1, "list_visa_resources did not go through prime_pyvisa()"
+
+
+# --------------------------------------------------------------------------- #
+# connect() resolves the armed tri-state from a READ-ONLY :OUTPut:STATe? query  #
+# (docs/research/dg4000_tbs1000c_query_forms.md Q1a). Never arms the output.    #
+# --------------------------------------------------------------------------- #
+
+class _FakeRM:
+    """pyvisa.ResourceManager stand-in: open_resource() hands back the fake."""
+
+    def __init__(self, instr) -> None:
+        self._instr = instr
+
+    def open_resource(self, addr):
+        return self._instr
+
+
+def _connect_real_with_fake(monkeypatch, fake: FakeWfgInstr, **kw) -> WaveformGenerator:
+    """Drive a real-mode connect() with pyvisa.ResourceManager monkeypatched to
+    return *fake* — exercises the full connect path (defaults + armed resolve)."""
+    pyvisa = pytest.importorskip("pyvisa")
+    monkeypatch.setattr(pyvisa, "ResourceManager", lambda *a, **k: _FakeRM(fake))
+    wfg = WaveformGenerator(simulation=False, vendor="rigol",
+                            visa_address="USB0::0x1AB1::0x0641::DG4162::INSTR", **kw)
+    wfg.connect()
+    return wfg
+
+
+def test_connect_resolves_armed_on(monkeypatch) -> None:
+    wfg = _connect_real_with_fake(monkeypatch, FakeWfgInstr(output_state="ON"))
+    assert wfg.output_is_on is True
+
+
+def test_connect_resolves_armed_off(monkeypatch) -> None:
+    wfg = _connect_real_with_fake(monkeypatch, FakeWfgInstr(output_state="OFF"))
+    assert wfg.output_is_on is False
+
+
+def test_connect_resolves_armed_header_prefixed(monkeypatch) -> None:
+    """A header-ON reply (`:OUTP1:STATE ON`) resolves via the last-token parse."""
+    wfg = _connect_real_with_fake(monkeypatch, FakeWfgInstr(output_state=":OUTP1:STATE ON"))
+    assert wfg.output_is_on is True
+
+
+def test_connect_keeps_unknown_on_garbage(monkeypatch, caplog) -> None:
+    """An unrecognised reply must NOT be coerced to True/False — the armed state
+    stays the honest 'unknown' (None) and warns."""
+    with caplog.at_level(logging.WARNING, logger="devices.waveform_generator"):
+        wfg = _connect_real_with_fake(monkeypatch, FakeWfgInstr(output_state="RIGOL,junk"))
+    assert wfg.output_is_on is None
+    assert any("unparseable" in r.message.lower() for r in caplog.records), caplog.text
+
+
+def test_connect_state_resolve_is_read_only(monkeypatch) -> None:
+    """Resolving the armed state must never write OUTPut:STATe — arming stays an
+    explicit caller action (laser-safety rule)."""
+    fake = FakeWfgInstr(output_state="ON")
+    _connect_real_with_fake(monkeypatch, fake)
+    assert not any("STAT" in w.upper() for w in fake.writes), fake.writes
+
+
+@pytest.mark.parametrize("reply,expected", [
+    ("ON", True), ("OFF", False),
+    ("on\n", True), (" off ", False),
+    ("1", True), ("0", False),
+    (":OUTP1:STATE ON", True), (":OUTPUT2:STATE OFF", False),
+    ("RIGOL,junk", None), ("", None), (None, None),
+])
+def test_parse_output_state(reply, expected) -> None:
+    assert WaveformGenerator._parse_output_state(reply) is expected
+
+
+def test_simulation_connect_keeps_output_state_false() -> None:
+    """Sim backend has no retained state — connect() leaves a known-off (False),
+    consistent with the real path resolving to a concrete True/False."""
+    wfg = WaveformGenerator(simulation=True)
+    assert wfg.output_is_on is None
+    wfg.connect()
+    assert wfg.output_is_on is False

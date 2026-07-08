@@ -44,6 +44,9 @@ from PySide6.QtWidgets import (
 logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).parent.parent / "configs" / "devices.yaml"
+# Plain import — prime_pyvisa() itself does no bus enumeration, so this has
+# no hardware side effects at module load (see _VisaScanManager below).
+from devices.waveform_generator import prime_pyvisa
 from gui.panel_kit import Card, form_row, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import DARK, FONT_XS, LIGHT, SPACE_SM
@@ -221,11 +224,22 @@ class _VisaScanManager(QObject):
         ``_rebuild_quick_settings`` call costs exactly one scan."""
         if self.cache is not None or self._visa_busy:
             return
+        # Import pyvisa (ctypes VISA-DLL load) synchronously on the GUI
+        # thread before rescan()'s worker spawns: a first-ever pyvisa import
+        # racing across many concurrently-constructed SettingsWindows' scan
+        # threads is the diagnosed Windows access-violation vector (2026-07-08
+        # pyvisa AV diagnosis) — the worker thread must only ever touch an
+        # already-imported module.
+        prime_pyvisa()
         self.rescan()
 
     def rescan(self) -> None:
         if self._visa_busy:
             return
+        # Same rationale as ensure_scanned() above — prime_pyvisa() is
+        # idempotent/thread-safe, so calling it again here covers the manual
+        # 🔄-rescan entry point too, independent of ensure_scanned().
+        prime_pyvisa()
         self._visa_busy = True
         self._start(_scan_visa_resources, self._on_visa_done)
 
