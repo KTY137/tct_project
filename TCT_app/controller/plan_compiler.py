@@ -69,10 +69,18 @@ class BiasStep:
     """Ramp the bias supply to ``target_V``.
 
     Marked as an HV-ramp danger step — the executor gates it on confirmation.
+
+    ``ramp_step_V`` / ``ramp_delay_s`` carry optional HV ramp shaping resolved
+    from the enclosing ``BIAS_V`` loop (see :class:`LeafMeta`).  Both None (the
+    default) means "use the driver's default ramp shape" — byte-for-byte the
+    historic behaviour; a set value shapes the ramp the executor applies.  HV
+    never steps unshaped when shaping is requested.
     """
     target_V: float
     requires_confirm: bool = True
     danger_kind: str = "hv_ramp"
+    ramp_step_V: float | None = None
+    ramp_delay_s: float | None = None
 
 
 @dataclass(frozen=True)
@@ -130,7 +138,15 @@ def compile_plan(plan: ScanPlan) -> list[Step]:
         if "bias_V" in ctx:
             target = float(ctx["bias_V"])
             if target != cur_bias:
-                steps.append(BiasStep(target_V=target))
+                # Stamp the enclosing BIAS_V loop's ramp shaping (None = the
+                # driver's default shape) so a plan-driven HV change ramps
+                # shaped; absent shaping stays byte-identical to the historic
+                # BiasStep(target_V=...).
+                steps.append(BiasStep(
+                    target_V=target,
+                    ramp_step_V=meta.bias_ramp_step_V,
+                    ramp_delay_s=meta.bias_ramp_delay_s,
+                ))
                 cur_bias = target
 
         # --- then position, only when a DRIVEN axis changes ----------------

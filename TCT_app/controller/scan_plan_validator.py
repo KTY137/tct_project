@@ -223,7 +223,7 @@ def _safe_materialize(
 def _check_loop_semantics(
     loop: LoopBlock, path: str, issues: list[PlanIssue]
 ) -> None:
-    """(h) settle_s / n_averages / reduce sanity on a loop."""
+    """(h) settle_s / n_averages / reduce / HV ramp shaping sanity on a loop."""
     if _is_num(loop.settle_s) and float(loop.settle_s) < 0:
         issues.append(PlanIssue(
             ERROR, path, f"settle_s must be >= 0 (got {loop.settle_s!r})"))
@@ -234,6 +234,28 @@ def _check_loop_semantics(
         issues.append(PlanIssue(
             WARNING, path,
             f"unknown reduce '{loop.reduce}' — typo? It is ignored downstream."))
+
+    # HV ramp shaping (BIAS_V loops only).  Fail closed: a nonsensical shape
+    # would drive the supply badly, so a non-positive step or a negative delay
+    # is an ERROR (a zero step could jump/loop badly in the driver's ramp).
+    if loop.ramp_step_V is not None and (
+        not _is_num(loop.ramp_step_V) or float(loop.ramp_step_V) <= 0
+    ):
+        issues.append(PlanIssue(
+            ERROR, path, f"ramp_step_V must be > 0 (got {loop.ramp_step_V!r})"))
+    if loop.ramp_delay_s is not None and (
+        not _is_num(loop.ramp_delay_s) or float(loop.ramp_delay_s) < 0
+    ):
+        issues.append(PlanIssue(
+            ERROR, path,
+            f"ramp_delay_s must be >= 0 (got {loop.ramp_delay_s!r})"))
+    if loop.axis != Axis.BIAS_V and (
+        loop.ramp_step_V is not None or loop.ramp_delay_s is not None
+    ):
+        issues.append(PlanIssue(
+            WARNING, path,
+            "ramp_step_V / ramp_delay_s are ignored on a non-bias loop "
+            "(only a bias_V loop drives HV ramp shaping)"))
 
 
 def _check_bias_values(

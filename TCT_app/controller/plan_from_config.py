@@ -48,10 +48,14 @@ Divergences from the classic path (documented, intentional)
   defaults the magnitude to 10 V.  The converter instead follows the plan model
   and *raises* — fail-closed for HV: an ambiguous bias step is refused, not
   guessed.
-* **Bias ramp shaping** (``ramp_step_V`` / ``ramp_delay_s``): the plan's
-  ``BiasStep`` records only a target voltage; how the executor ramps to it is the
-  executor's concern.  The plan model has no per-BiasStep ramp-shaping field, so
-  these two are not carried (a genuine model limitation, noted for follow-up).
+* **Bias ramp shaping** (``ramp_step_V`` / ``ramp_delay_s``): carried onto the
+  emitted ``BIAS_V`` loop (``LoopBlock.ramp_step_V`` / ``ramp_delay_s``), so the
+  compiled ``BiasStep`` ramps with the same shape the classic sweep used and the
+  executor honours it — no longer dropped.  ``ramp_step_V`` is stored as a
+  magnitude (``abs``), matching the classic ``bias.ramp_to(step_V=abs(...))``
+  call.  (Fail-closed divergence: a zero ``ramp_step_V`` — which the classic
+  path would pass verbatim to ``ramp_to`` — is refused by the plan validator,
+  not silently accepted.)
 """
 from __future__ import annotations
 
@@ -201,6 +205,11 @@ def plan_from_voltage_scan_config(
     bias = LoopBlock(
         axis=Axis.BIAS_V,
         start=cfg.v_start_V, stop=cfg.v_stop_V, step=cfg.v_step_V,
+        # Carry the per-run HV ramp shaping onto the bias loop so the compiled
+        # BiasStep ramps with the same shape the classic sweep used (magnitude
+        # for step, matching bias.ramp_to(step_V=abs(...))).
+        ramp_step_V=abs(float(cfg.ramp_step_V)),
+        ramp_delay_s=float(cfg.ramp_delay_s),
         children=children,
     )
     z = _fixed(Axis.STAGE_Z, cfg.z_mm); z.children = [bias]

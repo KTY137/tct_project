@@ -261,3 +261,78 @@ def test_dict_and_yaml_round_trip_unchanged(plan):
     d = plan.to_dict()
     assert ScanPlan.from_dict(d).to_dict() == d
     assert ScanPlan.from_yaml(plan.to_yaml()).to_dict() == d
+
+
+# --------------------------------------------------------------------------- #
+# G1: per-BiasStep HV ramp shaping survives the conversion (no longer dropped) #
+# --------------------------------------------------------------------------- #
+
+def _bias_loop(plan):
+    """The single BIAS_V LoopBlock in a converted vscan plan (x→y→z→bias)."""
+    x = plan.root[0]
+    y = x.children[0]
+    z = y.children[0]
+    bias = z.children[0]
+    assert bias.axis is Axis.BIAS_V
+    return bias
+
+
+def _iter_loops(blocks):
+    for b in blocks:
+        if isinstance(b, LoopBlock):
+            yield b
+            yield from _iter_loops(b.children)
+
+
+def test_vscan_carries_ramp_shaping_into_bias_loop_and_steps():
+    """The two VoltageScanConfig ramp knobs reach the BIAS_V loop AND every
+    compiled BiasStep — they are no longer silently dropped."""
+    cfg = VoltageScanConfig(v_start_V=0.0, v_stop_V=-30.0, v_step_V=-10.0,
+                            ramp_step_V=7.5, ramp_delay_s=0.25, hold_delay_s=0.0)
+    plan = plan_from_voltage_scan_config(cfg)
+
+    bias = _bias_loop(plan)
+    assert bias.ramp_step_V == 7.5
+    assert bias.ramp_delay_s == 0.25
+
+    bias_steps = [s for s in compile_plan(plan) if isinstance(s, BiasStep)]
+    assert bias_steps
+    assert all(s.ramp_step_V == 7.5 for s in bias_steps)
+    assert all(s.ramp_delay_s == 0.25 for s in bias_steps)
+
+
+def test_vscan_ramp_step_stored_as_magnitude():
+    """ramp_step_V is stored as a magnitude (abs), matching the classic
+    bias.ramp_to(step_V=abs(cfg.ramp_step_V)) call."""
+    cfg = VoltageScanConfig(v_start_V=0.0, v_stop_V=-20.0, v_step_V=-10.0,
+                            ramp_step_V=-7.5, ramp_delay_s=0.1)
+    bias = _bias_loop(plan_from_voltage_scan_config(cfg))
+    assert bias.ramp_step_V == 7.5
+
+
+def test_default_vscan_carries_default_ramp_shaping():
+    """The default VoltageScanConfig ramp shape (5 V / 0.1 s) reaches the steps,
+    so a plan-driven default sweep ramps the same way the classic default did."""
+    plan = plan_from_voltage_scan_config(VoltageScanConfig())
+    bias_steps = [s for s in compile_plan(plan) if isinstance(s, BiasStep)]
+    assert bias_steps
+    assert all(s.ramp_step_V == 5.0 and s.ramp_delay_s == 0.1 for s in bias_steps)
+
+
+def test_quick_scan_loops_carry_no_ramp_shaping():
+    """An XY raster holds bias — no loop requests HV ramp shaping (absent = the
+    driver default; leaves existing quick-scan plans byte-identical)."""
+    plan = plan_from_scan_config(ScanConfig())
+    loops = list(_iter_loops(plan.root))
+    assert loops
+    assert all(l.ramp_step_V is None and l.ramp_delay_s is None for l in loops)
+
+
+def test_ramp_shaping_survives_yaml_round_trip():
+    """The ramp knobs survive a full YAML serialise/deserialise into the steps."""
+    cfg = VoltageScanConfig(v_start_V=0.0, v_stop_V=-20.0, v_step_V=-10.0,
+                            ramp_step_V=7.5, ramp_delay_s=0.25, hold_delay_s=0.0)
+    plan = ScanPlan.from_yaml(plan_from_voltage_scan_config(cfg).to_yaml())
+    bias_steps = [s for s in compile_plan(plan) if isinstance(s, BiasStep)]
+    assert bias_steps
+    assert all(s.ramp_step_V == 7.5 and s.ramp_delay_s == 0.25 for s in bias_steps)

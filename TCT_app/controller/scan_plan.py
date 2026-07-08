@@ -131,6 +131,14 @@ class LoopBlock(ScanBlock):
     n_averages: int | None = None
     snake: bool = False
     reduce: str | None = None            # e.g. "max_gradient"; represented, not executed
+    # Per-bias-step HV ramp shaping (BIAS_V loops ONLY — ignored on stage axes).
+    # Both None (the default) means "use the driver's default ramp shape", which
+    # is byte-for-byte the historic plan-executor behaviour; a set value shapes
+    # the HV ramp (magnitude / per-step delay) the executor applies at each
+    # BiasStep.  ``ramp_step_V`` is a magnitude (> 0); ``ramp_delay_s`` is the
+    # per-step dwell (>= 0).  Validated by scan_plan_validator.
+    ramp_step_V: float | None = None
+    ramp_delay_s: float | None = None
     children: list[ScanBlock] = field(default_factory=list)
 
     def materialize(self) -> list[float]:
@@ -183,6 +191,13 @@ class LoopBlock(ScanBlock):
         d["n_averages"] = self.n_averages
         d["snake"] = self.snake
         d["reduce"] = self.reduce
+        # Only serialise ramp shaping when actually set, so a loop that requests
+        # no shaping (the overwhelming majority, incl. every stage loop) stays
+        # byte-identical to the pre-shaping serialisation.
+        if self.ramp_step_V is not None:
+            d["ramp_step_V"] = self.ramp_step_V
+        if self.ramp_delay_s is not None:
+            d["ramp_delay_s"] = self.ramp_delay_s
         d["children"] = [c.to_dict() for c in self.children]
         return d
 
@@ -200,6 +215,8 @@ class LoopBlock(ScanBlock):
                         else int(d["n_averages"])),
             snake=bool(d.get("snake", False)),
             reduce=d.get("reduce"),
+            ramp_step_V=_opt_float(d.get("ramp_step_V")),
+            ramp_delay_s=_opt_float(d.get("ramp_delay_s")),
             children=[ScanBlock.from_dict(c) for c in (d.get("children") or [])],
         )
 
@@ -234,9 +251,17 @@ class LeafMeta:
       not None (matching ``LoopBlock.n_averages: int | None = None``).
     * ``settle_s`` — default 0.0; a loop contributes it when ``settle_s > 0``.
       ``LoopBlock.settle_s`` has no unset sentinel, so 0.0 means "no settle".
+    * ``bias_ramp_step_V`` / ``bias_ramp_delay_s`` — HV ramp shaping resolved to
+      the nearest enclosing ``BIAS_V`` loop that sets the field, else None
+      (= "use the driver's default ramp shape").  Only a ``BIAS_V`` loop
+      contributes them — ramp shaping on a stage loop is meaningless and never
+      folded (the validator warns about it).  The compiler stamps them onto each
+      emitted ``BiasStep`` so a plan-driven HV change ramps shaped.
     """
     n_averages: int = 1
     settle_s: float = 0.0
+    bias_ramp_step_V: float | None = None
+    bias_ramp_delay_s: float | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -381,12 +406,29 @@ def _child_meta(meta: LeafMeta, loop: LoopBlock) -> LeafMeta:
 
     ``n_averages`` is inherited when the loop leaves it None; ``settle_s`` is
     inherited when the loop's value is not positive (0.0 == "no settle" — the
-    dataclass has no unset sentinel).  Pure and fail-closed: no getattr/eval.
+    dataclass has no unset sentinel).  HV ramp shaping is inherited unless *loop*
+    is a ``BIAS_V`` loop that sets the field (only a bias loop drives HV, so a
+    stage loop never contributes ramp shaping).  Pure and fail-closed: no
+    getattr/eval.
     """
     n_avg = meta.n_averages if loop.n_averages is None else int(loop.n_averages)
     loop_settle = float(loop.settle_s)
     settle = loop_settle if loop_settle > 0.0 else meta.settle_s
-    return LeafMeta(n_averages=n_avg, settle_s=settle)
+
+    ramp_step = meta.bias_ramp_step_V
+    ramp_delay = meta.bias_ramp_delay_s
+    if loop.axis == Axis.BIAS_V:
+        if loop.ramp_step_V is not None:
+            ramp_step = float(loop.ramp_step_V)
+        if loop.ramp_delay_s is not None:
+            ramp_delay = float(loop.ramp_delay_s)
+
+    return LeafMeta(
+        n_averages=n_avg,
+        settle_s=settle,
+        bias_ramp_step_V=ramp_step,
+        bias_ramp_delay_s=ramp_delay,
+    )
 
 
 # --------------------------------------------------------------------------- #

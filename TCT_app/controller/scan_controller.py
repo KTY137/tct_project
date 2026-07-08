@@ -191,6 +191,15 @@ class ScanController:
         self._pause_event.set()
         self._abort_event = threading.Event()
 
+        # Path of the HDF5 file the most recent run wrote, for the future
+        # "Open in Analysis" hand-off (design review Q6ii).  Set on the worker
+        # thread in _end_run (before on_finished fires) and read from the GUI
+        # thread via last_run_path — guarded by a lock so the cross-thread read
+        # never sees a torn reference.  Cleared at the start of every run
+        # (_begin_run) so a fresh/aborted run never surfaces a stale path.
+        self._run_path_lock = threading.Lock()
+        self._last_run_path: Path | None = None
+
         # Per-run HV arm latch (plan executor).  Only ever set True by
         # arm_hv(True) after a real user confirmation; cleared at the end of
         # every run so arming is never sticky across runs.
@@ -226,8 +235,28 @@ class ScanController:
         existing = sorted(base.glob("run_*"))
         return base / f"run_{len(existing) + 1:05d}"
 
+    @property
+    def last_run_path(self) -> Path | None:
+        """HDF5 file path the most recent run wrote, or None.
+
+        Thread-safe accessor for the GUI (read after ``on_finished``): None
+        before any run and while a run is in progress, then the just-written
+        ``waveforms.h5`` path once the run's writer is closed.  Populated in
+        :meth:`_end_run` before ``on_finished`` fires; cleared in
+        :meth:`_begin_run` on every new run start.
+        """
+        with self._run_path_lock:
+            return self._last_run_path
+
+    def _set_last_run_path(self, path: Path | None) -> None:
+        with self._run_path_lock:
+            self._last_run_path = path
+
     def _begin_run(self, scan_type: str, cfg) -> HDF5Writer:
         """Allocate a fresh run directory + writer, attach run metadata, open it."""
+        # A new run supersedes any previous run's path (cleared on start; set
+        # again in _end_run once this run's file is closed).
+        self._set_last_run_path(None)
         run_info = self._build_run_info(scan_type, cfg)
         self._writer = HDF5Writer(
             self._next_run_dir(),
@@ -238,12 +267,24 @@ class ScanController:
         return self._writer
 
     def _end_run(self) -> None:
-        """Close the current writer, swallowing errors so cleanup never raises."""
+        """Close the current writer, swallowing errors so cleanup never raises.
+
+        Publishes the just-written HDF5 path via :attr:`last_run_path` *before*
+        ``on_finished`` fires (every run body calls this in its ``finally`` right
+        before the finished callback), so the GUI can hand the run off to
+        analysis.  The path is published even on an aborted/errored run — data
+        taken before the fault is preserved and still openable.
+        """
         try:
             if self._writer is not None:
                 self._writer.close()
         except Exception:
             logger.warning("Writer close failed", exc_info=True)
+        finally:
+            # .path survives close() (only the file handle is dropped), so the
+            # accessor exposes it whether or not the flush/close succeeded.
+            if self._writer is not None:
+                self._set_last_run_path(self._writer.path)
 
     def _save_z_focus(self, z_mm: float, metric: float) -> None:
         try:
@@ -858,6 +899,10 @@ class ScanController:
         has_bias_step = False
         last_result: ScanResult | None = None
         last_bias_target: float | None = None
+        # Ramp shaping of the last commanded BiasStep, re-applied on resume so a
+        # shaped ramp stays shaped across a pause (None = driver default shape).
+        last_bias_step_V: float | None = None
+        last_bias_delay_s: float | None = None
         move_confirmed = False
         acq_index = -1
         saved = 0
@@ -877,7 +922,8 @@ class ScanController:
                     break
                 if self._reassert_pending:
                     self._reassert_pending = False
-                    self._reassert_bias(bias, last_bias_target)
+                    self._reassert_bias(bias, last_bias_target,
+                                        last_bias_step_V, last_bias_delay_s)
 
                 # -- explicit dispatch (fail closed on anything unknown) ------
                 if isinstance(step, MoveStep):
@@ -908,8 +954,11 @@ class ScanController:
                             f"HV ramp to {step.target_V:g} V not confirmed — "
                             "plan aborted.")
                         break
-                    bias.ramp_to(step.target_V)
+                    self._ramp_bias(bias, step.target_V,
+                                    step.ramp_step_V, step.ramp_delay_s)
                     last_bias_target = step.target_V
+                    last_bias_step_V = step.ramp_step_V
+                    last_bias_delay_s = step.ramp_delay_s
 
                 elif isinstance(step, AcquireStep):
                     pos = self._dev.motor.get_position()
@@ -1055,16 +1104,58 @@ class ScanController:
             detail={"envelope": env, "n_moves": n_moves},
         )
 
-    def _reassert_bias(self, bias: BiasChannel, target_V: float | None) -> None:
+    def _ramp_bias(
+        self,
+        bias: BiasChannel,
+        target_V: float,
+        ramp_step_V: float | None = None,
+        ramp_delay_s: float | None = None,
+    ) -> None:
+        """Ramp *bias* to *target_V*, honouring per-step ramp shaping when set.
+
+        Both shaping fields None (absent) is byte-for-byte the historic
+        ``bias.ramp_to(target_V)`` — the driver's default ramp shape.  When
+        either is provided the ramp is shaped (``step_V`` as a magnitude,
+        ``delay_s`` as the per-step dwell); the other keeps its ``ramp_to``
+        default.  HV never steps unshaped when shaping is requested — ``ramp_to``
+        always steps by ``step_V``, never a single unshaped jump.
+        """
+        if ramp_step_V is None and ramp_delay_s is None:
+            bias.ramp_to(target_V)
+            return
+        # Defense in depth (the validator already rejects these at start_plan):
+        # a non-positive step_V would make the driver's ramp loop forever, and a
+        # negative delay would raise in time.sleep — in either case drop the bad
+        # kwarg and fall back to the driver's safe default rather than forward a
+        # hazardous value.  The HV is still ramped (never a single unshaped jump).
+        kwargs: dict = {}
+        if ramp_step_V is not None:
+            step = abs(float(ramp_step_V))
+            if step > 0.0:
+                kwargs["step_V"] = step
+        if ramp_delay_s is not None:
+            delay = float(ramp_delay_s)
+            if delay >= 0.0:
+                kwargs["delay_s"] = delay
+        bias.ramp_to(target_V, **kwargs)
+
+    def _reassert_bias(
+        self,
+        bias: BiasChannel,
+        target_V: float | None,
+        ramp_step_V: float | None = None,
+        ramp_delay_s: float | None = None,
+    ) -> None:
         """Re-establish the last commanded HV set point after a pause→resume.
 
         ``compile_plan`` dedups BiasSteps, so resuming "from step N" would skip
         the re-ramp and keep acquiring at a bias the executor only *assumes* is
         still applied (TECH_DEBT RISK, M2.2).  We never trust the deduped list:
         on resume we re-read the supply (surfacing a dead link) and re-ramp to
-        the last commanded target.  No-op when nothing was commanded yet or HV
-        is not armed.  A failing re-ramp propagates → the run fails safe (ERROR +
-        HV-safe ``finally``).
+        the last commanded target, re-applying its ramp shaping so a shaped ramp
+        stays shaped across the pause.  No-op when nothing was commanded yet or
+        HV is not armed.  A failing re-ramp propagates → the run fails safe
+        (ERROR + HV-safe ``finally``).
         """
         if target_V is None or not self._hv_armed:
             return
@@ -1073,7 +1164,7 @@ class ScanController:
             bias.read()
         except Exception:
             logger.warning("Bias re-read on resume failed", exc_info=True)
-        bias.ramp_to(target_V)
+        self._ramp_bias(bias, target_V, ramp_step_V, ramp_delay_s)
 
     def _deny_abort(self, bias: BiasChannel, has_bias_step: bool, msg: str) -> None:
         """Treat a refused danger confirmation as a clean user abort.

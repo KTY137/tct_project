@@ -226,3 +226,52 @@ def test_steps_are_frozen():
     step = MoveStep(1.0, 2.0, 3.0)
     with pytest.raises(dataclasses.FrozenInstanceError):
         step.x_mm = 9.0
+
+
+# --------------------------------------------------------------------------- #
+# HV ramp shaping (G1): the BIAS_V loop's shaping stamps onto each BiasStep    #
+# --------------------------------------------------------------------------- #
+
+def test_bias_ramp_shaping_stamped_from_loop():
+    """A BIAS_V loop's ramp_step_V / ramp_delay_s reach every emitted BiasStep."""
+    loop = LoopBlock(axis=Axis.BIAS_V, values=[-10.0, -20.0],
+                     ramp_step_V=7.5, ramp_delay_s=0.25,
+                     children=[_acq(), _save()])
+    plan = ScanPlan(root=[loop], safety={"require_hv_confirmation": True})
+    bias_steps = [s for s in compile_plan(plan) if isinstance(s, BiasStep)]
+    assert [s.target_V for s in bias_steps] == [-10.0, -20.0]
+    assert all(s.ramp_step_V == 7.5 and s.ramp_delay_s == 0.25 for s in bias_steps)
+
+
+def test_bias_ramp_shaping_absent_is_none():
+    """A BIAS_V loop with no ramp shaping emits BiasSteps carrying None (=
+    driver default) — byte-identical to the pre-shaping behaviour."""
+    steps = compile_plan(nested_snake_plan())
+    bias_steps = [s for s in steps if isinstance(s, BiasStep)]
+    assert bias_steps
+    assert all(s.ramp_step_V is None and s.ramp_delay_s is None for s in bias_steps)
+
+
+def test_bias_ramp_shaping_inherited_from_outer_bias_loop():
+    """An inner BIAS_V loop that leaves shaping unset inherits the outer bias
+    loop's (nearest-set-wins, mirroring n_averages/settle inheritance)."""
+    inner = LoopBlock(axis=Axis.BIAS_V, values=[-10.0],
+                      children=[_acq(), _save()])            # no shaping set
+    outer = LoopBlock(axis=Axis.BIAS_V, values=[-100.0],
+                      ramp_step_V=25.0, ramp_delay_s=0.05, children=[inner])
+    plan = ScanPlan(root=[outer], safety={"require_hv_confirmation": True})
+    bias_steps = [s for s in compile_plan(plan) if isinstance(s, BiasStep)]
+    assert bias_steps
+    assert all(s.ramp_step_V == 25.0 and s.ramp_delay_s == 0.05 for s in bias_steps)
+
+
+def test_stage_loop_ramp_shaping_never_reaches_bias_step():
+    """Ramp shaping set on a STAGE loop is ignored — only a BIAS_V loop
+    contributes it (the validator warns about the misuse)."""
+    bias = LoopBlock(axis=Axis.BIAS_V, values=[-10.0], children=[_acq(), _save()])
+    stage = LoopBlock(axis=Axis.STAGE_X, values=[0.0],
+                      ramp_step_V=99.0, ramp_delay_s=9.0, children=[bias])
+    plan = ScanPlan(root=[stage], safety={"require_hv_confirmation": True})
+    bias_steps = [s for s in compile_plan(plan) if isinstance(s, BiasStep)]
+    assert bias_steps
+    assert all(s.ramp_step_V is None and s.ramp_delay_s is None for s in bias_steps)

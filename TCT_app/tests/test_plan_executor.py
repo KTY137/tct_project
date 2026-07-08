@@ -125,11 +125,45 @@ def _bias_pause_plan(target):
                     safety={"require_hv_confirmation": True})
 
 
+def _bias_ramp_plan(target, ramp_step_V=None, ramp_delay_s=None, points=1):
+    """A single-setpoint bias plan carrying explicit HV ramp shaping."""
+    children: list = []
+    for _ in range(points):
+        children.extend([_acq(), _save()])
+    loop = LoopBlock(axis=Axis.BIAS_V, values=[float(target)],
+                     ramp_step_V=ramp_step_V, ramp_delay_s=ramp_delay_s,
+                     children=children)
+    return ScanPlan(name="bias_ramp", root=[loop],
+                    safety={"require_hv_confirmation": True})
+
+
+def _bias_ramp_pause_plan(target, ramp_step_V, ramp_delay_s):
+    """A SHAPED bias ramp, acquire+save, a MID-plan manual-pause, then
+    acquire+save.  Parks in PAUSED at the second acquire so a resume must
+    re-assert the *shaped* ramp (compile_plan dedups the BiasStep)."""
+    children = [_acq(), _save(), _pause("swap sample"), _acq(), _save()]
+    loop = LoopBlock(axis=Axis.BIAS_V, values=[float(target)],
+                     ramp_step_V=ramp_step_V, ramp_delay_s=ramp_delay_s,
+                     children=children)
+    return ScanPlan(name="bias_ramp_pause", root=[loop],
+                    safety={"require_hv_confirmation": True})
+
+
 def _trailing_pause_plan(msg="done — last step"):
     """acquire+save, then a MANUAL_PAUSE as the LAST executable step (no bias)."""
     loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0],
                      children=[_acq(), _save(), _pause(msg)])
     return ScanPlan(name="trailing_pause", root=[loop])
+
+
+def _mid_pause_stage_plan(msg="hold"):
+    """acquire+save, a MID-plan MANUAL_PAUSE, then acquire+save (no bias).
+
+    Unlike a trailing pause (which finishes cleanly), this genuinely parks the
+    run in PAUSED at the pause_event.wait() before the second acquire."""
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0],
+                     children=[_acq(), _save(), _pause(msg), _acq(), _save()])
+    return ScanPlan(name="mid_pause", root=[loop])
 
 
 # --------------------------------------------------------------------------- #
@@ -348,6 +382,160 @@ def test_refused_start_clears_hv_arm(sim):
         ctrl.start_plan(_bias_plan(-10.0), _limits(), AutoConfirmGate())
     assert sm.state is AppState.READY
     assert ctrl._thread is None                   # no worker was ever launched
+
+
+# --------------------------------------------------------------------------- #
+# (j) HV ramp shaping (G1): the executor applies the requested shape           #
+# --------------------------------------------------------------------------- #
+def _ramp_up_prefix(set_v_spy, channel, target):
+    """The intermediate set-voltage sequence up to the first *target* command."""
+    volts = [c.args[1] for c in set_v_spy.call_args_list
+             if c.args and c.args[0] == channel]
+    return volts[:volts.index(target) + 1]
+
+
+def test_bias_ramp_shaping_applied_intermediate_steps(sim):
+    """A shaped plan ramps the SUPPLY in the requested step size — the simulated
+    driver walks 10 V intermediate setpoints, not the 5 V default."""
+    dm, ctrl, sm = sim
+    drv = dm.bias_supply.driver
+    set_v = mock.Mock(wraps=drv.set_voltage_ch)
+    drv.set_voltage_ch = set_v
+
+    ctrl.arm_hv(True)
+    ctrl.start_plan(_bias_ramp_plan(-50.0, ramp_step_V=10.0, ramp_delay_s=0.0),
+                    _limits(), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.FINISHED
+    # Coarse 10 V shaped ramp up to -50 V (intermediate voltage steps observed).
+    assert _ramp_up_prefix(set_v, 0, -50.0) == [-10.0, -20.0, -30.0, -40.0, -50.0]
+
+
+def test_bias_ramp_absent_uses_driver_default_step(sim):
+    """Absent shaping = today's behaviour: the executor calls bias.ramp_to(target)
+    with no kwargs, so the driver's default 5 V step walks the supply."""
+    dm, ctrl, sm = sim
+    drv = dm.bias_supply.driver
+    set_v = mock.Mock(wraps=drv.set_voltage_ch)
+    drv.set_voltage_ch = set_v
+
+    ctrl.arm_hv(True)
+    ctrl.start_plan(_bias_plan(-20.0), _limits(), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.FINISHED
+    # Default 5 V step (byte-identical to the pre-shaping BiasStep behaviour).
+    assert _ramp_up_prefix(set_v, 0, -20.0) == [-5.0, -10.0, -15.0, -20.0]
+
+
+def test_shaped_ramp_forwarded_to_ramp_to_kwargs(sim):
+    """The requested shape reaches bias.ramp_to as step_V / delay_s kwargs."""
+    dm, ctrl, sm = sim
+    ch = dm.bias_supply
+    ch.ramp_to = mock.Mock(wraps=ch.ramp_to)
+
+    ctrl.arm_hv(True)
+    ctrl.start_plan(_bias_ramp_plan(-30.0, ramp_step_V=15.0, ramp_delay_s=0.0),
+                    _limits(), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.FINISHED
+    ramp_up = [c for c in ch.ramp_to.call_args_list
+               if c.args and c.args[0] == -30.0]
+    assert ramp_up, "the shaped target was never ramped to"
+    for c in ramp_up:
+        assert c.kwargs.get("step_V") == 15.0
+        assert c.kwargs.get("delay_s") == 0.0
+
+
+def test_pause_resume_reasserts_shaped_bias(sim):
+    """Mary's RISK fix: a resume must re-apply the SAME step_V / delay_s the
+    original shaped BiasStep used.  compile_plan dedups the BiasStep, so a bare
+    resume would both skip the re-ramp AND (before this) drop the shaping — this
+    parks a shaped ramp in PAUSED and proves the resume re-ramp keeps the shape.
+    Mirrors test_shaped_ramp_forwarded_to_ramp_to_kwargs across a pause."""
+    dm, ctrl, sm = sim
+    ch = dm.bias_supply
+    ch.ramp_to = mock.Mock(wraps=ch.ramp_to)
+    prompts: list = []
+    ctrl.on_manual_pause = lambda p: prompts.append(p)
+
+    ctrl.arm_hv(True)
+    ctrl.start_plan(
+        _bias_ramp_pause_plan(-30.0, ramp_step_V=15.0, ramp_delay_s=0.0),
+        _limits(), AutoConfirmGate())
+
+    # The mid-plan ManualPauseStep parks the run in PAUSED.
+    deadline = time.time() + 20
+    while time.time() < deadline and sm.state is not AppState.PAUSED:
+        time.sleep(0.01)
+    assert sm.state is AppState.PAUSED
+    assert prompts == ["swap sample"]
+
+    ctrl.resume()
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.FINISHED
+    assert ctrl._writer._n_points == 2
+    ramp_up = [c for c in ch.ramp_to.call_args_list
+               if c.args and c.args[0] == -30.0]
+    # -30 V ramped twice: the initial shaped BiasStep AND the resume re-assertion.
+    assert len(ramp_up) >= 2
+    # EVERY ramp to the target carried the SAME shaping — incl. the resume one
+    # (a bare bias.ramp_to(target) on resume would drop step_V/delay_s here).
+    for c in ramp_up:
+        assert c.kwargs.get("step_V") == 15.0
+        assert c.kwargs.get("delay_s") == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# (k) run-path seam (Q6ii): last_run_path for the "Open in Analysis" hand-off  #
+# --------------------------------------------------------------------------- #
+def test_last_run_path_none_before_and_set_after_finish(sim):
+    dm, ctrl, sm = sim
+    assert ctrl.last_run_path is None            # nothing has run yet
+
+    ctrl.start_plan(_stage_plan([0.0, 1.0]), _limits(), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.FINISHED
+    path = ctrl.last_run_path
+    assert path is not None
+    assert path == ctrl._writer.path             # the just-written HDF5 file
+    assert path.name == "waveforms.h5"
+    assert path.exists()
+
+
+def test_last_run_path_cleared_on_new_run(sim):
+    dm, ctrl, sm = sim
+
+    # First run finishes → path is published.
+    ctrl.start_plan(_stage_plan([0.0]), _limits(), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+    first = ctrl.last_run_path
+    assert first is not None
+
+    # Re-arm the state machine for another run (FINISHED → CONFIGURED → READY).
+    sm.transition(AppState.CONFIGURED)
+    sm.transition(AppState.READY)
+
+    # A second run that parks in PAUSED (mid-plan manual pause): once it has
+    # started, the previous path is cleared and no new one is published until it
+    # finishes.
+    ctrl.start_plan(_mid_pause_stage_plan(), _limits(), AutoConfirmGate())
+    deadline = time.time() + 20
+    while time.time() < deadline and sm.state is not AppState.PAUSED:
+        time.sleep(0.01)
+    assert sm.state is AppState.PAUSED
+    assert ctrl.last_run_path is None            # cleared on the new run start
+
+    ctrl.resume()
+    ctrl._thread.join(timeout=20)
+    assert sm.state is AppState.FINISHED
+    second = ctrl.last_run_path
+    assert second is not None
+    assert second != first                       # a fresh run directory
 
 
 # --------------------------------------------------------------------------- #

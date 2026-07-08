@@ -5,6 +5,8 @@ require_hv_confirmation (fail-closed), bias out of range, a broken loop range
 reported (not crashed), and a clean plan with no errors — plus the semantic and
 branch checks.
 """
+import pytest
+
 from controller.scan_plan import (
     ActionBlock, ActionType, Axis, LoopBlock, ScanPlan,
 )
@@ -221,3 +223,51 @@ def test_mid_plan_manual_pause_does_not_warn():
     plan = ScanPlan(name="t", root=[pause, loop])
     issues = validate_plan(plan, limits())
     assert not any("MANUAL_PAUSE" in w for w in warnings(issues))
+
+
+# --------------------------------------------------------------------------- #
+# HV ramp shaping (G1): fail-closed on nonsensical values                      #
+# --------------------------------------------------------------------------- #
+
+def _bias_ramp_plan(ramp_step_V=None, ramp_delay_s=None):
+    loop = LoopBlock(axis=Axis.BIAS_V, values=[-50.0],
+                     ramp_step_V=ramp_step_V, ramp_delay_s=ramp_delay_s,
+                     children=[_acq(), _save()])
+    return ScanPlan(name="t", root=[loop],
+                    safety={"require_hv_confirmation": True})
+
+
+def test_valid_ramp_shaping_is_clean():
+    plan = _bias_ramp_plan(ramp_step_V=5.0, ramp_delay_s=0.1)
+    issues = validate_plan(plan, limits())
+    assert errors(issues) == []
+    assert not any("ramp_" in w for w in warnings(issues))
+
+
+@pytest.mark.parametrize("bad", [0.0, -5.0])
+def test_non_positive_ramp_step_is_error(bad):
+    plan = _bias_ramp_plan(ramp_step_V=bad, ramp_delay_s=0.1)
+    assert any("ramp_step_V" in e for e in errors(validate_plan(plan, limits())))
+
+
+def test_negative_ramp_delay_is_error():
+    plan = _bias_ramp_plan(ramp_step_V=5.0, ramp_delay_s=-0.1)
+    assert any("ramp_delay_s" in e for e in errors(validate_plan(plan, limits())))
+
+
+def test_zero_ramp_delay_is_clean():
+    """A zero per-step dwell is legal (fast, delay-free ramp)."""
+    plan = _bias_ramp_plan(ramp_step_V=5.0, ramp_delay_s=0.0)
+    assert not any("ramp_delay_s" in e for e in errors(validate_plan(plan, limits())))
+
+
+def test_ramp_shaping_on_stage_loop_warns():
+    """Ramp shaping on a non-bias loop is ignored downstream → WARNING, not an
+    ERROR (it is harmless, just useless)."""
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0],
+                     ramp_step_V=5.0, ramp_delay_s=0.1,
+                     children=[_acq(), _save()])
+    plan = ScanPlan(name="t", root=[loop])
+    issues = validate_plan(plan, limits())
+    assert errors(issues) == []
+    assert any("ramp_step_V" in w and "non-bias" in w for w in warnings(issues))
