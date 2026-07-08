@@ -41,6 +41,13 @@ matplotlib>=3.7       # vendored translater.py imports pyplot at module scope
 pandas>=2.0           # vendored translater.py binary_to_csv helper
 tqdm>=4.65            # vendored acquire.py progress bars
 
+# Testing (dev-only; not needed to run the app itself)
+# pytest itself is not pinned here (installed ad hoc into the dev venv);
+# pytest-timeout enforces a per-test wall-clock budget (see pytest.ini) so a
+# single hung test aborts with a stack dump instead of wedging the whole
+# suite (silent ~11 min hang at 0% CPU, 2026-07-08).
+pytest-timeout>=2.3
+
 # ─────────────────────────────────────────────────────────────────────
 # NOT on PyPI — install separately for the corresponding REAL hardware.
 # The app runs fully in simulation mode without these.

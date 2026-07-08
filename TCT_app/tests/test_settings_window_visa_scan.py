@@ -34,6 +34,7 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
 from PySide6.QtWidgets import QApplication, QInputDialog
 
 from gui.settings_window import SettingsWindow
@@ -114,6 +115,7 @@ def test_dialog_open_scans_visa_once_not_once_per_picker(tmp_path, monkeypatch):
         win.close()
 
 
+@pytest.mark.timing_sensitive
 def test_construction_does_not_block_on_slow_scan(tmp_path, monkeypatch):
     """A slow (bench-realistic) VISA enumeration must not stall __init__."""
     def slow_list():
