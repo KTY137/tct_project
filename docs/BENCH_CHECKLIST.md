@@ -47,7 +47,7 @@
 
 ## 3. Rigol DG4162 Waveform Generator
 
-### 3a. Output Load Setting (amplitude halving trap)
+### 3a. Output Load Setting (amplitude halving trap) + `:OUTP:LOAD?` readback
 
 **What to check:**
 - Connect to DG4162 at 192.168.0.10:5025 via VISA or front-panel GUI.
@@ -55,36 +55,44 @@
   - If you use the front panel: Menu → Output → Load (select 50 Ω).
 - Press **Apply** to confirm the setting change.
 - Observe the front-panel display: it should now show **50 Ω** (not HighZ).
+- **Readback the load:** query `:OUTPut:LOAD?` (or `:OUTP:LOAD?`) and verify the reply:
+  - After `:OUTP:LOAD 50`, the reply should be **`50`** (bare integer, no unit suffix).
+  - If the unit is in High-Z, the reply is the literal token **`INFINITY`** (not a number); the parser must handle this case.
 - Generate a test square wave: set Frequency = 1 kHz, waveform = Square, Amplitude = 2 V, DC Offset = 1 V (unipolar 0→2V).
 - Measure the **actual peak voltage delivered** to a 50 Ω load (oscilloscope or scope probe across the PDL trigger input).
 
 **Expected result:**
 - Front panel shows **50 Ω** after Apply.
+- Query `:OUTP:LOAD?` reads back **`50`** (integer); High-Z reads back **`INFINITY`** (literal keyword).
 - The delivered amplitude matches the display (e.g., 2 V display ≈ 2 V peak). If it was previously **half** (1 V when set to 2 V), this fix resolves it.
 
 **Closes:**
 - `docs/TECH_DEBT.md` line 35 (TODO(bench)).
 - Associated code: `TCT_app/devices/waveform_generator.py` (`:OUTPut:LOAD` SCPI sourced from manual).
+- Source: `docs/research/dg4000_tbs1000c_query_forms.md` Q1b (`:OUTPut:LOAD?` query form + return format).
 
 ---
 
 ### 3b. Output State Query (armed tri-state resolution)
 
 **What to check:**
+- DG4162 firmware version: confirm via front panel (Menu → System → Version) or via SCPI: `*IDN?`. Expected: **fw 00.01.14** (or document the actual version used).
 - While connected to DG4162 at 192.168.0.10:5025:
   - Enable output on channel 1 via front panel or SCPI: `:OUTPut1:STATe ON`.
-  - Query the state: send `:OUTPut1:STATe?` and record the reply (expected: `1` or `ON`).
+  - Query the state: send `:OUTPut1:STATe?` (or short form `:OUTP1?`) and record the reply (expected: `ON` or `OFF`).
   - Disable output: `:OUTPut1:STATe OFF`.
-  - Query again: send `:OUTPut1:STATe?` and record the reply (expected: `0` or `OFF`).
+  - Query again: send `:OUTPut1:STATe?` and record the reply (expected: `OFF`).
 - Also try channel 2 if present: `:OUTPut2:STATe?` (should work identically).
 
 **Expected result:**
-- The query form `:OUTPut{ch}:STATe?` **exists and returns a boolean** (1/0 or ON/OFF).
+- The query form `:OUTPut{ch}:STATe?` (short `:OUTP{ch}?`) **exists and returns `ON` or `OFF`** (keywords, not 1/0).
 - This allows `TCT_app` to auto-resolve the tri-state armed indicator from unknown → True/False on real hardware.
+- Parser handles both `ON`/`OFF` and (defensively) `1`/`0`, case-insensitive, with whitespace stripped.
 
 **Closes:**
-- `docs/TECH_DEBT.md` line 36 (TODO(manual needed)); requires a manual query SCPI form.
+- `docs/TECH_DEBT.md` line 36 (resolved 2026-07-08); manual query SCPI form now sourced.
 - Associated code: `TCT_app/devices/waveform_generator.py` (`:OUTPut{ch}:STATe?` query implementation).
+- Source: `docs/research/dg4000_tbs1000c_query_forms.md` Q1a (manual-cited return format: `ON`/`OFF`).
 
 ---
 
@@ -118,13 +126,16 @@
 - Also try both channels if available.
 
 **Expected result:**
-- Both queries **succeed** and return a value (e.g., `1X` or `10X` for gain; `AC` or `DC` for coupling).
-- If queries fail: document which model exhibits the failure; they may be TBS1000C-family-specific quirks.
+- Both queries **succeed** and return a value:
+  - `CH1:COUPling?` returns one of `AC`, `DC`, or `GND` (manual-cited TBS1000C 077-1691 Vertical group).
+  - `CH1:PRObe:GAIN?` returns a floating-point gain value (e.g., `0.1000E+00` for a 10× probe; gain = 1/attenuation, per 077-1691).
+- These are the **correct TBS1000C forms** (not just tolerated fallbacks); defensive fallback to legacy `CH:PRObe` is for older TDS1000/TBS1000B models (no longer needed for TBS1052C).
+- If queries fail on the real unit: document the exact failure; update the fallback logic in `oscilloscope.py` accordingly.
 
 **Closes:**
-- `docs/TECH_DEBT.md` line 19 (TODO(bench)).
-- Associated code: `TCT_app/devices/oscilloscope.py` (safe fallback query forms for TBS1052C).
-- Research note: `docs/research/tbs1000c_scpi.md` (live-verified 2026-07-06, flagged for follow-up).
+- `docs/TECH_DEBT.md` line 19 (TODO(bench)); now manual-cited (077-1691) instead of unverified.
+- Associated code: `TCT_app/devices/oscilloscope.py` (CH:PRObe:GAIN and CH:COUPling? query forms).
+- Source: `docs/research/dg4000_tbs1000c_query_forms.md` Q2 (manual-cited TBS1000C 077-1691 Vertical group forms + same-engine TBS2000 077-1149 argument/return details).
 
 ---
 

@@ -93,7 +93,8 @@ Core design rules (verified in code):
   `_command_move`/`_motor_stop_safe`), fail-safe hardening (motor.stop() in
   all five run-path finallys, isolated try-blocks in vscan finally, refused
   starts clear `_hv_armed`, trailing ManualPause finishes cleanly, `resume()`
-  no-op unless PAUSED, HV re-assertion on resume).
+  no-op unless PAUSED, HV re-assertion on resume). Read-only property `last_run_path: Path | None` 
+  (thread-safe, set after HDF5 write completes) allows the GUI to link to the just-written run file.
 - `danger_gate.py` — danger action protocol and authorization gates. `DangerAction`
   dataclass (action kind, `requires_confirm: bool`); `DangerGate` protocol (async
   request/confirm workflow). `AutoConfirmGate` (auto-approves in simulation);
@@ -102,9 +103,13 @@ Core design rules (verified in code):
 - `scan_plan.py` — `ScanPlan` tree dataclass: fail-closed nested parameter loops
   (Axis, Bias, Delay loops), action leaves (Move, Settle, Acquire, Extract, Save),
   guard nodes, and danger nodes. YAML round-trip via `load()`/`save()`;
-  `iter_leaf_contexts()` yields leaf scan points. New `LeafMeta` carries effective
+  `iter_leaf_contexts()` yields leaf scan points. `LeafMeta` carries effective
   `n_averages`/`settle_s` (action params > nearest enclosing loop > defaults);
-  `iter_leaf_contexts_ex()` yields `(coords, action, meta)` tuples.
+  `iter_leaf_contexts_ex()` yields `(coords, action, meta)` tuples. `BiasStep` 
+  (compiled from Bias loop) carries optional `ramp_step_V` / `ramp_delay_s` fields
+  (step size + per-step delay during ramp; sourced from device config defaults,
+  loop overrides, or per-action overrides; unifies the e4control + native driver 
+  ramp-shaping parameters).
 - `scan_plan_validator.py` — pure fail-closed plan pre-flight:
   `validate_plan(plan, PlanLimits) -> list[PlanIssue]`. Checks stage limits, HV
   range, `max_points` cap, and (fail-closed) requires any bias-driving plan to
@@ -162,7 +167,8 @@ Core design rules (verified in code):
 | Oscilloscope | — | `oscilloscope.py` (VISA), `oscilloscope_drs4.py` (PSI DRS4 eval board), `oscilloscope_tek_fastframe.py` (Tektronix MSO5204B FastFrame — currently non-functional, see Known constraints) |
 | Intensity monitor | `intensity_base.py` | `intensity_scope_ch.py`, `intensity_simulated.py` |
 | Slow control | `slow_control_base.py` | `slow_control_simulated.py` |
-| Other | `waveform_generator.py` (VISA), `camera_blackfly.py` (FLIR PySpin), `laser_manual.py` (metadata-only laser record) | |
+| Waveform generator | — | `waveform_generator.py` (VISA Rigol DG4162) |
+| Other | `camera_blackfly.py` (FLIR PySpin), `laser_manual.py` (metadata-only laser record) | |
 
 All inherit `base.py:BaseDevice` (`DeviceError`, `io_lock`, `simulation`,
 `is_alive()`, abstract `connect()`/`disconnect()`).
@@ -263,6 +269,11 @@ no FastFrame support), driven by the default `oscilloscope.py` VISA backend
   model number); `gui/scope_panel.py` builds its channel cards from it.
 - `is_alive()` = a `*STB?` heartbeat (see Big picture / `is_alive()` contract).
 
+`waveform_generator.py` (Rigol DG4162) facts:
+- `prime_pyvisa() -> bool` (main-thread warm-up helper called early in GUI startup and before the settings scan QThread spins up): primes PyVISA's ctypes DLL loader to avoid access-violation on first import off a background thread (Windows-specific).
+- `WaveformGenerator.connect()` queries `:OUTPut{ch}:STATe?` (manual-sourced from DG4000 Programming Manual, returns `ON`/`OFF`) and resolves the `armed` tri-state indicator from unknown → real `True`/`False` (defensive parse: accepts `ON`/`1` → True, `OFF`/`0` → False, case-insensitive, whitespace stripped).
+- Optional config fields `level_low_V` / `level_high_V` (unipolar 0→+V trigger path; mutually required, default omitted = bipolar mode). Validated in `config_validator` (both-or-neither, numeric, low < high).
+
 ## gui/ (PySide6 — never PyQt6)
 
 Panels: `motor_panel`, `bias_panel`, `multi_bias_panel`, `scope_panel`,
@@ -271,13 +282,11 @@ Panels: `motor_panel`, `bias_panel`, `multi_bias_panel`, `scope_panel`,
 (`DeviceManagerWindow`, `device_state`), `settings_window`, `planner_panel`
 (Recipe-Tree QTreeWidget, editable loop rows, live estimate, validate/dry-run/
 arm/start latch chain; v2: drag-drop palette, movable nodes, right-click ops,
-20-deep undo). Panels built on `panel_kit` Cards: `scope_panel`, `laser_panel`,
-`motor_panel`, `bias_panel`, `multi_bias_panel`, `intensity_panel`,
-`monitor_panel`, `device_panel` (9 of 12 core panels). Support: `panel_kit.py`
+20-deep undo). **All 12 core panels built on `panel_kit` Cards** (batch-1: motor/bias/multi_bias/intensity/monitor/device, batch-2: scope/laser, batch-3: camera/analysis). Support: `panel_kit.py`
 (Card composition: title/subtitle, header, per-card `set_rail(axis, mode)` with
 dynamic railAxis property; panel_header, eyebrow_title, section_header,
 readout_cell, form_row, axis_rail_css; QSS hooks cardHeader/cardTitle/
-cardSubtitle in style.py), `status_bus.py` (cross-panel status),
+cardSubtitle in style.py; cockpit-kit components: FigureCard, MetricTile, MetricGrid, ActionBar, CheckableCard, EmptyState, ReadoutCell), `status_bus.py` (cross-panel status),
 `status_widgets.py` (StatusChip, StatusPill, flash_button design-system tokens),
 `scan_map_window.py` (live scan map), `stage_view.py` (3D GL stage view),
 `scope_measurements.py`, `detachable_tabs.py`, `style.py` (token design system:
@@ -382,6 +391,8 @@ bias-scan CCE, `estimate_depletion_voltage`).
 - `configs/devices.yaml` — single config source: backend selection per device,
   connection parameters, `output.data_dir`, `output.save` toggles, calibration,
   software limits. Validated by `config_validator`.
+- `pytest.ini` — pytest configuration (timeout=60s per test, preventing hangs on
+  unresponsive mock transports).
 - `tests/` — pytest, headless, simulated backends only: state machine, config
   validator, GRBL mock, scope preamble, waveform analysis, bias & calibration.
 
@@ -427,6 +438,8 @@ The following files are autogenerated/maintained registries for fast O(1) lookup
 Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 ## Changelog
+
+- 2026-07-08 — **Bookkeeping post-commit d990d4d: S0 (viewer-prereqs) round landed.** Updated `docs/TECH_DEBT.md`: resolved row 36 (wavegen armed `:OUTPut{ch}:STATe?` query, manual-sourced, implemented in connect(), +17 tests, closes `TODO(manual needed)`); added resolved row for PyVISA AV fix (main-thread prime_pyvisa() warm-up + test stubs + style.py apply_theme walk removal, Paul/Noah, +3 regression tests). Updated `docs/BENCH_CHECKLIST.md`: §3a/3b (DG4162 load/state queries with firmware version + manual citations + readback format), §4a (TBS1052C probes upgraded from unverified to manual-cited 077-1691). Added panel_kit.py section to `docs/signal_registry.md` (CheckableCard.toggled). Updated `docs/ARCHITECTURE.md`: devices section (waveform_generator row), waveform_generator.py facts (prime_pyvisa, armed-state query, unipolar config), gui section (all 12 panels on panel_kit, cockpit-kit batch3 components), scan_controller.py (last_run_path property), scan_plan.py (BiasStep ramp fields), configs/tests section (pytest.ini). Appending S0 completion to `docs/OVERNIGHT_LOG.md`.
 
 - 2026-07-08 — **Crew meta-review bookkeeping: bench-checklist, decision ADR, and research index.** Created `docs/BENCH_CHECKLIST.md` (single human-runnable bench-verification list: 5 sections grouping TP-Link switch, PC NIC, DG4162 wavegen, TBS1052C scope, iseg HV; each with: what to do, expected result, which file/assumption it closes; HV items gated on explicit user go; safety notes on wavegen output + probe load). Created `docs/DECISIONS.md` (lightweight ADR ledger: date | decision | rationale | affected | status; 8 seed rows from known history: PySide6, numpy<2, printcore no-go, static IPs, ScanPanel retirement, quick-scan JSON drop, crew complete). Added index table to `docs/research/README.md` (7 research notes: date | file | topic | one-line takeaway; links to external research and live-verified findings). Updated `docs/ARCHITECTURE.md` header to point to changelog location and DECISIONS.md for "why" ledger. (Crew meta-review follow-up per user 2026-07-08.)
 

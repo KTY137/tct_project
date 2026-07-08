@@ -194,6 +194,14 @@ Organization: **one section per module**, signals listed in definition order. Fo
 
 ---
 
+## gui/panel_kit.py
+
+| Signal | Signature | Defined at | Connected to |
+|--------|-----------|-----------|--------------|
+| `CheckableCard.toggled` | `(bool)` — checked state | `panel_kit.py:507` | ? (internal; forwards header checkbox toggled state to parent) |
+
+---
+
 ## Notes
 
 - Signals marked `?` are internal to their panel/class and do not appear in the main window wiring log; some feed internal `QThread` workers or `QTimer` machinery.
