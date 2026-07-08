@@ -22,10 +22,8 @@ robustness, more Scan Planner features, be creative.*
 
 ## Sequence ledger (append one line per beat)
 
-- **S0 (in progress at bedtime):** viewer prerequisites round — G1 HV ramp
-  shaping, shared grid helper + CCE move, cockpit kit primitives, pytest-timeout,
-  pyvisa warm-up + wavegen armed-state query, crew tuning. Blocked on Noah's
-  `style.py` access-violation fix (green suite = proof), then commit + push.
+- **S0 DONE 2026-07-08:** viewer-prerequisites round committed+pushed (5922dbc..d990d4d, 7 commits): crew tuning, G1 ramp shaping, analysis grid/CCE, cockpit kit, pytest-timeout, pyvisa+armed fix, theme-apply AV fix. Suite 571 passed.
+- **S1 (in progress):** shared scan-map-view widget (Noah) + plan_estimate ramp preview (Abel, DONE, 17 passed). Then Mary review → commit.
 
 ## Theme backlog (ranked; I pull sequences from here top-down)
 
@@ -102,4 +100,11 @@ just the one call site); consider a session-scoped QApplication fixture +
 deferred-delete flush in conftest; pin pytest itself in requirements.
 
 ## Open decisions parked for Kaya (I will NOT guess these)
-*(none yet — appended as they arise)*
+- **Map colorbar levels (2026-07-08):** the new shared `ScanMapView` always
+  autoscales the colorbar (nanmin/nanmax over sampled cells); the old
+  `ScanMapWindow` "Auto levels" checkbox / manual level-lock was dropped in the
+  refactor. Autoscale is the right default for a live-filling scan, but manual
+  level-locking is useful for comparing runs on a fixed scale. → Decision: do
+  you want a level-lock control back (min/max spinboxes or a "freeze levels"
+  toggle) on the ScanViewer? Cheap to add later; not blocking. Not currently a
+  regression (no live caller used the old manual mode).
