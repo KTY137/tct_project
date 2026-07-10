@@ -234,6 +234,83 @@
 
 ---
 
+## 6. Scan Viewer Cockpit (live run monitor)
+
+### 6a. Cockpit Engagement on Real Bench Plan Run
+
+**What to check:**
+- In the GUI, open Planner panel and construct a simple XY-raster plan (e.g., 3×3 grid, 1 mm spacing).
+- Click "Start Plan" and observe the Scan Viewer tab.
+- During the run, verify the following cockpit elements are live and updating:
+  - **Live map:** 2D heatmap surface is drawn as points arrive and updates in real time.
+  - **Progress chip:** shows "Point N of Total" (e.g., "5 of 9").
+  - **ETA chip:** displays estimated time remaining for the scan.
+  - **Elapsed-time chip:** counts up as the scan runs.
+  - **Pause button:** is enabled and clickable; click it, observe the scan pauses and button changes to "Resume".
+  - **Abort button:** is enabled (red/danger styling) and clickable; test abort on a later run (dangerous action, requires confirmation).
+  - **Z-focus card:** (if enabled in plan) shows live Z position vs. amplitude curve as the scan sweeps Z.
+- After the run completes: **Finished chip** appears (green state), map is frozen.
+
+**Expected result:**
+- All cockpit elements respond in real time; no stalls or frozen readouts.
+- Pause/resume works; abort stops the scan immediately (with confirmation gate).
+- "Finished" state is reached cleanly.
+
+**Closes:**
+- Functional verification of Scan Viewer cockpit design (S2b+S2c).
+- Related commit: 8312f41, 46ff681, 48396c0, 884afe8.
+
+---
+
+### 6b. PNG/CSV Export + Freeze-Levels on Real Scan Data
+
+**What to check:**
+- After a completed scan (or load a past run via Analysis panel), the Scan Viewer map displays the last result.
+- Locate the map card's toolbar (top-right of the map widget).
+- **PNG export:** click the camera/export button, select a file path, save. Verify:
+  - A PNG file is created with the correct size/colormap.
+  - The file can be opened in an image viewer and matches the on-screen map.
+- **CSV export:** click the table/CSV button, select a file path, save. Verify:
+  - A CSV file is created with headers (x_mm, y_mm, value, etc.).
+  - The CSV opens in a spreadsheet viewer and contains numerical data matching the heatmap.
+- **Freeze-levels toggle:** in the map toolbar, find the "Freeze" or lock icon (or a toggle labeled "Lock levels").
+  - Click it; observe the colorbar min/max spinboxes appear (or lock visually).
+  - Load a second scan; the colorbar should NOT auto-scale; it stays locked to the first run's range.
+  - Click the toggle again to un-freeze; colorbar should autoscale to the new run.
+
+**Expected result:**
+- PNG export produces a valid image.
+- CSV export produces a valid spreadsheet with matching data.
+- Freeze-levels toggle persists the colorbar range across runs.
+
+**Closes:**
+- Functional verification of ScanMapView export + freeze-levels (46ff681).
+- Related code: `TCT_app/gui/scan_map_view.py` (_write_png, _write_csv, freeze-levels toggle).
+
+---
+
+### 6c. Motor "Set as Scan Start" → Planner "Use Current Position"
+
+**What to check:**
+- In the GUI, navigate to the Motor panel.
+- Jog the motor to a non-zero position (e.g., X=5 mm, Y=10 mm, Z=2 mm).
+- Locate the button labeled **"Set as Scan Start"** (or similar) in the Motor panel.
+- Click it; the motor position is sent to the Planner.
+- Switch to the Planner panel.
+- Expand an Axis loop in the plan tree (e.g., the X-axis loop).
+- Verify the **X Start spinbox** is now populated with 5 mm (the value you set in Motor).
+- Do the same for Y (should be 10 mm) and Z (should be 2 mm).
+
+**Expected result:**
+- Motor "Set as Scan Start" updates the Planner's selected loop start positions.
+- Flow name: motor `set_as_scan_start` signal → planner `set_position_from_motor(x, y, z)` slot.
+
+**Closes:**
+- Functional verification of G3 motor/planner affordance (48396c0).
+- Related code: `TCT_app/gui/motor_panel.py` (set_as_scan_start), `TCT_app/gui/planner_panel.py` (set_position_from_motor).
+
+---
+
 ## Next Steps
 
 Once all checklist items are complete:

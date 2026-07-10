@@ -25,6 +25,8 @@ robustness, more Scan Planner features, be creative.*
 - **S0 DONE 2026-07-08:** viewer-prerequisites round committed+pushed (5922dbc..d990d4d, 7 commits): crew tuning, G1 ramp shaping, analysis grid/CCE, cockpit kit, pytest-timeout, pyvisa+armed fix, theme-apply AV fix. Suite 571 passed.
 - **S1 DONE 2026-07-08:** shared map widget + ramp-aware estimate + PNG-export fix (7cba862, bc59250). Mary APPROVE-WITH-NITS. Suite 594.
 - **S2a DONE 2026-07-08:** scan_coordinator extracted from tct_gui (behavior-preserving, Mary byte-identical HV verify) + AnalysisPanel.load_run seam (412abe1, 3d3b4b8). Suite 611. Next: S2b ScanViewerPanel, S2c retire ScanPanel.
+- **S2b DONE 2026-07-10:** ScanViewerPanel live scan monitor + 32 tests (8312f41). Mary APPROVE-WITH-NITS, nits fixed. Suite 643.
+- **S2c DONE 2026-07-10:** viewer wired via coordinator, ScanPanel + ScanMapWindow retired, ScanMapView export/freeze-levels, planner Use-current-position (G3), coordinator start_plan scan_started fix (46ff681, 48396c0, 884afe8). Mary APPROVE. Suite 657. T1 sequence complete.
 
 ## Theme backlog (ranked; I pull sequences from here top-down)
 
@@ -101,11 +103,8 @@ just the one call site); consider a session-scoped QApplication fixture +
 deferred-delete flush in conftest; pin pytest itself in requirements.
 
 ## Open decisions parked for Kaya (I will NOT guess these)
-- **Map colorbar levels (2026-07-08):** the new shared `ScanMapView` always
-  autoscales the colorbar (nanmin/nanmax over sampled cells); the old
-  `ScanMapWindow` "Auto levels" checkbox / manual level-lock was dropped in the
-  refactor. Autoscale is the right default for a live-filling scan, but manual
-  level-locking is useful for comparing runs on a fixed scale. → Decision: do
-  you want a level-lock control back (min/max spinboxes or a "freeze levels"
-  toggle) on the ScanViewer? Cheap to add later; not blocking. Not currently a
-  regression (no live caller used the old manual mode).
+
+(none currently open)
+
+**Resolved decisions (archive):**
+- **Map colorbar levels (2026-07-08, RESOLVED 2026-07-10):** freeze-levels toggle built into ScanMapView, ratified by Kaya, implemented in 46ff681.

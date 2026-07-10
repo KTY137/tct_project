@@ -114,6 +114,8 @@ retiring ScanPanel retires the **widget and the quick-raster start path**; the
 Planner becomes the only surface for grid/CCE routines, but BiasPanel keeps its
 own voltage-scan entry and Z-focus is a live assist that cannot be a ScanPlan.)*
 
+**DONE 2026-07-10:** ScanViewerPanel live cockpit (8312f41), wired via coordinator (884afe8), ScanPanel+ScanMapWindow retired, ScanMapView export+freeze-levels (46ff681), planner Use-current-position (48396c0), suite 657 passed, Mary APPROVE.
+
 - **ScanPanel dies.** Its five responsibilities are re-homed, not lost:
   quick-raster form → gone (Planner covers it, proven via `plan_from_config`);
   voltage-scan entry → Planner + the surviving BiasPanel path (gap G2: retire

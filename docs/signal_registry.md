@@ -40,19 +40,19 @@ Organization: **one section per module**, signals listed in definition order. Fo
 
 | Signal | Signature | Defined at | Connected to |
 |--------|-----------|-----------|--------------|
-| `ScanCoordinator.point_done` | `(object)` — ScanResult | `scan_coordinator.py:102` | `gui/scan_map_view` / TBD ScanViewerPanel |
-| `ScanCoordinator.progress` | `(int, int)` — done, total | `scan_coordinator.py:103` | ? (live progress display) |
-| `ScanCoordinator.scan_started` | `()` | `scan_coordinator.py:104` | ? |
-| `ScanCoordinator.scan_finished` | `()` | `scan_coordinator.py:105` | ? |
-| `ScanCoordinator.z_focus_pt` | `(float, float)` — z_mm, amplitude_V | `scan_coordinator.py:106` | ? (TBD Z-focus panel) |
-| `ScanCoordinator.z_focus_done` | `(float)` — best_z_mm | `scan_coordinator.py:107` | ? |
+| `ScanCoordinator.point_done` | `(object)` — ScanResult | `scan_coordinator.py:102` | `ScanViewerPanel.on_point_done()`, `gui/scan_map_view` |
+| `ScanCoordinator.progress` | `(int, int)` — done, total | `scan_coordinator.py:103` | `ScanViewerPanel.on_progress()` (live progress display) |
+| `ScanCoordinator.scan_started` | `()` | `scan_coordinator.py:104` | `ScanViewerPanel.on_scan_started()` (emitted by `start_plan()` on success) |
+| `ScanCoordinator.scan_finished` | `()` | `scan_coordinator.py:105` | `ScanViewerPanel.on_scan_finished()` |
+| `ScanCoordinator.z_focus_pt` | `(float, float)` — z_mm, amplitude_V | `scan_coordinator.py:106` | `ScanViewerPanel.on_z_focus_point()` |
+| `ScanCoordinator.z_focus_done` | `(float)` — best_z_mm | `scan_coordinator.py:107` | `ScanViewerPanel.on_z_focus_done()` |
 | `ScanCoordinator.vscan_point` | `(float, float, float)` — voltage_V, charge_pC, current_A | `scan_coordinator.py:109` | `BiasPanel` (AnalysisPanel plot on vscan) |
-| `ScanCoordinator.plan_progress` | `(int, int)` — done, total | `scan_coordinator.py:111` | ? (live planner progress) |
-| `ScanCoordinator.plan_error` | `(str)` | `scan_coordinator.py:112` | ? |
-| `ScanCoordinator.plan_finished` | `()` | `scan_coordinator.py:113` | ? |
+| `ScanCoordinator.plan_progress` | `(int, int)` — done, total | `scan_coordinator.py:111` | `PlannerPanel.on_progress()` (live planner progress) |
+| `ScanCoordinator.plan_error` | `(str)` | `scan_coordinator.py:112` | `PlannerPanel.on_error()` |
+| `ScanCoordinator.plan_finished` | `()` | `scan_coordinator.py:113` | `PlannerPanel.on_plan_finished()` |
 | `ScanCoordinator.plan_running` | `(bool)` | `scan_coordinator.py:114` | ? |
 | `ScanCoordinator.hv_armed` | `(bool)` | `scan_coordinator.py:115` | ? |
-| `ScanCoordinator.manual_pause` | `(str)` — plan executor ManualPauseStep prompt | `scan_coordinator.py:117` | ? (plan executor pause-point dialog) |
+| `ScanCoordinator.manual_pause` | `(str)` — plan executor ManualPauseStep prompt | `scan_coordinator.py:117` | `TCTMainWindow._on_plan_manual_pause()` (plan executor pause-point dialog) |
 | `ScanCoordinator.warn_dialog` | `(str, str)` — (title, message) | `scan_coordinator.py:118` | ? (status-bus warning) |
 | `ScanCoordinator.error_dialog` | `(str, str)` — (title, message) | `scan_coordinator.py:119` | ? (status-bus error) |
 | `ScanCoordinator.status_message` | `(str)` | `scan_coordinator.py:120` | ? (status bar) |
@@ -135,32 +135,31 @@ Organization: **one section per module**, signals listed in definition order. Fo
 |--------|-----------|-----------|--------------|
 | `_PollWorker.position_updated` | `(float, float, float)` | `motor_panel.py:54` | ? (to parent MotorPanel) |
 | `_CommandWorker.done` | `(str)` — "" on success, else the error message | `motor_panel.py:96` | ? (to parent MotorPanel) |
-| `MotorPanel.set_as_scan_start` | `(float, float, float)` | `motor_panel.py:119` | `ScanPanel.set_start_position()`, `tct_gui.py:361-362` |
+| `MotorPanel.set_as_scan_start` | `(float, float, float)` | `motor_panel.py:119` | `PlannerPanel.set_position_from_motor()`, `tct_gui.py:TBD` |
 | `MotorPanel._poll_stop_requested` | `()` | `motor_panel.py:120` | ? |
 
 ---
 
 ## gui/planner_panel.py
 
-| Signal | Signature | Defined at | Connected to |
+| Signal / Slot | Signature | Defined at | Connected to |
 |--------|-----------|-----------|--------------|
 | `_TreeModel.itemActivatedForAppend` | `(dict)` | `planner_panel.py:202` | ? |
 | `PlannerPanel.start_plan_requested` | `(object)` | `planner_panel.py:358` | `TCTMainWindow._start_plan_from_planner()`, `tct_gui.py:349` |
 | `PlannerPanel.arm_hv_requested` | `()` | `planner_panel.py:359` | `TCTMainWindow._on_arm_hv_requested()`, `tct_gui.py:348` |
 | `PlannerPanel.abort_requested` | `()` | `planner_panel.py:360` | `ScanController.abort()`, `tct_gui.py:350` |
+| `PlannerPanel.set_position_from_motor(x_mm, y_mm, z_mm)` | `(float, float, float)` — slot | `planner_panel.py:TBD` | Called from `MotorPanel.set_as_scan_start` via `tct_gui.py:TBD` |
 
 ---
 
-## gui/scan_panel.py
+## gui/scan_viewer_panel.py
 
 | Signal | Signature | Defined at | Connected to |
 |--------|-----------|-----------|--------------|
-| `ScanPanel.start_requested` | `(ScanConfig)` | `scan_panel.py:36` | `TCTMainWindow._start_scan()`, `tct_gui.py:354` |
-| `ScanPanel.abort_requested` | `()` | `scan_panel.py:37` | `ScanController.abort()`, `tct_gui.py:355` |
-| `ScanPanel.pause_requested` | `(bool)` — True = pause, False = resume | `scan_panel.py:38` | `TCTMainWindow._toggle_pause()`, `tct_gui.py:372` |
-| `ScanPanel.z_focus_requested` | `(ZFocusScanConfig)` | `scan_panel.py:39` | `TCTMainWindow._start_z_focus()`, `tct_gui.py:356` |
-| `ScanPanel.vscan_requested` | `(VoltageScanConfig)` | `scan_panel.py:40` | `TCTMainWindow._start_voltage_scan()`, `tct_gui.py:357` |
-| `ScanPanel.open_in_planner_requested` | `(ScanConfig)` | `scan_panel.py:43` | `TCTMainWindow._open_in_planner()`, `tct_gui.py:352` |
+| `ScanViewerPanel.pause_requested` | `(bool)` — True = pause, False = resume | `scan_viewer_panel.py:TBD` | `ScanCoordinator.pause()` |
+| `ScanViewerPanel.abort_requested` | `()` | `scan_viewer_panel.py:TBD` | `ScanCoordinator.abort()` |
+| `ScanViewerPanel.z_focus_requested` | `(ZFocusScanConfig)` | `scan_viewer_panel.py:TBD` | `ScanCoordinator.start_z_focus()` |
+| `ScanViewerPanel.open_in_analysis_requested` | `(str)` — run HDF5 file path | `scan_viewer_panel.py:TBD` | `TCTMainWindow._open_in_analysis()`, `tct_gui.py:TBD` |
 
 ---
 

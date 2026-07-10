@@ -58,7 +58,10 @@ Core design rules (verified in code):
   `QThread` (created in `_build_central`, stopped in `_teardown_panels`), which sweeps
   `DeviceManager.poll_liveness()` every 3 s and emits `device_lost(name)` on a
   connected→lost transition; `_on_device_lost` turns that into a status-bus
-  warning even when no device window is open.
+  warning even when no device window is open. S2c updates: "Scan" tab replaced
+  by "Scan Viewer" (ScanViewerPanel), ScanPanel and ScanMapWindow retired,
+  motor `set_as_scan_start` → planner `set_position_from_motor`, new
+  `_publish_last_run_path()` and `_open_in_analysis(path)` slots for Analysis handoff.
 
 ## controller/
 
@@ -94,7 +97,10 @@ Core design rules (verified in code):
   `_command_move`/`_motor_stop_safe`), fail-safe hardening (motor.stop() in
   all five run-path finallys, isolated try-blocks in vscan finally, refused
   starts clear `_hv_armed`, trailing ManualPause finishes cleanly, `resume()`
-  no-op unless PAUSED, HV re-assertion on resume). Read-only property `last_run_path: Path | None` 
+  no-op unless PAUSED, HV re-assertion on resume). S2c: `start_plan()`
+  now emits `scan_started` on success (plan runs drive the viewer cockpit);
+  `start()` / `start_voltage_scan()` retained for API stability but have no
+  GUI callers since ScanPanel retirement. Read-only property `last_run_path: Path | None`
   (thread-safe, set after HDF5 write completes) allows the GUI to link to the just-written run file.
 - `danger_gate.py` — danger action protocol and authorization gates. `DangerAction`
   dataclass (action kind, `requires_confirm: bool`); `DangerGate` protocol (async
@@ -281,25 +287,28 @@ no FastFrame support), driven by the default `oscilloscope.py` VISA backend
 ## gui/ (PySide6 — never PyQt6)
 
 Panels: `motor_panel`, `bias_panel`, `multi_bias_panel`, `scope_panel`,
-`scan_panel`, `laser_panel`, `intensity_panel`, `camera_panel`,
+`laser_panel`, `intensity_panel`, `camera_panel`,
 `monitor_panel`, `analysis_panel`, `calibration_panel`, `device_panel`
 (`DeviceManagerWindow`, `device_state`), `settings_window`, `planner_panel`
 (Recipe-Tree QTreeWidget, editable loop rows, live estimate, validate/dry-run/
 arm/start latch chain; v2: drag-drop palette, movable nodes, right-click ops,
-20-deep undo). **All 12 core panels built on `panel_kit` Cards** (batch-1: motor/bias/multi_bias/intensity/monitor/device, batch-2: scope/laser, batch-3: camera/analysis). Support: `panel_kit.py`
+20-deep undo), `scan_viewer_panel` (S2b+S2c: live scan monitor & cockpit —
+shared ScanMapView, MetricGrid progress/ETA/point/elapsed, Pause/Abort ActionBar,
+Z-focus CheckableCard, EmptyState until first run, "Open in Analysis" handoff;
+signals out: pause_requested, abort_requested, z_focus_requested, open_in_analysis_requested;
+slots in: set_last_run_path, refresh_theme). **All 12 core panels built on `panel_kit` Cards** (batch-1: motor/bias/multi_bias/intensity/monitor/device, batch-2: scope/laser, batch-3: camera/analysis). Support: `panel_kit.py`
 (Card composition: title/subtitle, header, per-card `set_rail(axis, mode)` with
 dynamic railAxis property; panel_header, eyebrow_title, section_header,
 readout_cell, form_row, axis_rail_css; QSS hooks cardHeader/cardTitle/
 cardSubtitle in style.py; cockpit-kit components: FigureCard, MetricTile, MetricGrid, ActionBar, CheckableCard, EmptyState, ReadoutCell), `status_bus.py` (cross-panel status),
 `status_widgets.py` (StatusChip, StatusPill, flash_button design-system tokens),
-`scan_map_view.py` (NEW, S1: shared 2-D scan-map widget — FigureCard + pyqtgraph ImageView,
+`scan_map_view.py` (S1: shared 2-D scan-map widget — FigureCard + pyqtgraph ImageView,
 `analysis.scan_grid`-driven, quantity selector, autoscale colorbar, cursor readout,
-live `update_point()` + batch `set_points()`; embedded by `scan_map_window` and
-future `ScanViewerPanel`), `scan_map_window.py` (live scan map, PNG export via
-`pyqtgraph.exporters`), `scan_coordinator.py` (NEW, S2a: `ScanCoordinator` QObject,
+live `update_point()` + batch `set_points()`; PNG/CSV export via toolbuttons,
+freeze-levels toggle for colorbar min/max lock; embedded by `scan_map_window` and `ScanViewerPanel`), `scan_map_window.py` (live scan map window, re-fed by shared ScanMapView), `scan_coordinator.py` (S2a: `ScanCoordinator` QObject,
 extracts scan run-control from `TCTMainWindow`; owns `_ScanBridge`, `ScanController`
 handle; dispatches start/abort/pause/z-focus/vscan/arm-hv/start-plan with plan-vs-classic
-dual-dispatch; signals: `point_done`, `progress`, `scan_started`, `scan_finished`,
+dual-dispatch; `start_plan` emits `scan_started` on success; signals: `point_done`, `progress`, `scan_started`, `scan_finished`,
 `z_focus_pt`, `z_focus_done`, `vscan_point`, `plan_progress`, `plan_error`,
 `plan_finished`, `plan_running`, `hv_armed`, `manual_pause`, `warn_dialog`, `error_dialog`,
 `status_message`), `stage_view.py` (3D GL stage view),
@@ -457,6 +466,8 @@ The following files are autogenerated/maintained registries for fast O(1) lookup
 Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 ## Changelog
+
+- 2026-07-10 — **S2b+S2c module retirement and ScanViewerPanel wiring.** S2b (8312f41): new `gui/scan_viewer_panel.py` (live scan monitor, ScanMapView+MetricGrid+ActionBar, Z-focus CheckableCard, EmptyState, 32 tests). S2c (46ff681, 48396c0, 884afe8): ScanMapView export+freeze-levels, PlannerPanel.set_position_from_motor slot, ScanPanel+ScanMapWindow retired, ScanViewerPanel wired via coordinator (mirror scanner signals 1:1, cockpit pause/abort/z-focus), tct_gui Scan Viewer tab, _publish_last_run_path/_open_in_analysis slots, motor set_as_scan_start → planner set_position_from_motor, coordinator start_plan emits scan_started on success. Module index: removed scan_panel.py + scan_map_window.py entries, added scan_viewer_panel.py, updated scan_map_view.py (export+freeze), scan_coordinator (scan_started), tct_gui (new slots, tab name). Suite 657 passed; Mary APPROVE.
 
 - 2026-07-08 — **S1+S2a module additions and signal registry.** Module index: `gui/scan_map_view.py` (NEW, S1: shared 2-D scan-map widget, FigureCard+pyqtgraph ImageView, quantity selector, autoscale colorbar, cursor readout, live/batch point updates); `gui/scan_coordinator.py` (NEW, S2a: run-control extraction from TCTMainWindow, behavior-preserving); updated `tct_gui.py` note (composition root, signals wired to coordinator methods); updated `controller/plan_estimate.py` (S1: per-BiasStep ramp-duration ETA); updated `gui/analysis_panel.py` (public `load_run(path)->bool` seam). Signal registry: added all 15 ScanCoordinator signals (point_done, progress, scan_started, scan_finished, z_focus_pt, z_focus_done, vscan_point, plan_progress, plan_error, plan_finished, plan_running, hv_armed, manual_pause, warn_dialog, error_dialog, status_message).
 
