@@ -236,6 +236,14 @@ class BlackflyCamera(BaseDevice):
             except Exception as exc:  # pragma: no cover — probe is best-effort
                 logger.debug("GenTL env probe skipped: %s", exc)
 
+        # Idempotent under a dirty death: release any stale camera / system from
+        # a prior session that was never cleanly closed (e.g. a silent USB drop)
+        # BEFORE acquiring the singleton again.  Otherwise the refcounted
+        # GetInstance()/ReleaseInstance pair leaks and a still-``Init``'d camera
+        # keeps the USB device busy, so the reconnect fails until the app
+        # restarts.  No-op on a clean first connect.
+        self._release_hw()
+
         self._system = ps.System.GetInstance()
         cam_list = self._system.GetCameras()
         if cam_list.GetSize() == 0:
@@ -265,21 +273,78 @@ class BlackflyCamera(BaseDevice):
         )
 
     def disconnect(self) -> None:
+        self._release_hw()
+        self._pyspin  = None
+        self._connected = False
+
+    def _release_hw(self) -> None:
+        """Release the PySpin camera + system singleton and clear the handles.
+
+        Guarded EndAcquisition → DeInit → ReleaseInstance, each independently,
+        so a half-open or already-pulled camera still fully releases.  This
+        balances the *refcounted* ``System.GetInstance()`` / ``ReleaseInstance``
+        pair and frees an ``Init``'d camera that would otherwise keep the USB
+        device busy — the leak that made a silent reconnect fail until an app
+        restart.  Idempotent (safe to call with nothing open); resets ``_cam``
+        and ``_system`` to ``None``.  Does NOT clear ``_pyspin`` (connect() must
+        keep the just-imported module) nor touch ``_connected`` — callers own
+        those.
+        """
         self._stop_acquisition()
         if self._cam is not None:
             try:
                 self._cam.DeInit()
             except Exception:
                 pass
+            self._cam = None
         if self._system is not None:
             try:
                 self._system.ReleaseInstance()
             except Exception:
                 pass
-        self._cam     = None
-        self._system  = None
-        self._pyspin  = None
-        self._connected = False
+            self._system = None
+
+    def is_alive(self) -> bool:
+        """Cheap, non-blocking check that the held camera handle is still valid.
+
+        Polled by the liveness monitor so a yanked / powered-off USB3 camera
+        flips to DISCONNECTED instead of holding a stale green flag until the
+        app restarts (the silent-death reconnect gap).  ``CameraPtr.IsValid()``
+        is a *local* handle check — it inspects the reference the driver already
+        holds and performs no bus I/O, so it cannot block on a pulled device;
+        that is the cheapest liveness probe on a Spinnaker camera handle.  Never
+        changes camera state.  Simulation / not-connected short-circuit with
+        zero I/O.  On any ``SpinnakerException`` (or missing handle) the driver
+        fails safe to DISCONNECTED.
+
+        # TODO(bench): confirm cheapest non-blocking pulled-device probe — that
+        # CameraPtr.IsValid() returns False (and never blocks) on the real
+        # BFLY-U3-23S6M once the USB3 cable is pulled; IsInitialized() is the
+        # fallback if a Spinnaker build lacks IsValid.
+        """
+        if self.simulation or not self._connected:
+            return self._connected
+        cam = self._cam
+        if cam is None:
+            self._connected = False
+            return False
+        try:
+            if hasattr(cam, "IsValid"):
+                alive = bool(cam.IsValid())
+            elif hasattr(cam, "IsInitialized"):
+                alive = bool(cam.IsInitialized())
+            else:
+                # No cheap predicate on this SDK build — trust the flag rather
+                # than forcing bus I/O that could block on a pulled device.
+                alive = True
+            if not alive:
+                self._connected = False
+            return alive
+        except Exception as exc:   # PySpin.SpinnakerException et al.
+            logger.error("BlackflyCamera liveness check failed — marking "
+                         "disconnected: %s", exc)
+            self._connected = False
+            return False
 
     # ──────────────────────────────────────────────────────────────────── #
     # Camera settings                                                      #

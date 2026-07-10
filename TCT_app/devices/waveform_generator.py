@@ -324,6 +324,13 @@ class WaveformGenerator(BaseDevice):
         except ImportError as exc:
             raise DeviceError("pyvisa is not installed.") from exc
 
+        # Idempotent under a dirty death: if a prior session was never cleanly
+        # closed (silent link loss / powered-off instrument), tear it down before
+        # opening a fresh one — otherwise the old VISA handle and ResourceManager
+        # leak and the reconnect can inherit a wedged session (the silent-death
+        # reconnect bug).  No-op on a clean first connect.
+        self._teardown_session()
+
         self._rm = pyvisa.ResourceManager()
         try:
             self._instr = self._rm.open_resource(self._address)
@@ -362,14 +369,82 @@ class WaveformGenerator(BaseDevice):
             return f"*IDN? query failed: {exc}"
 
     def disconnect(self) -> None:
+        # Best-effort disarm of a KNOWN-on output.  A dead-socket write here must
+        # never abort the teardown — a silently dead link is exactly when we most
+        # need the session fully closed — so guard it and continue.
         if self._output_on:
-            self.output_off()
+            try:
+                self.output_off()
+            except Exception as exc:
+                logger.debug("WFGEN output_off during disconnect failed "
+                             "(link already down?): %s", exc)
+        self._teardown_session()
+        self._connected = False
+
+    def _teardown_session(self) -> None:
+        """Close and clear the VISA instrument + ResourceManager handles.
+
+        Idempotent and fully guarded: every close is wrapped so a dead socket
+        cannot abort the teardown, and BOTH handles are reset to ``None`` so a
+        later ``connect()`` can never leak a prior session (the previous
+        ``disconnect`` closed ``_instr`` but leaked ``_rm``).  Does NOT touch
+        ``_connected`` or the armed record — callers own those.
+        """
         if self._instr is not None:
             try:
                 self._instr.close()
             except Exception:
                 pass
-        self._connected = False
+            self._instr = None
+        if self._rm is not None:
+            try:
+                self._rm.close()
+            except Exception:
+                pass
+            self._rm = None
+
+    def is_alive(self) -> bool:
+        """Verify the VISA link with an IEEE 488.2 ``*STB?`` heartbeat.
+
+        Polled by the liveness monitor so an unplugged / powered-off generator
+        flips to DISCONNECTED instead of holding a stale green flag until the
+        app restarts (the silent-death reconnect gap).  ``*STB?`` (read the
+        status byte) is an IEEE 488.2 *mandatory* common query — every SCPI
+        instrument answers it, it changes no instrument state, and it is the
+        same cheap heartbeat the oscilloscope driver uses.  Non-contending: if
+        another thread holds the io_lock the generator is mid-conversation and
+        is reported alive without probing (never block the monitor).  Always
+        restores the previous VISA timeout.
+
+        TODO(bench): confirm the DG4162 answers ``*STB?`` on the VXI-11 link
+        (TCPIP…::INSTR) — mandatory per IEEE 488.2, but not yet exercised on the
+        real instrument.
+        """
+        if self.simulation or not self._connected:
+            return self._connected
+        if self._instr is None:
+            self._connected = False
+            return False
+        if not self.io_lock.acquire(blocking=False):
+            return True
+        try:
+            old_timeout = self._instr.timeout
+            try:
+                self._instr.timeout = 1000
+                self._instr.query("*STB?")
+                return True
+            finally:
+                try:
+                    self._instr.timeout = old_timeout
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.error("WaveformGenerator liveness check failed — marking "
+                         "disconnected: %s", exc)
+            self._connected = False
+            return False
+        finally:
+            self.io_lock.release()
 
     # ------------------------------------------------------------------ #
     # Control interface                                                   #
