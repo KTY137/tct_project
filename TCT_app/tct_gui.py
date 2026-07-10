@@ -38,7 +38,7 @@ from gui.analysis_panel import AnalysisPanel
 from gui.calibration_panel import CalibrationPanel
 from gui.device_panel import DeviceManagerWindow, device_state
 from gui.liveness import LivenessMonitor
-from gui.motion import set_pulse
+from gui.motion import ActivityRing, set_pulse
 from gui.settings_window import SettingsWindow
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, StatusPill
@@ -226,6 +226,7 @@ class TCTMainWindow(QMainWindow):
 
         # ── Layout ────────────────────────────────────────────────────
         central = QWidget()
+        central.setObjectName("mainShell")
         self.setCentralWidget(central)
         outer = QVBoxLayout(central)
         outer.setContentsMargins(12, 12, 12, 12)
@@ -234,16 +235,48 @@ class TCTMainWindow(QMainWindow):
         # (Connect/Disconnect/Settings/Log live on the menu bar + toolbar, built
         #  once in __init__ so they survive a soft-reload.)
 
-        # Status strip: per-device connection lights + live bias readout.
-        # Always visible regardless of the active tab (bias is safety-critical).
-        status_strip = QHBoxLayout()
-        status_strip.setSpacing(6)
+        # System ribbon: grouped cached status, always visible regardless of
+        # active tab. Pure widget composition; device I/O remains in the
+        # existing pollers/workers below.
+        ribbon = QFrame()
+        ribbon.setObjectName("systemRibbon")
+        status_strip = QHBoxLayout(ribbon)
+        status_strip.setContentsMargins(10, 7, 10, 7)
+        status_strip.setSpacing(8)
+
+        brand = QFrame()
+        brand.setObjectName("ribbonBrand")
+        brand_row = QHBoxLayout(brand)
+        brand_row.setContentsMargins(0, 0, 2, 0)
+        brand_row.setSpacing(6)
+        mark = QLabel("T")
+        mark.setObjectName("ribbonMark")
+        name = QLabel("TCT Control")
+        name.setObjectName("ribbonWordmark")
+        brand_row.addWidget(mark)
+        brand_row.addWidget(name)
+        status_strip.addWidget(brand)
+
+        def _group(label: str, widgets: list[QWidget]) -> QFrame:
+            group = QFrame()
+            group.setObjectName("ribbonGroup")
+            row = QHBoxLayout(group)
+            row.setContentsMargins(7, 3, 7, 3)
+            row.setSpacing(6)
+            caption = QLabel(label.upper())
+            caption.setObjectName("ribbonLabel")
+            row.addWidget(caption)
+            for widget in widgets:
+                row.addWidget(widget)
+            return group
+
         self._lights: dict[str, StatusPill] = {}
+        device_lights: list[QWidget] = []
         for name in self._devices.named_devices():
             light = StatusPill(name, "neutral")
             self._lights[name] = light
-            status_strip.addWidget(light)
-        status_strip.addStretch()
+            device_lights.append(light)
+        status_strip.addWidget(_group("Devices", device_lights))
         self._chip_bias_v = StatusChip("HV --", "neutral", min_width=84)
         self._chip_bias_v.setToolTip("Live bias voltage on the primary HV channel")
         self._chip_bias_i = StatusChip("I --", "neutral", min_width=86)
@@ -254,21 +287,24 @@ class TCTMainWindow(QMainWindow):
         self._chip_motion.setToolTip("Motor connection and homing state")
         self._chip_scan = StatusChip(f"Scan {self._sm.state.name}", "neutral", min_width=96)
         self._chip_scan.setToolTip("Application scan state")
-        for chip in (
-            self._chip_bias_v, self._chip_bias_i, self._chip_bias_comp,
-            self._chip_motion, self._chip_scan,
-        ):
-            status_strip.addWidget(chip)
-        strip_frame = QFrame()
-        strip_frame.setLayout(status_strip)
+        self._ring_scan = ActivityRing(active=False)
+        self._chip_laser = StatusChip("Laser --", "neutral", min_width=92)
+        self._chip_laser.setToolTip("Cached wavegen trigger output state")
+        status_strip.addWidget(_group(
+            "Bias", [self._chip_bias_v, self._chip_bias_i, self._chip_bias_comp]))
+        status_strip.addWidget(_group("Motion", [self._chip_motion]))
+        status_strip.addWidget(_group("Scan", [self._ring_scan, self._chip_scan]))
+        status_strip.addWidget(_group("Laser", [self._chip_laser]))
+        status_strip.addStretch(1)
         # Horizontal scroll so the device lights + bias readout never clip on a
         # narrow window; fixed height keeps it a thin strip.
         strip_scroll = QScrollArea()
+        strip_scroll.setObjectName("ribbonScroll")
         strip_scroll.setWidgetResizable(True)
         strip_scroll.setFrameShape(QFrame.NoFrame)
         strip_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        strip_scroll.setFixedHeight(44)
-        strip_scroll.setWidget(strip_frame)
+        strip_scroll.setFixedHeight(54)
+        strip_scroll.setWidget(ribbon)
         outer.addWidget(strip_scroll)
 
         # Main tabs — detachable (double-click / ⧉ to pop into a window).  Each
@@ -674,6 +710,33 @@ class TCTMainWindow(QMainWindow):
                 self._chip_motion.set_status("Motion homed", "good")
             else:
                 self._chip_motion.set_status("Motion not homed", "warn")
+        self._refresh_laser_strip()
+
+    def _refresh_laser_strip(self) -> None:
+        """Update the ribbon's laser trigger chip from cached wavegen state."""
+        if not hasattr(self, "_chip_laser"):
+            return
+        wfg = getattr(self._devices, "waveform_generator", None)
+        try:
+            live = bool(wfg is not None and (
+                getattr(wfg, "connected", False) or getattr(wfg, "simulation", False)
+            ))
+            state = getattr(wfg, "output_is_on", None) if wfg is not None else None
+        except Exception:
+            live = False
+            state = None
+        if not live:
+            set_pulse(self._chip_laser, False)
+            self._chip_laser.set_status("Laser --", "neutral")
+        elif state is True:
+            self._chip_laser.set_status("Laser ON", "armed")
+            set_pulse(self._chip_laser, True, kind="laser")
+        elif state is False:
+            set_pulse(self._chip_laser, False)
+            self._chip_laser.set_status("Laser off", "good")
+        else:
+            self._chip_laser.set_status("Laser unknown", "warn")
+            set_pulse(self._chip_laser, True, kind="laser")
 
     @Slot(str)
     def _on_device_lost(self, name: str) -> None:
@@ -1109,6 +1172,8 @@ class TCTMainWindow(QMainWindow):
         if hasattr(self, "_chip_scan"):
             self._chip_scan.set_status(f"Scan {new.name}", visual)
             set_pulse(self._chip_scan, new == AppState.RUNNING, kind="scan")
+        if hasattr(self, "_ring_scan"):
+            self._ring_scan.set_active(new == AppState.RUNNING)
         panel = getattr(self, "_planner_panel", None)
         if panel is not None:
             # Only a planner-launched run drives the panel's running state; a

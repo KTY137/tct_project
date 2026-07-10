@@ -244,6 +244,27 @@ def build_qss(p: dict) -> str:
 }}
 
 QMainWindow, QDialog, QWidget {{ background: {p['bg']}; }}
+QWidget#mainShell {{ background: {p['bg']}; }}
+
+QScrollArea#ribbonScroll {{ background: transparent; border: none; }}
+QFrame#systemRibbon {{
+    background: {p['material']}; border: 1px solid {p['hairline']};
+    border-radius: {RADIUS_MD}px;
+}}
+QFrame#ribbonBrand {{ background: transparent; }}
+QLabel#ribbonMark {{
+    min-width: 18px; max-width: 18px; min-height: 18px; max-height: 18px;
+    border-radius: {RADIUS_SM - 1}px; background: {p['accent']};
+    color: {p['on_accent']}; font-weight: 800;
+}}
+QLabel#ribbonWordmark {{ font-weight: 700; }}
+QFrame#ribbonGroup {{
+    background: {p['field']}; border: 1px solid {p['hairline']};
+    border-radius: {RADIUS_MD}px;
+}}
+QLabel#ribbonLabel {{
+    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0;
+}}
 
 /* Group boxes: card-like with breathing room. The title is a section header —
    a touch heavier and a hair tighter in tracking than body text so it reads
@@ -376,6 +397,16 @@ QToolButton:checked {{
 }}
 QToolButton:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outline-offset: 1px; }}
 QToolButton:disabled {{ color: {p['muted']}; }}
+QToolButton#detachTabButton {{
+    background: {p['field']}; border: 1px solid {p['hairline']};
+    border-radius: {RADIUS_MD}px; padding: {SPACE_XS}px {SPACE_SM}px;
+    font-weight: 700;
+}}
+QToolButton#detachTabButton:hover {{
+    background: {p['tint']}; color: {p['accent']};
+    border-color: {_rgba(p['accent'], 0.45)};
+}}
+QToolButton#detachTabButton:pressed {{ background: {_rgba(p['accent'], 0.20)}; }}
 
 /* Accent buttons by objectName (toolbar Connect/Disconnect). Hover/pressed
    shades are derived from the same good/crit token via _darken() so there is

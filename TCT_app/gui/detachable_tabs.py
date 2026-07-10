@@ -40,7 +40,9 @@ class DetachableTabWidget(QTabWidget):
         self.tabBarDoubleClicked.connect(self._on_double_click)
 
         btn = QToolButton()
+        btn.setObjectName("detachTabButton")
         btn.setText("⧉")
+        btn.setAutoRaise(True)
         btn.setToolTip("Detach the current tab into its own window "
                        "(double-click a tab does the same)")
         btn.clicked.connect(lambda: self.detach(self.currentIndex()))
