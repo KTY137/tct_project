@@ -36,7 +36,7 @@ import time
 import pyqtgraph as pg
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QComboBox, QDoubleSpinBox, QFormLayout, QFrame, QLabel,
+    QComboBox, QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
     QPushButton, QSpinBox, QStackedWidget, QVBoxLayout, QWidget,
 )
 
@@ -58,6 +58,10 @@ class ScanViewerPanel(QWidget):
     abort_requested()                  — Abort button (loudest control, rule 2).
     z_focus_requested(ZFocusScanConfig) — Z-focus "Find Focus" button.
     open_in_analysis_requested(str)    — "Open in Analysis" with the run path.
+    best_z_apply_requested(float)      — "Apply to Planner" button next to the
+        Best Z readout; carries the last ``on_z_focus_done`` value. Staging
+        only — never moves the motor and never touches a running plan, see
+        ``gui/planner_panel.py.set_focus_z`` (the sole intended receiver).
 
     Slots IN (match ``gui/scan_coordinator.py`` signal names 1:1)
     ---------------------------------------------------------------
@@ -79,6 +83,7 @@ class ScanViewerPanel(QWidget):
     abort_requested = Signal()
     z_focus_requested = Signal(ZFocusScanConfig)
     open_in_analysis_requested = Signal(str)
+    best_z_apply_requested = Signal(float)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -88,6 +93,7 @@ class ScanViewerPanel(QWidget):
         self._start_time: float | None = None
         self._zf_z_data: list[float] = []
         self._zf_a_data: list[float] = []
+        self._last_best_z: float | None = None
         self._build_ui()
 
     # ------------------------------------------------------------------ #
@@ -200,7 +206,23 @@ class ScanViewerPanel(QWidget):
         form.addRow(self._zf_amp_frame)
 
         self._lbl_best_z = QLabel("Best Z: --")
-        form.addRow(self._lbl_best_z)
+        self._btn_apply_best_z = QPushButton("Apply to Planner")
+        set_button_icon(self._btn_apply_best_z, "mdi.arrow-right-bold-box-outline")
+        self._btn_apply_best_z.setToolTip(
+            "Stage the last Z-focus result as the selected Z loop's start "
+            "in the Scan Planner (never moves the motor, never touches a "
+            "running plan)"
+        )
+        self._btn_apply_best_z.setEnabled(False)
+        self._btn_apply_best_z.clicked.connect(self._on_apply_best_z_clicked)
+        best_z_row = QHBoxLayout()
+        best_z_row.setContentsMargins(0, 0, 0, 0)
+        best_z_row.addWidget(self._lbl_best_z)
+        best_z_row.addStretch(1)
+        best_z_row.addWidget(self._btn_apply_best_z)
+        best_z_row_widget = QWidget()
+        best_z_row_widget.setLayout(best_z_row)
+        form.addRow(best_z_row_widget)
         card.add_layout(form)
 
         # Live Z-vs-amplitude curve — FigureCard (rule 3: no QGraphicsEffect).
@@ -305,6 +327,8 @@ class ScanViewerPanel(QWidget):
         self._lbl_best_z.setText(f"Best Z: {best_z_mm:.3f} mm  ({mode_label})")
         self._zf_marker.setValue(best_z_mm)
         self._zf_marker.setVisible(True)
+        self._last_best_z = float(best_z_mm)
+        self._btn_apply_best_z.setEnabled(True)
 
     # ------------------------------------------------------------------ #
     # Internal — run control                                              #
@@ -377,6 +401,8 @@ class ScanViewerPanel(QWidget):
         self._zf_curve.setData([], [])
         self._zf_marker.setVisible(False)
         self._lbl_best_z.setText("Best Z: --")
+        self._last_best_z = None
+        self._btn_apply_best_z.setEnabled(False)
         mode = self._zf_mode.currentData()
         cfg = ZFocusScanConfig(
             mode=mode,
@@ -396,6 +422,12 @@ class ScanViewerPanel(QWidget):
     def _emit_open_in_analysis(self) -> None:
         if self._last_run_path:
             self.open_in_analysis_requested.emit(self._last_run_path)
+
+    def _on_apply_best_z_clicked(self) -> None:
+        """Stage the last Z-focus result in the Planner (G4). Emits only —
+        this panel never touches the Planner's plan or the motor directly."""
+        if self._last_best_z is not None:
+            self.best_z_apply_requested.emit(self._last_best_z)
 
     # ------------------------------------------------------------------ #
     # Theme                                                               #

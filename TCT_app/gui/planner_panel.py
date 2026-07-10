@@ -40,6 +40,7 @@ from controller.scan_plan import (
     ActionBlock, ActionType, Axis, LoopBlock, STAGE_AXES, ScanBlock, ScanPlan,
 )
 from controller.scan_plan_validator import PlanIssue, PlanLimits, validate_plan
+from gui.status_bus import notify
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
 from gui.style import DARK, LIGHT, axis_color, repolish
 
@@ -357,6 +358,11 @@ class PlannerPanel(QWidget):
     position (no hardware I/O) for the "Use current position" affordance;
     connect this to ``MotorPanel.set_as_scan_start`` in place of the retired
     ``ScanPanel.set_start_position``.
+    set_focus_z(float) — stores the Scan Viewer's Z-focus best-Z result (no
+    hardware I/O) for the "Use focus Z" affordance; connect this to
+    ``ScanViewerPanel.best_z_apply_requested`` (design doc gap G4). Staging
+    only, mirrors ``set_position_from_motor``: select a stage-Z loop row,
+    then "Use focus Z" writes the stored value into that loop's start field.
     """
 
     start_plan_requested = Signal(object)
@@ -386,6 +392,10 @@ class PlannerPanel(QWidget):
         # set_position_from_motor -- staged for the "Use current position"
         # affordance, see the "Motor position -> loop start" section below.
         self._motor_pos: tuple[float, float, float] | None = None
+        # Latest Z-focus best-Z result, received (no hardware I/O) via
+        # set_focus_z -- staged for the "Use focus Z" affordance (G4), see
+        # the same section below.
+        self._focus_z: float | None = None
 
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -468,12 +478,20 @@ class PlannerPanel(QWidget):
         # THAT loop's start field. A plan has no single "start position"
         # (only per-axis loops), so this replaces ScanPanel.set_start_position
         # as the target of MotorPanel.set_as_scan_start (design doc gap G3).
+        #
+        # "Use focus Z" mirrors the exact same pattern for the Scan Viewer's
+        # Z-focus assist (design doc gap G4): select a stage-Z loop, then it
+        # writes the last best-Z result (see set_focus_z) into THAT loop's
+        # start field only -- never the motor, never a running plan.
         motor_row = QHBoxLayout()
         motor_row.setContentsMargins(14, 0, 14, 8)
         motor_row.setSpacing(8)
         self._lbl_motor_pos = QLabel("Motor position not received yet")
         self._lbl_motor_pos.setObjectName("plannerLeafMeta")
         motor_row.addWidget(self._lbl_motor_pos)
+        self._lbl_focus_z = QLabel("Focus Z: --")
+        self._lbl_focus_z.setObjectName("plannerLeafMeta")
+        motor_row.addWidget(self._lbl_focus_z)
         motor_row.addStretch(1)
         self._btn_use_motor_pos = QPushButton("Use current position")
         set_button_icon(self._btn_use_motor_pos, "mdi.crosshairs-gps")
@@ -483,6 +501,14 @@ class PlannerPanel(QWidget):
         )
         self._btn_use_motor_pos.setEnabled(False)
         motor_row.addWidget(self._btn_use_motor_pos)
+        self._btn_use_focus_z = QPushButton("Use focus Z")
+        set_button_icon(self._btn_use_focus_z, "mdi.target-variant")
+        self._btn_use_focus_z.setToolTip(
+            "Write the last Z-focus result into the selected stage-Z loop's "
+            "start field (select a stage-Z loop below first)"
+        )
+        self._btn_use_focus_z.setEnabled(False)
+        motor_row.addWidget(self._btn_use_focus_z)
         tree_lay.addLayout(motor_row)
 
         self._tree = _RecipeTree(self)
@@ -586,6 +612,7 @@ class PlannerPanel(QWidget):
         self._btn_save_routine.clicked.connect(self._on_save_routine)
         self._btn_load_routine.clicked.connect(self._on_load_routine)
         self._btn_use_motor_pos.clicked.connect(self._on_use_motor_position_clicked)
+        self._btn_use_focus_z.clicked.connect(self._on_use_focus_z_clicked)
 
         self._undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self)
         self._undo_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -1035,10 +1062,19 @@ class PlannerPanel(QWidget):
     def _update_use_position_enabled(self) -> None:
         # Gated on not-running: the tree is disabled during a run, so the
         # programmatic spinbox write must be locked out with it.
+        axis_loop = self._selected_axis_loop()
         self._btn_use_motor_pos.setEnabled(
             not self._running
             and self._motor_pos is not None
-            and self._selected_axis_loop() is not None
+            and axis_loop is not None
+        )
+        # "Use focus Z" is narrower still: a Z-focus result only ever means
+        # something for the stage-Z axis (X/Y loops have no focus concept).
+        self._btn_use_focus_z.setEnabled(
+            not self._running
+            and self._focus_z is not None
+            and axis_loop is not None
+            and axis_loop.axis == Axis.STAGE_Z
         )
 
     def _on_use_motor_position_clicked(self) -> None:
@@ -1050,6 +1086,20 @@ class PlannerPanel(QWidget):
             Axis.STAGE_X: x_mm, Axis.STAGE_Y: y_mm, Axis.STAGE_Z: z_mm,
         }[loop.axis]
         self._loop_editors[id(loop)]["start"].setValue(value)
+
+    def _on_use_focus_z_clicked(self) -> None:
+        loop = self._selected_axis_loop()
+        if loop is None or loop.axis != Axis.STAGE_Z or self._focus_z is None:
+            return
+        # Write ONLY start, through the exact same widget (and therefore the
+        # same valueChanged -> plan-edit -> invalidate path) "Use current
+        # position" uses above. A fixed-Z 2D raster is a Z loop with
+        # start == stop (see controller.scan_plan.LoopBlock.materialize --
+        # a zero span always collapses to the single point `start`
+        # regardless of step), so writing start alone is the honest minimal
+        # action here too: the user still owns stop (and step), nothing new
+        # is invented in the plan model.
+        self._loop_editors[id(loop)]["start"].setValue(self._focus_z)
 
     @Slot(float, float, float)
     def set_position_from_motor(self, x_mm: float, y_mm: float, z_mm: float) -> None:
@@ -1064,6 +1114,18 @@ class PlannerPanel(QWidget):
             f"Motor @ x={x_mm:.3f}  y={y_mm:.3f}  z={z_mm:.3f} mm"
         )
         self._update_use_position_enabled()
+
+    @Slot(float)
+    def set_focus_z(self, z_mm: float) -> None:
+        """Store the Scan Viewer's Z-focus best-Z result (no hardware I/O --
+        this only receives a value already computed there). Connected from
+        ``tct_gui`` to ``ScanViewerPanel.best_z_apply_requested`` (design doc
+        gap G4). Staging only -- see the "Use focus Z" affordance above; the
+        Planner tab is never auto-switched-to."""
+        self._focus_z = float(z_mm)
+        self._lbl_focus_z.setText(f"Focus Z: {self._focus_z:.3f} mm")
+        self._update_use_position_enabled()
+        notify("Focus Z staged in Planner", "info")
 
     def _rebuild_legend(self) -> None:
         while self._legend_row.count():

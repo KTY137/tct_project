@@ -368,6 +368,14 @@ class TCTMainWindow(QMainWindow):
             self._planner_panel.set_position_from_motor
         )
 
+        # Scan Viewer → Scan Planner: "Apply to Planner" stages the Z-focus
+        # assist's best-Z result into the planner's "Use focus Z" affordance
+        # (G4 — staging only; never moves the motor, never touches a running
+        # plan).
+        self._scan_viewer.best_z_apply_requested.connect(
+            self._planner_panel.set_focus_z
+        )
+
         # ── Live bias readout (dedicated thread — instrument I/O must never
         #    run on the GUI thread; a hung GPIB read froze the window) ─────
         self._bias_poller = _BiasPoller(lambda: getattr(self._devices, "bias_supply", None))

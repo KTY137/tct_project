@@ -244,6 +244,47 @@ def test_z_focus_done_sets_marker_and_label():
     assert panel._zf_marker.value() == pytest.approx(0.42)
 
 
+def test_apply_best_z_disabled_until_z_focus_done():
+    _app()
+    panel = ScanViewerPanel()
+    assert not panel._btn_apply_best_z.isEnabled()
+
+    panel.on_z_focus_done(0.42)
+    assert panel._btn_apply_best_z.isEnabled()
+
+
+def test_apply_best_z_redisabled_on_new_z_focus_run():
+    _app()
+    panel = ScanViewerPanel()
+    panel.on_z_focus_done(0.42)
+    assert panel._btn_apply_best_z.isEnabled()
+
+    # A fresh "Find Focus" run resets the stale result -- Apply must not
+    # keep offering the previous run's best-Z.
+    panel._btn_zf_start.click()
+    assert not panel._btn_apply_best_z.isEnabled()
+    assert panel._last_best_z is None
+
+
+def test_apply_best_z_click_emits_last_value():
+    _app()
+    panel = ScanViewerPanel()
+    panel.on_z_focus_done(1.234)
+    seen = []
+    panel.best_z_apply_requested.connect(seen.append)
+    panel._btn_apply_best_z.click()
+    assert seen == [pytest.approx(1.234)]
+
+
+def test_apply_best_z_noop_without_result():
+    _app()
+    panel = ScanViewerPanel()
+    seen = []
+    panel.best_z_apply_requested.connect(seen.append)
+    panel._on_apply_best_z_clicked()
+    assert seen == []
+
+
 def test_z_focus_mode_switch_toggles_edge_and_amp_frames():
     _app()
     panel = ScanViewerPanel()

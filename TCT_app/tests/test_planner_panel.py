@@ -15,6 +15,7 @@ import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import pytest
 from PySide6.QtCore import QByteArray, QCoreApplication, QMimeData
 from PySide6.QtWidgets import QApplication, QLabel
 
@@ -511,7 +512,7 @@ def test_public_api_surface_unchanged():
             "set_hv_armed", "set_limits", "set_running",
             "on_progress", "on_finished", "on_error",
             "plan", "set_plan", "refresh_theme", "shutdown",
-            "set_position_from_motor",
+            "set_position_from_motor", "set_focus_z",
         ):
             assert callable(getattr(panel, name)), name
     finally:
@@ -625,6 +626,113 @@ def test_use_current_position_disabled_before_position_and_for_non_axis_loop():
         # Reselecting the X loop re-enables it.
         panel._tree.setCurrentItem(x_item)
         assert panel._btn_use_motor_pos.isEnabled()
+    finally:
+        panel.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# Z-focus -> loop start ("Use focus Z", G4)                                    #
+#                                                                                #
+# set_focus_z is the slot ScanViewerPanel.best_z_apply_requested(float) is     #
+# wired to (in tct_gui, not tested here) — the "apply to planner Z" action    #
+# ratified in docs/design/cockpit_style_overhaul.md. Mirrors                  #
+# set_position_from_motor exactly, but the affordance only ever targets the   #
+# stage-Z loop (a Z-focus result has no X/Y meaning).                         #
+# --------------------------------------------------------------------------- #
+
+def test_set_focus_z_stores_value_and_updates_label():
+    _app()
+    panel = PlannerPanel()
+    try:
+        assert panel._focus_z is None
+        assert not panel._btn_use_focus_z.isEnabled()
+        assert panel._lbl_focus_z.text() == "Focus Z: --"
+
+        panel.set_focus_z(1.234)
+
+        assert panel._focus_z == pytest.approx(1.234)
+        assert "1.234" in panel._lbl_focus_z.text()
+    finally:
+        panel.shutdown()
+
+
+def test_use_focus_z_writes_z_loop_start_and_invalidates_latches():
+    _app()
+    panel = PlannerPanel()
+    try:
+        z_loop = LoopBlock(axis=Axis.STAGE_Z, start=-2.0, stop=2.0, step=0.1)
+        panel._on_palette_append({"op": "new", "block": z_loop.to_dict()})
+        new_z_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_Z)
+        z_item = panel._item_for_block(new_z_loop)
+
+        panel.set_focus_z(0.417)
+        panel._tree.setCurrentItem(z_item)
+        assert panel._btn_use_focus_z.isEnabled()
+
+        # Force an armed + dry-run-ok state so we can observe it get
+        # cleared, same as the plain spinbox-edit invalidation test.
+        panel._dry_run_ok = True
+        panel.set_hv_armed(True)
+        assert panel._btn_start.isEnabled()
+
+        panel._btn_use_focus_z.click()
+
+        assert new_z_loop.start == pytest.approx(0.417)
+        assert panel._dry_run_ok is False
+        assert panel._hv_armed is False
+        assert not panel._btn_start.isEnabled()
+    finally:
+        panel.shutdown()
+
+
+def test_use_focus_z_disabled_for_x_and_y_loops():
+    _app()
+    panel = PlannerPanel()
+    try:
+        panel.set_focus_z(0.5)
+
+        x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        x_item = panel._item_for_block(x_loop)
+        panel._tree.setCurrentItem(x_item)
+        assert not panel._btn_use_focus_z.isEnabled()
+
+        y_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_Y)
+        y_item = panel._item_for_block(y_loop)
+        panel._tree.setCurrentItem(y_item)
+        assert not panel._btn_use_focus_z.isEnabled()
+
+        bias_loop = _bias_loop(panel._plan)
+        bias_item = panel._item_for_block(bias_loop)
+        panel._tree.setCurrentItem(bias_item)
+        assert not panel._btn_use_focus_z.isEnabled()
+    finally:
+        panel.shutdown()
+
+
+def test_use_focus_z_disabled_before_result_and_while_running():
+    _app()
+    panel = PlannerPanel()
+    try:
+        z_loop = LoopBlock(axis=Axis.STAGE_Z, start=-2.0, stop=2.0, step=0.1)
+        panel._on_palette_append({"op": "new", "block": z_loop.to_dict()})
+        new_z_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_Z)
+        z_item = panel._item_for_block(new_z_loop)
+        panel._tree.setCurrentItem(z_item)
+
+        # A valid Z-loop selection alone is not enough -- no focus result yet.
+        assert panel._focus_z is None
+        assert not panel._btn_use_focus_z.isEnabled()
+
+        panel.set_focus_z(0.5)
+        assert panel._btn_use_focus_z.isEnabled()
+
+        # A run in progress locks the affordance out, same as the motor-
+        # position button (the tree itself is disabled while running).
+        panel.set_running(True)
+        assert not panel._btn_use_focus_z.isEnabled()
+
+        panel.set_running(False)
+        assert panel._btn_use_focus_z.isEnabled()
     finally:
         panel.shutdown()
 
