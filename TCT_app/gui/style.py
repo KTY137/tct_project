@@ -25,11 +25,12 @@ SPACE_LG = 16
 SPACE_XL = 24
 SPACE = {"xs": SPACE_XS, "sm": SPACE_SM, "md": SPACE_MD, "lg": SPACE_LG, "xl": SPACE_XL}
 
-# Corner-radius scale (px)
+# Corner-radius scale (px). Cards stay at <= 8 px; pills are the only
+# intentionally larger shape.
 RADIUS_XS = 4     # menus / tooltips
 RADIUS_SM = 6
 RADIUS_MD = 8
-RADIUS_LG = 10
+RADIUS_LG = 8
 RADIUS_PILL = 999
 RADIUS = {"xs": RADIUS_XS, "sm": RADIUS_SM, "md": RADIUS_MD,
           "lg": RADIUS_LG, "pill": RADIUS_PILL}
@@ -48,16 +49,20 @@ MONO_FAMILY = '"Consolas", "Cascadia Mono", "Cascadia Code", "Courier New", mono
 # Shared accent — scope-cyan (was blue #2d7ff9).  Reads as an oscilloscope
 # trace; ``accent_strong`` is the deeper hover/pressed/default-fill variant.
 # ---------------------------------------------------------------------------
-ACCENT_LIGHT = "#0d8ba6"
-ACCENT_LIGHT_STRONG = "#0a6b80"
-ACCENT_DARK = "#33c8ff"
-ACCENT_DARK_STRONG = "#12a7e0"
+ACCENT_LIGHT = "#0e7fa6"
+ACCENT_LIGHT_STRONG = "#0a678a"
+ACCENT_DARK = "#41c8f0"
+ACCENT_DARK_STRONG = "#2fa8cd"
 
-# Status accents (shared by both themes — readable on either base).  Kept as
-# the historical names *and* exposed through the palette as good/warn/crit.
-OK_GREEN = "#27ae60"
-WARN_AMBER = "#d98c17"
-WARN_RED = "#c0392b"
+# Status accents. The exported names remain available for existing panel code
+# that imports a single fixed semantic colour; the palette below uses theme-
+# tuned light/dark values for the global QSS.
+OK_GREEN = "#30d158"
+WARN_AMBER = "#ffa01e"
+WARN_RED = "#ff4f47"
+OK_GREEN_LIGHT = "#1e9e46"
+WARN_AMBER_LIGHT = "#c77000"
+WARN_RED_LIGHT = "#d93a32"
 
 # Device-manager status accents (gui/device_panel.py's ``_STATUS_STYLE``) —
 # two more fixed-both-themes status colours alongside OK_GREEN/WARN_AMBER/
@@ -65,8 +70,10 @@ WARN_RED = "#c0392b"
 # ``statusChip``/``statusLamp[state="simulated"]`` hue in ``build_qss``
 # below) and "error" (a hard device error, distinct from the general
 # WARN_AMBER "warn" look).
-SIM_PURPLE = "#8e44ad"
-ERROR_ORANGE = "#e67e22"
+SIM_PURPLE = "#bf8cff"
+SIM_PURPLE_LIGHT = "#7d55d8"
+ERROR_ORANGE = "#ff8a1f"
+ERROR_ORANGE_LIGHT = "#d96c00"
 
 # General amber token (distinct from the warn status colour): matches the
 # bias axis-rail hue so a "bias" accent is amber everywhere.
@@ -76,18 +83,24 @@ AMBER_DARK = "#E8A33D"
 LIGHT = {
     "accent": ACCENT_LIGHT, "accent_strong": ACCENT_LIGHT_STRONG,
     "amber": AMBER_LIGHT,
-    "good": OK_GREEN, "warn": WARN_AMBER, "crit": WARN_RED,
-    "bg": "#f4f6f9", "panel": "#ffffff", "border": "#d6dbe3",
-    "text": "#1f2a37", "muted": "#6b7280",
-    "pressed": "#e6f4f8", "disabled_bg": "#f0f1f3",
+    "good": OK_GREEN_LIGHT, "warn": WARN_AMBER_LIGHT, "crit": WARN_RED_LIGHT,
+    "sim": SIM_PURPLE_LIGHT, "error": ERROR_ORANGE_LIGHT,
+    "canvas": "#eef0f4", "bg": "#eef0f4",
+    "material": "#ffffff", "material_strong": "#ffffff",
+    "panel": "#ffffff", "border": "#d6dbe3",
+    "hairline": "#dfe4ec", "hairline_strong": "#b9c2cf",
+    "toplight": "#ffffff",
+    "text": "#1b1d22", "muted": "#5c626e", "faint": "#9aa0ab",
+    "on_accent": "#ffffff", "tint": "#d9edf3",
+    "field": "#f2f4f7", "pressed": "#e4e8ee", "disabled_bg": "#eceff3",
     # Cockpit kit (Phase 0, docs/design/cockpit_style_overhaul.md §2) —
     # additive layering/emphasis tokens. panel_2/panel_3 step progressively
     # deeper than "panel" (nested card bodies); "sunk" is a recessed/inset
     # surface (input wells, dial recesses); "border_strong" is an emphasized
     # border for hover/active/focus rings; "hover"/"active" are neutral
     # interaction washes distinct from the accent-tinted "pressed" above.
-    "panel_2": "#f6f8fb", "panel_3": "#eef1f6", "sunk": "#e6eaf0",
-    "border_strong": "#b7c0cc", "hover": "#e9edf2", "active": "#d8eef5",
+    "panel_2": "#f6f7f9", "panel_3": "#eef0f4", "sunk": "#e8ebf0",
+    "border_strong": "#b9c2cf", "hover": "#e8ebf0", "active": "#d9edf3",
     # Plot chrome tokens (grid/overlay) — kept identical in both dicts on
     # purpose, same idiom as good/warn/crit above: the plot canvas itself
     # (PLOT_BG/PLOT_FG, below) is a fixed dark "instrument screen" in BOTH
@@ -101,12 +114,18 @@ DARK = {
     "accent": ACCENT_DARK, "accent_strong": ACCENT_DARK_STRONG,
     "amber": AMBER_DARK,
     "good": OK_GREEN, "warn": WARN_AMBER, "crit": WARN_RED,
-    "bg": "#1f242b", "panel": "#272d36", "border": "#3a424d",
-    "text": "#e6e9ee", "muted": "#9aa4b2",
-    "pressed": "#243743", "disabled_bg": "#2b313a",
+    "sim": SIM_PURPLE, "error": ERROR_ORANGE,
+    "canvas": "#131316", "bg": "#131316",
+    "material": "#1e1e22", "material_strong": "#18181b",
+    "panel": "#1d1d21", "border": "#33343a",
+    "hairline": "#33343a", "hairline_strong": "#4a4d56",
+    "toplight": "#292a2f",
+    "text": "#f2f3f5", "muted": "#a3a8b3", "faint": "#63676f",
+    "on_accent": "#04222c", "tint": "#18343d",
+    "field": "#2a2b31", "pressed": "#30323a", "disabled_bg": "#25262b",
     # See the matching comment in LIGHT above.
-    "panel_2": "#2d333d", "panel_3": "#333a45", "sunk": "#191d23",
-    "border_strong": "#4d5765", "hover": "#323944", "active": "#25414c",
+    "panel_2": "#242429", "panel_3": "#2b2b31", "sunk": "#0f1012",
+    "border_strong": "#4a4d56", "hover": "#2c2d34", "active": "#18343d",
     "plot_grid": None, "plot_overlay": None,
 }
 
@@ -231,7 +250,7 @@ QMainWindow, QDialog, QWidget {{ background: {p['bg']}; }}
    as a designed heading rather than a bigger label (size is unchanged). */
 QGroupBox {{
     background: {p['panel']};
-    border: 1px solid {p['border']};
+    border: 1px solid {p['hairline']};
     border-radius: {RADIUS_MD}px;
     margin-top: {SPACE_LG - 2}px;
     padding: {SPACE_MD}px {SPACE_MD}px {SPACE_SM + 2}px {SPACE_MD}px;
@@ -243,20 +262,20 @@ QGroupBox::title {{
     padding: 2px {SPACE_SM - 2}px;
     color: {p['muted']};
     font-weight: 700;
-    letter-spacing: -0.01em;
+    letter-spacing: 0;
 }}
 
 /* Inputs */
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-    background: {p['panel']};
-    border: 1px solid {p['border']};
+    background: {p['field']};
+    border: 1px solid transparent;
     border-radius: {RADIUS_SM}px;
     padding: {SPACE_XS}px {SPACE_SM}px;
     selection-background-color: {p['accent']};
-    selection-color: white;
+    selection-color: {p['on_accent']};
 }}
 QLineEdit:hover, QPlainTextEdit:hover, QSpinBox:hover,
-QDoubleSpinBox:hover, QComboBox:hover {{ border-color: {_rgba(p['accent'], 0.55)}; }}
+QDoubleSpinBox:hover, QComboBox:hover {{ border-color: {p['border_strong']}; background: {p['hover']}; }}
 QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus,
 QDoubleSpinBox:focus, QComboBox:focus {{
     border: 1px solid {p['accent']};
@@ -270,34 +289,34 @@ QDoubleSpinBox:disabled, QComboBox:disabled {{
 QComboBox::drop-down {{ border: none; width: 18px; }}
 QComboBox QAbstractItemView {{
     background: {p['panel']};
-    border: 1px solid {p['border']};
+    border: 1px solid {p['hairline']};
     border-radius: {RADIUS_SM}px;
     padding: {SPACE_XS}px;
     outline: none;
     selection-background-color: {p['accent']};
-    selection-color: white;
+    selection-color: {p['on_accent']};
 }}
 
 /* Buttons */
 QPushButton {{
-    background: {p['panel']};
-    border: 1px solid {p['border']};
+    background: {p['field']};
+    border: 1px solid transparent;
     border-radius: {RADIUS_SM}px;
     padding: {SPACE_XS + 2}px {SPACE_LG - 2}px;
 }}
-QPushButton:hover {{ border-color: {p['accent']}; background: {_rgba(p['accent'], 0.06)}; }}
-QPushButton:pressed {{ background: {p['pressed']}; }}
+QPushButton:hover {{ border-color: {p['border_strong']}; background: {p['hover']}; }}
+QPushButton:pressed {{ background: {p['active']}; }}
 QPushButton:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outline-offset: 1px; }}
 QPushButton:disabled {{
-    color: {p['muted']}; background: {p['disabled_bg']}; border-color: {p['border']};
+    color: {p['faint']}; background: {p['disabled_bg']}; border-color: transparent;
 }}
 QPushButton:default, QPushButton[state="primary"] {{
-    background: {p['accent']}; color: white; border: 1px solid {p['accent_strong']};
+    background: {p['accent']}; color: {p['on_accent']}; border: 1px solid {p['accent']};
 }}
 QPushButton:default:hover, QPushButton[state="primary"]:hover {{ background: {p['accent_strong']}; }}
 QPushButton[state="primary"]:pressed {{ background: {_darken(p['accent_strong'], 0.15)}; }}
 QPushButton[state="busy"] {{
-    background: {_rgba(p['accent'], 0.16)}; color: {p['accent']};
+    background: {p['tint']}; color: {p['accent']};
     border: 1px solid {_rgba(p['accent'], 0.55)};
 }}
 QPushButton[state="good"] {{
@@ -305,7 +324,7 @@ QPushButton[state="good"] {{
     border: 1px solid {_rgba(p['good'], 0.55)};
 }}
 QPushButton[state="warn"], QPushButton#armedBtn, QPushButton[state="armed"] {{
-    background: {_rgba(p['warn'], 0.18)}; color: {p['warn']};
+    background: {_rgba(p['warn'], 0.16)}; color: {p['warn']};
     border: 1px solid {_rgba(p['warn'], 0.65)};
     font-weight: 700;
 }}
@@ -321,24 +340,24 @@ QPushButton[state="crit"] {{
    app-wide (cockpit_style_overhaul.md §1 rule 1/2) instead of a second,
    parallel button-colour system. */
 QPushButton[state="secondary"] {{
-    background: transparent; color: {p['accent']};
+    background: {p['field']}; color: {p['accent']};
     border: 1px solid {_rgba(p['accent'], 0.55)};
 }}
 QPushButton[state="secondary"]:hover {{
-    background: {_rgba(p['accent'], 0.10)}; border-color: {p['accent']};
+    background: {p['tint']}; border-color: {p['accent']};
 }}
 QPushButton[state="secondary"]:pressed {{ background: {_rgba(p['accent'], 0.18)}; }}
 QPushButton[state="secondary"]:disabled {{
-    color: {p['muted']}; background: transparent; border-color: {p['border']};
+    color: {p['faint']}; background: {p['disabled_bg']}; border-color: transparent;
 }}
 QPushButton[state="ghost"] {{
     background: transparent; color: {p['muted']}; border: 1px solid transparent;
 }}
 QPushButton[state="ghost"]:hover {{
-    background: {p['pressed']}; color: {p['text']}; border-color: {p['border']};
+    background: {p['field']}; color: {p['text']}; border-color: {p['hairline']};
 }}
 QPushButton[state="ghost"]:pressed {{ background: {_rgba(p['accent'], 0.14)}; }}
-QPushButton[state="ghost"]:disabled {{ color: {p['muted']}; background: transparent; }}
+QPushButton[state="ghost"]:disabled {{ color: {p['faint']}; background: transparent; }}
 
 /* Toolbuttons (toolbar actions, tab corner "detach" button, ...) get the same
    quiet hover/pressed/checked language as QPushButton so a toolbar reads as
@@ -349,10 +368,10 @@ QToolButton {{
     background: transparent; border: 1px solid transparent;
     border-radius: {RADIUS_SM}px; padding: {SPACE_XS}px {SPACE_SM}px;
 }}
-QToolButton:hover {{ background: {p['pressed']}; border-color: {p['border']}; }}
+QToolButton:hover {{ background: {p['field']}; border-color: {p['hairline']}; }}
 QToolButton:pressed {{ background: {_rgba(p['accent'], 0.18)}; }}
 QToolButton:checked {{
-    background: {_rgba(p['accent'], 0.16)}; color: {p['accent']};
+    background: {p['tint']}; color: {p['accent']};
     border-color: {_rgba(p['accent'], 0.55)};
 }}
 QToolButton:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outline-offset: 1px; }}
@@ -385,53 +404,51 @@ QPushButton#disconnectBtn:disabled, QToolButton#disconnectBtn:disabled {{
 }}
 
 /* Tabs (also the DetachableTabWidget) — a quiet card tab; the active page is
-   marked by a slim accent underline rather than a heavier background swap, so
-   the selection reads at a glance without shouting. */
+   a pill with accent-tinted material, matching the v5 polish artifact. */
 QTabWidget::pane {{
-    border: 1px solid {p['border']}; border-radius: {RADIUS_MD}px; top: -1px; background: {p['bg']};
+    border: none; top: -1px; background: {p['bg']};
 }}
 QTabBar::tab {{
-    background: transparent; padding: {SPACE_SM}px {SPACE_LG}px; margin-right: 2px;
-    border: 1px solid transparent; border-bottom: 2px solid transparent;
-    border-top-left-radius: {RADIUS_SM + 1}px; border-top-right-radius: {RADIUS_SM + 1}px;
+    background: transparent; padding: {SPACE_SM - 2}px {SPACE_LG - 3}px; margin-right: 4px;
+    border: 1px solid transparent; border-radius: {RADIUS_MD}px;
     color: {p['muted']};
 }}
 QTabBar::tab:selected {{
-    background: {p['panel']}; color: {p['text']};
-    border: 1px solid {p['border']}; border-bottom: 2px solid {p['accent']};
+    background: {p['tint']}; color: {p['accent']};
+    border: 1px solid {_rgba(p['accent'], 0.22)};
     font-weight: 600;
 }}
 QTabBar::tab:hover:!selected {{
-    color: {p['text']}; border-bottom: 2px solid {_rgba(p['accent'], 0.35)};
+    background: {p['field']}; color: {p['text']}; border-color: {p['hairline']};
 }}
 QTabBar::tab:focus {{ outline: none; }}
 
 /* Menu / toolbar */
-QMenuBar {{ background: {p['panel']}; border-bottom: 1px solid {p['border']}; padding: 1px {SPACE_XS}px; }}
+QMenuBar {{ background: {p['material_strong']}; border-bottom: 1px solid {p['hairline']}; padding: 1px {SPACE_XS}px; }}
 QMenuBar::item {{
     background: transparent; padding: {SPACE_XS}px {SPACE_SM + 2}px; border-radius: {RADIUS_XS}px;
 }}
-QMenuBar::item:selected {{ background: {p['pressed']}; color: {p['text']}; }}
-QMenuBar::item:pressed {{ background: {p['accent']}; color: white; }}
+QMenuBar::item:selected {{ background: {p['field']}; color: {p['text']}; }}
+QMenuBar::item:pressed {{ background: {p['accent']}; color: {p['on_accent']}; }}
 QMenu {{
-    background: {p['panel']}; border: 1px solid {p['border']}; border-radius: {RADIUS_SM}px;
+    background: {p['panel']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_SM}px;
     padding: {SPACE_XS}px;
 }}
 QMenu::item {{
     padding: {SPACE_XS + 1}px {SPACE_LG}px {SPACE_XS + 1}px {SPACE_MD}px;
     border-radius: {RADIUS_XS}px;
 }}
-QMenu::item:selected {{ background: {p['accent']}; color: white; }}
+QMenu::item:selected {{ background: {p['accent']}; color: {p['on_accent']}; }}
 QMenu::item:disabled {{ color: {p['muted']}; }}
-QMenu::separator {{ height: 1px; background: {p['border']}; margin: {SPACE_XS}px {SPACE_SM}px; }}
-QToolBar {{ background: {p['panel']}; border-bottom: 1px solid {p['border']}; spacing: {SPACE_SM - 2}px; padding: {SPACE_XS}px; }}
+QMenu::separator {{ height: 1px; background: {p['hairline']}; margin: {SPACE_XS}px {SPACE_SM}px; }}
+QToolBar {{ background: {p['material_strong']}; border-bottom: 1px solid {p['hairline']}; spacing: {SPACE_SM - 2}px; padding: {SPACE_XS}px; }}
 
 /* Status bar + dock titles */
-QStatusBar {{ background: {p['panel']}; border-top: 1px solid {p['border']}; }}
+QStatusBar {{ background: {p['material_strong']}; border-top: 1px solid {p['hairline']}; }}
 QDockWidget {{ titlebar-close-icon: none; }}
 QDockWidget::title {{
-    background: {p['panel']}; padding: {SPACE_SM - 2}px {SPACE_MD - 2}px;
-    border: 1px solid {p['border']}; border-radius: {RADIUS_SM}px;
+    background: {p['material']}; padding: {SPACE_SM - 2}px {SPACE_MD - 2}px;
+    border: 1px solid {p['hairline']}; border-radius: {RADIUS_SM}px;
     font-weight: 600;
 }}
 
@@ -446,7 +463,7 @@ QScrollArea {{ border: none; background: {p['bg']}; }}
    themes). */
 QToolTip {{
     background: {p['panel']}; color: {p['text']};
-    border: 1px solid {p['border']};
+    border: 1px solid {p['hairline']};
     padding: {SPACE_XS}px {SPACE_SM}px; border-radius: {RADIUS_SM}px;
 }}
 
@@ -477,14 +494,14 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{ background: 
 /* Splitter handles (e.g. scope/motor stage-view split panes) — thin and
    quiet at rest, brighten so a drag target is discoverable without drawing a
    heavy grip when idle. */
-QSplitter::handle {{ background: {p['border']}; }}
+QSplitter::handle {{ background: {p['hairline']}; }}
 QSplitter::handle:horizontal {{ width: 3px; }}
 QSplitter::handle:vertical {{ height: 3px; }}
 QSplitter::handle:hover {{ background: {p['accent']}; }}
 
 /* Progress bars (IV/V-scan sweeps) */
 QProgressBar {{
-    background: {p['disabled_bg']}; border: 1px solid {p['border']};
+    background: {p['disabled_bg']}; border: 1px solid {p['hairline']};
     border-radius: {RADIUS_SM}px; text-align: center; color: {p['text']};
     min-height: 16px;
 }}
@@ -492,18 +509,18 @@ QProgressBar::chunk {{ background: {p['accent']}; border-radius: {RADIUS_SM - 1}
 
 /* Tables (device/monitor panels) */
 QHeaderView::section {{
-    background: {p['panel']}; color: {p['muted']};
-    font-weight: 700; font-size: {FONT_XS}px; letter-spacing: 0.02em;
+    background: {p['material']}; color: {p['muted']};
+    font-weight: 700; font-size: {FONT_XS}px; letter-spacing: 0;
     padding: {SPACE_XS}px {SPACE_SM}px; border: none;
-    border-bottom: 1px solid {p['border']}; border-right: 1px solid {p['border']};
+    border-bottom: 1px solid {p['hairline']}; border-right: 1px solid {p['hairline']};
 }}
 QTableView, QTableWidget {{
-    background: {p['panel']}; border: 1px solid {p['border']}; border-radius: {RADIUS_SM}px;
-    gridline-color: {p['border']};
+    background: {p['panel']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_SM}px;
+    gridline-color: {p['hairline']};
     selection-background-color: {_rgba(p['accent'], 0.22)}; selection-color: {p['text']};
 }}
 QTreeWidget::item, QListWidget::item {{ padding: 3px 2px; }}
-QTreeWidget::item:hover, QListWidget::item:hover {{ background: {p['pressed']}; }}
+QTreeWidget::item:hover, QListWidget::item:hover {{ background: {p['field']}; }}
 
 /* Danger action button (STOP / immediate hardware abort). Same red language
    as the toolbar Disconnect button, under its own name so any panel can mark
@@ -529,10 +546,10 @@ QPushButton#dangerBtn:disabled, QPushButton[state="danger"]:disabled {{
    plot canvas, so live numbers read as an instrument display rather than a
    plain label. Values use a monospace face for tabular alignment. */
 QFrame#instrumentReadout {{
-    background: {PLOT_BG}; border: 1px solid {p['border']}; border-radius: {RADIUS_MD}px;
+    background: {PLOT_BG}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_MD}px;
 }}
 QLabel#readoutAxis {{
-    color: {PLOT_FG}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0.06em;
+    color: {PLOT_FG}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0;
 }}
 QLabel#readoutValue {{
     color: {p['accent']};
@@ -540,10 +557,10 @@ QLabel#readoutValue {{
     font-size: {FONT_XL}px; font-weight: 600;
 }}
 QFrame#readoutCell {{
-    background: {PLOT_BG}; border: 1px solid {p['border']}; border-radius: {RADIUS_SM}px;
+    background: {PLOT_BG}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_SM}px;
 }}
 QLabel#readoutCellTitle {{
-    color: {PLOT_FG}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0.06em;
+    color: {PLOT_FG}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0;
 }}
 QLabel#readoutCellValue {{
     color: {p['accent']}; font-family: {MONO_FAMILY};
@@ -563,10 +580,10 @@ QLabel#readoutCellValue[state="armed"] {{ color: {p['warn']}; font-weight: 800; 
    one visual unit inside a QGroupBox, the way a physical jog controller
    reads as a single control rather than loose buttons in a form. */
 QFrame#controlCluster {{
-    background: {p['bg']}; border: 1px solid {p['border']}; border-radius: {RADIUS_LG}px;
+    background: {p['field']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_LG}px;
 }}
 QLabel#clusterCaption {{
-    color: {p['muted']}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0.06em;
+    color: {p['muted']}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0;
 }}
 
 /* Jog pad buttons — compact, square-ish directional keys inside a cluster. */
@@ -581,14 +598,14 @@ QPushButton#jogBtn:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outli
 /* Segmented control — exclusive preset buttons (e.g. jog step size) styled
    as one pill-shaped group with a clear selected segment. */
 QFrame#segmented {{
-    background: {p['panel']}; border: 1px solid {p['border']}; border-radius: {RADIUS_MD}px;
+    background: {p['field']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_MD}px;
 }}
 QPushButton#segBtn {{
     background: transparent; border: none; border-radius: {RADIUS_SM}px;
     padding: {SPACE_XS + 1}px {SPACE_SM + 2}px; color: {p['muted']}; font-weight: 600;
 }}
-QPushButton#segBtn:hover:!checked {{ background: {p['pressed']}; color: {p['text']}; }}
-QPushButton#segBtn:checked {{ background: {p['accent']}; color: white; }}
+QPushButton#segBtn:hover:!checked {{ background: {p['hover']}; color: {p['text']}; }}
+QPushButton#segBtn:checked {{ background: {p['accent']}; color: {p['on_accent']}; }}
 QPushButton#segBtn:disabled {{ color: {p['muted']}; background: transparent; }}
 QPushButton#segBtn:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outline-offset: 1px; }}
 
@@ -596,13 +613,13 @@ QPushButton#segBtn:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outli
    sit visually level with group boxes (e.g. a live view beside a controls
    column). */
 QFrame#cardPane {{
-    background: {p['panel']}; border: 1px solid {p['border']}; border-radius: {RADIUS_MD}px;
+    background: {p['panel']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_MD}px;
 }}
 
 /* Channel card — a cardPane variant used per scope channel.  The panel adds an
    inline coloured left border per channel; this is the shared base look. */
 QFrame#channelCard {{
-    background: {p['panel']}; border: 1px solid {p['border']}; border-radius: {RADIUS_SM}px;
+    background: {p['panel']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_SM}px;
 }}
 
 /* Eyebrow — a small caption label above a heading/value.  QSS cannot
@@ -610,7 +627,7 @@ QFrame#channelCard {{
    spacing gives it the tracking real small-caps captions need to read
    comfortably at this size instead of looking merely "shrunk". */
 QLabel#eyebrow {{
-    color: {p['muted']}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0.07em;
+    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0;
 }}
 
 /* ---------------------------------------------------------------------
@@ -623,7 +640,7 @@ QLabel#eyebrow {{
    above — a Card IS a cardPane with a structured header prepended.
    --------------------------------------------------------------------- */
 QFrame#cardHeader {{
-    background: transparent; border-bottom: 1px solid {p['border']};
+    background: transparent; border-bottom: 1px solid {p['hairline']};
 }}
 QLabel#cardTitle {{ font-weight: 600; }}
 QLabel#cardSubtitle {{
@@ -641,11 +658,11 @@ QLabel#statusChip {{
     padding: 2px {SPACE_SM + 2}px;
     border-radius: {RADIUS_PILL}px;
     font-size: {FONT_XS}px; font-weight: 700;
-    background: {p['pressed']}; color: {p['muted']};
-    border: 1px solid {p['border']};
+    background: {p['field']}; color: {p['muted']};
+    border: 1px solid {p['hairline']};
 }}
 QLabel#statusChip[state="neutral"] {{
-    background: {p['pressed']}; color: {p['muted']}; border: 1px solid {p['border']};
+    background: {p['field']}; color: {p['muted']}; border: 1px solid {p['hairline']};
 }}
 QLabel#statusChip[state="good"] {{
     background: {_rgba(p['good'], 0.16)}; color: {p['good']};
@@ -660,7 +677,7 @@ QLabel#statusChip[state="crit"] {{
     border: 1px solid {_rgba(p['crit'], 0.55)};
 }}
 QLabel#statusChip[state="info"], QLabel#statusChip[state="busy"] {{
-    background: {_rgba(p['accent'], 0.14)}; color: {p['accent']};
+    background: {p['tint']}; color: {p['accent']};
     border: 1px solid {_rgba(p['accent'], 0.50)};
 }}
 QLabel#statusChip[state="armed"] {{
@@ -668,8 +685,8 @@ QLabel#statusChip[state="armed"] {{
     border: 1px solid {_rgba(p['warn'], 0.70)};
 }}
 QLabel#statusChip[state="simulated"] {{
-    background: rgba(142, 68, 173, 0.16); color: #8e44ad;
-    border: 1px solid rgba(142, 68, 173, 0.55);
+    background: {_rgba(p['sim'], 0.16)}; color: {p['sim']};
+    border: 1px solid {_rgba(p['sim'], 0.55)};
 }}
 
 QFrame#statusLamp {{
@@ -681,17 +698,17 @@ QFrame#statusLamp[state="good"] {{ background: {p['good']}; }}
 QFrame#statusLamp[state="warn"], QFrame#statusLamp[state="armed"] {{ background: {p['warn']}; }}
 QFrame#statusLamp[state="crit"] {{ background: {p['crit']}; }}
 QFrame#statusLamp[state="info"], QFrame#statusLamp[state="busy"] {{ background: {p['accent']}; }}
-QFrame#statusLamp[state="simulated"] {{ background: #8e44ad; }}
+QFrame#statusLamp[state="simulated"] {{ background: {p['sim']}; }}
 
 QFrame#statusPill {{
-    background: {p['panel']}; border: 1px solid {p['border']};
+    background: {p['material']}; border: 1px solid {p['hairline']};
     border-radius: {RADIUS_PILL}px;
 }}
 QFrame#statusPill[state="good"] {{ border-color: {_rgba(p['good'], 0.55)}; }}
 QFrame#statusPill[state="warn"], QFrame#statusPill[state="armed"] {{ border-color: {_rgba(p['warn'], 0.60)}; }}
 QFrame#statusPill[state="crit"] {{ border-color: {_rgba(p['crit'], 0.60)}; }}
 QFrame#statusPill[state="info"], QFrame#statusPill[state="busy"] {{ border-color: {_rgba(p['accent'], 0.55)}; }}
-QFrame#statusPill[state="simulated"] {{ border-color: rgba(142, 68, 173, 0.60); }}
+QFrame#statusPill[state="simulated"] {{ border-color: {_rgba(p['sim'], 0.60)}; }}
 QLabel#statusPillText {{
     font-size: {FONT_XS}px; font-weight: 700; color: {p['text']};
 }}
@@ -711,7 +728,7 @@ QFrame#plannerLoopHead {{
 }}
 QLabel#plannerTag {{
     font-family: {MONO_FAMILY}; font-size: {FONT_XS - 1}px; font-weight: 700;
-    letter-spacing: 0.06em; padding: 2px {SPACE_XS + 2}px; border-radius: {RADIUS_XS}px;
+    letter-spacing: 0; padding: 2px {SPACE_XS + 2}px; border-radius: {RADIUS_XS}px;
 }}
 QLabel#plannerAxisName {{ font-weight: 600; }}
 QLabel#plannerCountPill {{
@@ -737,7 +754,7 @@ QFrame#plannerDanger {{ border-radius: {RADIUS_SM}px; }}
 QLabel#plannerDangerLabel {{ font-weight: 600; }}
 QLabel#plannerConfirmPill {{
     font-family: {MONO_FAMILY}; font-size: {FONT_XS - 1}px; font-weight: 700;
-    letter-spacing: 0.04em; padding: 2px {SPACE_SM}px; border-radius: {RADIUS_PILL}px;
+    letter-spacing: 0; padding: 2px {SPACE_SM}px; border-radius: {RADIUS_PILL}px;
 }}
 
 /* Drop ghost-insertion preview row (dragMoveEvent, gui/planner_panel.py
@@ -755,8 +772,8 @@ QLabel#plannerGhostHint {{
 
 # Plot canvas: a dark "instrument screen" in BOTH themes so the plot area never
 # blends into the (white) light UI and reads clearly as a plot even when empty.
-PLOT_BG = "#0e1116"
-PLOT_FG = "#c8cdd6"
+PLOT_BG = "#0a0b0d"
+PLOT_FG = "#c7cfda"
 
 # Plot chrome (grid/overlay) — cockpit kit (Phase 0). Same "fixed in both
 # themes" reasoning as PLOT_BG/PLOT_FG above: FigureCard's hosted plot always
@@ -765,7 +782,7 @@ PLOT_FG = "#c8cdd6"
 # into LIGHT/DARK's "plot_grid"/"plot_overlay" placeholders (declared next to
 # the other per-theme tokens, above) so callers can resolve every cockpit-kit
 # token the same way via palette(mode) instead of a special case for these two.
-PLOT_GRID = "#2a323d"
+PLOT_GRID = "#242a33"
 PLOT_OVERLAY = "#ffb454"
 for _p in (LIGHT, DARK):
     _p["plot_grid"] = PLOT_GRID

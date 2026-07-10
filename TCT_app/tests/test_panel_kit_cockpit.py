@@ -73,7 +73,12 @@ def _grab_both_themes(make_widget, *, has_refresh: bool = True) -> None:
 # gui/style.py — new tokens                                                   #
 # --------------------------------------------------------------------------- #
 
-_NEW_PALETTE_KEYS = ("panel_2", "panel_3", "sunk", "border_strong", "hover", "active")
+_NEW_PALETTE_KEYS = (
+    "canvas", "material", "material_strong", "field",
+    "hairline", "hairline_strong", "toplight", "faint",
+    "on_accent", "tint", "sim", "error",
+    "panel_2", "panel_3", "sunk", "border_strong", "hover", "active",
+)
 
 
 def test_new_layering_tokens_present_in_both_themes():
@@ -86,14 +91,29 @@ def test_new_layering_tokens_present_in_both_themes():
 
 
 def test_existing_palette_keys_untouched():
-    # Additive-only guarantee (cockpit_style_overhaul.md §1 rule 1): every
-    # key that existed before this task is still present with its old value.
-    untouched = {
-        "accent": "#0d8ba6", "bg": "#f4f6f9", "panel": "#ffffff",
-        "border": "#d6dbe3", "good": "#27ae60",
-    }
-    for key, val in untouched.items():
-        assert LIGHT[key] == val
+    # Compatibility guarantee: the long-standing public palette keys still
+    # exist after the v5 value refresh, so callers using palette()["accent"] /
+    # ["bg"] / ["good"] do not break.
+    for key in ("accent", "accent_strong", "bg", "panel", "border",
+                "text", "muted", "pressed", "disabled_bg",
+                "good", "warn", "crit", "amber"):
+        assert key in LIGHT and LIGHT[key], key
+        assert key in DARK and DARK[key], key
+
+
+def test_v5_palette_values_match_polish_artifact():
+    assert DARK["bg"] == "#131316"
+    assert DARK["panel"] == "#1d1d21"
+    assert DARK["accent"] == "#41c8f0"
+    assert DARK["good"] == "#30d158"
+    assert DARK["warn"] == "#ffa01e"
+    assert DARK["crit"] == "#ff4f47"
+
+    assert LIGHT["bg"] == "#eef0f4"
+    assert LIGHT["accent"] == "#0e7fa6"
+    assert LIGHT["good"] == "#1e9e46"
+    assert LIGHT["warn"] == "#c77000"
+    assert LIGHT["crit"] == "#d93a32"
 
 
 def test_plot_grid_overlay_tokens_present_both_themes_and_fixed():
