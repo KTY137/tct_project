@@ -79,14 +79,14 @@ def test_apply_theme_survives_half_destroyed_plot_windows():
 @pytest.mark.skipif(not _HAS_PG, reason="pyqtgraph not installed")
 def test_apply_theme_does_not_touch_live_plots():
     """``apply_theme`` must not reach into existing plots. A plot that opts out
-    of the dark canvas — ScanMapWindow's transparent axis overlay uses
+    of the dark canvas — e.g. a transparent axis overlay that uses
     ``setBackground(None)`` — must keep that transparent background across a
     theme toggle (the old walk silently clobbered it to PLOT_BG)."""
     app = _app()
     apply_theme(app, "light")
 
     overlay = pg.PlotWidget()
-    overlay.setBackground(None)  # transparent, like ScanMapWindow's overlay
+    overlay.setBackground(None)  # transparent, like a plot-over-image overlay
     assert overlay.backgroundBrush().style() == Qt.BrushStyle.NoBrush
 
     apply_theme(app, "dark")

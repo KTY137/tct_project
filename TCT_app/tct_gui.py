@@ -31,7 +31,7 @@ from gui.intensity_panel import IntensityPanel
 from gui.camera_panel import CameraPanel
 from gui.scope_panel import ScopePanel
 from gui.laser_panel import LaserPanel
-from gui.scan_panel import ScanPanel
+from gui.scan_viewer_panel import ScanViewerPanel
 from gui.multi_bias_panel import MultiBiasPanel
 from gui.monitor_panel import MonitorPanel
 from gui.analysis_panel import AnalysisPanel
@@ -45,7 +45,6 @@ from gui.planner_panel import PlannerPanel
 from gui.qt_danger_gate import QtDangerGate
 from gui.scan_coordinator import ScanCoordinator
 from controller.scan_plan_validator import PlanLimits
-from controller.plan_from_config import plan_from_scan_config
 
 logger = logging.getLogger(__name__)
 
@@ -206,7 +205,7 @@ class TCTMainWindow(QMainWindow):
         self._scope_panel     = ScopePanel(self._devices.scope, config_path=self._config_path,
                                            analysis_kwargs=self._devices.analysis_kwargs)
         self._laser_panel     = LaserPanel(self._devices.laser, self._devices.waveform_generator)
-        self._scan_panel      = ScanPanel()
+        self._scan_viewer     = ScanViewerPanel()
         # One tab per HV channel.  Starts as [primary] and is rebuilt from the
         # driver's real channel count once connect_all() runs refresh_bias_channels().
         self._bias_panel      = MultiBiasPanel(self._devices.bias_channels)
@@ -282,7 +281,7 @@ class TCTMainWindow(QMainWindow):
         self._tabs.addTab(_scrollable(self._camera_panel), "Camera")
         self._tabs.addTab(_scrollable(self._scope_panel), "Oscilloscope")
         self._tabs.addTab(_scrollable(self._laser_panel), "Laser / Trigger")
-        self._tabs.addTab(_scrollable(self._scan_panel), "Scan")
+        self._tabs.addTab(_scrollable(self._scan_viewer), "Scan Viewer")
         self._tabs.addTab(_scrollable(self._planner_panel), "Scan Planner")
         self._tabs.addTab(_scrollable(self._bias_panel), "Bias Supply")
         self._tabs.addTab(_scrollable(self._calib_panel), "Calibration")
@@ -313,15 +312,23 @@ class TCTMainWindow(QMainWindow):
         )
         coord = self._coordinator
 
-        # Coordinator → classic Scan panel (fired for every run — plan or classic).
-        coord.point_done.connect(self._scan_panel.on_point_done)
-        coord.progress.connect(self._scan_panel.on_progress)
-        coord.scan_started.connect(self._scan_panel.on_scan_started)
-        coord.scan_finished.connect(self._scan_panel.on_scan_finished)
+        # Coordinator → Scan Viewer (fired for every run — plan or classic).
+        coord.point_done.connect(self._scan_viewer.on_point_done)
+        coord.progress.connect(self._scan_viewer.on_progress)
+        coord.scan_started.connect(self._scan_viewer.on_scan_started)
+        coord.scan_finished.connect(self._scan_viewer.on_scan_finished)
+        # Publish the finished run's HDF5 path AFTER on_scan_finished has cleared
+        # the viewer's run-active flag, so set_last_run_path can enable "Open in
+        # Analysis" (order matters — see _publish_last_run_path).
+        coord.scan_finished.connect(self._publish_last_run_path)
+        # Manual-pause prompt: the viewer flags it on its run chip; the modal
+        # Resume/Abort dialog shim (_on_plan_manual_pause, below) is still wired
+        # too — both consumers are wanted.
+        coord.manual_pause.connect(self._scan_viewer.on_manual_pause)
         # Z-focus results are connected once here (connecting them per-run
-        # duplicated the slots: double plot points and spin_z written twice).
-        coord.z_focus_pt.connect(self._scan_panel.on_z_focus_point)
-        coord.z_focus_done.connect(self._scan_panel.on_z_focus_done)
+        # duplicated the slots: double plot points and marker written twice).
+        coord.z_focus_pt.connect(self._scan_viewer.on_z_focus_pt)
+        coord.z_focus_done.connect(self._scan_viewer.on_z_focus_done)
         # Coordinator → bias panel (voltage-scan IV points).
         coord.vscan_point.connect(self._bias_panel.on_vscan_point)
         # Coordinator → Scan Planner (forwarded only for a planner-launched run;
@@ -337,14 +344,14 @@ class TCTMainWindow(QMainWindow):
         coord.error_dialog.connect(self._show_error_dialog)
         coord.status_message.connect(self._status.showMessage)
 
-        # Scan panel → coordinator.
-        self._scan_panel.start_requested.connect(coord.start_scan)
-        self._scan_panel.abort_requested.connect(coord.abort)
-        self._scan_panel.z_focus_requested.connect(coord.start_z_focus)
-        self._scan_panel.vscan_requested.connect(coord.start_voltage_scan)
-        self._scan_panel.pause_requested.connect(coord.toggle_pause)
-        # Scan panel → Planner handoff: same parameters, editable as a routine.
-        self._scan_panel.open_in_planner_requested.connect(self._open_in_planner)
+        # Scan Viewer → coordinator (live run control only — the Scan Planner is
+        # the sole scan-start surface; the viewer owns no start path except its
+        # Z-focus live assist, the one sanctioned exception).
+        self._scan_viewer.pause_requested.connect(coord.toggle_pause)
+        self._scan_viewer.abort_requested.connect(coord.abort)
+        self._scan_viewer.z_focus_requested.connect(coord.start_z_focus)
+        # Scan Viewer → Analysis handoff: open the just-finished run's HDF5 file.
+        self._scan_viewer.open_in_analysis_requested.connect(self._open_in_analysis)
 
         # Planner panel → coordinator.
         self._planner_panel.arm_hv_requested.connect(coord.arm_hv)
@@ -354,9 +361,11 @@ class TCTMainWindow(QMainWindow):
         # Bias panel → coordinator (voltage scan also starts from the bias panel).
         self._bias_panel.vscan_requested.connect(coord.start_voltage_scan)
 
-        # Motor → Scan panel: "Set as Start"
+        # Motor → Scan Planner: "Set as Start" seeds the planner's current-
+        # position affordance (G3 — a plan has no single start position, only
+        # per-axis loops; replaces the retired quick-scan start-position seam).
         self._motor_panel.set_as_scan_start.connect(
-            self._scan_panel.set_start_position
+            self._planner_panel.set_position_from_motor
         )
 
         # ── Live bias readout (dedicated thread — instrument I/O must never
@@ -584,6 +593,7 @@ class TCTMainWindow(QMainWindow):
         for panel in (getattr(self, "_motor_panel", None),
                       getattr(self, "_bias_panel", None),
                       getattr(self, "_planner_panel", None),
+                      getattr(self, "_scan_viewer", None),
                       getattr(self, "_scope_panel", None),
                       getattr(self, "_laser_panel", None),
                       getattr(self, "_monitor_panel", None),
@@ -1006,22 +1016,42 @@ class TCTMainWindow(QMainWindow):
             max_points=250_000,
         )
 
-    @Slot(object)
-    def _open_in_planner(self, cfg) -> None:
-        """Convert the Scan panel's current quick-scan parameters into an
-        editable ScanPlan and load it into the Scan Planner tab (proven
-        point-order equivalence — same scan, now refinable)."""
+    @Slot()
+    def _publish_last_run_path(self) -> None:
+        """Hand the just-written run's HDF5 path to the Scan Viewer so its
+        "Open in Analysis" button can enable.
+
+        ``ScanController.last_run_path`` is a thread-safe accessor published in
+        ``_end_run`` *before* the finished callback fires, and stays correct on
+        an aborted/errored terminal (abort preserves the data already taken).
+        Wired to ``scan_finished`` *after* the viewer's own ``on_scan_finished``
+        so the viewer's run-active flag is cleared by the time
+        ``set_last_run_path`` runs and enables the button."""
+        p = self._scanner.last_run_path
+        self._scan_viewer.set_last_run_path(str(p) if p else None)
+
+    @Slot(str)
+    def _open_in_analysis(self, path: str) -> None:
+        """Scan Viewer "Open in Analysis": load the finished run's HDF5 file
+        into the Analysis tab and switch to it.  ``AnalysisPanel.load_run``
+        never raises — it reports failure via its own file chip and a ``False``
+        return; the try/except is a belt-and-braces guard mirroring the old
+        ``_open_in_planner`` shape."""
         try:
-            plan = plan_from_scan_config(cfg)
-        except ValueError as exc:
-            QMessageBox.warning(self, "Cannot convert scan", str(exc))
+            ok = self._analysis_panel.load_run(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "Cannot open run", str(exc))
             return
-        self._planner_panel.set_plan(plan)
+        if not ok:
+            QMessageBox.warning(
+                self, "Cannot open run",
+                f"The run file could not be loaded:\n{path}")
+            return
         for i in range(self._tabs.count()):
-            if self._tabs.tabText(i) == "Scan Planner":
+            if self._tabs.tabText(i) == "Analysis":
                 self._tabs.setCurrentIndex(i)
                 break
-        notify("Quick-scan parameters opened in the Scan Planner", "info")
+        notify("Run opened in the Analysis tab", "info")
 
     @Slot(str)
     def _on_plan_manual_pause(self, prompt: str) -> None:

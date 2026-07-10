@@ -1,17 +1,17 @@
 """
 Reconstruct a scattered ``(x, y, value)`` point cloud into a regular 2-D grid.
 
-Every 2-D map in this app (live scan-panel map, the detachable
-``ScanMapWindow``, the post-run ``AnalysisPanel`` re-plot) starts from the
-same shape of data: a set of ``(x_mm, y_mm)`` stage positions, each with one
-scalar value (charge, amplitude, drift time, ...), and needs to end up as a
-dense 2-D array for ``pyqtgraph.ImageView``. Three near-identical
-implementations grew independently with subtly different NaN handling
-(``gui/scan_panel.py``, ``gui/scan_map_window.py``, ``gui/analysis_panel.py``
-— see ``docs/research/scan_viewer_design_review.md``). This module is the one
-canonical implementation; GUI code should call it rather than re-deriving the
-grid inline (see ``.claude/AGENT_PROTOCOL.md`` — physics/formula code lives in
-``analysis/``, GUI panels call it).
+Every 2-D map in this app (the live ``ScanViewerPanel`` map — via the shared
+``gui/scan_map_view.py`` widget — and the post-run ``AnalysisPanel`` re-plot)
+starts from the same shape of data: a set of ``(x_mm, y_mm)`` stage positions,
+each with one scalar value (charge, amplitude, drift time, ...), and needs to
+end up as a dense 2-D array for ``pyqtgraph.ImageView``. Several near-identical
+implementations once grew independently with subtly different NaN handling
+(across the retired ``gui/scan_panel.py`` / ``gui/scan_map_window.py`` and
+``gui/analysis_panel.py`` — see ``docs/research/scan_viewer_design_review.md``).
+This module is the one canonical implementation; GUI code should call it rather
+than re-deriving the grid inline (see ``.claude/AGENT_PROTOCOL.md`` —
+physics/formula code lives in ``analysis/``, GUI panels call it).
 
 Axes / units convention
 ------------------------
@@ -124,8 +124,7 @@ def points_to_grid(
         coordinates is 1 nm resolution — far finer than any stage's
         mechanical repeatability — so genuinely distinct scan points are
         never merged. Matches the live map dict-key convention already used
-        in ``gui/scan_panel.py`` / ``gui/scan_map_window.py``
-        (``round(x, 6)``).
+        in ``gui/scan_map_view.py`` (``round(x, 6)``).
 
     Returns
     -------

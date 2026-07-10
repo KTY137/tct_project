@@ -11,7 +11,7 @@ God object).  The coordinator:
   ``ScanController`` callbacks — fired from the daemon scan thread — onto the Qt
   main thread via queued signal/slot delivery;
 * owns the ``_plan_run_active`` dual-dispatch flag that routes bridge signals to
-  either the classic Scan panel or the Scan Planner panel;
+  either the Scan Viewer or the Scan Planner panel;
 * exposes **methods** the GUI connects panel signals *into* (start scan / plan /
   z-focus / voltage scan, pause/resume, arm-HV, abort) and **Qt signals** the GUI
   connects panel slots (and dialogs) *out of*.
@@ -64,11 +64,13 @@ class ScanCoordinator(QObject):
 
     Public **methods** (connect panel signals here)::
 
-        start_scan(ScanConfig)          ← ScanPanel.start_requested
-        start_z_focus(ZFocusScanConfig) ← ScanPanel.z_focus_requested
+        start_scan(ScanConfig)          (no GUI caller since S2c — kept for
+                                         API stability; Planner is the only
+                                         raster-start surface)
+        start_z_focus(ZFocusScanConfig) ← ScanViewerPanel.z_focus_requested
         start_voltage_scan(VoltageScanConfig)
-                                        ← ScanPanel/BiasPanel.vscan_requested
-        toggle_pause(bool)              ← ScanPanel.pause_requested
+                                        ← BiasPanel.vscan_requested
+        toggle_pause(bool)              ← ScanViewerPanel.pause_requested
         arm_hv()                        ← PlannerPanel.arm_hv_requested
         start_plan(ScanPlan)            ← PlannerPanel.start_plan_requested
         abort()                         ← *.abort_requested
@@ -76,13 +78,13 @@ class ScanCoordinator(QObject):
 
     Public **signals** (connect panel slots / dialog shims here)::
 
-        # classic Scan panel (fired for every run — plan or classic)
-        point_done(object)              → ScanPanel.on_point_done
-        progress(int, int)              → ScanPanel.on_progress
-        scan_started()                  → ScanPanel.on_scan_started
-        scan_finished()                 → ScanPanel.on_scan_finished
-        z_focus_pt(float, float)        → ScanPanel.on_z_focus_point
-        z_focus_done(float)             → ScanPanel.on_z_focus_done
+        # Scan Viewer (fired for every run — plan or classic)
+        point_done(object)              → ScanViewerPanel.on_point_done
+        progress(int, int)              → ScanViewerPanel.on_progress
+        scan_started()                  → ScanViewerPanel.on_scan_started
+        scan_finished()                 → ScanViewerPanel.on_scan_finished
+        z_focus_pt(float, float)        → ScanViewerPanel.on_z_focus_pt
+        z_focus_done(float)             → ScanViewerPanel.on_z_focus_done
         # bias panel
         vscan_point(float, float, float)→ BiasPanel.on_vscan_point
         # Scan Planner (fired only for a planner-launched run)
@@ -98,7 +100,7 @@ class ScanCoordinator(QObject):
         status_message(str)             → status bar showMessage
     """
 
-    # ── classic Scan panel ────────────────────────────────────────────
+    # ── Scan Viewer (every run — plan or classic) ─────────────────────
     point_done   = Signal(object)              # ScanResult
     progress     = Signal(int, int)            # done, total
     scan_started = Signal()
@@ -175,7 +177,7 @@ class ScanCoordinator(QObject):
 
     @Slot(object)
     def _on_point_done(self, result) -> None:
-        # Fired for every run (classic or plan); the classic Scan panel renders
+        # Fired for every run (classic or plan); the Scan Viewer renders
         # the live map for both (see design review §b feasibility note).
         self.point_done.emit(result)
 
@@ -316,6 +318,11 @@ class ScanCoordinator(QObject):
         try:
             self._scanner.start_plan(plan, self._plan_limits(), self._danger_gate)
             self._plan_run_active = True
+            # The Scan Viewer's run-active state (map clear, Pause/Abort
+            # enable, chip, ETA clock) keys off scan_started — a plan run
+            # must fire it exactly like a classic start.  Success path only:
+            # a refused/raised start must never paint a running cockpit.
+            self.scan_started.emit()
         except Exception as exc:
             # A refused start consumes the arm latch (controller side) — keep the
             # panel's Start locked in step.

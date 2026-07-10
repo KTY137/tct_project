@@ -57,13 +57,13 @@ devices/                    hardware drivers behind abstract base classes
   intensity_*  slow_control_*  laser_manual.py  printer_presets.py
 
 gui/                        one panel per instrument + shared widgets
-  motor_panel / scope_panel / camera_panel / laser_panel / scan_panel /
-  bias_panel / monitor_panel / analysis_panel / calibration_panel
+  motor_panel / scope_panel / camera_panel / laser_panel / scan_viewer_panel /
+  planner_panel / bias_panel / monitor_panel / analysis_panel / calibration_panel
   device_panel.py           Device Manager window (per-device connect/status)
   settings_window.py        Settings editor (Quick form + full YAML), VISA picker
   detachable_tabs.py        tear-off tabs (double-click / ⧉ → own window)
   style.py                  light/dark themes; dark plot canvas
-  scan_map_window.py        live 2-D scan map
+  scan_map_view.py          shared 2-D scan-map widget (live map + PNG/CSV export)
 
 data/hdf5_writer.py         HDF5 run writer (see SCAN_DATA_FORMAT.md)
 analysis/                   waveform_analysis.py, charge_calibration.py
