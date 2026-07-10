@@ -177,8 +177,8 @@ Core design rules (verified in code):
 | Oscilloscope | — | `oscilloscope.py` (VISA), `oscilloscope_drs4.py` (PSI DRS4 eval board), `oscilloscope_tek_fastframe.py` (Tektronix MSO5204B FastFrame — currently non-functional, see Known constraints) |
 | Intensity monitor | `intensity_base.py` | `intensity_scope_ch.py`, `intensity_simulated.py` |
 | Slow control | `slow_control_base.py` | `slow_control_simulated.py` |
-| Waveform generator | — | `waveform_generator.py` (VISA Rigol DG4162) |
-| Other | `camera_blackfly.py` (FLIR PySpin), `laser_manual.py` (metadata-only laser record) | |
+| Waveform generator | — | `waveform_generator.py` (VISA Rigol DG4162); `is_alive()` (*STB? heartbeat), `_teardown_session()` (close/null VISA + RM) |
+| Other | `camera_blackfly.py` (FLIR PySpin, `is_alive()` via PySpin `IsValid`, `_release_hw()` balanced PySpin acquire/release), `laser_manual.py` (metadata-only laser record) | |
 
 All inherit `base.py:BaseDevice` (`DeviceError`, `io_lock`, `simulation`,
 `is_alive()`, abstract `connect()`/`disconnect()`).
@@ -282,6 +282,8 @@ no FastFrame support), driven by the default `oscilloscope.py` VISA backend
 `waveform_generator.py` (Rigol DG4162) facts:
 - `prime_pyvisa() -> bool` (main-thread warm-up helper called early in GUI startup and before the settings scan QThread spins up): primes PyVISA's ctypes DLL loader to avoid access-violation on first import off a background thread (Windows-specific).
 - `WaveformGenerator.connect()` queries `:OUTPut{ch}:STATe?` (manual-sourced from DG4000 Programming Manual, returns `ON`/`OFF`) and resolves the `armed` tri-state indicator from unknown → real `True`/`False` (defensive parse: accepts `ON`/`1` → True, `OFF`/`0` → False, case-insensitive, whitespace stripped).
+- `is_alive()` = a `*STB?` heartbeat (Status Byte query, non-blocking, fast, never raises; verifies device link; see Big picture / `is_alive()` contract). New post-liveness-round, verified in simulation.
+- `_teardown_session()` (called on `disconnect()`) closes and nulls `_instr` VISA instrument session + previously-leaked `_rm` resource manager; idempotent after dirty death (earlier root cause of Kaya's bench freeze bug).
 - Optional config fields `level_low_V` / `level_high_V` (unipolar 0→+V trigger path; mutually required, default omitted = bipolar mode). Validated in `config_validator` (both-or-neither, numeric, low < high).
 
 ## gui/ (PySide6 — never PyQt6)
@@ -292,15 +294,16 @@ Panels: `motor_panel`, `bias_panel`, `multi_bias_panel`, `scope_panel`,
 (`DeviceManagerWindow`, `device_state`), `settings_window`, `planner_panel`
 (Recipe-Tree QTreeWidget, editable loop rows, live estimate, validate/dry-run/
 arm/start latch chain; v2: drag-drop palette, movable nodes, right-click ops,
-20-deep undo), `scan_viewer_panel` (S2b+S2c: live scan monitor & cockpit —
+20-deep undo; G4: gained `set_focus_z(z_mm)` slot that writes selected STAGE_Z loop's start spinbox, staging-only, wired from ScanViewerPanel's "Use Focus Z" button), `scan_viewer_panel` (S2b+S2c+G4: live scan monitor & cockpit —
 shared ScanMapView, MetricGrid progress/ETA/point/elapsed, Pause/Abort ActionBar,
 Z-focus CheckableCard, EmptyState until first run, "Open in Analysis" handoff;
-signals out: pause_requested, abort_requested, z_focus_requested, open_in_analysis_requested;
+G4: added best_z_apply_requested(float) signal + "Apply to Planner" button (gated: enabled only after Z-focus completes);
+signals out: pause_requested, abort_requested, z_focus_requested, best_z_apply_requested, open_in_analysis_requested;
 slots in: set_last_run_path, refresh_theme). **All 12 core panels built on `panel_kit` Cards** (batch-1: motor/bias/multi_bias/intensity/monitor/device, batch-2: scope/laser, batch-3: camera/analysis). Support: `panel_kit.py`
 (Card composition: title/subtitle, header, per-card `set_rail(axis, mode)` with
 dynamic railAxis property; panel_header, eyebrow_title, section_header,
 readout_cell, form_row, axis_rail_css; QSS hooks cardHeader/cardTitle/
-cardSubtitle in style.py; cockpit-kit components: FigureCard, MetricTile, MetricGrid, ActionBar, CheckableCard, EmptyState, ReadoutCell), `status_bus.py` (cross-panel status),
+cardSubtitle in style.py; cockpit-kit components: FigureCard, MetricTile, MetricGrid, ActionBar, CheckableCard, EmptyState, ReadoutCell); `style.py` gained SIM_PURPLE (#8e44ad) + ERROR_ORANGE (#e67e22) constants (T3 palette expansion), `status_bus.py` (cross-panel status),
 `status_widgets.py` (StatusChip, StatusPill, flash_button design-system tokens),
 `scan_map_view.py` (S1: shared 2-D scan-map widget — FigureCard + pyqtgraph ImageView,
 `analysis.scan_grid`-driven, quantity selector, autoscale colorbar, cursor readout,
@@ -421,6 +424,7 @@ bias-scan CCE, `estimate_depletion_voltage`).
   software limits. Validated by `config_validator`.
 - `pytest.ini` — pytest configuration (timeout=60s per test, preventing hangs on
   unresponsive mock transports).
+- `tests/conftest.py` — shared pytest fixtures; T6 (2026-07-10): added autouse fixture that drains Qt's DeferredDelete queue after every test, curing accumulation hang (suite wedged in pyqtgraph grab() past ~450 GUI tests).
 - `tests/` — pytest, headless, simulated backends only: state machine, config
   validator, GRBL mock, scope preamble, waveform analysis, bias & calibration.
 
@@ -466,6 +470,14 @@ The following files are autogenerated/maintained registries for fast O(1) lookup
 Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 ## Changelog
+
+- 2026-07-10 — **G4 scan-viewer integration (best_z_apply → planner).** ScanViewerPanel gained `best_z_apply_requested(float)` signal + "Apply to Planner" button (gated: enabled only after Z-focus completes); PlannerPanel gained `set_focus_z(z_mm)` slot that writes selected STAGE_Z loop's start spinbox (staging-only, never moves motor). tct_gui wires viewer→planner. Signal registry updated; ARCHITECTURE.md scan_viewer_panel + planner_panel entries updated.
+
+- 2026-07-10 — **T3 partial hex sweep + style constants.** gui scope_measurements/calibration_panel/laser_panel/scope_panel/device_panel now token-only; style.py gained SIM_PURPLE (#8e44ad) + ERROR_ORANGE (#e67e22). NEW guard test tests/test_no_inline_hex_gui.py enforces no inline hex in gui/ (allowlist _PENDING_SWEEP: motor_panel.py 1 hex, settings_window.py 6 hex — follow-up pass).
+
+- 2026-07-10 — **Driver reconnect/liveness hardening.** WaveformGenerator: `is_alive()` (*STB? heartbeat) + `_teardown_session()` (close+null _instr and RM, idempotent after dirty death). BlackflyCamera: `is_alive()` (PySpin IsValid) + `_release_hw()` (balanced acquire/release). Both `connect()` idempotent after dirty death. NEW tests/test_reconnect_liveness.py (15 tests). Root cause of Kaya's bench "freezes after disconnect; reconnect only works after app restart" — fixed.
+
+- 2026-07-10 — **T6 pyqtgraph accumulation hang — FIXED.** tests/conftest.py autouse fixture drains Qt DeferredDelete after every test — cured suite wedge past ~450 GUI tests (pyqtgraph grab() accumulation). Suite now 690 passed clean.
 
 - 2026-07-10 — **S2b+S2c module retirement and ScanViewerPanel wiring.** S2b (8312f41): new `gui/scan_viewer_panel.py` (live scan monitor, ScanMapView+MetricGrid+ActionBar, Z-focus CheckableCard, EmptyState, 32 tests). S2c (46ff681, 48396c0, 884afe8): ScanMapView export+freeze-levels, PlannerPanel.set_position_from_motor slot, ScanPanel+ScanMapWindow retired, ScanViewerPanel wired via coordinator (mirror scanner signals 1:1, cockpit pause/abort/z-focus), tct_gui Scan Viewer tab, _publish_last_run_path/_open_in_analysis slots, motor set_as_scan_start → planner set_position_from_motor, coordinator start_plan emits scan_started on success. Module index: removed scan_panel.py + scan_map_window.py entries, added scan_viewer_panel.py, updated scan_map_view.py (export+freeze), scan_coordinator (scan_started), tct_gui (new slots, tab name). Suite 657 passed; Mary APPROVE.
 

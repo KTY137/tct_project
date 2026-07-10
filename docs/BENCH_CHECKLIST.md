@@ -311,6 +311,112 @@
 
 ---
 
+## 7. Camera Optics Alignment (FLIR Blackfly Beam-Monitoring Setup)
+
+**Last updated:** 2026-07-10 (Samantha's bench-observation note, 5 actions harvested)
+
+### 7a. Relay Lens Identification
+
+**What to check:**
+- The camera sits atop a vertical cage-rod column with two relay lenses in the first and second cage ring below it.
+- **Read the engravings / part numbers** off both relay lenses (focal lengths, vendor).
+- Record the cage system/vendor if visible.
+
+**Expected result:**
+- Part numbers + focal lengths are recorded. Unlocks: system magnification calculation, and a queued Prometheus datasheet pull for optical performance specs.
+
+**Closes:**
+- `docs/research/camera_optics_setup.md` open action 1.
+- Feeds: camera-survey-metrology feature build (mm-per-pixel calibration).
+
+---
+
+### 7b. Parfocality Verification (camera ↔ laser shared focus)
+
+**What to check:**
+- With the laser focused on the DUT (via its own Z-focus adjust or the Planner focus-Z feature), observe the camera image on the Camera panel.
+- **Is the image simultaneously sharp** at the laser's Z-focus point, or does the camera need independent focus adjustment?
+
+**Expected result:**
+- Camera image is sharp when laser is focused (parfocal) **OR** camera needs independent Z height adjustment.
+- Either outcome is documented; the hypothesis is that the relay has a fixed image plane and the camera height (open action 3) must sit at that plane.
+
+**Closes:**
+- `docs/research/camera_optics_setup.md` open action 2.
+
+---
+
+### 7c. Camera Height Lock Mechanism
+
+**What to check:**
+- The camera currently sits at some height on the cage-rod column.
+- Locate the mechanism (set screw, clamp collar, locking ring, etc.) that holds the camera at that height.
+- Verify the mechanism is secure and can be reproduced after accidental disturbance.
+
+**Expected result:**
+- Locking mechanism is identified and documented (e.g., "M6 set screw on the cage ring").
+- **Known-good height is recorded** (e.g., cage ring #1 at 45 mm from the base, camera locked by the set screw on the north side).
+
+**Closes:**
+- `docs/research/camera_optics_setup.md` open action 3.
+
+---
+
+### 7d. Pixel-Scale Staircase Calibration (after ROI feature lands)
+
+**What to check:**
+- This action defers until after the ROI (Region-of-Interest) feature is built into the GUI (planned, not yet done).
+- Once ROI is wired, construct a calibration target with known spatial features (e.g., a printed grid or a semiconductor feature at known spacing).
+- Acquire images at several camera Z positions and measure the pixel-to-mm scale.
+
+**Expected result:**
+- Pixel scale (mm-per-pixel) is measured and recorded for the system magnification and relay focal lengths identified in action 1.
+- This feeds the planned camera-survey-stitching and stage-metrology features.
+
+**Closes:**
+- `docs/research/camera_optics_setup.md` open action 4.
+- Feeds: `docs/design/camera_survey_metrology.md` stitch precision calculations.
+
+---
+
+### 7e. ROI Writeability While Streaming
+
+**What to check:**
+- In the Camera panel, configure a small Region of Interest (ROI) by either:
+  - (A) Manually entering OffsetX, OffsetY, Width, Height spinbox values, **while the camera is streaming (acquiring)**, or
+  - (B) Using the planned "Set ROI…" assisted dialog (once it is built) **during a live acquisition**.
+- Observe: does the ROI change take effect immediately, or does the camera require acquisition to stop first?
+
+**Expected result:**
+- If writable while streaming: no action needed; driver code `_set_node_if_writable()` already guards it (see `camera_blackfly.py:703-706`).
+- If **read-only while streaming**: the driver's `_set_node_if_writable()` safeguard is correct, and the GUI must stop acquisition before applying an ROI change.
+- **Document the finding** in `camera_blackfly.py` docstring or a comment next to the ROI-write calls.
+
+**Closes:**
+- `docs/research/camera_optics_setup.md` open action 5.
+- Impacts: planned ROI-cropping feature in camera-survey-metrology.
+
+---
+
+### 7f. Known-Good Camera Settings Reference
+
+**For future bench sessions:** Use these Acquisition Console settings as a known-good starting point (verified 2026-07-10):
+
+| Control | Value | Notes |
+| --- | --- | --- |
+| Pixel Format | Mono8 | (Mono16 has display banding bug; Mono8 is safe) |
+| Binning | 1 | (Binning 2/4 shows white-frame bug; bin1 is stable) |
+| Exposure | 13,009 µs (~13 ms) | ~1.0 fps readout for full 1920×1200 |
+| Gain | 14.00 dB | Bright laser spot with controlled clipping at core |
+| Gamma | Enabled, γ = 1.00 | |
+| Hardware Trigger (Line 0 ↓) | Off | Free-running acquisition |
+| TEMP Readout | Active/Live | Should populate; `–` placeholder means connection issue |
+| Saturated Pixels | ON | Expected (laser spot core saturates); not a misconfiguration |
+
+Source: `docs/research/camera_optics_setup.md` (verified live 2026-07-10).
+
+---
+
 ## Next Steps
 
 Once all checklist items are complete:

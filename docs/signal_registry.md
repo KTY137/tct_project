@@ -159,6 +159,7 @@ Organization: **one section per module**, signals listed in definition order. Fo
 | `ScanViewerPanel.pause_requested` | `(bool)` — True = pause, False = resume | `scan_viewer_panel.py:TBD` | `ScanCoordinator.pause()` |
 | `ScanViewerPanel.abort_requested` | `()` | `scan_viewer_panel.py:TBD` | `ScanCoordinator.abort()` |
 | `ScanViewerPanel.z_focus_requested` | `(ZFocusScanConfig)` | `scan_viewer_panel.py:TBD` | `ScanCoordinator.start_z_focus()` |
+| `ScanViewerPanel.best_z_apply_requested` | `(float)` — best_z_mm | `scan_viewer_panel.py:TBD` | `PlannerPanel.set_focus_z()`, `tct_gui.py:TBD` (G4: "Apply to Planner" button; gated: enabled only after Z-focus completes; target is selected STAGE_Z loop's start spinbox, staging only) |
 | `ScanViewerPanel.open_in_analysis_requested` | `(str)` — run HDF5 file path | `scan_viewer_panel.py:TBD` | `TCTMainWindow._open_in_analysis()`, `tct_gui.py:TBD` |
 
 ---

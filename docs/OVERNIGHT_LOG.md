@@ -27,6 +27,10 @@ robustness, more Scan Planner features, be creative.*
 - **S2a DONE 2026-07-08:** scan_coordinator extracted from tct_gui (behavior-preserving, Mary byte-identical HV verify) + AnalysisPanel.load_run seam (412abe1, 3d3b4b8). Suite 611. Next: S2b ScanViewerPanel, S2c retire ScanPanel.
 - **S2b DONE 2026-07-10:** ScanViewerPanel live scan monitor + 32 tests (8312f41). Mary APPROVE-WITH-NITS, nits fixed. Suite 643.
 - **S2c DONE 2026-07-10:** viewer wired via coordinator, ScanPanel + ScanMapWindow retired, ScanMapView export/freeze-levels, planner Use-current-position (G3), coordinator start_plan scan_started fix (46ff681, 48396c0, 884afe8). Mary APPROVE. Suite 657. T1 sequence complete.
+- **G4 DONE 2026-07-10:** ScanViewerPanel.best_z_apply_requested(float) signal + "Apply to Planner" button (gated post-Z-focus); PlannerPanel.set_focus_z(z_mm) slot wired from viewer (9e66baf). Mary APPROVE. Signal registry + ARCHITECTURE.md entries updated.
+- **T3 partial DONE 2026-07-10:** hex sweep token-ification: gui scope_measurements/calibration_panel/laser_panel/scope_panel/device_panel now token-only; style.py gained SIM_PURPLE/ERROR_ORANGE; guard test tests/test_no_inline_hex_gui.py prevents regressions (allowlist: motor_panel 1 hex, settings_window 6 hex — follow-up pass) (a87d308). Mary APPROVE-WITH-NITS (3 nearest-token approximations noted; calibration dark-mode contrast → TECH_DEBT).
+- **Driver-liveness DONE 2026-07-10:** WaveformGenerator (is_alive *STB?, _teardown_session close/null) + BlackflyCamera (is_alive PySpin IsValid, _release_hw balanced release); both idempotent after dirty death; tests/test_reconnect_liveness.py (15 tests). Root cause of Kaya's bench freeze bug (64df056). Mary APPROVE (safety lens); camera IsValid-vs-grab cross-thread → TECH_DEBT, folds into GUI-thread beat.
+- **T6 DONE 2026-07-10:** pyqtgraph accumulation hang FIXED: tests/conftest.py autouse fixture drains Qt DeferredDelete after every test (suite wedged past ~450 tests). Suite now 690 passed clean (548a7fa).
 
 ## Theme backlog (ranked; I pull sequences from here top-down)
 
