@@ -98,35 +98,37 @@ def test_camera_panel_hooks_survive_card_swap():
         # (same objectName) so it keeps its tri-state colour override hook.
         assert len(panel.findChildren(QFrame, "readoutCell")) >= 12
         assert panel._temp_frame.objectName() == "readoutCell"
-        # Existing public hook other code depends on (tct_gui.py teardown,
-        # test_panel_kit_rollout_batch1.py's own "untouched" check).
-        assert panel._timer is not None
+        # The panel's teardown hook (tct_gui.py _teardown_panels calls it): the
+        # frame grab moved off the GUI thread to a worker QThread, so the old
+        # public _timer hook is now the worker thread + shutdown().
+        assert panel._cam_thread is not None
     finally:
-        panel._timer.stop()
+        panel.shutdown()
 
 
 def test_camera_panel_temp_readout_tristate_colours():
     """The Temp readout's good/warn/crit colour swap (bench overheat cue)
     survived the QLabel -> readoutCell-look-alike swap, using WARN_AMBER /
-    WARN_RED tokens instead of the old hardcoded '#ffaa00' / '#ff4444'."""
+    WARN_RED tokens instead of the old hardcoded '#ffaa00' / '#ff4444'.
+
+    Temperature now arrives as an argument to _update_stats (grabbed off-thread
+    by the worker), so drive that directly instead of the retired _refresh()."""
     _app()
     cam = BlackflyCamera(simulation=True)
     cam.connect()
     panel = CameraPanel(cam)
     try:
-        cam.get_temperature = lambda: 70.0   # >= 65 C -> crit
-        panel._refresh()
+        _, meta = cam.get_frame_with_meta()
+        panel._update_stats(meta, 70.0, 10.0)   # >= 65 C -> crit
         assert WARN_RED in panel._lbl_temp.styleSheet()
 
-        cam.get_temperature = lambda: 60.0   # >= 55 C -> warn
-        panel._refresh()
+        panel._update_stats(meta, 60.0, 10.0)   # >= 55 C -> warn
         assert WARN_AMBER in panel._lbl_temp.styleSheet()
 
-        cam.get_temperature = lambda: 30.0   # normal -> style resets
-        panel._refresh()
+        panel._update_stats(meta, 30.0, 10.0)   # normal -> style resets
         assert panel._lbl_temp.styleSheet() == ""
     finally:
-        panel._timer.stop()
+        panel.shutdown()
 
 
 def test_analysis_panel_hooks_survive_card_swap():
@@ -174,7 +176,7 @@ def test_hot_path_widgets_have_no_graphics_effect():
                   ana_panel._map_view, ana_panel._cce_plot):
             assert w.graphicsEffect() is None
     finally:
-        cam_panel._timer.stop()
+        cam_panel.shutdown()
 
 
 # --------------------------------------------------------------------------- #

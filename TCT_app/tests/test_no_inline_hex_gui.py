@@ -227,7 +227,7 @@ def test_calibration_panel_construct_and_theme_switch(tmp_path):
 def test_laser_panel_construct_and_theme_switch():
     """Exercises LaserPanel.refresh_theme() directly (the panel's own local
     per-instance re-style, not the global gui.style.apply_theme())."""
-    _app()
+    app = _app()
     from devices.laser_manual import LaserManualMetadata
     from devices.waveform_generator import WaveformGenerator
     from gui.laser_panel import LaserPanel
@@ -235,10 +235,14 @@ def test_laser_panel_construct_and_theme_switch():
 
     wfg = WaveformGenerator(simulation=True)
     panel = LaserPanel(LaserManualMetadata(), wfg)
-    panel.refresh_theme("dark")
-    assert palette("dark")["muted"] in panel._pulse_hint.styleSheet()
-    panel.refresh_theme("light")
-    assert palette("light")["muted"] in panel._pulse_hint.styleSheet()
+    try:
+        panel.refresh_theme("dark")
+        assert palette("dark")["muted"] in panel._pulse_hint.styleSheet()
+        panel.refresh_theme("light")
+        assert palette("light")["muted"] in panel._pulse_hint.styleSheet()
+    finally:
+        panel.shutdown()   # stop the VISA worker thread it now owns
+        _pump(app, 0.1)
 
 
 def test_channel_card_readout_color_resolves_from_palette():

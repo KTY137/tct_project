@@ -182,7 +182,7 @@ def test_camera_panel_still_constructs_untouched():
         pm = panel.grab()
         assert not pm.isNull()
     finally:
-        panel._timer.stop()
+        panel.shutdown()   # stops the frame-acquisition worker thread
 
 
 def test_settings_window_still_constructs_untouched():

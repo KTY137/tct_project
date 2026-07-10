@@ -813,6 +813,8 @@ class TCTMainWindow(QMainWindow):
                       (getattr(self, "_bias_panel", None),    "shutdown"),
                       (getattr(self, "_intensity_panel", None), "shutdown"),
                               (getattr(self, "_scope_panel", None),   "shutdown"),
+                              (getattr(self, "_camera_panel", None),  "shutdown"),
+                              (getattr(self, "_laser_panel", None),   "shutdown"),
                               (getattr(self, "_calib_panel", None),   "shutdown"),
                               (getattr(self, "_planner_panel", None), "shutdown"),
                               (getattr(self, "_monitor_panel", None), "stop_polling")):
@@ -851,8 +853,17 @@ class TCTMainWindow(QMainWindow):
 
     def _run_bg(self, fn, on_done) -> bool:
         """Run *fn* in a worker QThread; deliver (result, err) to *on_done* on
-        the GUI thread.  Returns False if another background task is running."""
+        the GUI thread.  Returns False if another background task is running.
+
+        The single-slot design is deliberate (no arbitrary-depth queue): a
+        connect/disconnect can legitimately take many seconds, and stacking
+        more onto the same VISA/serial links would only pile up contention.
+        When busy we surface that on the status bus instead of the old silent
+        ``return False`` — the "clicking reconnect does nothing" bench report.
+        """
         if self._bg_thread is not None and self._bg_thread.isRunning():
+            notify("Still busy with the previous device operation — "
+                   "please wait for it to finish.", "warn")
             return False
         self._bg_task = _BgTask(fn)
         self._bg_thread = QThread(self)

@@ -1,11 +1,13 @@
 """Laser / trigger panel (PDL 800 manual settings + waveform generator control)."""
 from __future__ import annotations
 
-from PySide6.QtCore import QSettings, QTimer
+import logging
+
+from PySide6.QtCore import QObject, QSettings, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QLineEdit, QDoubleSpinBox,
-    QPushButton, QComboBox,
+    QPushButton, QComboBox, QApplication, QMessageBox,
 )
 
 from devices.laser_manual import LaserManualMetadata
@@ -14,8 +16,36 @@ from gui.panel_kit import Card, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import SPACE_MD, WARN_AMBER, palette
 
+logger = logging.getLogger(__name__)
+
+
+class _LaserWorker(QObject):
+    """Runs blocking waveform-generator VISA calls off the GUI thread.
+
+    On a dead LAN peer a single set/query blocks ≥5 s at the socket layer;
+    doing that in a button slot or an ``editingFinished`` handler froze the
+    whole window (the bench "the GUI locks up when I click Apply / edit a
+    field" complaint).  Jobs are delivered here as *queued* invocations, so
+    this worker's own event queue is the FIFO: writes reach the instrument in
+    the exact order the user made them (frequency → amplitude → offset → …).
+    Each job reports its result (or error text) back on the GUI thread.
+    """
+    job_done = Signal(int, object, str)   # job_id, result (or None), error
+
+    @Slot(int, object)
+    def run_job(self, job_id: int, fn) -> None:
+        try:
+            result = fn()
+        except Exception as exc:
+            self.job_done.emit(job_id, None, str(exc))
+            return
+        self.job_done.emit(job_id, result, "")
+
 
 class LaserPanel(QWidget):
+    # GUI → worker: (job_id, callable).  Cross-thread → Qt queues it, so the
+    # worker's event queue preserves submission order (see _LaserWorker).
+    _submit_job = Signal(int, object)
     def __init__(
         self,
         laser: LaserManualMetadata,
@@ -45,6 +75,28 @@ class LaserPanel(QWidget):
         self._output_poll.timeout.connect(self._refresh_output_chip)
         self._output_poll.start()
         self._refresh_output_chip()
+
+        # ── Serialized VISA worker ────────────────────────────────────
+        # Every wavegen set/query is a blocking VISA call (≥5 s on a dead LAN
+        # peer); running them in the button/editingFinished slots froze the
+        # window.  They now run on this worker thread, delivered as queued
+        # invocations so they apply in submission order.  Parented to the
+        # long-lived QApplication (NOT this panel): a soft config-reload
+        # deletes the panel tree via setCentralWidget(), and a QThread
+        # destroyed as a child while still running is a hard Qt6 abort — the
+        # MotorPanel crash class.  shutdown() stops it with a bounded wait; it
+        # self-deletes on ``finished``.
+        self._job_seq = 0
+        self._pending = 0
+        self._job_callbacks: dict[int, object] = {}
+        self._laser_thread: QThread | None = QThread(QApplication.instance())
+        self._laser_worker = _LaserWorker()
+        self._laser_worker.moveToThread(self._laser_thread)
+        self._submit_job.connect(self._laser_worker.run_job)
+        self._laser_worker.job_done.connect(self._on_job_done)
+        self._laser_thread.finished.connect(self._laser_worker.deleteLater)
+        self._laser_thread.finished.connect(self._laser_thread.deleteLater)
+        self._laser_thread.start()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -220,6 +272,7 @@ class LaserPanel(QWidget):
         btn_test.setToolTip("Query *IDN? and show the reply — confirms the VISA/USB link")
         btn_test.clicked.connect(self._test_connection)
         btn_visa = QPushButton("List VISA…")
+        self._btn_visa = btn_visa
         set_button_icon(btn_visa, "mdi.format-list-bulleted")
         btn_visa.setToolTip("List VISA resource strings (find the instrument's USB address)")
         btn_visa.clicked.connect(self._list_visa)
@@ -267,13 +320,55 @@ class LaserPanel(QWidget):
             self._pulse_hint.setText(f"≈ {duty:.3g} % duty  @ {f:g} Hz")
             self._chip_pulse.set_status(f"Width {self._fmt_time(self._spin_width.value())}", "info")
 
+    # ------------------------------------------------------------------ #
+    # Off-thread VISA job plumbing                                        #
+    # ------------------------------------------------------------------ #
+
+    def _submit(self, fn, on_done) -> None:
+        """Queue *fn* to run on the VISA worker thread; *on_done(result, err)*
+        runs back on the GUI thread when it finishes.  Jobs run in submission
+        order (the worker's queued event loop is the FIFO), so a burst of live
+        edits reaches the instrument in the exact order the user made them."""
+        self._job_seq += 1
+        jid = self._job_seq
+        self._job_callbacks[jid] = on_done
+        self._pending += 1
+        if self._pending == 1:
+            self._chip_wfg.set_status("Wavegen busy…", "busy",
+                                      "Sending to the waveform generator…")
+        self._submit_job.emit(jid, fn)
+
+    @Slot(int, object, str)
+    def _on_job_done(self, jid: int, result, err: str) -> None:
+        self._pending = max(0, self._pending - 1)
+        cb = self._job_callbacks.pop(jid, None)
+        if cb is not None:
+            try:
+                cb(result, err)
+            except Exception:
+                logger.debug("laser job callback failed", exc_info=True)
+        # Jobs whose callbacks settle a DIFFERENT chip (output toggle, load,
+        # list-VISA) would otherwise leave "Wavegen busy…" latched forever.
+        # Settle the shared chip once the queue drains — but never overwrite
+        # a more specific state (error/configured) a callback just painted.
+        if self._pending == 0 and self._chip_wfg.text() == "Wavegen busy…":
+            live = bool(getattr(self._wfg, "connected", False)
+                        or getattr(self._wfg, "simulation", False))
+            if live:
+                self._chip_wfg.set_status("Wavegen connected", "good")
+            else:
+                self._chip_wfg.set_status(
+                    "Staged — wavegen not connected", "warn",
+                    "Values cached; sent when you Connect the wavegen.")
+
     def _live_apply(self, setter, value) -> None:
-        """Send ONE wavegen setting immediately (a control's editingFinished).
+        """Send ONE wavegen setting (a control's editingFinished) off-thread.
 
         No-op with a 'staged' hint when the wavegen is not connected — the
         driver's setters silently drop writes with no VISA session, so we
         surface that rather than imply success (the earlier bench failure).
-        Never enables the output.
+        Never enables the output.  The VISA write runs on the worker thread so
+        a slow/dead instrument can never freeze the field the user just edited.
         """
         live = bool(getattr(self._wfg, "connected", False)
                     or getattr(self._wfg, "simulation", False))
@@ -282,15 +377,17 @@ class LaserPanel(QWidget):
                 "Staged — wavegen not connected", "warn",
                 "Value cached; sent when you Connect the wavegen.")
             return
-        try:
-            setter(value)
-            # Reflect what the instrument ACTUALLY applied — the DG4162 clamps
-            # pulse width / duty to its frequency-dependent minimum, so the
-            # request the user typed may not be what the device did.
-            self._reflect_applied()
-            self._chip_wfg.set_status("Wavegen configured", "good")
-        except Exception as exc:
-            self._chip_wfg.set_status("Wavegen error", "crit", str(exc))
+        self._submit(lambda: setter(value), self._on_live_applied)
+
+    def _on_live_applied(self, result, err: str) -> None:
+        if err:
+            self._chip_wfg.set_status("Wavegen error", "crit", err)
+            return
+        # Reflect what the instrument ACTUALLY applied — the DG4162 clamps pulse
+        # width / duty to its frequency-dependent minimum, so the request the
+        # user typed may not be what the device did.
+        self._reflect_applied()
+        self._chip_wfg.set_status("Wavegen configured", "good")
 
     def _reflect_applied(self) -> None:
         """Sync the width/duty spinboxes to the driver's ACTUALLY-applied values.
@@ -319,79 +416,93 @@ class LaserPanel(QWidget):
         self._update_pulse_hint()
 
     def _apply_wfg(self) -> None:
-        set_button_busy(self._btn_apply, True, "Applying...")
         # A disconnected real driver silently drops every write (the setters
         # no-op when there is no VISA session), so "configured" would be a lie —
         # the exact "settings couldn't pass to the wavegen" bench failure.
         # Detect it up front and report "staged" instead of a false success.
         live = bool(getattr(self._wfg, "connected", False)
                     or getattr(self._wfg, "simulation", False))
-        ok = False
-        try:
+        set_button_busy(self._btn_apply, True, "Applying...")
+        # Read every widget value HERE, on the GUI thread — the worker closure
+        # below must never touch a Qt widget from the worker thread.
+        load    = self._load_combo.currentData()
+        freq    = self._spin_freq.value()
+        is_duty = (self._pulse_mode.currentText() == "Duty cycle")
+        duty    = self._spin_duty.value()
+        width   = self._spin_width.value()
+        ampl    = self._spin_ampl.value()
+        offset  = self._spin_offset.value()
+
+        def work():
             # Load first: it changes how the generator interprets the amplitude
             # that follows (High-Z vs 50 Ω is a silent up-to-2x error), so the
             # whole batch stays self-consistent — mirrors the driver's
             # _apply_defaults() ordering.
-            self._wfg.set_output_load(self._load_combo.currentData())
-            self._wfg.set_frequency(self._spin_freq.value())
-            if self._pulse_mode.currentText() == "Duty cycle":
-                self._wfg.set_duty_cycle(self._spin_duty.value())
+            self._wfg.set_output_load(load)
+            self._wfg.set_frequency(freq)
+            if is_duty:
+                self._wfg.set_duty_cycle(duty)
             else:
-                self._wfg.set_pulse_width(self._spin_width.value())
-            self._wfg.set_amplitude(self._spin_ampl.value())
-            self._wfg.set_offset(self._spin_offset.value())
-            # Reflect the instrument's actually-applied width/duty back into the
-            # spinboxes (it clamps to a frequency-dependent minimum).
-            self._reflect_applied()
-            if live:
-                self._chip_wfg.set_status("Wavegen configured", "good")
-                ok = True
-            else:
-                self._chip_wfg.set_status(
-                    "Staged — wavegen not connected", "warn",
-                    "Values cached; they are sent when you Connect the wavegen.")
-        except Exception as exc:
-            from PySide6.QtWidgets import QMessageBox
-            self._chip_wfg.set_status("Wavegen error", "crit", str(exc))
-            QMessageBox.warning(self, "WFG Error", str(exc))
-        finally:
-            set_button_busy(self._btn_apply, False)
-        if ok:
+                self._wfg.set_pulse_width(width)
+            self._wfg.set_amplitude(ampl)
+            self._wfg.set_offset(offset)
+
+        self._submit(work, lambda result, err: self._on_apply_wfg_done(live, err))
+
+    def _on_apply_wfg_done(self, live: bool, err: str) -> None:
+        set_button_busy(self._btn_apply, False)
+        if err:
+            self._chip_wfg.set_status("Wavegen error", "crit", err)
+            QMessageBox.warning(self, "WFG Error", err)
+            return
+        # Reflect the instrument's actually-applied width/duty back into the
+        # spinboxes (it clamps to a frequency-dependent minimum).
+        self._reflect_applied()
+        if live:
+            self._chip_wfg.set_status("Wavegen configured", "good")
             flash_button(self._btn_apply, "good", "Applied")
-        elif not live:
+        else:
+            self._chip_wfg.set_status(
+                "Staged — wavegen not connected", "warn",
+                "Values cached; they are sent when you Connect the wavegen.")
             flash_button(self._btn_apply, "warn", "Staged")
 
     def _on_load_changed(self, idx: int) -> None:
-        try:
-            self._wfg.set_output_load(self._load_combo.itemData(idx))
-            label = self._load_combo.currentText()
-            self._chip_load.set_status(f"Load {label}", "good" if label == "50 Ω" else "warn")
-        except Exception as exc:
-            from PySide6.QtWidgets import QMessageBox
-            self._chip_load.set_status("Load error", "crit", str(exc))
-            QMessageBox.warning(self, "WFG Error", str(exc))
+        load = self._load_combo.itemData(idx)
+        label = self._load_combo.currentText()
+        self._submit(lambda: self._wfg.set_output_load(load),
+                     lambda result, err: self._on_load_done(label, err))
+
+    def _on_load_done(self, label: str, err: str) -> None:
+        if err:
+            self._chip_load.set_status("Load error", "crit", err)
+            QMessageBox.warning(self, "WFG Error", err)
+            return
+        self._chip_load.set_status(f"Load {label}", "good" if label == "50 Ω" else "warn")
 
     def _output_on(self) -> None:
-        try:
-            self._wfg.output_on()
-            # Reflect the driver's real post-command state rather than assuming
-            # success (the driver flips its record only after the write path).
-            self._refresh_output_chip()
-            flash_button(self._btn_on, "warn", "Armed")
-        except Exception as exc:
-            from PySide6.QtWidgets import QMessageBox
-            self._chip_output.set_status("Output error", "crit", str(exc))
-            QMessageBox.warning(self, "WFG Error", str(exc))
+        # Off-thread like every wavegen write.  The OFF path (below) stays just
+        # as responsive, so the trigger can always be disarmed even while a slow
+        # write is still draining on a dead peer.
+        self._submit(self._wfg.output_on,
+                     lambda result, err: self._on_output_toggled(
+                         self._btn_on, "warn", "Armed", err))
 
     def _output_off(self) -> None:
-        try:
-            self._wfg.output_off()
-            self._refresh_output_chip()
-            flash_button(self._btn_off, "good", "Off")
-        except Exception as exc:
-            from PySide6.QtWidgets import QMessageBox
-            self._chip_output.set_status("Output error", "crit", str(exc))
-            QMessageBox.warning(self, "WFG Error", str(exc))
+        self._submit(self._wfg.output_off,
+                     lambda result, err: self._on_output_toggled(
+                         self._btn_off, "good", "Off", err))
+
+    def _on_output_toggled(self, button: QPushButton, flash_state: str,
+                           flash_text: str, err: str) -> None:
+        if err:
+            self._chip_output.set_status("Output error", "crit", err)
+            QMessageBox.warning(self, "WFG Error", err)
+            return
+        # Reflect the driver's real post-command state rather than assuming
+        # success (the driver flips its record only after the write path).
+        self._refresh_output_chip()
+        flash_button(button, flash_state, flash_text)
 
     def _refresh_output_chip(self) -> None:
         """Repaint the armed/output chip from the driver's REAL output record.
@@ -424,38 +535,74 @@ class LaserPanel(QWidget):
                                          "connect — toggle Output ON/OFF to define it.")
 
     def _test_connection(self) -> None:
-        from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QMessageBox, QApplication
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            msg = self._wfg.test_connection()
+        # Runs off-thread: *IDN? blocks ≥5 s on a dead LAN peer, which used to
+        # freeze the window behind a wait-cursor.  The button's busy state is
+        # the responsive replacement for the old override cursor.
+        set_button_busy(self._btn_test, True, "Testing...")
+        self._submit(self._wfg.test_connection, self._on_test_done)
+
+    def _on_test_done(self, result, err: str) -> None:
+        set_button_busy(self._btn_test, False)
+        if err:
+            msg = f"Test failed: {err}"
+            self._chip_wfg.set_status("Wavegen error", "crit", err)
+        else:
+            msg = result
             self._chip_wfg.set_status("Wavegen connected", "good")
             flash_button(self._btn_test, "good", "Connected")
-        except Exception as exc:
-            msg = f"Test failed: {exc}"
-            self._chip_wfg.set_status("Wavegen error", "crit", str(exc))
-        finally:
-            QApplication.restoreOverrideCursor()
         QMessageBox.information(self, "Waveform Generator Test", msg)
 
     def _list_visa(self) -> None:
-        from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QMessageBox, QApplication
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            res = list_visa_resources()
-            text = ("\n".join(res) if res
+        set_button_busy(self._btn_visa, True, "Scanning...")
+        self._submit(list_visa_resources, self._on_list_visa_done)
+
+    def _on_list_visa_done(self, result, err: str) -> None:
+        set_button_busy(self._btn_visa, False)
+        if err:
+            text = f"{err}"
+        else:
+            text = ("\n".join(result) if result
                     else "No VISA resources found.\nIs the instrument on and NI-VISA installed?")
-        except Exception as exc:
-            text = f"{exc}"
-        finally:
-            QApplication.restoreOverrideCursor()
         QMessageBox.information(self, "VISA Resources", text)
 
     def get_metadata(self) -> LaserManualMetadata:
         """Return a snapshot of the current laser metadata."""
         self._save_metadata()
         return self._laser
+
+    # ------------------------------------------------------------------ #
+    # Teardown                                                            #
+    # ------------------------------------------------------------------ #
+
+    def shutdown(self) -> None:
+        """Stop the output-poll timer and the VISA worker before the panel is
+        discarded (``tct_gui._teardown_panels`` on a soft config-reload / exit).
+
+        Bounded wait — a wavegen write/query can sit ≥5 s on a dead LAN peer,
+        so never wait unbounded on the GUI thread.  The worker thread is
+        parented to QApplication and self-``deleteLater``s on ``finished``, so
+        a call still in flight when the 3 s bound elapses finishes and cleans
+        itself up rather than being destroyed as a child of this (soon-deleted)
+        widget — the MotorPanel soft-reload crash class.  Idempotent.
+
+        SAFETY ORDERING (rule 5): ``thread.quit()`` discards queued jobs that
+        have not started — including a queued Output OFF.  That is safe ONLY
+        because every teardown path calls ``DeviceManager.disconnect_all()``
+        AFTER ``_teardown_panels()``, and ``WaveformGenerator.disconnect()``
+        forces ``output_off()`` for an armed output.  Do not reorder teardown
+        before checking ``test_queued_output_off_rescued_by_teardown_order``.
+        """
+        if getattr(self, "_output_poll", None) is not None:
+            self._output_poll.stop()
+        thread = self._laser_thread
+        self._laser_thread = None
+        if thread is not None:
+            thread.quit()
+            thread.wait(3000)
+
+    def closeEvent(self, event) -> None:
+        self.shutdown()
+        super().closeEvent(event)
 
     # ------------------------------------------------------------------ #
     # Axis-rail styling (gui.style.axis_color) — re-run by refresh_theme() #

@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 
 from controller.device_manager import DeviceManager
 from gui.panel_kit import Card
+from gui.status_bus import notify
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import ERROR_ORANGE, OK_GREEN, SIM_PURPLE, WARN_RED
 
@@ -235,7 +236,14 @@ class DeviceManagerWindow(QMainWindow):
         self._run_bg(self._devices.disconnect_all, self._on_disconnect_all_done)
 
     def _run_bg(self, fn, on_done) -> bool:
+        # One device operation at a time (single slot, no arbitrary-depth
+        # queue).  Surface the busy state instead of the old silent no-op —
+        # the "clicking Connect/Disconnect does nothing" bench report.
         if self._bg_thread is not None and self._bg_thread.isRunning():
+            notify("Device Manager is still busy — wait for the current "
+                   "connect/disconnect to finish.", "warn")
+            self._chip_busy.set_status("Still working…", "busy",
+                                       "A device operation is already running.")
             return False
         self._set_busy(True)
         self._bg_task = _DeviceTask(fn)

@@ -9,8 +9,14 @@ Two bench complaints, pinned here against the simulated backend:
   * settings "couldn't pass properly" — Apply on a NOT-connected wavegen must
     report "staged", not a green "configured", because the driver silently
     caches writes when there is no session.
+
+Apply / live-edit / test-connection now run on a serialized worker thread
+(2026-07-10 freeze fix), so the result chip updates *after* the event loop
+delivers the worker's completion signal — the async tests below pump until the
+panel's pending-job count drains rather than asserting synchronously.
 """
 import os
+import time
 
 import pytest
 
@@ -23,10 +29,44 @@ def qapp():
     yield app
 
 
+_PANELS: list = []
+
+
 def _panel(wfg):
     from devices.laser_manual import LaserManualMetadata
     from gui.laser_panel import LaserPanel
-    return LaserPanel(LaserManualMetadata(), wfg)
+    p = LaserPanel(LaserManualMetadata(), wfg)
+    _PANELS.append(p)
+    return p
+
+
+def _pump(app, seconds: float = 0.2) -> None:
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < seconds:
+        app.processEvents()
+        time.sleep(0.01)
+
+
+def _pump_until(app, pred, timeout: float = 3.0) -> bool:
+    """Process the event loop until *pred()* is true (the worker's queued
+    completion signal has been delivered) or *timeout* elapses."""
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < timeout:
+        if pred():
+            return True
+        app.processEvents()
+        time.sleep(0.005)
+    return pred()
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_panels(qapp):
+    """Stop each panel's VISA worker thread after every test (they are parented
+    to QApplication, so an un-joined one would otherwise leak past the test)."""
+    yield
+    while _PANELS:
+        _PANELS.pop().shutdown()
+    _pump(qapp, 0.15)
 
 
 def test_armed_chip_tracks_driver_state_not_button(qapp) -> None:
@@ -73,6 +113,8 @@ def test_apply_while_disconnected_reports_staged_not_configured(qapp) -> None:
     panel._spin_freq.setValue(3210.0)
     panel._spin_ampl.setValue(2.1)
     panel._apply_wfg()
+    # Apply now runs off-thread; wait for the worker's completion signal.
+    assert _pump_until(qapp, lambda: panel._pending == 0), "apply job never drained"
     txt = panel._chip_wfg.text().lower()
     assert "stag" in txt and "configured" not in txt
     # Values are staged on the driver so a later connect applies them.
@@ -87,4 +129,5 @@ def test_apply_when_connected_reports_configured(qapp) -> None:
     panel = _panel(wfg)
     panel._spin_freq.setValue(1500.0)
     panel._apply_wfg()
+    assert _pump_until(qapp, lambda: panel._pending == 0), "apply job never drained"
     assert "configured" in panel._chip_wfg.text().lower()

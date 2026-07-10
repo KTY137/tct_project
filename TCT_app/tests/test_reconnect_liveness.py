@@ -23,6 +23,8 @@ no VISA, no PySpin, no hardware I/O:
 from __future__ import annotations
 
 import sys
+import threading
+import time
 import types
 
 import pytest
@@ -211,6 +213,78 @@ def test_camera_is_alive_no_handle_fails_safe() -> None:
     cam._connected = True                     # stale flag, _cam is None
     assert cam.is_alive() is False
     assert cam.connected is False
+
+
+# --------------------------------------------------------------------------- #
+# is_alive() vs the grab/temperature/fps io_lock (Mary's shared-handle risk)  #
+# --------------------------------------------------------------------------- #
+
+class _CountingValidCam:
+    """Handle that counts IsValid() probes (they must never fire while the
+    io_lock is held by an in-flight grab / temperature read)."""
+
+    def __init__(self) -> None:
+        self.valid_calls = 0
+
+    def IsValid(self) -> bool:
+        self.valid_calls += 1
+        return True
+
+
+class _SlowTempNode:
+    def __init__(self, in_read: threading.Event, finish: threading.Event) -> None:
+        self._in = in_read
+        self._finish = finish
+
+    def GetValue(self) -> float:
+        self._in.set()
+        self._finish.wait(timeout=5)
+        return 42.0
+
+
+class _SlowTempCam(_CountingValidCam):
+    """CameraPtr whose DeviceTemperature.GetValue() blocks — so a
+    get_temperature() call holds the io_lock for as long as we want, modelling
+    an in-flight grab on the worker thread."""
+
+    def __init__(self, in_read: threading.Event, finish: threading.Event) -> None:
+        super().__init__()
+        self.DeviceTemperature = _SlowTempNode(in_read, finish)
+
+
+def test_camera_is_alive_nonblocking_while_grab_holds_lock() -> None:
+    """The whole contract in one test: get_temperature/fps/grab hold io_lock
+    across their handle I/O, and while that lock is held on another thread
+    (the worker), the liveness thread's is_alive() must (a) NOT block and
+    (b) NOT probe IsValid() on the same CameraPtr — report the cached flag
+    instead.  Mirrors test_wavegen_is_alive_busy_lock_reports_alive_without_
+    probe, but drives the contention through the real locked read path."""
+    in_read = threading.Event()
+    finish = threading.Event()
+    cam = BlackflyCamera(simulation=False)
+    cam._connected = True
+    probe = _SlowTempCam(in_read, finish)
+    cam._cam = probe
+
+    # get_temperature() acquires io_lock and blocks inside GetValue().
+    reader = threading.Thread(target=cam.get_temperature)
+    reader.start()
+    try:
+        assert in_read.wait(timeout=5), "temperature read never entered the lock"
+        t0 = time.monotonic()
+        alive = cam.is_alive()
+        elapsed = time.monotonic() - t0
+        assert alive is True                       # cached flag, fail-open
+        assert elapsed < 1.0, "is_alive blocked on the held io_lock"
+        assert probe.valid_calls == 0, \
+            "is_alive probed IsValid() while a read held the io_lock"
+    finally:
+        finish.set()
+        reader.join(timeout=5)
+
+    # Lock free again → is_alive resumes probing normally.
+    assert cam.is_alive() is True
+    assert probe.valid_calls == 1
 
 
 # =========================================================================== #

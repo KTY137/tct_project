@@ -18,9 +18,10 @@ from typing import Optional
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, QSettings, QTimer
+from PySide6.QtCore import QObject, Qt, QSettings, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -86,6 +87,80 @@ class _ROIDialog(QDialog):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Frame-acquisition worker
+# ──────────────────────────────────────────────────────────────────────────────
+
+class _CameraWorker(QObject):
+    """Grabs frames + camera stats in a dedicated QThread.
+
+    PySpin's ``GetNextImage`` blocks up to ~2 s (its own timeout) and a pulled
+    USB3 camera sits there the whole time; running it on the GUI thread (the
+    old 100 ms ``QTimer`` → ``_refresh`` path) froze the window for that long
+    every tick, and even a healthy 1 fps link left the event loop stuck inside
+    PySpin most of the time.  This worker owns a ``QTimer`` that polls on its
+    own thread and hands the finished frame + metadata + temperature/fps back
+    to the panel through a queued signal, so the GUI thread only ever renders.
+    Mirrors ``gui.motor_panel._PositionPoller`` / ``tct_gui._BiasPoller``.
+    """
+    # frame ndarray, FrameMeta, temperature °C, actual fps.  ``object`` params
+    # carry the Python objects by reference across the queued connection; the
+    # driver already returns a fresh ndarray per grab, so there is no buffer
+    # aliased between the worker and the GUI thread.
+    frame_ready = Signal(object, object, float, float)
+    offline = Signal()
+    info_ready = Signal(dict)
+
+    def __init__(self, get_camera, interval_ms: int = 100) -> None:
+        super().__init__()
+        self._get_camera = get_camera
+        self._info_sent = False
+        # Parent the timer to self so moveToThread() carries it to the worker
+        # thread (an unparented QTimer would stay on the GUI thread).
+        self._timer = QTimer(self)
+        self._timer.setInterval(interval_ms)
+        self._timer.timeout.connect(self._poll)
+
+    def start(self) -> None:
+        self._timer.start()
+
+    def stop(self) -> None:
+        self._timer.stop()
+
+    def _poll(self) -> None:
+        cam = self._get_camera()
+        if cam is None or not getattr(cam, "connected", False):
+            self.offline.emit()
+            return
+        # Static camera info once, off the GUI thread too — the node-map reads
+        # are local but still device I/O, so they belong here, not on the loop.
+        if not self._info_sent:
+            try:
+                info = cam.get_camera_info()
+            except Exception:
+                info = None
+            if info:
+                self._info_sent = True
+                self.info_ready.emit(info)
+        try:
+            frame, meta = cam.get_frame_with_meta()
+        except Exception as exc:
+            # A transient grab failure keeps the last displayed frame — exactly
+            # what the old _refresh did; do not tear the live view down.
+            logger.debug("camera frame grab failed: %s", exc)
+            return
+        # Temperature / fps are best-effort: a failure must not drop the frame.
+        try:
+            temp = float(cam.get_temperature())
+        except Exception:
+            temp = float("nan")
+        try:
+            fps = float(cam.get_fps_actual())
+        except Exception:
+            fps = float("nan")
+        self.frame_ready.emit(frame, meta, temp, fps)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Main panel
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -93,6 +168,7 @@ class CameraPanel(QWidget):
     """Live camera view with full acquisition controls and beam diagnostics."""
 
     _HIST_BINS = 256   # histogram resolution
+    _worker_stop_requested = Signal()   # GUI → worker: stop the poll timer
 
     def __init__(
         self,
@@ -112,9 +188,26 @@ class CameraPanel(QWidget):
 
         self._build_ui()
 
-        self._timer = QTimer(self)
-        self._timer.timeout.connect(self._refresh)
-        self._timer.start(100)   # 10 fps display rate
+        # ── Frame-acquisition worker ──────────────────────────────────
+        # All PySpin I/O (GetNextImage ~2 s on a pulled USB, plus temperature
+        # and fps node reads) runs on this worker thread, never the GUI thread
+        # — the old 100 ms QTimer → _refresh path did the grab inline and froze
+        # the window.  The thread is parented to the long-lived QApplication
+        # (NOT this panel): a soft config-reload deletes the panel tree via
+        # setCentralWidget(), and a QThread destroyed as a child while still
+        # running is a hard Qt6 abort (the MotorPanel crash class).  shutdown()
+        # stops it with a bounded wait; it self-deletes on ``finished``.
+        self._cam_thread: QThread | None = QThread(QApplication.instance())
+        self._cam_worker = _CameraWorker(lambda: self._camera)
+        self._cam_worker.moveToThread(self._cam_thread)
+        self._cam_thread.started.connect(self._cam_worker.start)
+        self._worker_stop_requested.connect(self._cam_worker.stop)
+        self._cam_thread.finished.connect(self._cam_worker.deleteLater)
+        self._cam_thread.finished.connect(self._cam_thread.deleteLater)
+        self._cam_worker.frame_ready.connect(self._on_frame)
+        self._cam_worker.offline.connect(self._on_offline)
+        self._cam_worker.info_ready.connect(self._on_camera_info)
+        self._cam_thread.start()
 
     # ──────────────────────────────────────────────────────────────────── #
     # UI construction                                                      #
@@ -378,9 +471,8 @@ class CameraPanel(QWidget):
         right.addStretch()
 
         self._restyle_theme_tokens()
-
-        # Populate info once connected
-        QTimer.singleShot(500, self._update_camera_info)
+        # Camera info is fetched off-thread by _CameraWorker and delivered to
+        # _on_camera_info() once the camera is connected (no GUI-thread I/O).
 
     @staticmethod
     def _build_temp_readout() -> tuple[QFrame, QLabel]:
@@ -439,26 +531,29 @@ class CameraPanel(QWidget):
         self._restyle_theme_tokens()
 
     # ──────────────────────────────────────────────────────────────────── #
-    # Timer callback                                                       #
+    # Worker-delivered render slots (queued from _CameraWorker's thread)   #
     # ──────────────────────────────────────────────────────────────────── #
 
-    def _refresh(self) -> None:
-        if not self._camera.connected:
-            self._chip_camera.set_status("Camera offline", "neutral")
-            self._chip_fps.set_status("FPS --", "neutral")
-            return
-        try:
-            frame, meta = self._camera.get_frame_with_meta()
-        except Exception as exc:
-            logger.debug("camera frame grab failed: %s", exc)
-            return
-
+    @Slot(object, object, float, float)
+    def _on_frame(self, frame: np.ndarray, meta: FrameMeta,
+                  temp: float, fps: float) -> None:
+        """Render a frame the worker grabbed off-thread.  Pure widget work —
+        no device I/O here (that all happened on the worker thread).  Same
+        body as the old _refresh, minus the grab and the temp/fps reads, which
+        arrive as arguments."""
         self._last_frame = frame
         self._last_meta  = meta
         self._display(frame, meta)
         self._update_histogram(frame)
-        self._update_stats(meta)
+        self._update_stats(meta, temp, fps)
         self._update_status_chips(frame, meta)
+
+    @Slot()
+    def _on_offline(self) -> None:
+        """Worker reports the camera is not connected — the same neutral chips
+        the old _refresh painted on its not-connected branch."""
+        self._chip_camera.set_status("Camera offline", "neutral")
+        self._chip_fps.set_status("FPS --", "neutral")
 
     def _update_status_chips(self, frame: np.ndarray, meta: FrameMeta) -> None:
         self._chip_camera.set_status("Camera live", "busy")
@@ -538,7 +633,11 @@ class CameraPanel(QWidget):
             width=(edges[1] - edges[0]) * 0.9,
         )
 
-    def _update_stats(self, meta: FrameMeta) -> None:
+    def _update_stats(self, meta: FrameMeta, temp: float, fps: float) -> None:
+        """Update beam/frame readouts.  ``temp`` (°C) and ``fps`` are supplied
+        by the worker thread — this slot does no device I/O (the old version
+        called ``camera.get_temperature()`` / ``get_fps_actual()`` inline on
+        the GUI thread)."""
         self._ro_cx.set_value(   f"{meta.centroid_x:.1f} px")
         self._ro_cy.set_value(   f"{meta.centroid_y:.1f} px")
         self._ro_sx.set_value(   f"{meta.sigma_x:.1f} px")
@@ -553,7 +652,6 @@ class CameraPanel(QWidget):
         self._ro_act_exp.set_value( f"{meta.exposure_us:.0f}")
         self._ro_act_gain.set_value(f"{meta.gain_db:.2f}")
 
-        temp = self._camera.get_temperature()
         if math.isnan(temp):
             self._lbl_temp.setText("–")
             self._lbl_temp.setStyleSheet("")
@@ -573,7 +671,6 @@ class CameraPanel(QWidget):
             self._lbl_temp.setStyleSheet("")
             self._chip_temp.set_status(f"Temp {temp:.1f} C", "good")
 
-        fps = self._camera.get_fps_actual()
         if math.isnan(fps):
             self._ro_fps.set_value("–")
             self._chip_fps.set_status("FPS --", "neutral")
@@ -603,20 +700,47 @@ class CameraPanel(QWidget):
             self._spin_gamma.value(),
         )
 
-    def _update_camera_info(self) -> None:
-        if not self._camera.connected:
-            QTimer.singleShot(1000, self._update_camera_info)
+    @Slot(dict)
+    def _on_camera_info(self, info: dict) -> None:
+        """Populate the static camera-info card from data the worker fetched
+        off-thread (was a GUI-thread ``get_camera_info()`` singleShot poll)."""
+        if not info:
             return
-        info = self._camera.get_camera_info()
-        if info:
-            lines = [
-                f"Model:  {info.get('model', '–')}",
-                f"Serial: {info.get('serial', '–')}",
-                f"FW:     {info.get('firmware', '–')}",
-                f"Sensor: {info.get('sensor_w')}×{info.get('sensor_h')} px",
-                f"Pixel:  {info.get('pixel_size_um', '–')} µm",
-            ]
-            self._lbl_info.setText("\n".join(lines))
+        lines = [
+            f"Model:  {info.get('model', '–')}",
+            f"Serial: {info.get('serial', '–')}",
+            f"FW:     {info.get('firmware', '–')}",
+            f"Sensor: {info.get('sensor_w')}×{info.get('sensor_h')} px",
+            f"Pixel:  {info.get('pixel_size_um', '–')} µm",
+        ]
+        self._lbl_info.setText("\n".join(lines))
+
+    # ──────────────────────────────────────────────────────────────────── #
+    # Teardown                                                             #
+    # ──────────────────────────────────────────────────────────────────── #
+
+    def shutdown(self) -> None:
+        """Stop the frame worker before the panel is discarded.
+
+        Called by ``tct_gui._teardown_panels`` on a soft config-reload / exit
+        (setCentralWidget() then deletes the panel tree).  Bounded wait — a
+        ``GetNextImage`` grab can sit ~2 s inside PySpin, so never wait
+        unbounded on the GUI thread.  The worker thread is parented to
+        QApplication and self-``deleteLater``s on ``finished``, so a grab still
+        in flight when the 3 s bound elapses finishes and cleans itself up on
+        its own rather than being destroyed as a child of this (soon-deleted)
+        widget — the MotorPanel soft-reload crash class.  Idempotent.
+        """
+        self._worker_stop_requested.emit()   # queued → stops the worker QTimer
+        thread = self._cam_thread
+        self._cam_thread = None
+        if thread is not None:
+            thread.quit()
+            thread.wait(3000)
+
+    def closeEvent(self, event) -> None:
+        self.shutdown()
+        super().closeEvent(event)
 
     # ──────────────────────────────────────────────────────────────────── #
     # Actions                                                              #

@@ -328,6 +328,15 @@ class BlackflyCamera(BaseDevice):
         if cam is None:
             self._connected = False
             return False
+        # Non-contending: if a grab / temperature / fps read holds the io_lock
+        # the camera is mid-conversation on the worker thread — report the
+        # cached flag instead of racing ``IsValid()`` on the *same* CameraPtr
+        # the grab is using (concurrent unlocked access to one Spinnaker handle
+        # is undefined at the SDK level, not merely a raise).  Never block the
+        # liveness monitor.  io_lock is re-entrant, so the only real contention
+        # comes from another thread — exactly the monitor-vs-worker case.
+        if not self.io_lock.acquire(blocking=False):
+            return self._connected
         try:
             if hasattr(cam, "IsValid"):
                 alive = bool(cam.IsValid())
@@ -345,104 +354,116 @@ class BlackflyCamera(BaseDevice):
                          "disconnected: %s", exc)
             self._connected = False
             return False
+        finally:
+            self.io_lock.release()
 
     # ──────────────────────────────────────────────────────────────────── #
     # Camera settings                                                      #
     # ──────────────────────────────────────────────────────────────────── #
 
     def set_exposure(self, exposure_us: float, auto: bool = False) -> None:
-        """Set exposure time in µs.  auto=True → ExposureAuto_Continuous."""
+        """Set exposure time in µs.  auto=True → ExposureAuto_Continuous.
+
+        Like every setter below, holds ``io_lock``: the camera worker thread
+        grabs frames under the same lock, and concurrent node access on one
+        Spinnaker handle is undefined.
+        """
         self._exposure_us   = exposure_us
         self._auto_exposure = auto
-        if self._cam is None:
-            return
-        ps = self._pyspin
-        if auto:
-            self._cam.ExposureAuto.SetValue(ps.ExposureAuto_Continuous)
-        else:
-            self._cam.ExposureAuto.SetValue(ps.ExposureAuto_Off)
-            clipped = float(np.clip(
-                exposure_us,
-                self._cam.ExposureTime.GetMin(),
-                self._cam.ExposureTime.GetMax(),
-            ))
-            self._cam.ExposureTime.SetValue(clipped)
+        with self.io_lock:
+            if self._cam is None:
+                return
+            ps = self._pyspin
+            if auto:
+                self._cam.ExposureAuto.SetValue(ps.ExposureAuto_Continuous)
+            else:
+                self._cam.ExposureAuto.SetValue(ps.ExposureAuto_Off)
+                clipped = float(np.clip(
+                    exposure_us,
+                    self._cam.ExposureTime.GetMin(),
+                    self._cam.ExposureTime.GetMax(),
+                ))
+                self._cam.ExposureTime.SetValue(clipped)
 
     def set_gain(self, gain_db: float, auto: bool = False) -> None:
         """Set analog gain in dB.  auto=True → GainAuto_Continuous."""
         self._gain_db  = gain_db
         self._auto_gain = auto
-        if self._cam is None:
-            return
-        ps = self._pyspin
-        if auto:
-            self._cam.GainAuto.SetValue(ps.GainAuto_Continuous)
-        else:
-            self._cam.GainAuto.SetValue(ps.GainAuto_Off)
-            clipped = float(np.clip(
-                gain_db,
-                self._cam.Gain.GetMin(),
-                self._cam.Gain.GetMax(),
-            ))
-            self._cam.Gain.SetValue(clipped)
+        with self.io_lock:
+            if self._cam is None:
+                return
+            ps = self._pyspin
+            if auto:
+                self._cam.GainAuto.SetValue(ps.GainAuto_Continuous)
+            else:
+                self._cam.GainAuto.SetValue(ps.GainAuto_Off)
+                clipped = float(np.clip(
+                    gain_db,
+                    self._cam.Gain.GetMin(),
+                    self._cam.Gain.GetMax(),
+                ))
+                self._cam.Gain.SetValue(clipped)
 
     def set_pixel_format(self, fmt: str) -> None:
         """Set pixel format: 'Mono8' or 'Mono16'."""
         self._pixel_format = fmt
-        if self._cam is None:
-            return
-        ps = self._pyspin
-        fmt_map = {
-            "Mono8":  ps.PixelFormat_Mono8,
-            "Mono16": ps.PixelFormat_Mono16,
-        }
-        if fmt not in fmt_map:
-            logger.warning("Unknown pixel format '%s'; using Mono8", fmt)
-            fmt = "Mono8"
-        was = self._acquiring
-        if was:
-            self._stop_acquisition()
-        try:
-            self._cam.PixelFormat.SetValue(fmt_map[fmt])
-        except Exception as exc:
-            logger.warning("PixelFormat set failed: %s", exc)
-        if was:
-            self._start_acquisition()
+        with self.io_lock:
+            if self._cam is None:
+                return
+            ps = self._pyspin
+            fmt_map = {
+                "Mono8":  ps.PixelFormat_Mono8,
+                "Mono16": ps.PixelFormat_Mono16,
+            }
+            if fmt not in fmt_map:
+                logger.warning("Unknown pixel format '%s'; using Mono8", fmt)
+                fmt = "Mono8"
+            was = self._acquiring
+            if was:
+                self._stop_acquisition()
+            try:
+                self._cam.PixelFormat.SetValue(fmt_map[fmt])
+            except Exception as exc:
+                logger.warning("PixelFormat set failed: %s", exc)
+            if was:
+                self._start_acquisition()
 
     def set_gamma(self, enabled: bool, value: float = 1.0) -> None:
         """Enable/disable gamma correction and set the gamma exponent."""
         self._gamma_enabled = enabled
         self._gamma_value   = value
-        if self._cam is None:
-            return
-        try:
-            self._cam.GammaEnable.SetValue(enabled)
-            if enabled:
-                clipped = float(np.clip(
-                    value,
-                    self._cam.Gamma.GetMin(),
-                    self._cam.Gamma.GetMax(),
-                ))
-                self._cam.Gamma.SetValue(clipped)
-        except Exception as exc:
-            logger.debug("Gamma node not accessible: %s", exc)
+        with self.io_lock:
+            if self._cam is None:
+                return
+            try:
+                self._cam.GammaEnable.SetValue(enabled)
+                if enabled:
+                    clipped = float(np.clip(
+                        value,
+                        self._cam.Gamma.GetMin(),
+                        self._cam.Gamma.GetMax(),
+                    ))
+                    self._cam.Gamma.SetValue(clipped)
+            except Exception as exc:
+                logger.debug("Gamma node not accessible: %s", exc)
 
     def set_black_level(self, value: float) -> None:
         """Set black-level offset (camera counts)."""
-        if self._cam is None:
-            return
-        try:
-            self._cam.BlackLevelSelector.SetValue(
-                self._pyspin.BlackLevelSelector_All
-            )
-            clipped = float(np.clip(
-                value,
-                self._cam.BlackLevel.GetMin(),
-                self._cam.BlackLevel.GetMax(),
-            ))
-            self._cam.BlackLevel.SetValue(clipped)
-        except Exception as exc:
-            logger.debug("BlackLevel not settable: %s", exc)
+        with self.io_lock:
+            if self._cam is None:
+                return
+            try:
+                self._cam.BlackLevelSelector.SetValue(
+                    self._pyspin.BlackLevelSelector_All
+                )
+                clipped = float(np.clip(
+                    value,
+                    self._cam.BlackLevel.GetMin(),
+                    self._cam.BlackLevel.GetMax(),
+                ))
+                self._cam.BlackLevel.SetValue(clipped)
+            except Exception as exc:
+                logger.debug("BlackLevel not settable: %s", exc)
 
     def set_binning(self, n: int) -> None:
         """Set symmetric horizontal + vertical binning (1, 2, or 4).
@@ -456,15 +477,16 @@ class BlackflyCamera(BaseDevice):
         (read-only) horizontal value.
         """
         self._binning = int(n)
-        if self._cam is None:
-            return
-        was = self._acquiring
-        if was:
-            self._stop_acquisition()
-        self._set_node_if_writable(self._cam.BinningVertical, n, "BinningVertical")
-        self._set_node_if_writable(self._cam.BinningHorizontal, n, "BinningHorizontal")
-        if was:
-            self._start_acquisition()
+        with self.io_lock:
+            if self._cam is None:
+                return
+            was = self._acquiring
+            if was:
+                self._stop_acquisition()
+            self._set_node_if_writable(self._cam.BinningVertical, n, "BinningVertical")
+            self._set_node_if_writable(self._cam.BinningHorizontal, n, "BinningHorizontal")
+            if was:
+                self._start_acquisition()
 
     def set_roi(
         self,
@@ -477,54 +499,56 @@ class BlackflyCamera(BaseDevice):
         Set region of interest.
         Pass width=0 or height=0 to reset to full sensor.
         """
-        if self._cam is None:
-            return
-        was = self._acquiring
-        if was:
-            self._stop_acquisition()
-        try:
-            if width == 0 or height == 0:
-                # Full sensor
-                self._cam.OffsetX.SetValue(0)
-                self._cam.OffsetY.SetValue(0)
-                self._cam.Width.SetValue(self._cam.Width.GetMax())
-                self._cam.Height.SetValue(self._cam.Height.GetMax())
-            else:
-                # Must zero offsets first before changing dimensions
-                self._cam.OffsetX.SetValue(0)
-                self._cam.OffsetY.SetValue(0)
-                self._cam.Width.SetValue(
-                    int(np.clip(width,  1, self._cam.Width.GetMax()))
-                )
-                self._cam.Height.SetValue(
-                    int(np.clip(height, 1, self._cam.Height.GetMax()))
-                )
-                self._cam.OffsetX.SetValue(
-                    int(np.clip(offset_x, 0, self._cam.OffsetX.GetMax()))
-                )
-                self._cam.OffsetY.SetValue(
-                    int(np.clip(offset_y, 0, self._cam.OffsetY.GetMax()))
-                )
-        except Exception as exc:
-            logger.warning("ROI set failed: %s", exc)
-        if was:
-            self._start_acquisition()
+        with self.io_lock:
+            if self._cam is None:
+                return
+            was = self._acquiring
+            if was:
+                self._stop_acquisition()
+            try:
+                if width == 0 or height == 0:
+                    # Full sensor
+                    self._cam.OffsetX.SetValue(0)
+                    self._cam.OffsetY.SetValue(0)
+                    self._cam.Width.SetValue(self._cam.Width.GetMax())
+                    self._cam.Height.SetValue(self._cam.Height.GetMax())
+                else:
+                    # Must zero offsets first before changing dimensions
+                    self._cam.OffsetX.SetValue(0)
+                    self._cam.OffsetY.SetValue(0)
+                    self._cam.Width.SetValue(
+                        int(np.clip(width,  1, self._cam.Width.GetMax()))
+                    )
+                    self._cam.Height.SetValue(
+                        int(np.clip(height, 1, self._cam.Height.GetMax()))
+                    )
+                    self._cam.OffsetX.SetValue(
+                        int(np.clip(offset_x, 0, self._cam.OffsetX.GetMax()))
+                    )
+                    self._cam.OffsetY.SetValue(
+                        int(np.clip(offset_y, 0, self._cam.OffsetY.GetMax()))
+                    )
+            except Exception as exc:
+                logger.warning("ROI set failed: %s", exc)
+            if was:
+                self._start_acquisition()
 
     def set_frame_rate(self, fps: float) -> None:
         """Set target acquisition frame rate."""
         self._fps_target = fps
-        if self._cam is None:
-            return
-        try:
-            self._cam.AcquisitionFrameRateEnable.SetValue(True)
-            clipped = float(np.clip(
-                fps,
-                self._cam.AcquisitionFrameRate.GetMin(),
-                self._cam.AcquisitionFrameRate.GetMax(),
-            ))
-            self._cam.AcquisitionFrameRate.SetValue(clipped)
-        except Exception as exc:
-            logger.debug("Frame-rate control unavailable: %s", exc)
+        with self.io_lock:
+            if self._cam is None:
+                return
+            try:
+                self._cam.AcquisitionFrameRateEnable.SetValue(True)
+                clipped = float(np.clip(
+                    fps,
+                    self._cam.AcquisitionFrameRate.GetMin(),
+                    self._cam.AcquisitionFrameRate.GetMax(),
+                ))
+                self._cam.AcquisitionFrameRate.SetValue(clipped)
+            except Exception as exc:
+                logger.debug("Frame-rate control unavailable: %s", exc)
 
     def set_trigger(self, enabled: bool) -> None:
         """
@@ -532,46 +556,60 @@ class BlackflyCamera(BaseDevice):
         When disabled the camera free-runs at the configured frame rate.
         """
         self._trigger_enabled = enabled
-        if self._cam is None:
-            return
-        ps = self._pyspin
-        was = self._acquiring
-        if was:
-            self._stop_acquisition()
-        try:
-            self._cam.TriggerMode.SetValue(ps.TriggerMode_Off)
-            if enabled:
-                self._cam.TriggerSource.SetValue(ps.TriggerSource_Line0)
-                self._cam.TriggerActivation.SetValue(
-                    ps.TriggerActivation_FallingEdge
-                )
-                self._cam.TriggerMode.SetValue(ps.TriggerMode_On)
-        except Exception as exc:
-            logger.warning("Trigger setup failed: %s", exc)
-        if was:
-            self._start_acquisition()
+        with self.io_lock:
+            if self._cam is None:
+                return
+            ps = self._pyspin
+            was = self._acquiring
+            if was:
+                self._stop_acquisition()
+            try:
+                self._cam.TriggerMode.SetValue(ps.TriggerMode_Off)
+                if enabled:
+                    self._cam.TriggerSource.SetValue(ps.TriggerSource_Line0)
+                    self._cam.TriggerActivation.SetValue(
+                        ps.TriggerActivation_FallingEdge
+                    )
+                    self._cam.TriggerMode.SetValue(ps.TriggerMode_On)
+            except Exception as exc:
+                logger.warning("Trigger setup failed: %s", exc)
+            if was:
+                self._start_acquisition()
 
     # ──────────────────────────────────────────────────────────────────── #
     # Read-only camera state                                               #
     # ──────────────────────────────────────────────────────────────────── #
 
     def get_temperature(self) -> float:
-        """Device temperature in °C (NaN in simulation or if unavailable)."""
+        """Device temperature in °C (NaN in simulation or if unavailable).
+
+        Holds ``io_lock`` (shared with the frame grab / fps read) so a
+        temperature poll on the camera worker thread cannot interleave a node
+        read with an in-flight ``GetNextImage`` on the same handle, and so
+        ``is_alive`` on the liveness thread skips its probe while this runs.
+        """
         if self.simulation or self._cam is None:
             return float("nan")
-        try:
-            return float(self._cam.DeviceTemperature.GetValue())
-        except Exception:
-            return float("nan")
+        with self.io_lock:
+            try:
+                return float(self._cam.DeviceTemperature.GetValue())
+            except Exception:
+                return float("nan")
 
     def get_fps_actual(self) -> float:
-        """Resulting frame rate reported by the camera."""
+        """Resulting frame rate reported by the camera.
+
+        Holds ``io_lock`` for the same reason as ``get_temperature`` — the
+        camera's node reads and its blocking image grab share one Spinnaker
+        handle and must be serialised.
+        """
         if self.simulation or self._cam is None:
             return self._fps_target
-        try:
-            return float(self._cam.AcquisitionResultingFrameRate.GetValue())
-        except Exception:
-            return float("nan")
+        with self.io_lock:
+            try:
+                return float(self._cam.AcquisitionResultingFrameRate.GetValue())
+            except Exception:
+                return float("nan")
 
     def get_camera_info(self) -> dict:
         """Static camera properties (vendor, model, serial, firmware, …)."""
@@ -585,41 +623,43 @@ class BlackflyCamera(BaseDevice):
                 "sensor_h": self.SENSOR_H,
                 "pixel_size_um": 5.86,
             }
-        if self._cam is None:
-            return {}
-        ps  = self._pyspin
-        tl  = self._cam.GetTLDeviceNodeMap()
+        with self.io_lock:
+            if self._cam is None:
+                return {}
+            ps  = self._pyspin
+            tl  = self._cam.GetTLDeviceNodeMap()
 
-        def _str(name: str) -> str:
-            try:
-                n = ps.CStringPtr(tl.GetNode(name))
-                return n.GetValue() if ps.IsAvailable(n) and ps.IsReadable(n) else ""
-            except Exception:
-                return ""
+            def _str(name: str) -> str:
+                try:
+                    n = ps.CStringPtr(tl.GetNode(name))
+                    return n.GetValue() if ps.IsAvailable(n) and ps.IsReadable(n) else ""
+                except Exception:
+                    return ""
 
-        return {
-            "vendor":        _str("DeviceVendorName"),
-            "model":         _str("DeviceModelName"),
-            "serial":        _str("DeviceSerialNumber"),
-            "firmware":      _str("DeviceFirmwareVersion"),
-            "sensor_w":      self.SENSOR_W,
-            "sensor_h":      self.SENSOR_H,
-            "pixel_size_um": 5.86,
-        }
+            return {
+                "vendor":        _str("DeviceVendorName"),
+                "model":         _str("DeviceModelName"),
+                "serial":        _str("DeviceSerialNumber"),
+                "firmware":      _str("DeviceFirmwareVersion"),
+                "sensor_w":      self.SENSOR_W,
+                "sensor_h":      self.SENSOR_H,
+                "pixel_size_um": 5.86,
+            }
 
     def get_roi(self) -> tuple[int, int, int, int]:
         """Return current ROI as (offset_x, offset_y, width, height)."""
-        if self._cam is None:
-            return (0, 0, self.SENSOR_W, self.SENSOR_H)
-        try:
-            return (
-                int(self._cam.OffsetX.GetValue()),
-                int(self._cam.OffsetY.GetValue()),
-                int(self._cam.Width.GetValue()),
-                int(self._cam.Height.GetValue()),
-            )
-        except Exception:
-            return (0, 0, self.SENSOR_W, self.SENSOR_H)
+        with self.io_lock:
+            if self._cam is None:
+                return (0, 0, self.SENSOR_W, self.SENSOR_H)
+            try:
+                return (
+                    int(self._cam.OffsetX.GetValue()),
+                    int(self._cam.OffsetY.GetValue()),
+                    int(self._cam.Width.GetValue()),
+                    int(self._cam.Height.GetValue()),
+                )
+            except Exception:
+                return (0, 0, self.SENSOR_W, self.SENSOR_H)
 
     # ──────────────────────────────────────────────────────────────────── #
     # Frame acquisition                                                    #
@@ -641,47 +681,55 @@ class BlackflyCamera(BaseDevice):
         if self.simulation or self._cam is None:
             return self._simulated_frame_with_meta()
 
-        try:
-            image = self._cam.GetNextImage(2000)   # 2 s timeout
-        except self._pyspin.SpinnakerException as exc:
-            raise DeviceError(f"GetNextImage failed: {exc}") from exc
+        # Serialise the whole grab under io_lock: it shares one Spinnaker
+        # CameraPtr with get_temperature/get_fps_actual and the liveness
+        # thread's is_alive() probe.  is_alive() acquires non-blocking and
+        # reports the cached flag while this runs, so the ~2 s GetNextImage
+        # grab never blocks the monitor and no two threads touch the handle
+        # at once.  Lock is held only across handle I/O + the fast local numpy
+        # stats — never across a sleep.
+        with self.io_lock:
+            try:
+                image = self._cam.GetNextImage(2000)   # 2 s timeout
+            except self._pyspin.SpinnakerException as exc:
+                raise DeviceError(f"GetNextImage failed: {exc}") from exc
 
-        if image.IsIncomplete():
+            if image.IsIncomplete():
+                image.Release()
+                raise DeviceError("Blackfly: incomplete frame received")
+
+            arr = image.GetNDArray().copy()   # H × W  uint8 or uint16
+
+            meta = FrameMeta(
+                width=arr.shape[1],
+                height=arr.shape[0],
+                pixel_format=self._pixel_format,
+            )
+
+            # ── Chunk data (best-effort) ──────────────────────────────────
+            try:
+                chunk = image.GetChunkData()
+                meta.frame_id      = int(chunk.GetFrameID())
+                meta.timestamp_ns  = int(chunk.GetTimestamp())
+                meta.exposure_us   = float(chunk.GetExposureTime())
+                meta.gain_db       = float(chunk.GetGain())
+                meta.black_level   = float(chunk.GetBlackLevel())
+            except Exception:
+                meta.exposure_us = self._exposure_us
+                meta.gain_db     = self._gain_db
+
             image.Release()
-            raise DeviceError("Blackfly: incomplete frame received")
 
-        arr = image.GetNDArray().copy()   # H × W  uint8 or uint16
+            # ── Background subtraction ────────────────────────────────────
+            if self._background is not None and self._background.shape == arr.shape:
+                arr = np.clip(
+                    arr.astype(np.int32) - self._background.astype(np.int32),
+                    0, None,
+                ).astype(arr.dtype)
 
-        meta = FrameMeta(
-            width=arr.shape[1],
-            height=arr.shape[0],
-            pixel_format=self._pixel_format,
-        )
-
-        # ── Chunk data (best-effort) ──────────────────────────────────
-        try:
-            chunk = image.GetChunkData()
-            meta.frame_id      = int(chunk.GetFrameID())
-            meta.timestamp_ns  = int(chunk.GetTimestamp())
-            meta.exposure_us   = float(chunk.GetExposureTime())
-            meta.gain_db       = float(chunk.GetGain())
-            meta.black_level   = float(chunk.GetBlackLevel())
-        except Exception:
-            meta.exposure_us = self._exposure_us
-            meta.gain_db     = self._gain_db
-
-        image.Release()
-
-        # ── Background subtraction ────────────────────────────────────
-        if self._background is not None and self._background.shape == arr.shape:
-            arr = np.clip(
-                arr.astype(np.int32) - self._background.astype(np.int32),
-                0, None,
-            ).astype(arr.dtype)
-
-        # ── Beam statistics ───────────────────────────────────────────
-        self._fill_beam_stats(arr, meta)
-        return arr, meta
+            # ── Beam statistics ───────────────────────────────────────────
+            self._fill_beam_stats(arr, meta)
+            return arr, meta
 
     def capture_background(self) -> None:
         """Store the current frame as background for subtraction."""
