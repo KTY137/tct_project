@@ -1,340 +1,276 @@
 <title>TCT Cockpit — Polish Preview (P1–P3)</title>
 <style>
   /* =====================================================================
-     PROPOSED refined token set (v2) — becomes the new values in
-     TCT_app/gui/style.py if approved. Identity kept: scope-cyan accent,
-     amber = bias, fixed dark instrument screens. Everything re-tuned:
-     deeper temperature-coherent darks, luminance-matched status hues
-     (the old #27ae60/#c0392b flat-UI colors are what read "cheap"),
-     hairline borders, tighter radii, material buttons.
+     v4 — APPLE PASS. Deference, materials, depth, typography.
+     Canvas is a near-black neutral with two faint ambient accent glows;
+     chrome is frosted glass floating above it; cards are elevated planes
+     with continuous 12px radii and soft real shadows; numerals are large,
+     light, tabular; one luminous accent; Apple-calibrated semantics.
      ===================================================================== */
   :root {
-    /* dark is the hero theme in a laser lab */
-    --bg:#14181e; --panel:#1b212a; --panel-2:#212834; --panel-3:#28303d;
-    --sunk:#0e1218; --border:#2c3542; --border-strong:#465368;
-    --hover:#28313f; --active:#1f3947; --pressed:#173340;
-    --text:#dfe5ec; --muted:#8b95a5; --faint:#5b6575;
-    --accent:#45cff5; --accent-strong:#1ba8d5; --accent-dim:#2a6d84;
-    --good:#46c78e; --warn:#e2a63b; --crit:#e5534b;
-    --sim:#a78bfa; --error:#ef8e4f; --amber:#e8a33d;
-    --plot-bg:#0b0e12; --plot-fg:#c7cfda;
-    --disabled-bg:#1d232c; --disabled-text:#5b6575;
-    --btn-hi: rgba(255,255,255,.055);   /* top-edge light on raised controls */
-    --btn-lo: rgba(0,0,0,.25);          /* bottom shade */
-    --lamp-off:#3a4350;
-    /* very subtle elevation — ambient + contact, tuned per theme */
-    --elev-1: 0 1px 2px rgba(0,0,0,.35), 0 3px 10px rgba(0,0,0,.16);
-    --elev-2: 0 1px 2px rgba(0,0,0,.30), 0 2px 6px rgba(0,0,0,.14);
+    --canvas:#131316;
+    --glow-a: rgba(56,178,220,.10);
+    --glow-b: rgba(56,120,220,.05);
+    --material: rgba(30,30,34,.62);          /* frosted chrome */
+    --material-strong: rgba(24,24,27,.78);
+    --card:#1d1d21; --card-2:#242429; --field: rgba(255,255,255,.055);
+    --hairline: rgba(255,255,255,.085);
+    --hairline-strong: rgba(255,255,255,.16);
+    --text:#f2f3f5; --muted:#a3a8b3; --faint:#63676f;
+    --accent:#41c8f0; --accent-press:#2fa8cd; --on-accent:#04222c;
+    --tint: rgba(65,200,240,.13);
+    --good:#30d158; --warn:#ffa01e; --crit:#ff4f47; --sim:#bf8cff;
+    --plot:#0a0b0d;
+    --shadow-card: 0 1px 1px rgba(0,0,0,.28), 0 10px 30px rgba(0,0,0,.34);
+    --shadow-rail: 0 1px 0 rgba(255,255,255,.05) inset, 0 8px 24px rgba(0,0,0,.35);
+    --press-dim: brightness(.92);
   }
-  :root[data-theme="light"], .force-light {
-    --bg:#e9ecef; --panel:#f7f8fa; --panel-2:#eff1f5; --panel-3:#e6e9ee;
-    --sunk:#dde1e7; --border:#c9cfd8; --border-strong:#9aa5b4;
-    --hover:#e4e8ee; --active:#d5e8f0; --pressed:#c9e2ec;
-    --text:#22272f; --muted:#5d6674; --faint:#8d95a3;
-    --accent:#0d84a8; --accent-strong:#0a678a; --accent-dim:#7ab5c6;
-    --good:#1f9d68; --warn:#b57d16; --crit:#c3423c;
-    --sim:#7c5fd3; --error:#cd7134; --amber:#b57d16;
-    --disabled-bg:#e2e5ea; --disabled-text:#9aa2af;
-    --btn-hi: rgba(255,255,255,.65);
-    --btn-lo: rgba(20,30,45,.12);
-    --lamp-off:#b6bec9;
-    --elev-1: 0 1px 2px rgba(25,35,50,.09), 0 3px 12px rgba(25,35,50,.07);
-    --elev-2: 0 1px 2px rgba(25,35,50,.08), 0 2px 6px rgba(25,35,50,.06);
-  }
-  @media (prefers-color-scheme: light) {
-    :root:not([data-theme="dark"]) {
-      --bg:#e9ecef; --panel:#f7f8fa; --panel-2:#eff1f5; --panel-3:#e6e9ee;
-      --sunk:#dde1e7; --border:#c9cfd8; --border-strong:#9aa5b4;
-      --hover:#e4e8ee; --active:#d5e8f0; --pressed:#c9e2ec;
-      --text:#22272f; --muted:#5d6674; --faint:#8d95a3;
-      --accent:#0d84a8; --accent-strong:#0a678a; --accent-dim:#7ab5c6;
-      --good:#1f9d68; --warn:#b57d16; --crit:#c3423c;
-      --sim:#7c5fd3; --error:#cd7134; --amber:#b57d16;
-      --disabled-bg:#e2e5ea; --disabled-text:#9aa2af;
-      --btn-hi: rgba(255,255,255,.65);
-      --btn-lo: rgba(20,30,45,.12);
-      --lamp-off:#b6bec9;
-      --elev-1: 0 1px 2px rgba(25,35,50,.09), 0 3px 12px rgba(25,35,50,.07);
-      --elev-2: 0 1px 2px rgba(25,35,50,.08), 0 2px 6px rgba(25,35,50,.06);
-    }
-  }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
+    --canvas:#eef0f4;
+    --glow-a: rgba(24,150,190,.10);
+    --glow-b: rgba(90,120,255,.06);
+    --material: rgba(255,255,255,.60);
+    --material-strong: rgba(255,255,255,.78);
+    --card:#ffffff; --card-2:#f6f7f9; --field: rgba(20,25,35,.05);
+    --hairline: rgba(20,25,40,.10);
+    --hairline-strong: rgba(20,25,40,.22);
+    --text:#1b1d22; --muted:#5c626e; --faint:#9aa0ab;
+    --accent:#0e7fa6; --accent-press:#0a678a; --on-accent:#ffffff;
+    --tint: rgba(14,127,166,.12);
+    --good:#1e9e46; --warn:#c77000; --crit:#d93a32; --sim:#7d55d8;
+    --shadow-card: 0 1px 1px rgba(25,30,45,.05), 0 10px 28px rgba(25,30,45,.09);
+    --shadow-rail: 0 1px 0 rgba(255,255,255,.8) inset, 0 8px 22px rgba(25,30,45,.10);
+  }}
   :root[data-theme="dark"] {
-    --bg:#14181e; --panel:#1b212a; --panel-2:#212834; --panel-3:#28303d;
-    --sunk:#0e1218; --border:#2c3542; --border-strong:#465368;
-    --hover:#28313f; --active:#1f3947; --pressed:#173340;
-    --text:#dfe5ec; --muted:#8b95a5; --faint:#5b6575;
-    --accent:#45cff5; --accent-strong:#1ba8d5; --accent-dim:#2a6d84;
-    --good:#46c78e; --warn:#e2a63b; --crit:#e5534b;
-    --sim:#a78bfa; --error:#ef8e4f; --amber:#e8a33d;
-    --plot-bg:#0b0e12; --plot-fg:#c7cfda;
-    --disabled-bg:#1d232c; --disabled-text:#5b6575;
-    --btn-hi: rgba(255,255,255,.055);
-    --btn-lo: rgba(0,0,0,.25);
-    --lamp-off:#3a4350;
-    --elev-1: 0 1px 2px rgba(0,0,0,.35), 0 3px 10px rgba(0,0,0,.16);
-    --elev-2: 0 1px 2px rgba(0,0,0,.30), 0 2px 6px rgba(0,0,0,.14);
+    --canvas:#131316;
+    --glow-a: rgba(56,178,220,.10);
+    --glow-b: rgba(56,120,220,.05);
+    --material: rgba(30,30,34,.62);
+    --material-strong: rgba(24,24,27,.78);
+    --card:#1d1d21; --card-2:#242429; --field: rgba(255,255,255,.055);
+    --hairline: rgba(255,255,255,.085);
+    --hairline-strong: rgba(255,255,255,.16);
+    --text:#f2f3f5; --muted:#a3a8b3; --faint:#63676f;
+    --accent:#41c8f0; --accent-press:#2fa8cd; --on-accent:#04222c;
+    --tint: rgba(65,200,240,.13);
+    --good:#30d158; --warn:#ffa01e; --crit:#ff4f47; --sim:#bf8cff;
+    --shadow-card: 0 1px 1px rgba(0,0,0,.28), 0 10px 30px rgba(0,0,0,.34);
+    --shadow-rail: 0 1px 0 rgba(255,255,255,.05) inset, 0 8px 24px rgba(0,0,0,.35);
+  }
+  :root[data-theme="light"] {
+    --canvas:#eef0f4;
+    --glow-a: rgba(24,150,190,.10);
+    --glow-b: rgba(90,120,255,.06);
+    --material: rgba(255,255,255,.60);
+    --material-strong: rgba(255,255,255,.78);
+    --card:#ffffff; --card-2:#f6f7f9; --field: rgba(20,25,35,.05);
+    --hairline: rgba(20,25,40,.10);
+    --hairline-strong: rgba(20,25,40,.22);
+    --text:#1b1d22; --muted:#5c626e; --faint:#9aa0ab;
+    --accent:#0e7fa6; --accent-press:#0a678a; --on-accent:#ffffff;
+    --tint: rgba(14,127,166,.12);
+    --good:#1e9e46; --warn:#c77000; --crit:#d93a32; --sim:#7d55d8;
+    --shadow-card: 0 1px 1px rgba(25,30,45,.05), 0 10px 28px rgba(25,30,45,.09);
+    --shadow-rail: 0 1px 0 rgba(255,255,255,.8) inset, 0 8px 22px rgba(25,30,45,.10);
   }
 
-  /* ================= base ============================================== */
   * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
   body {
-    background: var(--bg); color: var(--text);
-    font-family: "Segoe UI", "Segoe UI Variable", system-ui, sans-serif;
-    font-size: 13px; line-height: 1.5; margin: 0; padding: 30px 20px 70px;
+    margin: 0; padding: 44px 24px 90px;
+    color: var(--text);
+    background:
+      radial-gradient(900px 480px at 12% -6%, var(--glow-a), transparent 62%),
+      radial-gradient(1100px 560px at 95% 8%, var(--glow-b), transparent 60%),
+      var(--canvas);
+    background-attachment: fixed;
+    font-family: -apple-system, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    font-size: 13px; line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
   }
-  main { max-width: 1000px; margin: 0 auto; display: flex; flex-direction: column; gap: 26px; }
-  h1 { font-size: 21px; font-weight: 650; margin: 0 0 2px; text-wrap: balance; letter-spacing: -.01em; }
-  h2 { font-size: 11px; font-weight: 650; letter-spacing: .14em; text-transform: uppercase;
-       color: var(--faint); margin: 0 0 12px; }
-  h2 .tag { color: var(--accent); margin-right: 10px; letter-spacing: .14em; }
-  p  { margin: 6px 0; max-width: 70ch; }
-  .mono { font-family: Consolas, "Cascadia Mono", monospace; font-variant-numeric: tabular-nums; }
-  .note { color: var(--muted); font-size: 12px; }
+  main { max-width: 940px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
 
-  section {
-    background: var(--panel);
-    border: 1px solid var(--border); border-radius: 6px; padding: 18px 22px 16px;
-    background-image: linear-gradient(180deg, var(--btn-hi), transparent 26px);
-    box-shadow: var(--elev-1);
-  }
-  .spec { border-top: 1px solid var(--border); margin-top: 16px; padding-top: 10px;
-          font-size: 11.5px; color: var(--muted); }
-  .spec code { font-family: Consolas, monospace; font-size: 11px; color: var(--text);
-               background: var(--panel-3); padding: 1px 5px; border-radius: 3px; }
+  h1 { font-family: -apple-system, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", sans-serif;
+       font-size: 26px; font-weight: 650; letter-spacing: -.022em; margin: 0; text-wrap: balance; }
+  .lede { color: var(--muted); font-size: 13px; max-width: 68ch; margin-top: 8px; }
+  h2 { font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+       color: var(--faint); margin: 0 0 14px; }
+  .mono { font-family: "SF Mono", Consolas, "Cascadia Mono", monospace; font-variant-numeric: tabular-nums; }
+  .spec { margin-top: 18px; padding-top: 12px; border-top: 1px solid var(--hairline);
+          font-size: 11.5px; color: var(--faint); max-width: 76ch; }
+  .spec code { font-family: Consolas, monospace; font-size: 10.5px; color: var(--muted); }
 
-  /* ================= instrument status cells (chips v2) ================ */
-  .cell {
-    display: inline-flex; align-items: center; gap: 8px;
-    background: linear-gradient(180deg, var(--panel-3), var(--panel-2));
-    border: 1px solid var(--border); border-radius: 4px;
-    padding: 4px 11px 4px 9px; white-space: nowrap;
-  }
-  .cell .lamp {
-    width: 9px; height: 9px; border-radius: 50%; flex: none;
-    background: radial-gradient(circle at 35% 30%, rgba(255,255,255,.55), transparent 45%),
-                var(--lamp-off);
-    border: 1px solid rgba(0,0,0,.35);
-  }
-  .cell .lab { font-size: 10px; font-weight: 650; letter-spacing: .1em;
-               text-transform: uppercase; color: var(--faint); }
-  .cell .val { font-family: Consolas, monospace; font-variant-numeric: tabular-nums;
-               font-size: 12.5px; color: var(--text); }
-  .cell .val .unit { color: var(--muted); font-size: 11px; margin-left: 2px; }
+  section { background: var(--card); border: 1px solid var(--hairline);
+            border-radius: 14px; padding: 24px 28px 20px;
+            box-shadow: var(--shadow-card); }
 
-  .cell.good .lamp { background: radial-gradient(circle at 35% 30%, #fff9, transparent 45%), var(--good);
-                     box-shadow: 0 0 6px 0 color-mix(in srgb, var(--good) 60%, transparent); }
-  .cell.busy .lamp { background: radial-gradient(circle at 35% 30%, #fff9, transparent 45%), var(--accent);
-                     box-shadow: 0 0 6px 0 color-mix(in srgb, var(--accent) 60%, transparent); }
-  .cell.warn .lamp { background: radial-gradient(circle at 35% 30%, #fff9, transparent 45%), var(--warn);
-                     box-shadow: 0 0 6px 0 color-mix(in srgb, var(--warn) 60%, transparent); }
-  .cell.crit .lamp { background: radial-gradient(circle at 35% 30%, #fffa, transparent 45%), var(--crit);
-                     box-shadow: 0 0 7px 1px color-mix(in srgb, var(--crit) 65%, transparent); }
-  .cell.sim  .lamp { background: radial-gradient(circle at 35% 30%, #fff9, transparent 45%), var(--sim);
-                     box-shadow: 0 0 6px 0 color-mix(in srgb, var(--sim) 55%, transparent); }
-  .cell.warn .val { color: var(--warn); }
-  .cell.crit .val { color: var(--crit); }
-  .cell.busy .val { color: var(--accent); }
-
-  /* P2 — breathing = the LAMP glows, not the whole cell (quieter, richer) */
-  @keyframes lampbreathe-crit {
-    0%,100% { box-shadow: 0 0 3px 0 color-mix(in srgb, var(--crit) 35%, transparent); }
-    50%     { box-shadow: 0 0 11px 2.5px color-mix(in srgb, var(--crit) 85%, transparent); }
-  }
-  @keyframes lampbreathe-warn {
-    0%,100% { box-shadow: 0 0 3px 0 color-mix(in srgb, var(--warn) 35%, transparent); }
-    50%     { box-shadow: 0 0 10px 2px color-mix(in srgb, var(--warn) 80%, transparent); }
-  }
-  .cell.breathe.crit .lamp { animation: lampbreathe-crit 2.2s ease-in-out infinite; }
-  .cell.breathe.warn .lamp { animation: lampbreathe-warn 2.2s ease-in-out infinite; }
-
-  .ring { width: 11px; height: 11px; border-radius: 50%; flex: none;
-          border: 2px solid color-mix(in srgb, var(--accent) 30%, transparent);
-          border-top-color: var(--accent); animation: rot 1.1s linear infinite; }
-  @keyframes rot { to { transform: rotate(360deg); } }
-  @media (prefers-reduced-motion: reduce) {
-    .cell.breathe .lamp, .ring { animation: none; }
-  }
-
-  /* ================= P3 — system rail =================================== */
+  /* ============ frosted system rail (the aesthetic thesis) ============== */
+  .railwrap { position: relative; border-radius: 14px; overflow: hidden;
+              box-shadow: var(--shadow-rail); }
   .rail {
-    display: flex; align-items: stretch; gap: 0; flex-wrap: wrap;
-    background: linear-gradient(180deg, var(--panel-2), var(--panel));
-    border: 1px solid var(--border); border-radius: 5px; overflow: hidden;
-    box-shadow: var(--elev-2);
+    display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
+    padding: 13px 22px;
+    background: var(--material);
+    -webkit-backdrop-filter: blur(22px) saturate(1.5);
+    backdrop-filter: blur(22px) saturate(1.5);
+    border: 1px solid var(--hairline);
+    border-radius: 14px;
   }
-  .rail .zone { display: flex; align-items: center; gap: 8px; padding: 8px 14px;
-                border-right: 1px solid var(--border); }
-  .rail .zone:last-child { border-right: 0; }
-  .rail .zone.grow { flex: 1; }
-  .dev { display: inline-flex; align-items: center; gap: 6px;
-         font-size: 10.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase;
-         color: var(--muted); }
-  .dev .lamp { width: 7px; height: 7px; border-radius: 50%; background: var(--lamp-off);
-               border: 1px solid rgba(0,0,0,.3); }
-  .dev.on   { color: var(--text); }
-  .dev.on  .lamp { background: var(--good); box-shadow: 0 0 5px 0 color-mix(in srgb, var(--good) 55%, transparent); }
-  .dev.sim  { color: var(--sim); }
-  .dev.sim .lamp { background: var(--sim); box-shadow: 0 0 5px 0 color-mix(in srgb, var(--sim) 50%, transparent); }
-  .dev.off .lamp { background: var(--lamp-off); }
-  .dev.off { color: var(--faint); }
+  .rail .sep { width: 1px; height: 22px; background: var(--hairline-strong); }
+  .rail .spacer { flex: 1; }
 
-  /* ================= P3/P1 — tabs ======================================= */
-  .tabs { display: flex; gap: 1px; border-bottom: 1px solid var(--border); overflow-x: auto;
-          padding: 0 2px; }
-  .tab { padding: 8px 15px 9px; font-size: 12.5px; color: var(--muted);
-         position: relative; cursor: default; white-space: nowrap; border-radius: 4px 4px 0 0;
-         transition: background .12s ease, color .12s ease; }
-  .tab:hover { background: var(--hover); color: var(--text); }
-  .tab.active { color: var(--text); font-weight: 600;
-         background: linear-gradient(180deg, var(--active), transparent); }
-  .tab.active::after { content:""; position: absolute; left: 10px; right: 10px; bottom: -1px;
-         height: 2px; background: var(--accent); border-radius: 1px;
-         box-shadow: 0 0 6px 0 color-mix(in srgb, var(--accent) 50%, transparent); }
+  .dev { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 590;
+         color: var(--muted); letter-spacing: .01em; }
+  .dev .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .dev.on .dot  { background: var(--good); }
+  .dev.sim      { color: var(--sim); }
+  .dev.sim .dot { background: var(--sim); }
+  .dev.off      { color: var(--faint); }
+  .dev.off .dot { background: transparent; box-shadow: inset 0 0 0 1.2px var(--faint); }
 
-  /* ================= P1 — cards / wells / tiles ========================= */
-  .card { background: var(--panel-2); border: 1px solid var(--border);
-          border-radius: 5px; padding: 12px 14px;
-          background-image: linear-gradient(180deg, var(--btn-hi), transparent 18px);
-          box-shadow: var(--elev-2); }
-  .card h3 { margin: 0 0 10px; font-size: 12px; font-weight: 650; color: var(--text); }
-  .card h3 .sub { color: var(--faint); font-weight: 400; margin-left: 8px; font-size: 11px; }
+  .st { display: inline-flex; align-items: baseline; gap: 7px; white-space: nowrap; }
+  .st .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); align-self: center; }
+  .st .lab { font-size: 11px; font-weight: 590; color: var(--faint); letter-spacing: .01em; }
+  .st .val { font-family: "SF Mono", Consolas, monospace; font-variant-numeric: tabular-nums;
+             font-size: 13px; font-weight: 500; color: var(--text); }
+  .st .val .u { color: var(--faint); font-size: 11px; margin-left: 1px; }
+  .st.good .dot { background: var(--good); }
+  .st.busy .dot { background: var(--accent); }
+  .st.warn .dot { background: var(--warn); }  .st.warn .val { color: var(--warn); }
+  .st.crit .dot { background: var(--crit); }  .st.crit .val { color: var(--crit); font-weight: 600; }
 
-  .viewer { display: flex; flex-direction: column; gap: 10px; }
-  .viewer-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-  .viewer-head .crumb { font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--faint); }
-  .viewer-head .title { font-size: 15px; font-weight: 650; letter-spacing: -.01em; }
+  @keyframes laserbreathe {
+    0%,100% { box-shadow: 0 0 0 0 rgba(255,79,71,0); }
+    50%     { box-shadow: 0 0 10px 2px rgba(255,79,71,.55); }
+  }
+  .st.crit.live .dot { animation: laserbreathe 2.6s ease-in-out infinite; }
+  @keyframes hvpulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.3); } }
+  .st.warn.live .dot { animation: hvpulse 2.6s ease-in-out infinite; }
+  .ring { width: 11px; height: 11px; border-radius: 50%; align-self: center;
+          border: 1.5px solid var(--tint); border-top-color: var(--accent);
+          animation: rot 1s linear infinite; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .st .dot, .ring { animation: none !important; } }
+
+  /* ============ tabs — sidebar-selection pills ========================== */
+  .tabs { display: flex; gap: 4px; overflow-x: auto; padding: 3px; border-radius: 12px;
+          background: var(--field); }
+  .tab { padding: 6px 14px; font-size: 12.5px; font-weight: 500; color: var(--muted);
+         border-radius: 9px; white-space: nowrap; cursor: default;
+         transition: background .16s ease, color .16s ease; }
+  .tab:hover { background: var(--field); color: var(--text); }
+  .tab.active { background: var(--tint); color: var(--accent); font-weight: 600; }
+
+  /* ============ viewer =================================================== */
+  .viewer { display: flex; flex-direction: column; gap: 16px; }
+  .viewer-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .viewer-head .crumb { font-size: 11px; font-weight: 590; color: var(--faint); }
+  .viewer-head .crumb::after { content: " ›"; color: var(--faint); }
+  .viewer-head .title { font-family: -apple-system, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", sans-serif;
+       font-size: 19px; font-weight: 650; letter-spacing: -.015em; }
   .viewer-head .spacer { flex: 1; }
 
-  .screen { background: var(--plot-bg, #0b0e12); color: var(--plot-fg, #c7cfda);
-            border-radius: 5px; border: 1px solid var(--border);
-            box-shadow: inset 0 1px 8px rgba(0,0,0,.5);
-            min-height: 140px; position: relative;
-            display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .screen { background: var(--plot, #0a0b0d); border-radius: 12px;
+            border: 1px solid var(--hairline);
+            min-height: 170px; position: relative; overflow: hidden;
+            display: flex; align-items: center; justify-content: center;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.04), inset 0 0 40px rgba(0,0,0,.5); }
   .screen .grid { position: absolute; inset: 0; background:
-        repeating-linear-gradient(0deg, transparent 0 23px, rgba(199,207,218,.06) 23px 24px),
-        repeating-linear-gradient(90deg, transparent 0 23px, rgba(199,207,218,.06) 23px 24px); }
-  .screen .blob { position: absolute; width: 130px; height: 90px; border-radius: 50%;
-      background: radial-gradient(closest-side, #f7e08a 0%, #e2a63b 32%, #8a4a12 68%, transparent 100%);
+      repeating-linear-gradient(0deg, transparent 0 23px, rgba(199,207,218,.045) 23px 24px),
+      repeating-linear-gradient(90deg, transparent 0 23px, rgba(199,207,218,.045) 23px 24px); }
+  .screen .blob { position: absolute; width: 140px; height: 96px; border-radius: 50%;
+      background: radial-gradient(closest-side, #f6df82 0%, #e3a63a 32%, #7c440f 68%, transparent 100%);
       opacity: .92; filter: blur(1px); }
-  .screen .label { position: relative; font-family: Consolas, monospace; font-size: 10.5px;
-      color: rgba(199,207,218,.55); margin-top: 104px; letter-spacing: .06em; }
+  .screen .label { position: relative; font-family: "SF Mono", Consolas, monospace; font-size: 10px;
+      letter-spacing: .14em; color: rgba(199,207,218,.45); margin-top: 126px; }
 
-  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
-  .tile { background: linear-gradient(180deg, var(--panel-3), var(--panel-2));
-          border: 1px solid var(--border); border-radius: 5px; padding: 9px 13px 8px;
-          box-shadow: 0 1px 2px var(--btn-lo); }
-  .tile .k { font-size: 9.5px; letter-spacing: .13em; text-transform: uppercase; color: var(--faint);
-             font-weight: 650; }
-  .tile .v { font-family: Consolas, "Cascadia Mono", monospace; font-variant-numeric: tabular-nums;
-             font-size: 19px; font-weight: 600; margin-top: 3px; color: var(--text); letter-spacing: -.01em; }
-  .tile .v .unit { font-size: 11.5px; color: var(--muted); font-weight: 500; margin-left: 3px; }
-  @keyframes tileflash { 0% { border-color: var(--accent);
-        background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 14%, var(--panel-3)), var(--panel-2)); }
-       100% { border-color: var(--border);
-        background: linear-gradient(180deg, var(--panel-3), var(--panel-2)); } }
-  .tile.flash { animation: tileflash 1s ease-out; }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .tile { background: var(--card-2); border: 1px solid var(--hairline); border-radius: 12px;
+          padding: 13px 16px 12px; }
+  .tile .k { font-size: 11px; font-weight: 590; color: var(--faint); letter-spacing: .01em; }
+  .tile .v { font-family: -apple-system, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", sans-serif;
+             font-variant-numeric: tabular-nums; font-size: 27px; font-weight: 350;
+             letter-spacing: -.02em; margin-top: 2px; }
+  .tile .v .u { font-size: 12px; color: var(--faint); font-weight: 450; margin-left: 4px; letter-spacing: 0; }
+  @keyframes tickflash { 0% { color: var(--accent); } 100% { color: var(--text); } }
+  .tile.flash .v { animation: tickflash 1.2s ease-out; }
 
-  .well { background: var(--sunk); border: 1px solid var(--border); border-radius: 4px;
-          box-shadow: inset 0 1.5px 3px var(--btn-lo);
-          padding: 4px 10px; font-family: Consolas, monospace; font-size: 12.5px;
-          font-variant-numeric: tabular-nums; color: var(--text); display: inline-block; min-width: 96px; }
-  .well .unit { color: var(--faint); }
-  .well.focus { border-color: var(--accent-dim);
-          outline: 2px solid color-mix(in srgb, var(--accent) 38%, transparent); outline-offset: 0; }
-  .flab { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint);
-          font-weight: 650; margin-right: 4px; }
+  .fld { display: inline-flex; flex-direction: column; gap: 5px; }
+  .fld .flab { font-size: 11px; font-weight: 590; color: var(--faint); }
+  .well { background: var(--field); border: 1px solid transparent; border-radius: 9px;
+          padding: 6px 12px; font-family: "SF Mono", Consolas, monospace; font-size: 13px;
+          font-variant-numeric: tabular-nums; min-width: 112px;
+          transition: box-shadow .15s ease, border-color .15s ease; }
+  .well .u { color: var(--faint); }
+  .well.focus { border-color: var(--accent);
+          box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--accent) 22%, transparent); }
 
-  /* ================= P1 — material buttons (QSS-mappable) =============== */
-  .btn { display: inline-block; text-align: center; border-radius: 4px; padding: 6px 15px;
-         font-size: 12.5px; font-weight: 600; cursor: default; user-select: none;
-         border: 1px solid var(--border-strong);
-         background: linear-gradient(180deg, var(--panel-3), var(--panel-2));
-         box-shadow: inset 0 1px 0 var(--btn-hi), 0 1px 1px var(--btn-lo);
-         color: var(--text); }
-  .btn.hov { background: linear-gradient(180deg, var(--hover), var(--panel-2));
-             border-color: var(--border-strong); }
-  .btn.prs { background: var(--pressed);
-             box-shadow: inset 0 2px 4px var(--btn-lo); }
-  .btn.primary {
-      background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, white), var(--accent-strong));
-      border-color: color-mix(in srgb, var(--accent-strong) 80%, black);
-      color: #06222c; text-shadow: 0 1px 0 rgba(255,255,255,.25);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.3), 0 1px 2px var(--btn-lo); }
-  :root[data-theme="light"] .btn.primary, .force-light .btn.primary { color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,.2); }
-  .btn.primary.hov { background: linear-gradient(180deg, var(--accent), var(--accent-strong)); }
-  .btn.primary.prs { background: var(--accent-strong);
-      box-shadow: inset 0 2px 5px rgba(0,0,0,.35); }
-  .btn.danger {
-      background: linear-gradient(180deg, color-mix(in srgb, var(--crit) 90%, white), color-mix(in srgb, var(--crit) 78%, black));
-      border-color: color-mix(in srgb, var(--crit) 55%, black);
-      color: #fff; text-shadow: 0 1px 1px rgba(0,0,0,.35);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.22), 0 1px 2px var(--btn-lo); }
-  .btn.danger.hov { background: linear-gradient(180deg, var(--crit), color-mix(in srgb, var(--crit) 70%, black)); }
-  .btn.danger.prs { background: color-mix(in srgb, var(--crit) 72%, black);
-      box-shadow: inset 0 2px 5px rgba(0,0,0,.4); }
-  .btn.dis { background: var(--disabled-bg); color: var(--disabled-text);
-      border-color: var(--border); box-shadow: none; font-weight: 500; }
+  .card2 { background: var(--card-2); border: 1px solid var(--hairline); border-radius: 12px;
+           padding: 16px 18px; }
+  .card2 h3 { margin: 0 0 14px; font-size: 13.5px; font-weight: 600; letter-spacing: -.005em; }
+  .card2 h3 .sub { color: var(--faint); font-weight: 400; margin-left: 10px; font-size: 11.5px; }
 
-  .btnrow { display: grid; grid-template-columns: 96px repeat(4, minmax(104px,1fr)); gap: 9px; align-items: center; }
-  .btnrow .rowlab { font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
-      color: var(--faint); font-weight: 650; }
-  .btnrow .head { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); }
+  /* ============ buttons — Apple push buttons ============================= */
+  .btn { display: inline-block; text-align: center; border-radius: 9px; padding: 7px 16px;
+         font-size: 13px; font-weight: 590; cursor: default;
+         -webkit-user-select: none; user-select: none;
+         background: var(--field); color: var(--text); border: 0;
+         transition: filter .12s ease, transform .12s ease, background .12s ease; }
+  .btn.hov { background: color-mix(in srgb, var(--text) 10%, transparent); }
+  .btn.prs { filter: var(--press-dim); transform: scale(.97); }
+  .btn.primary { background: var(--accent); color: var(--on-accent); }
+  .btn.primary.hov { background: color-mix(in srgb, var(--accent) 90%, white); }
+  .btn.primary.prs { background: var(--accent-press); transform: scale(.97); }
+  .btn.danger { background: color-mix(in srgb, var(--crit) 16%, transparent); color: var(--crit); }
+  .btn.danger.hov { background: color-mix(in srgb, var(--crit) 24%, transparent); }
+  .btn.danger.prs { background: var(--crit); color: #fff; transform: scale(.97); }
+  .btn.dis { background: var(--field); color: var(--faint); }
 
-  /* ================= palette comparison ================================= */
-  .cmp { display: grid; grid-template-columns: 110px 1fr 1fr; gap: 6px 12px; align-items: center;
-         max-width: 560px; }
-  .cmp .h { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); font-weight: 650; }
-  .cmp .name { font-size: 11.5px; color: var(--muted); font-family: Consolas, monospace; }
-  .swb { display: flex; align-items: center; gap: 8px; font-family: Consolas, monospace;
+  .btnrow { display: grid; grid-template-columns: 92px repeat(4, minmax(108px,1fr)); gap: 12px; align-items: center; }
+  .btnrow .h { font-size: 11px; font-weight: 590; color: var(--faint); }
+
+  /* ============ palette ================================================== */
+  .cmp { display: grid; grid-template-columns: 92px 1fr 1fr; gap: 10px 16px; align-items: center; max-width: 560px; }
+  .cmp .h { font-size: 11px; font-weight: 590; color: var(--faint); }
+  .cmp .name { font-size: 12px; color: var(--muted); font-family: "SF Mono", Consolas, monospace; }
+  .swb { display: flex; align-items: center; gap: 9px; font-family: "SF Mono", Consolas, monospace;
          font-size: 11px; color: var(--muted); }
-  .swb i { width: 30px; height: 16px; border-radius: 3px; border: 1px solid var(--border); flex: none; }
+  .swb i { width: 30px; height: 16px; border-radius: 5px; flex: none;
+           box-shadow: inset 0 0 0 1px var(--hairline); }
 
-  footer { color: var(--muted); font-size: 12px; max-width: 70ch; }
+  footer { color: var(--faint); font-size: 12px; max-width: 74ch; line-height: 1.65; }
 </style>
 
 <main>
   <header>
-    <h1>TCT Cockpit — Polish Preview <span class="note">v2 · precision-instrument pass</span></h1>
-    <p class="note"><strong>Same rule as v1: no invented widgets.</strong> What changed after your
-    "looks cheap" verdict: the 2013 flat-UI status hues are re-tuned and luminance-matched, buttons get
-    machined depth (gradient + top-light + inset press — all expressible in Qt QSS), web-pills become
-    instrument <em>status cells</em> with real LED lamps, numerals get display treatment with muted units,
-    and dark is now the hero theme. Toggle the artifact theme — light is a re-derived companion, not an inversion.</p>
+    <h1>TCT Cockpit</h1>
+    <p class="lede">Polish preview, v4 — the Apple pass. The interface defers: an almost-black canvas with
+    a faint ambient glow, frosted chrome floating above it, planes separated by light instead of lines,
+    and numerals that carry the room. Every widget on this page exists in the app today — nothing invented,
+    only re-clothed. Toggle the theme; both are first-class.</p>
   </header>
 
-  <!-- ================= P3: system rail ================================= -->
-  <section>
-    <h2><span class="tag">P3</span>System rail</h2>
+  <div class="railwrap">
     <div class="rail">
-      <div class="zone">
-        <span class="dev on"><span class="lamp"></span>Motor</span>
-        <span class="dev on"><span class="lamp"></span>RefMon</span>
-        <span class="dev on"><span class="lamp"></span>Camera</span>
-        <span class="dev on"><span class="lamp"></span>Scope</span>
-        <span class="dev sim"><span class="lamp"></span>Wavegen</span>
-        <span class="dev off"><span class="lamp"></span>Bias</span>
-      </div>
-      <div class="zone grow">
-        <span class="cell warn breathe"><span class="lamp"></span><span class="lab">HV</span><span class="val">−120.0<span class="unit">V</span></span></span>
-        <span class="cell"><span class="lamp"></span><span class="lab">I</span><span class="val">0.42<span class="unit">µA</span></span></span>
-        <span class="cell good"><span class="lamp"></span><span class="lab">Compl</span><span class="val">OK</span></span>
-      </div>
-      <div class="zone">
-        <span class="cell good"><span class="lamp"></span><span class="lab">Motion</span><span class="val">homed</span></span>
-        <span class="cell busy"><span class="ring"></span><span class="lab">Scan</span><span class="val">RUN</span></span>
-        <span class="cell crit breathe"><span class="lamp"></span><span class="lab">Laser</span><span class="val">ON</span></span>
-      </div>
+      <span class="dev on"><span class="dot"></span>Motor</span>
+      <span class="dev on"><span class="dot"></span>RefMon</span>
+      <span class="dev on"><span class="dot"></span>Camera</span>
+      <span class="dev on"><span class="dot"></span>Scope</span>
+      <span class="dev sim"><span class="dot"></span>Wavegen</span>
+      <span class="dev off"><span class="dot"></span>Bias</span>
+      <span class="sep"></span>
+      <span class="st warn live"><span class="dot"></span><span class="lab">HV</span><span class="val">−120.0<span class="u">V</span></span></span>
+      <span class="st"><span class="dot"></span><span class="lab">I</span><span class="val">0.42<span class="u">µA</span></span></span>
+      <span class="st good"><span class="dot"></span><span class="lab">Compliance</span><span class="val">OK</span></span>
+      <span class="spacer"></span>
+      <span class="st good"><span class="dot"></span><span class="lab">Motion</span><span class="val">homed</span></span>
+      <span class="st busy"><span class="ring"></span><span class="lab">Scan</span><span class="val">running</span></span>
+      <span class="st crit live"><span class="dot"></span><span class="lab">Laser</span><span class="val">ON</span></span>
     </div>
-    <div class="spec">Etched uppercase micro-labels + mono values with muted units. The LED lamp itself
-      breathes on danger states (HV live, laser emitting) — richer and quieter than tinting a whole pill.
-      QSS mapping: cells are <code>QFrame</code> gradients; lamps already exist as <code>StatusPill</code> dots —
-      they gain a radial fill + the P2 glow animation drives <code>border/box</code> color via
-      <code>QVariantAnimation</code>.</div>
-  </section>
+  </div>
 
-  <!-- ================= P3/P1: tabs ===================================== -->
   <section>
-    <h2><span class="tag">P3</span>Tabs</h2>
+    <h2>Navigation</h2>
     <div class="tabs">
       <span class="tab">Motor Stage</span>
       <span class="tab">Reference Monitor</span>
@@ -343,125 +279,124 @@
       <span class="tab">Laser / Trigger</span>
       <span class="tab active">Scan Viewer</span>
       <span class="tab">Scan Planner</span>
-      <span class="tab hov" style="background:var(--hover);color:var(--text)">Bias Supply</span>
+      <span class="tab" style="background:var(--field);color:var(--text)">Bias Supply</span>
       <span class="tab">Calibration</span>
       <span class="tab">Monitor</span>
       <span class="tab">Analysis</span>
     </div>
-    <div class="spec">Active: gradient wash fading upward + glowing accent underline. Hover: neutral wash
-      ("Bias Supply" frozen mid-hover). Same eleven real tabs.</div>
+    <div class="spec">Selection-pill navigation (the macOS sidebar idiom): the active tab sits in a tinted
+      pill with accent ink; hover is a quiet material wash ("Bias Supply" frozen mid-hover). No borders,
+      no underline hardware.</div>
   </section>
 
-  <!-- ================= P1: viewer stack ================================ -->
   <section>
-    <h2><span class="tag">P1</span>Scan Viewer — depth stack</h2>
+    <h2>Scan Viewer</h2>
     <div class="viewer">
       <div class="viewer-head">
         <span class="crumb">TCT Control</span>
         <span class="title">Scan Viewer</span>
         <span class="spacer"></span>
-        <span class="cell busy"><span class="ring"></span><span class="lab">Run</span><span class="val">128/400</span></span>
+        <span class="st busy"><span class="ring"></span><span class="lab">Run</span><span class="val">128/400</span></span>
         <span class="btn dis">Open in Analysis</span>
       </div>
 
       <div class="screen">
         <div class="grid"></div>
         <div class="blob"></div>
-        <div class="label">LIVE MAP — canvas fixed dark in both themes (rule 3)</div>
+        <div class="label">LIVE MAP — CANVAS FIXED DARK IN BOTH THEMES</div>
       </div>
 
       <div class="metrics">
-        <div class="tile"><div class="k">Progress</div><div class="v">128<span class="unit">/ 400</span></div></div>
-        <div class="tile flash" id="etaTile"><div class="k">ETA</div><div class="v" id="etaVal">4.2<span class="unit">min</span></div></div>
-        <div class="tile"><div class="k">Point</div><div class="v">1.250<span class="unit">, 0.375 mm</span></div></div>
-        <div class="tile"><div class="k">Elapsed</div><div class="v" id="elVal">2.1<span class="unit">min</span></div></div>
+        <div class="tile"><div class="k">Progress</div><div class="v">128<span class="u">/ 400</span></div></div>
+        <div class="tile flash" id="etaTile"><div class="k">ETA</div><div class="v" id="etaVal">4.2<span class="u">min</span></div></div>
+        <div class="tile"><div class="k">Point</div><div class="v">1.250<span class="u">, 0.375 mm</span></div></div>
+        <div class="tile"><div class="k">Elapsed</div><div class="v" id="elVal">2.1<span class="u">min</span></div></div>
       </div>
 
-      <div style="display:flex; gap:9px;">
+      <div style="display:flex; gap:10px;">
         <span class="btn">Pause</span>
         <span class="btn danger">Abort</span>
       </div>
 
-      <div class="card">
+      <div class="card2">
         <h3>Z-Focus <span class="sub">live assist — not a Planner routine</span></h3>
-        <div style="display:flex; gap:14px; flex-wrap:wrap; align-items:center;">
-          <span><span class="flab">Z start</span><span class="well">−2.0000<span class="unit"> mm</span></span></span>
-          <span><span class="flab">Z stop</span><span class="well focus">2.0000<span class="unit"> mm</span></span></span>
-          <span><span class="flab">Step</span><span class="well">0.1000<span class="unit"> mm</span></span></span>
+        <div style="display:flex; gap:22px; flex-wrap:wrap; align-items:flex-end;">
+          <span class="fld"><span class="flab">Z start</span><span class="well">−2.0000<span class="u"> mm</span></span></span>
+          <span class="fld"><span class="flab">Z stop</span><span class="well focus">2.0000<span class="u"> mm</span></span></span>
+          <span class="fld"><span class="flab">Step</span><span class="well">0.1000<span class="u"> mm</span></span></span>
           <span class="btn primary">Find Focus</span>
           <span class="btn dis">Apply to Planner</span>
         </div>
       </div>
     </div>
-    <div class="spec">Readout numerals at display size with muted inline units (<code>tabular-nums</code>);
-      wells are genuinely recessed (<code>sunk</code> + inset shade); focus ring = <code>accent</code> halo.
-      ETA tile flashes its <em>border</em> accent on change — watch it tick.</div>
+    <div class="spec">Numerals at 27px in a light weight (SF-Display-style) with quiet inline units —
+      the data is the interface. Fields are filled wells, borderless until focus, where an accent ring
+      blooms (<code>3.5px</code> soft ring, the macOS focus idiom). Sentence-case labels; no shouting caps.
+      ETA flashes by numeral color — watch it tick.</div>
   </section>
 
-  <!-- ================= P1: buttons ===================================== -->
   <section>
-    <h2><span class="tag">P1</span>Button material</h2>
+    <h2>Buttons</h2>
     <div class="btnrow">
-      <span class="rowlab"></span><span class="head">rest</span><span class="head">hover</span><span class="head">pressed</span><span class="head">disabled</span>
-      <span class="rowlab">Primary</span>
+      <span class="h"></span><span class="h">Rest</span><span class="h">Hover</span><span class="h">Pressed</span><span class="h">Disabled</span>
+      <span class="h">Primary</span>
       <span class="btn primary">Find Focus</span>
       <span class="btn primary hov">Find Focus</span>
       <span class="btn primary prs">Find Focus</span>
       <span class="btn dis">Find Focus</span>
-      <span class="rowlab">Standard</span>
+      <span class="h">Standard</span>
       <span class="btn">Pause</span>
       <span class="btn hov">Pause</span>
       <span class="btn prs">Pause</span>
       <span class="btn dis">Pause</span>
-      <span class="rowlab">Danger</span>
+      <span class="h">Danger</span>
       <span class="btn danger">Abort</span>
       <span class="btn danger hov">Abort</span>
       <span class="btn danger prs">Abort</span>
       <span class="btn dis">Abort</span>
     </div>
-    <div class="spec">The "machined" feel: vertical gradient + 1px top-light + drop hairline; pressed
-      inverts to an inset. All four states are plain <code>qlineargradient</code> QSS — no effects, no images.
-      Danger reads hot at every state but stays in the new crimson family, not the old flat red.</div>
+    <div class="spec">Apple push buttons: borderless material fills, continuous 9px radius, press =
+      subtle scale-down + dim (alive under the finger). Danger is a red-tinted material that only goes
+      solid at the moment of commitment. Primary wears the accent with dark ink for real contrast.</div>
   </section>
 
-  <!-- ================= palette: old vs new ============================= -->
   <section>
-    <h2>Why it felt cheap — the hues themselves (old → proposed)</h2>
+    <h2>Color — Apple-calibrated semantics</h2>
     <div class="cmp">
-      <span class="h">token</span><span class="h">today (flat-UI 2013)</span><span class="h">proposed (dark / light)</span>
+      <span class="h">Token</span><span class="h">Today in app</span><span class="h">Proposed (dark / light)</span>
       <span class="name">good</span>
       <span class="swb"><i style="background:#27ae60"></i>#27ae60</span>
-      <span class="swb"><i style="background:var(--good)"></i>#46c78e / #1f9d68</span>
+      <span class="swb"><i style="background:var(--good)"></i>#30d158 / #1e9e46</span>
       <span class="name">warn</span>
       <span class="swb"><i style="background:#d98c17"></i>#d98c17</span>
-      <span class="swb"><i style="background:var(--warn)"></i>#e2a63b / #b57d16</span>
+      <span class="swb"><i style="background:var(--warn)"></i>#ffa01e / #c77000</span>
       <span class="name">crit</span>
       <span class="swb"><i style="background:#c0392b"></i>#c0392b</span>
-      <span class="swb"><i style="background:var(--crit)"></i>#e5534b / #c3423c</span>
+      <span class="swb"><i style="background:var(--crit)"></i>#ff4f47 / #d93a32</span>
       <span class="name">accent</span>
       <span class="swb"><i style="background:#33c8ff"></i>#33c8ff / #0d8ba6</span>
-      <span class="swb"><i style="background:var(--accent)"></i>#45cff5 / #0d84a8</span>
-      <span class="name">bg (dark)</span>
+      <span class="swb"><i style="background:var(--accent)"></i>#41c8f0 / #0e7fa6</span>
+      <span class="name">canvas</span>
       <span class="swb"><i style="background:#1f242b"></i>#1f242b</span>
-      <span class="swb"><i style="background:#14181e"></i>#14181e (deeper, blue-black)</span>
+      <span class="swb"><i style="background:#131316"></i>#131316 + ambient glow</span>
       <span class="name">sim</span>
       <span class="swb"><i style="background:#8e44ad"></i>#8e44ad</span>
-      <span class="swb"><i style="background:var(--sim)"></i>#a78bfa / #7c5fd3</span>
+      <span class="swb"><i style="background:var(--sim)"></i>#bf8cff / #7d55d8</span>
     </div>
-    <div class="spec">Status hues are luminance-matched against both grounds (the old green glowed,
-      the old red sulked) and per-theme instead of shared. Deeper base darks buy the layering tokens room
-      to actually read. One-file change: these are token <em>values</em> in <code>gui/style.py</code> —
-      every panel inherits them for free, and the no-inline-hex guard test keeps it that way.</div>
+    <div class="spec">The luminous system-color family (vivid on dark, deepened on light) replaces the
+      2013 flat set. Semantic colors are never the accent; the accent stays scope-cyan — your instrument's
+      identity — just recalibrated.</div>
   </section>
 
   <footer>
-    Approve or veto per section, as before. If approved: P1 ships the new token values + QSS material,
-    P2 the lamp-glow motion, P3 the rail — same review-gated beats, still zero new features. The Qt result
-    won't be pixel-identical to this page (QSS has no outer glow or box-shadow; lamp glows become painted
-    radial fills), but every gradient, state, and hue has a direct QSS mapping. The subtle card/section
-    elevation maps to Qt as a sparing QGraphicsDropShadowEffect on top-level cards ONLY (never plot
-    containers — rule 3; perf-checked on the lab PC), while tiles/buttons/rail keep the cheaper
-    border-and-gradient lift, which carries most of the depth impression anyway.
+    <strong>Qt honesty, so the pitch is real:</strong> colors, radii, type scale, fills, pills, focus rings
+    and press-dim all map 1:1 to QSS (+ a tiny press-scale helper in code). Soft card shadows map to a
+    sparing QGraphicsDropShadowEffect on top-level cards only — never plot containers. The frosted rail is
+    the one aspirational element: true backdrop blur isn't a QSS facility, so the app approximates it with
+    a solid elevated surface in the same tint over the ambient-glow window background (the glow itself is a
+    paintEvent gradient — cheap). Everything else on this page is buildable exactly as shown.
+    If v4 is the direction: P1 ships tokens + QSS, P2 the dot-pulse / ring / numeral-flash motion,
+    P3 the rail. Zero new features, as agreed.
   </footer>
 </main>
 
@@ -472,8 +407,8 @@
     setInterval(function () {
       eta = Math.max(0.1, eta - 0.1); el += 0.1;
       var t = document.getElementById("etaTile");
-      document.getElementById("etaVal").innerHTML = eta.toFixed(1) + '<span class="unit">min</span>';
-      document.getElementById("elVal").innerHTML = el.toFixed(1) + '<span class="unit">min</span>';
+      document.getElementById("etaVal").innerHTML = eta.toFixed(1) + '<span class="u">min</span>';
+      document.getElementById("elVal").innerHTML = el.toFixed(1) + '<span class="u">min</span>';
       t.classList.remove("flash"); void t.offsetWidth; t.classList.add("flash");
     }, 3000);
   })();
