@@ -511,8 +511,120 @@ def test_public_api_surface_unchanged():
             "set_hv_armed", "set_limits", "set_running",
             "on_progress", "on_finished", "on_error",
             "plan", "set_plan", "refresh_theme", "shutdown",
+            "set_position_from_motor",
         ):
             assert callable(getattr(panel, name)), name
+    finally:
+        panel.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# Motor position -> loop start ("Use current position")                        #
+#                                                                                #
+# set_position_from_motor is the slot MotorPanel.set_as_scan_start(float,      #
+# float, float) is wired to (in tct_gui, not tested here) in place of the      #
+# retired ScanPanel.set_start_position — a plan has no single "start           #
+# position", only per-axis loops, so the affordance writes into whichever      #
+# X/Y/Z loop row is currently selected in the recipe tree.                     #
+# --------------------------------------------------------------------------- #
+
+def test_set_position_from_motor_stores_value_and_updates_label():
+    _app()
+    panel = PlannerPanel()
+    try:
+        assert panel._motor_pos is None
+        assert not panel._btn_use_motor_pos.isEnabled()
+
+        panel.set_position_from_motor(1.25, -2.5, 0.125)
+
+        assert panel._motor_pos == (1.25, -2.5, 0.125)
+        text = panel._lbl_motor_pos.text()
+        assert "1.250" in text
+        assert "-2.500" in text
+        assert "0.125" in text
+    finally:
+        panel.shutdown()
+
+
+def test_use_current_position_writes_x_loop_start_and_invalidates_latches():
+    _app()
+    panel = PlannerPanel()
+    try:
+        x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        x_item = panel._item_for_block(x_loop)
+
+        panel.set_position_from_motor(3.5, -1.0, 0.0)
+        panel._tree.setCurrentItem(x_item)
+        assert panel._btn_use_motor_pos.isEnabled()
+
+        # Force an armed + dry-run-ok state so we can observe it get
+        # cleared, same as the plain spinbox-edit invalidation test.
+        panel._dry_run_ok = True
+        panel.set_hv_armed(True)
+        assert panel._btn_start.isEnabled()
+
+        panel._btn_use_motor_pos.click()
+
+        assert x_loop.start == 3.5
+        assert panel._dry_run_ok is False
+        assert panel._hv_armed is False
+        assert not panel._btn_start.isEnabled()
+    finally:
+        panel.shutdown()
+
+
+def test_use_current_position_writes_z_loop_start():
+    _app()
+    panel = PlannerPanel()
+    try:
+        z_loop = LoopBlock(axis=Axis.STAGE_Z, start=-2.0, stop=2.0, step=0.1)
+        panel._on_palette_append({"op": "new", "block": z_loop.to_dict()})
+        new_z_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_Z)
+        z_item = panel._item_for_block(new_z_loop)
+
+        panel.set_position_from_motor(1.0, 2.0, -4.75)
+        panel._tree.setCurrentItem(z_item)
+        assert panel._btn_use_motor_pos.isEnabled()
+
+        panel._btn_use_motor_pos.click()
+
+        assert new_z_loop.start == -4.75
+    finally:
+        panel.shutdown()
+
+
+def test_use_current_position_disabled_before_position_and_for_non_axis_loop():
+    _app()
+    panel = PlannerPanel()
+    try:
+        x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        x_item = panel._item_for_block(x_loop)
+        panel._tree.setCurrentItem(x_item)
+
+        # A valid axis-loop selection alone is not enough -- no position
+        # has arrived yet.
+        assert panel._motor_pos is None
+        assert not panel._btn_use_motor_pos.isEnabled()
+
+        panel.set_position_from_motor(1.0, 2.0, 3.0)
+        assert panel._btn_use_motor_pos.isEnabled()
+
+        # Bias loop selected -> not an X/Y/Z axis loop -> disabled even
+        # though a position has already arrived.
+        bias_loop = _bias_loop(panel._plan)
+        bias_item = panel._item_for_block(bias_loop)
+        panel._tree.setCurrentItem(bias_item)
+        assert not panel._btn_use_motor_pos.isEnabled()
+
+        # An action leaf (not a loop at all) -> disabled too.
+        y_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_Y)
+        acquire_item = panel._item_for_block(y_loop.children[0])
+        panel._tree.setCurrentItem(acquire_item)
+        assert not panel._btn_use_motor_pos.isEnabled()
+
+        # Reselecting the X loop re-enables it.
+        panel._tree.setCurrentItem(x_item)
+        assert panel._btn_use_motor_pos.isEnabled()
     finally:
         panel.shutdown()
 

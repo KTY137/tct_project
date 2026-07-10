@@ -352,7 +352,11 @@ class PlannerPanel(QWidget):
     module docstring: never call these directly from a worker thread)
     --------------------------------------------------------------------
     set_hv_armed(bool), set_limits(PlanLimits), set_running(bool),
-    on_progress(int, int), on_finished(), on_error(str).
+    on_progress(int, int), on_finished(), on_error(str),
+    set_position_from_motor(float, float, float) — stores the latest motor
+    position (no hardware I/O) for the "Use current position" affordance;
+    connect this to ``MotorPanel.set_as_scan_start`` in place of the retired
+    ``ScanPanel.set_start_position``.
     """
 
     start_plan_requested = Signal(object)
@@ -378,6 +382,10 @@ class PlannerPanel(QWidget):
         self._loop_editors: dict[int, dict[str, QDoubleSpinBox]] = {}
         self._issue_labels: list[QLabel] = []
         self._undo_stack: list[dict] = []
+        # Latest motor position, received (no hardware I/O) via
+        # set_position_from_motor -- staged for the "Use current position"
+        # affordance, see the "Motor position -> loop start" section below.
+        self._motor_pos: tuple[float, float, float] | None = None
 
         self._debounce = QTimer(self)
         self._debounce.setSingleShot(True)
@@ -455,6 +463,28 @@ class PlannerPanel(QWidget):
         tree_hd.addWidget(sub_lbl)
         tree_lay.addLayout(tree_hd)
 
+        # "Use current position" -- select an X/Y/Z loop below, then this
+        # writes the last motor position (see set_position_from_motor) into
+        # THAT loop's start field. A plan has no single "start position"
+        # (only per-axis loops), so this replaces ScanPanel.set_start_position
+        # as the target of MotorPanel.set_as_scan_start (design doc gap G3).
+        motor_row = QHBoxLayout()
+        motor_row.setContentsMargins(14, 0, 14, 8)
+        motor_row.setSpacing(8)
+        self._lbl_motor_pos = QLabel("Motor position not received yet")
+        self._lbl_motor_pos.setObjectName("plannerLeafMeta")
+        motor_row.addWidget(self._lbl_motor_pos)
+        motor_row.addStretch(1)
+        self._btn_use_motor_pos = QPushButton("Use current position")
+        set_button_icon(self._btn_use_motor_pos, "mdi.crosshairs-gps")
+        self._btn_use_motor_pos.setToolTip(
+            "Write the last motor position into the selected loop's start "
+            "field (select an X/Y/Z loop below first)"
+        )
+        self._btn_use_motor_pos.setEnabled(False)
+        motor_row.addWidget(self._btn_use_motor_pos)
+        tree_lay.addLayout(motor_row)
+
         self._tree = _RecipeTree(self)
         self._tree.setColumnCount(1)
         self._tree.header().hide()
@@ -471,6 +501,7 @@ class PlannerPanel(QWidget):
         )
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
+        self._tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
         tree_lay.addWidget(self._tree, 1)
 
         legend_widget = QWidget()
@@ -554,6 +585,7 @@ class PlannerPanel(QWidget):
         self._btn_abort.clicked.connect(self.abort_requested.emit)
         self._btn_save_routine.clicked.connect(self._on_save_routine)
         self._btn_load_routine.clicked.connect(self._on_load_routine)
+        self._btn_use_motor_pos.clicked.connect(self._on_use_motor_position_clicked)
 
         self._undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self)
         self._undo_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -654,6 +686,9 @@ class PlannerPanel(QWidget):
             self._add_block(self._tree, block, [i])
         self._tree.expandAll()
         self._restore_expansion(collapsed_ids)
+        # tree.clear() drops the selection -- re-evaluate (normally disables
+        # until the user reselects a row in the rebuilt tree).
+        self._update_use_position_enabled()
 
     def _snapshot_expansion(self) -> set[int]:
         """``id(block)`` of every currently-collapsed *real* node (default is
@@ -964,6 +999,71 @@ class PlannerPanel(QWidget):
             ),
             trailing=pill,
         )
+
+    # ------------------------------------------------------------------ #
+    # Motor position -> loop start ("Use current position")               #
+    #                                                                      #
+    # set_position_from_motor stores the last motor position emitted by   #
+    # MotorPanel.set_as_scan_start (no hardware I/O -- it just receives   #
+    # the value). A plan has no single "start position" like the retired  #
+    # ScanPanel did -- only per-axis loops -- so the affordance is        #
+    # per-loop: select an X/Y/Z loop row in the tree, then _btn_use_motor #
+    # _pos writes THAT axis's stored coordinate into the loop's start     #
+    # spinbox, through the exact same widget (and therefore the exact    #
+    # same valueChanged -> plan-edit -> invalidate path) the user would   #
+    # touch by hand -- see _make_loop_row's _on_edit closure.             #
+    # ------------------------------------------------------------------ #
+
+    def _on_tree_selection_changed(self) -> None:
+        self._update_use_position_enabled()
+
+    def _selected_axis_loop(self) -> LoopBlock | None:
+        """The :class:`LoopBlock` behind the currently-selected tree row,
+        if (and only if) it is a live-editable X/Y/Z stage loop -- the only
+        kind this affordance can write into. Bias has no stage coordinate;
+        an explicit ``values`` loop has no start field (v1 skip, see
+        ``_make_loop_row``) and so never gets a ``_loop_editors`` entry."""
+        item = self._tree.currentItem()
+        if item is None:
+            return None
+        block = item.data(0, _ROLE_BLOCK)
+        if (isinstance(block, LoopBlock) and block.axis in STAGE_AXES
+                and id(block) in self._loop_editors):
+            return block
+        return None
+
+    def _update_use_position_enabled(self) -> None:
+        # Gated on not-running: the tree is disabled during a run, so the
+        # programmatic spinbox write must be locked out with it.
+        self._btn_use_motor_pos.setEnabled(
+            not self._running
+            and self._motor_pos is not None
+            and self._selected_axis_loop() is not None
+        )
+
+    def _on_use_motor_position_clicked(self) -> None:
+        loop = self._selected_axis_loop()
+        if loop is None or self._motor_pos is None:
+            return
+        x_mm, y_mm, z_mm = self._motor_pos
+        value = {
+            Axis.STAGE_X: x_mm, Axis.STAGE_Y: y_mm, Axis.STAGE_Z: z_mm,
+        }[loop.axis]
+        self._loop_editors[id(loop)]["start"].setValue(value)
+
+    @Slot(float, float, float)
+    def set_position_from_motor(self, x_mm: float, y_mm: float, z_mm: float) -> None:
+        """Store the latest stage position (no hardware I/O -- this only
+        receives what the caller already read). Connected from ``tct_gui``
+        to ``MotorPanel.set_as_scan_start``, replacing the retired
+        ``ScanPanel.set_start_position`` target (design doc gap G3: a plan
+        has no single start position, only per-axis loops -- see the
+        "Use current position" affordance above)."""
+        self._motor_pos = (float(x_mm), float(y_mm), float(z_mm))
+        self._lbl_motor_pos.setText(
+            f"Motor @ x={x_mm:.3f}  y={y_mm:.3f}  z={z_mm:.3f} mm"
+        )
+        self._update_use_position_enabled()
 
     def _rebuild_legend(self) -> None:
         while self._legend_row.count():
@@ -1669,6 +1769,7 @@ class PlannerPanel(QWidget):
         self._btn_load_routine.setEnabled(not running)
         self._tree.setEnabled(not running)
         self._btn_abort.setEnabled(running)
+        self._update_use_position_enabled()
         if running:
             self._chip_hv_status.set_status("Running…", "busy")
         self._update_start_enabled()
