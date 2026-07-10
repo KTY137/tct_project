@@ -1,5 +1,6 @@
-"""Headless tests for the shared 2-D scan-map widget (``gui/scan_map_view.py``)
-and its embedding in ``gui/scan_map_window.py``.
+"""Headless tests for the shared 2-D scan-map widget (``gui/scan_map_view.py``),
+including its own PNG/CSV export + freeze-levels toolbar (the ``ScanMapView``
+now owns what the retired ``ScanMapWindow`` used to add on top).
 
 Follows the existing gui test idiom: ``QT_QPA_PLATFORM=offscreen``, a shared
 ``QApplication.instance()`` helper, no pytest-qt, no hardware/simulated
@@ -11,6 +12,7 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import csv
 import math
 
 import numpy as np
@@ -19,7 +21,6 @@ from PySide6.QtWidgets import QApplication
 
 from controller.scan_controller import ScanPoint, ScanResult
 from gui.scan_map_view import QUANTITIES, ScanMapView
-from gui.scan_map_window import ScanMapWindow
 from gui.style import apply_theme
 
 
@@ -234,6 +235,11 @@ def test_no_graphics_effect_on_figure_card_or_plot():
     assert view._figure_card.graphicsEffect() is None
     assert view._figure_card.plot.graphicsEffect() is None
     assert view.image_view().graphicsEffect() is None
+    # New toolbar controls (freeze toggle + PNG/CSV export) — static depth
+    # only, same rule 3 guard as the plot itself.
+    assert view._btn_freeze.graphicsEffect() is None
+    assert view._btn_export_png.graphicsEffect() is None
+    assert view._btn_export_csv.graphicsEffect() is None
 
 
 # --------------------------------------------------------------------------- #
@@ -256,37 +262,143 @@ def test_nan_value_does_not_skew_autoscale_levels():
 
 
 # --------------------------------------------------------------------------- #
-# ScanMapWindow embedding                                                     #
+# PNG/CSV export (S2c work package A) — dialog-free write helpers behind the  #
+# toolbar's export toolbuttons.                                               #
 # --------------------------------------------------------------------------- #
 
-def test_scan_map_window_constructs_and_embeds_shared_view():
+def test_write_csv_writes_expected_rows(tmp_path):
     _app()
-    window = ScanMapWindow()
-    assert window._map_view is not None
-    assert isinstance(window._map_view, ScanMapView)
+    view = ScanMapView()
+    view.update_point(_result(0.0, 0.0, charge=1.0))
+    view.update_point(_result(1.0, 0.0, charge=2.0))
+    view.update_point(_result(0.0, 1.0, charge=3.0))
+
+    out = tmp_path / "map.csv"
+    view._write_csv(str(out))
+
+    assert out.exists()
+    with open(out, newline="") as fh:
+        rows = list(csv.reader(fh))
+
+    assert rows[0] == ["x_mm", "y_mm", "dut_charge_pC"]
+    # Rows are written in sorted (x_mm, y_mm) order.
+    assert rows[1] == ["0.000000", "0.000000", "1"]
+    assert rows[2] == ["0.000000", "1.000000", "3"]
+    assert rows[3] == ["1.000000", "0.000000", "2"]
+    assert len(rows) == 4
 
 
-def test_scan_map_window_update_point_and_set_quantity_delegate_to_view():
+def test_write_csv_uses_currently_selected_quantity(tmp_path):
     _app()
-    window = ScanMapWindow()
-    window.set_quantity("dut_amplitude_V")
-    window.update_point(_result(0.0, 0.0, charge=1.0))
-    window.update_point(_result(1.0, 0.0, charge=2.0))
+    view = ScanMapView()
+    view.update_point(_result(0.0, 0.0, charge=1.0))
+    view.set_quantity("baseline_rms_V")
 
-    assert window._map_view.current_quantity() == "dut_amplitude_V"
-    result = window._map_view.grid_result()
-    assert np.allclose(result.grid.flatten(), 0.3)
+    out = tmp_path / "map.csv"
+    view._write_csv(str(out))
 
-    window.clear()
-    assert window._map_view.point_count() == 0
+    with open(out, newline="") as fh:
+        rows = list(csv.reader(fh))
+    assert rows[0] == ["x_mm", "y_mm", "baseline_rms_V"]
+    assert float(rows[1][2]) == pytest.approx(0.001, rel=1e-6)
 
 
-def test_scan_map_window_theme_switch_survives():
+def test_write_png_writes_nonzero_file(tmp_path):
     app = _app()
-    apply_theme(app, "light")
-    window = ScanMapWindow()
-    window.update_point(_result(0.0, 0.0, charge=1.0))
-    apply_theme(app, "dark")
-    window.refresh_theme("dark")
-    pm = window.grab()
-    assert not pm.isNull()
+    view = ScanMapView()
+    if view.image_view() is None:
+        pytest.skip("pyqtgraph not installed — no map image to export")
+    view.update_point(_result(0.0, 0.0, charge=1.0))
+    view.update_point(_result(1.0, 1.0, charge=2.0))
+    # pg.exporters.ImageExporter needs real item geometry — an unshown
+    # widget's imageItem has none yet in an offscreen session.
+    view.resize(400, 300)
+    view.show()
+    app.processEvents()
+
+    out = tmp_path / "map.png"
+    try:
+        view._write_png(str(out))
+    except Exception as exc:  # pragma: no cover - exercised only if the
+        # pg.exporters ImageExporter path is unavailable in this environment.
+        pytest.skip(f"pyqtgraph PNG exporter unavailable: {exc}")
+
+    assert out.exists()
+    assert out.stat().st_size > 0
+
+
+def test_write_csv_on_empty_view_writes_header_only(tmp_path):
+    _app()
+    view = ScanMapView()
+    out = tmp_path / "empty.csv"
+    view._write_csv(str(out))
+    with open(out, newline="") as fh:
+        rows = list(csv.reader(fh))
+    assert rows == [["x_mm", "y_mm", "dut_charge_pC"]]
+
+
+# --------------------------------------------------------------------------- #
+# Freeze-levels toggle (S2c work package A, ratified 2026-07-10 —             #
+# was the parked "Map colorbar levels" decision, docs/OVERNIGHT_LOG.md)       #
+# --------------------------------------------------------------------------- #
+
+def test_freeze_levels_keeps_colorbar_fixed_while_new_points_widen_range():
+    _app()
+    view = ScanMapView()
+    if view.image_view() is None:
+        pytest.skip("pyqtgraph not installed")
+    view.update_point(_result(0.0, 0.0, charge=10.0))
+    view.update_point(_result(1.0, 0.0, charge=20.0))
+
+    assert view._btn_freeze.isChecked() is False
+    view._btn_freeze.setChecked(True)
+    assert view._btn_freeze.isChecked() is True
+
+    frozen_levels = tuple(view.image_view().imageItem.getLevels())
+    assert frozen_levels == pytest.approx((10.0, 20.0))
+
+    # A new point far outside the captured range arrives while frozen — the
+    # colorbar must not move.
+    view.update_point(_result(2.0, 0.0, charge=100.0))
+    still_frozen = tuple(view.image_view().imageItem.getLevels())
+    assert still_frozen == pytest.approx(frozen_levels)
+
+    # Another new point below the captured range too — still fixed.
+    view.update_point(_result(3.0, 0.0, charge=-50.0))
+    assert tuple(view.image_view().imageItem.getLevels()) == pytest.approx(frozen_levels)
+
+
+def test_unfreeze_levels_resumes_live_autoscale():
+    _app()
+    view = ScanMapView()
+    if view.image_view() is None:
+        pytest.skip("pyqtgraph not installed")
+    view.update_point(_result(0.0, 0.0, charge=10.0))
+    view.update_point(_result(1.0, 0.0, charge=20.0))
+    view._btn_freeze.setChecked(True)
+    view.update_point(_result(2.0, 0.0, charge=100.0))
+
+    view._btn_freeze.setChecked(False)
+    live_levels = tuple(view.image_view().imageItem.getLevels())
+    assert live_levels == pytest.approx((10.0, 100.0))
+
+    # Autoscale keeps tracking further new points once unfrozen.
+    view.update_point(_result(3.0, 0.0, charge=200.0))
+    assert tuple(view.image_view().imageItem.getLevels()) == pytest.approx((10.0, 200.0))
+
+
+def test_freeze_toggled_before_any_data_captures_on_first_arrival():
+    _app()
+    view = ScanMapView()
+    if view.image_view() is None:
+        pytest.skip("pyqtgraph not installed")
+
+    view._btn_freeze.setChecked(True)
+    assert view.grid_result() is None
+
+    view.update_point(_result(0.0, 0.0, charge=5.0))
+    first_levels = tuple(view.image_view().imageItem.getLevels())
+    assert first_levels == pytest.approx((5.0, 5.0 + 1e-9), rel=1e-6)
+
+    view.update_point(_result(1.0, 0.0, charge=500.0))
+    assert tuple(view.image_view().imageItem.getLevels()) == pytest.approx(first_levels)

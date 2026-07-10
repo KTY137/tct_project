@@ -1,11 +1,12 @@
 """
-Shared 2-D scan-map widget — the single map renderer behind both the
-standalone :class:`~gui.scan_map_window.ScanMapWindow` and the future live
-``ScanViewerPanel`` (``docs/research/scan_viewer_design_review.md`` build
-order step 2). Reconstructs a scattered ``(x_mm, y_mm, value)`` point cloud
-into a dense 2-D image via the canonical :mod:`analysis.scan_grid` helper —
-this widget never re-derives the grid/NaN logic inline (that duplication,
-across ``scan_panel``/``scan_map_window``/``analysis_panel``, is exactly what
+Shared 2-D scan-map widget — the single map renderer behind the live
+:class:`~gui.scan_viewer_panel.ScanViewerPanel` and the post-run
+:class:`~gui.analysis_panel.AnalysisPanel` re-plot
+(``docs/research/scan_viewer_design_review.md`` build order step 2).
+Reconstructs a scattered ``(x_mm, y_mm, value)`` point cloud into a dense 2-D
+image via the canonical :mod:`analysis.scan_grid` helper — this widget never
+re-derives the grid/NaN logic inline (that duplication, across the retired
+``scan_panel``/``scan_map_window`` and ``analysis_panel``, is exactly what
 ``analysis.scan_grid`` was built to retire).
 
 Self-contained ``QWidget`` wrapping a ``gui.panel_kit.FigureCard`` (cockpit
@@ -28,23 +29,38 @@ Public API
     arrival).
 ``refresh_theme(mode)``
     Re-applies the cached axis/canvas pens after a light/dark switch.
+
+The toolbar also carries a PNG/CSV export pair and a "freeze levels" toggle
+(this widget now owns the export controls that used to live only on the
+retired standalone map window — see
+``_write_png``/``_write_csv``/``_on_freeze_toggled`` below).
+The export buttons open a ``QFileDialog`` on click; ``_write_png(path)`` /
+``_write_csv(path)`` are the dialog-free write helpers underneath them, for
+programmatic/tested use. "Freeze levels" (ratified 2026-07-10, was the
+parked "Map colorbar levels" decision — ``docs/OVERNIGHT_LOG.md``) keeps the
+colorbar min/max fixed at whatever it was when checked, instead of
+``_redraw``'s default per-call nanmin/nanmax autoscale.
 """
 from __future__ import annotations
 
+import csv
+
 import numpy as np
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
+    QComboBox, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QToolButton,
+    QVBoxLayout, QWidget,
 )
 
 try:
     import pyqtgraph as pg
+    import pyqtgraph.exporters  # noqa: F401 — pg.exporters is not auto-imported; PNG export needs it
     _HAS_PG = True
 except ImportError:  # pragma: no cover - exercised only without pyqtgraph installed
     _HAS_PG = False
 
 from analysis.scan_grid import ScanGridResult, grid_extent, points_to_grid
 from gui.panel_kit import FigureCard
-from gui.status_widgets import StatusChip
+from gui.status_widgets import StatusChip, flash_button, set_button_icon
 from gui.style import PLOT_BG, PLOT_FG, SPACE_SM
 
 # Quantities available on a controller.scan_controller.ScanResult that make
@@ -89,6 +105,14 @@ class ScanMapView(QWidget):
         self._pos: tuple[float, float] = (0.0, 0.0)
         self._scale: tuple[float, float] = (1.0, 1.0)
         self._theme_mode = "dark"
+        # Colorbar "freeze levels" (ratified 2026-07-10, was the parked "Map
+        # colorbar levels" decision — docs/OVERNIGHT_LOG.md): while frozen,
+        # _redraw keeps _frozen_range fixed instead of recomputing
+        # nanmin/nanmax every call. Re-armed (cleared to None) every time
+        # freezing is turned off, so the *next* freeze captures a fresh range
+        # rather than replaying a stale one.
+        self._freeze_levels = False
+        self._frozen_range: tuple[float, float] | None = None
         self._build_ui()
 
     # ------------------------------------------------------------------ #
@@ -109,6 +133,33 @@ class ScanMapView(QWidget):
         self._chip_points = StatusChip("No data", "neutral")
         toolbar.addWidget(self._chip_points)
         toolbar.addStretch(1)
+
+        # Compact trailing control cluster — freeze-levels toggle + PNG/CSV
+        # export, icon-only so embedding this widget in a panel (e.g.
+        # ScanViewerPanel) never grows the row. The export logic lives on this
+        # shared widget so every embedder gets it for free (it used to sit on
+        # the now-retired standalone map window).
+        self._btn_freeze = QToolButton()
+        self._btn_freeze.setCheckable(True)
+        self._btn_freeze.setToolTip(
+            "Freeze colorbar levels — keep the current min/max fixed as new "
+            "points arrive (unchecked = live autoscale)")
+        set_button_icon(self._btn_freeze, "mdi.snowflake")
+        self._btn_freeze.toggled.connect(self._on_freeze_toggled)
+        toolbar.addWidget(self._btn_freeze)
+
+        self._btn_export_png = QToolButton()
+        self._btn_export_png.setToolTip("Export map as PNG")
+        set_button_icon(self._btn_export_png, "mdi.image")
+        self._btn_export_png.clicked.connect(self._on_export_png_clicked)
+        toolbar.addWidget(self._btn_export_png)
+
+        self._btn_export_csv = QToolButton()
+        self._btn_export_csv.setToolTip("Export points as CSV")
+        set_button_icon(self._btn_export_csv, "mdi.content-save")
+        self._btn_export_csv.clicked.connect(self._on_export_csv_clicked)
+        toolbar.addWidget(self._btn_export_csv)
+
         root.addLayout(toolbar)
 
         if _HAS_PG:
@@ -118,7 +169,7 @@ class ScanMapView(QWidget):
             self._image_view = pg.ImageView(view=self._plot_item)
             self._image_view.setMinimumHeight(240)
             # Disable ROI rotation — only axis-aligned resize makes sense on
-            # a stage-position map (same guard as scan_map_window/analysis_panel).
+            # a stage-position map (same guard as analysis_panel).
             _roi = self._image_view.roi
             _roi.rotatable = False
             for _h in list(_roi.handles):
@@ -197,15 +248,15 @@ class ScanMapView(QWidget):
 
     def points(self) -> dict[tuple[float, float], dict[str, float]]:
         """A shallow copy of the accumulated ``(x_mm, y_mm) -> {quantity:
-        value}`` points — for a caller (e.g. ``ScanMapWindow``'s CSV export)
-        that needs the raw per-point data rather than the gridded image."""
+        value}`` points — for a caller that needs the raw per-point data
+        rather than the gridded image (e.g. this widget's own CSV export)."""
         return dict(self._points)
 
     def image_view(self):
         """The underlying ``pyqtgraph.ImageView`` (``None`` if pyqtgraph is
-        not installed) — for a caller (e.g. ``ScanMapWindow``'s PNG export)
-        that needs the raw plot item rather than going through this widget's
-        own API."""
+        not installed) — for a caller that needs the raw plot item rather than
+        going through this widget's own API (e.g. this widget's own PNG
+        export)."""
         return self._image_view if _HAS_PG else None
 
     def grid_result(self) -> ScanGridResult | None:
@@ -244,6 +295,10 @@ class ScanMapView(QWidget):
         if not self._points:
             self._image_view.clear()
             self._grid_result = None
+            # A stale frozen range from a prior dataset makes no sense once
+            # every point is gone — re-arm so the next arriving point (with
+            # freeze still checked) captures a fresh range instead.
+            self._frozen_range = None
             self._chip_points.set_status("No data", "neutral")
             self._lbl_cursor.setText("x: -- mm   y: -- mm   value: --")
             return
@@ -258,9 +313,19 @@ class ScanMapView(QWidget):
         grid = result.grid
         finite = grid[~np.isnan(grid)]
         if finite.size:
-            # Autoscale the colorbar from nanmin/nanmax over sampled cells
-            # only — unsampled/NaN cells never skew the colour range.
-            vmin, vmax = float(np.nanmin(grid)), float(np.nanmax(grid))
+            if self._freeze_levels:
+                # Keep whatever range was captured when freezing began (or,
+                # if freezing was toggled on before any data existed, the
+                # very first grid seen while frozen) — new points, even ones
+                # widening the true data range, never move the colorbar
+                # until "freeze levels" is unchecked again.
+                if self._frozen_range is None:
+                    self._frozen_range = (float(np.nanmin(grid)), float(np.nanmax(grid)))
+                vmin, vmax = self._frozen_range
+            else:
+                # Autoscale the colorbar from nanmin/nanmax over sampled cells
+                # only — unsampled/NaN cells never skew the colour range.
+                vmin, vmax = float(np.nanmin(grid)), float(np.nanmax(grid))
             if vmin == vmax:
                 vmax = vmin + 1e-9
             display = np.nan_to_num(grid, nan=vmin)
@@ -282,6 +347,67 @@ class ScanMapView(QWidget):
             f"{n_filled}/{n_total} pts", status,
             f"{result.n_missing} cells not yet sampled")
         self._update_cursor_readout()
+
+    def _on_freeze_toggled(self, checked: bool) -> None:
+        """Toolbar "freeze levels" toggle. Checking it fixes the colorbar at
+        whatever range ``_redraw`` next resolves (immediately below, since
+        this handler ends with a redraw); unchecking clears the captured
+        range and resumes live nanmin/nanmax autoscale."""
+        self._freeze_levels = bool(checked)
+        if not self._freeze_levels:
+            self._frozen_range = None
+        self._redraw()
+
+    def _on_export_png_clicked(self) -> None:
+        if not _HAS_PG or self._image_view is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Map as PNG", "", "PNG (*.png)")
+        if not path:
+            return
+        try:
+            self._write_png(path)
+            flash_button(self._btn_export_png, "good")
+        except Exception as exc:
+            QMessageBox.warning(self, "Export Error", str(exc))
+
+    def _on_export_csv_clicked(self) -> None:
+        if not self._points:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Map as CSV", "", "CSV (*.csv)")
+        if not path:
+            return
+        try:
+            self._write_csv(path)
+            flash_button(self._btn_export_csv, "good")
+        except Exception as exc:
+            QMessageBox.warning(self, "Export Error", str(exc))
+
+    def _write_png(self, path: str) -> None:
+        """Write the current map image to *path* as PNG via pyqtgraph's
+        ``ImageExporter`` — the write half of the toolbar PNG export button,
+        split out so a caller (including a headless test) can drive it
+        without a ``QFileDialog``."""
+        if not _HAS_PG:
+            raise RuntimeError("pyqtgraph is not installed — cannot export PNG")
+        if self._image_view is None:
+            raise RuntimeError("no map image to export")
+        exporter = pg.exporters.ImageExporter(self._image_view.imageItem)
+        exporter.export(path)
+
+    def _write_csv(self, path: str) -> None:
+        """Write the accumulated per-point data for the current quantity to
+        *path* as CSV — the write half of the toolbar CSV export button,
+        split out so a caller (including a headless test) can drive it
+        without a ``QFileDialog``."""
+        qty = self._combo_qty.currentText()
+        with open(path, "w", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["x_mm", "y_mm", qty])
+            for (x, y), values in sorted(self._points.items()):
+                val = values.get(qty, float("nan"))
+                writer.writerow([f"{x:.6f}", f"{y:.6f}", f"{val:.8g}"])
 
     def _update_cursor_readout(self, x_mm: float | None = None, y_mm: float | None = None) -> None:
         if x_mm is None or y_mm is None:
