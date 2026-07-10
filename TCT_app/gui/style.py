@@ -575,6 +575,15 @@ QLabel#readoutCellValue[state="good"] {{ color: {p['good']}; }}
 QLabel#readoutCellValue[state="warn"] {{ color: {p['warn']}; }}
 QLabel#readoutCellValue[state="crit"] {{ color: {p['crit']}; }}
 QLabel#readoutCellValue[state="armed"] {{ color: {p['warn']}; font-weight: 800; }}
+QFrame#readoutCell[flash="accent"] {{
+    border: 1px solid {p['accent']}; background: {_rgba(p['accent'], 0.10)};
+}}
+QFrame#readoutCell[flash="warn"] {{
+    border: 1px solid {p['warn']}; background: {_rgba(p['warn'], 0.10)};
+}}
+QFrame#readoutCell[flash="crit"] {{
+    border: 1px solid {p['crit']}; background: {_rgba(p['crit'], 0.10)};
+}}
 
 /* Recessed control cluster — groups related buttons (e.g. a jog pad) into
    one visual unit inside a QGroupBox, the way a physical jog controller
@@ -688,6 +697,30 @@ QLabel#statusChip[state="simulated"] {{
     background: {_rgba(p['sim'], 0.16)}; color: {p['sim']};
     border: 1px solid {_rgba(p['sim'], 0.55)};
 }}
+QLabel#statusChip[motionPulse="laser"][motionPulsePhase="0"] {{
+    background: {_rgba(p['crit'], 0.14)}; color: {p['crit']};
+    border: 1px solid {_rgba(p['crit'], 0.42)};
+}}
+QLabel#statusChip[motionPulse="laser"][motionPulsePhase="1"] {{
+    background: {_rgba(p['crit'], 0.24)}; color: {p['crit']};
+    border: 1px solid {_rgba(p['crit'], 0.78)};
+}}
+QLabel#statusChip[motionPulse="hv"][motionPulsePhase="0"] {{
+    background: {_rgba(p['warn'], 0.14)}; color: {p['warn']};
+    border: 1px solid {_rgba(p['warn'], 0.42)};
+}}
+QLabel#statusChip[motionPulse="hv"][motionPulsePhase="1"] {{
+    background: {_rgba(p['warn'], 0.24)}; color: {p['warn']};
+    border: 1px solid {_rgba(p['warn'], 0.78)};
+}}
+QLabel#statusChip[motionPulse="scan"][motionPulsePhase="0"] {{
+    background: {_rgba(p['accent'], 0.14)}; color: {p['accent']};
+    border: 1px solid {_rgba(p['accent'], 0.42)};
+}}
+QLabel#statusChip[motionPulse="scan"][motionPulsePhase="1"] {{
+    background: {_rgba(p['accent'], 0.24)}; color: {p['accent']};
+    border: 1px solid {_rgba(p['accent'], 0.78)};
+}}
 
 QFrame#statusLamp {{
     min-width: 9px; max-width: 9px; min-height: 9px; max-height: 9px;
@@ -712,6 +745,16 @@ QFrame#statusPill[state="simulated"] {{ border-color: {_rgba(p['sim'], 0.60)}; }
 QLabel#statusPillText {{
     font-size: {FONT_XS}px; font-weight: 700; color: {p['text']};
 }}
+
+QFrame#activityRing {{
+    min-width: 10px; max-width: 10px; min-height: 10px; max-height: 10px;
+    border-radius: 5px; background: transparent;
+    border: 1px solid {_rgba(p['accent'], 0.28)};
+}}
+QFrame#activityRing[phase="0"] {{ border-top: 2px solid {p['accent']}; }}
+QFrame#activityRing[phase="1"] {{ border-right: 2px solid {p['accent']}; }}
+QFrame#activityRing[phase="2"] {{ border-bottom: 2px solid {p['accent']}; }}
+QFrame#activityRing[phase="3"] {{ border-left: 2px solid {p['accent']}; }}
 
 /* ---------------------------------------------------------------------
    Scan Routine Planner "Recipe Tree" (Phase 2.2 step 3 — gui/planner_panel.py).

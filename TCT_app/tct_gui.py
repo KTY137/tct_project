@@ -38,6 +38,7 @@ from gui.analysis_panel import AnalysisPanel
 from gui.calibration_panel import CalibrationPanel
 from gui.device_panel import DeviceManagerWindow, device_state
 from gui.liveness import LivenessMonitor
+from gui.motion import set_pulse
 from gui.settings_window import SettingsWindow
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, StatusPill
@@ -691,6 +692,7 @@ class TCTMainWindow(QMainWindow):
         """Update the bias strip from a reading delivered by the _BiasPoller
         thread (None = supply unavailable).  Pure widget work — no I/O here."""
         if r is None:
+            set_pulse(self._chip_bias_v, False)
             self._chip_bias_v.set_status("HV --", "neutral")
             self._chip_bias_i.set_status("I --", "neutral")
             self._chip_bias_comp.set_status("Compliance --", "neutral")
@@ -703,6 +705,7 @@ class TCTMainWindow(QMainWindow):
         self._bias_compliant_prev = compliant
         hv_state = "armed" if abs(float(r.voltage_V)) > 1.0 else "good"
         self._chip_bias_v.set_status(f"HV {r.voltage_V:+.1f} V", hv_state)
+        set_pulse(self._chip_bias_v, hv_state == "armed", kind="hv")
         self._chip_bias_i.set_status(f"I {r.current_A*1e6:+.3f} uA", hv_state)
         self._chip_bias_comp.set_status(
             "Compliance HIT" if compliant else "Compliance OK",
@@ -1105,6 +1108,7 @@ class TCTMainWindow(QMainWindow):
         self._lbl_state.set_status(f"State: {new.name}", visual)
         if hasattr(self, "_chip_scan"):
             self._chip_scan.set_status(f"Scan {new.name}", visual)
+            set_pulse(self._chip_scan, new == AppState.RUNNING, kind="scan")
         panel = getattr(self, "_planner_panel", None)
         if panel is not None:
             # Only a planner-launched run drives the panel's running state; a

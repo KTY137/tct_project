@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 
 from devices.laser_manual import LaserManualMetadata
 from devices.waveform_generator import WaveformGenerator, list_visa_resources
+from gui.motion import set_pulse
 from gui.panel_kit import Card, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import SPACE_MD, WARN_AMBER, palette
@@ -524,12 +525,16 @@ class LaserPanel(QWidget):
         except Exception:
             return
         if not live:
+            set_pulse(self._chip_output, False)
             self._chip_output.set_status("Output --", "neutral")
         elif state is True:
             self._chip_output.set_status("Output ARMED", "armed")
+            set_pulse(self._chip_output, True, kind="laser")
         elif state is False:
+            set_pulse(self._chip_output, False)
             self._chip_output.set_status("Output off", "good")
         else:
+            set_pulse(self._chip_output, True, kind="laser")
             self._chip_output.set_status("Output state unknown", "warn",
                                          "Wavegen output state not read back on "
                                          "connect — toggle Output ON/OFF to define it.")

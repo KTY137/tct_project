@@ -44,6 +44,7 @@ from controller.scan_controller import ScanResult, ZFocusScanConfig
 from gui.panel_kit import (
     ActionBar, CheckableCard, EmptyState, FigureCard, MetricGrid, panel_header,
 )
+from gui.motion import flash_readout
 from gui.scan_map_view import ScanMapView
 from gui.status_widgets import StatusChip, set_button_icon
 from gui.style import PLOT_OVERLAY, SPACE_SM, axis_color, repolish
@@ -299,6 +300,7 @@ class ScanViewerPanel(QWidget):
         self._metric_progress.set_value(f"{done}/{total}")
         self._metric_eta.set_value(self._compute_eta(done, total))
         self._metric_elapsed.set_value(self._format_duration(self._elapsed_s()))
+        flash_readout(self._metric_progress, "accent", timeout_ms=450)
 
     def on_manual_pause(self, msg: str) -> None:
         self._chip_run.set_status(f"Manual pause: {msg}"[:60], "warn")
