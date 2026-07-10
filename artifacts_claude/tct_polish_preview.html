@@ -1,21 +1,20 @@
 <title>TCT Cockpit — Polish Preview (P1–P3)</title>
 <style>
   /* =====================================================================
-     v4 — APPLE PASS. Deference, materials, depth, typography.
-     Canvas is a near-black neutral with two faint ambient accent glows;
-     chrome is frosted glass floating above it; cards are elevated planes
-     with continuous 12px radii and soft real shadows; numerals are large,
-     light, tabular; one luminous accent; Apple-calibrated semantics.
+     v5 — COMPOSITION PASS on the approved v4 (Apple) direction.
+     The hero is the product: one composed cockpit frame (rail, tabs,
+     viewer with a real-looking live map) exactly as the app lays it out;
+     anatomy sections follow. Same tokens as v4; new: credible canvas
+     heatmap + colorbar + quantity segmented control + freeze toggle
+     (all existing widgets), staggered entrance, finer material details.
      ===================================================================== */
   :root {
     --canvas:#131316;
-    --glow-a: rgba(56,178,220,.10);
-    --glow-b: rgba(56,120,220,.05);
-    --material: rgba(30,30,34,.62);          /* frosted chrome */
-    --material-strong: rgba(24,24,27,.78);
+    --glow-a: rgba(56,178,220,.10); --glow-b: rgba(86,110,230,.05);
+    --material: rgba(30,30,34,.62); --material-strong: rgba(24,24,27,.78);
     --card:#1d1d21; --card-2:#242429; --field: rgba(255,255,255,.055);
-    --hairline: rgba(255,255,255,.085);
-    --hairline-strong: rgba(255,255,255,.16);
+    --hairline: rgba(255,255,255,.085); --hairline-strong: rgba(255,255,255,.16);
+    --toplight: rgba(255,255,255,.045);
     --text:#f2f3f5; --muted:#a3a8b3; --faint:#63676f;
     --accent:#41c8f0; --accent-press:#2fa8cd; --on-accent:#04222c;
     --tint: rgba(65,200,240,.13);
@@ -27,13 +26,11 @@
   }
   @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) {
     --canvas:#eef0f4;
-    --glow-a: rgba(24,150,190,.10);
-    --glow-b: rgba(90,120,255,.06);
-    --material: rgba(255,255,255,.60);
-    --material-strong: rgba(255,255,255,.78);
+    --glow-a: rgba(24,150,190,.10); --glow-b: rgba(90,120,255,.06);
+    --material: rgba(255,255,255,.60); --material-strong: rgba(255,255,255,.80);
     --card:#ffffff; --card-2:#f6f7f9; --field: rgba(20,25,35,.05);
-    --hairline: rgba(20,25,40,.10);
-    --hairline-strong: rgba(20,25,40,.22);
+    --hairline: rgba(20,25,40,.10); --hairline-strong: rgba(20,25,40,.22);
+    --toplight: rgba(255,255,255,.85);
     --text:#1b1d22; --muted:#5c626e; --faint:#9aa0ab;
     --accent:#0e7fa6; --accent-press:#0a678a; --on-accent:#ffffff;
     --tint: rgba(14,127,166,.12);
@@ -43,13 +40,11 @@
   }}
   :root[data-theme="dark"] {
     --canvas:#131316;
-    --glow-a: rgba(56,178,220,.10);
-    --glow-b: rgba(56,120,220,.05);
-    --material: rgba(30,30,34,.62);
-    --material-strong: rgba(24,24,27,.78);
+    --glow-a: rgba(56,178,220,.10); --glow-b: rgba(86,110,230,.05);
+    --material: rgba(30,30,34,.62); --material-strong: rgba(24,24,27,.78);
     --card:#1d1d21; --card-2:#242429; --field: rgba(255,255,255,.055);
-    --hairline: rgba(255,255,255,.085);
-    --hairline-strong: rgba(255,255,255,.16);
+    --hairline: rgba(255,255,255,.085); --hairline-strong: rgba(255,255,255,.16);
+    --toplight: rgba(255,255,255,.045);
     --text:#f2f3f5; --muted:#a3a8b3; --faint:#63676f;
     --accent:#41c8f0; --accent-press:#2fa8cd; --on-accent:#04222c;
     --tint: rgba(65,200,240,.13);
@@ -59,13 +54,11 @@
   }
   :root[data-theme="light"] {
     --canvas:#eef0f4;
-    --glow-a: rgba(24,150,190,.10);
-    --glow-b: rgba(90,120,255,.06);
-    --material: rgba(255,255,255,.60);
-    --material-strong: rgba(255,255,255,.78);
+    --glow-a: rgba(24,150,190,.10); --glow-b: rgba(90,120,255,.06);
+    --material: rgba(255,255,255,.60); --material-strong: rgba(255,255,255,.80);
     --card:#ffffff; --card-2:#f6f7f9; --field: rgba(20,25,35,.05);
-    --hairline: rgba(20,25,40,.10);
-    --hairline-strong: rgba(20,25,40,.22);
+    --hairline: rgba(20,25,40,.10); --hairline-strong: rgba(20,25,40,.22);
+    --toplight: rgba(255,255,255,.85);
     --text:#1b1d22; --muted:#5c626e; --faint:#9aa0ab;
     --accent:#0e7fa6; --accent-press:#0a678a; --on-accent:#ffffff;
     --tint: rgba(14,127,166,.12);
@@ -75,24 +68,33 @@
   }
 
   * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
   body {
     margin: 0; padding: 44px 24px 90px;
     color: var(--text);
     background:
-      radial-gradient(900px 480px at 12% -6%, var(--glow-a), transparent 62%),
-      radial-gradient(1100px 560px at 95% 8%, var(--glow-b), transparent 60%),
+      radial-gradient(1000px 520px at 10% -8%, var(--glow-a), transparent 62%),
+      radial-gradient(1200px 600px at 96% 6%, var(--glow-b), transparent 60%),
       var(--canvas);
     background-attachment: fixed;
     font-family: -apple-system, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
     font-size: 13px; line-height: 1.55;
     -webkit-font-smoothing: antialiased;
   }
-  main { max-width: 940px; margin: 0 auto; display: flex; flex-direction: column; gap: 40px; }
+  main { max-width: 920px; margin: 0 auto; display: flex; flex-direction: column; gap: 48px; }
+
+  /* orchestrated entrance — one gentle rise, staggered */
+  @keyframes rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+  main > * { animation: rise .6s cubic-bezier(.2,.7,.2,1) backwards; }
+  main > *:nth-child(1) { animation-delay: .05s; }
+  main > *:nth-child(2) { animation-delay: .14s; }
+  main > *:nth-child(3) { animation-delay: .24s; }
+  main > *:nth-child(4) { animation-delay: .32s; }
+  main > *:nth-child(5) { animation-delay: .40s; }
+  @media (prefers-reduced-motion: reduce) { main > * { animation: none; } }
 
   h1 { font-family: -apple-system, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", sans-serif;
-       font-size: 26px; font-weight: 650; letter-spacing: -.022em; margin: 0; text-wrap: balance; }
-  .lede { color: var(--muted); font-size: 13px; max-width: 68ch; margin-top: 8px; }
+       font-size: 27px; font-weight: 650; letter-spacing: -.022em; margin: 0; }
+  .lede { color: var(--muted); font-size: 13px; max-width: 66ch; margin-top: 8px; }
   h2 { font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
        color: var(--faint); margin: 0 0 14px; }
   .mono { font-family: "SF Mono", Consolas, "Cascadia Mono", monospace; font-variant-numeric: tabular-nums; }
@@ -102,115 +104,106 @@
 
   section { background: var(--card); border: 1px solid var(--hairline);
             border-radius: 14px; padding: 24px 28px 20px;
-            box-shadow: var(--shadow-card); }
+            box-shadow: var(--shadow-card), inset 0 1px 0 var(--toplight); }
 
-  /* ============ frosted system rail (the aesthetic thesis) ============== */
-  .railwrap { position: relative; border-radius: 14px; overflow: hidden;
-              box-shadow: var(--shadow-rail); }
-  .rail {
-    display: flex; align-items: center; gap: 22px; flex-wrap: wrap;
-    padding: 13px 22px;
+  /* ================= THE HERO: one composed cockpit frame ============== */
+  .frame { border-radius: 16px; overflow: hidden; border: 1px solid var(--hairline);
+           box-shadow: var(--shadow-card); background: var(--card); }
+  .frame .rail {
+    display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+    padding: 12px 20px;
     background: var(--material);
     -webkit-backdrop-filter: blur(22px) saturate(1.5);
     backdrop-filter: blur(22px) saturate(1.5);
-    border: 1px solid var(--hairline);
-    border-radius: 14px;
+    border-bottom: 1px solid var(--hairline);
+    box-shadow: var(--shadow-rail);
   }
-  .rail .sep { width: 1px; height: 22px; background: var(--hairline-strong); }
+  .wordmark { display: inline-flex; align-items: center; gap: 8px; margin-right: 4px; }
+  .wordmark .mark { width: 18px; height: 18px; border-radius: 5px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-press));
+      display: inline-flex; align-items: center; justify-content: center;
+      color: var(--on-accent); font-size: 10px; font-weight: 700; }
+  .wordmark .name { font-size: 12.5px; font-weight: 650; letter-spacing: -.01em; }
+
+  .rail .sep { width: 1px; height: 20px; background: var(--hairline-strong); }
   .rail .spacer { flex: 1; }
-
-  .dev { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 590;
-         color: var(--muted); letter-spacing: .01em; }
-  .dev .dot { width: 7px; height: 7px; border-radius: 50%; }
+  .dev { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 590; color: var(--muted); }
+  .dev .dot { width: 6.5px; height: 6.5px; border-radius: 50%; }
   .dev.on .dot  { background: var(--good); }
-  .dev.sim      { color: var(--sim); }
-  .dev.sim .dot { background: var(--sim); }
-  .dev.off      { color: var(--faint); }
-  .dev.off .dot { background: transparent; box-shadow: inset 0 0 0 1.2px var(--faint); }
+  .dev.sim      { color: var(--sim); }   .dev.sim .dot { background: var(--sim); }
+  .dev.off      { color: var(--faint); } .dev.off .dot { background: transparent; box-shadow: inset 0 0 0 1.2px var(--faint); }
 
-  .st { display: inline-flex; align-items: baseline; gap: 7px; white-space: nowrap; }
-  .st .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); align-self: center; }
-  .st .lab { font-size: 11px; font-weight: 590; color: var(--faint); letter-spacing: .01em; }
+  .st { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; }
+  .st .dot { width: 6.5px; height: 6.5px; border-radius: 50%; background: var(--faint); align-self: center; }
+  .st .lab { font-size: 11px; font-weight: 590; color: var(--faint); }
   .st .val { font-family: "SF Mono", Consolas, monospace; font-variant-numeric: tabular-nums;
-             font-size: 13px; font-weight: 500; color: var(--text); }
-  .st .val .u { color: var(--faint); font-size: 11px; margin-left: 1px; }
+             font-size: 12.5px; font-weight: 500; }
+  .st .val .u { color: var(--faint); font-size: 10.5px; margin-left: 1px; }
   .st.good .dot { background: var(--good); }
   .st.busy .dot { background: var(--accent); }
   .st.warn .dot { background: var(--warn); }  .st.warn .val { color: var(--warn); }
   .st.crit .dot { background: var(--crit); }  .st.crit .val { color: var(--crit); font-weight: 600; }
-
-  @keyframes laserbreathe {
-    0%,100% { box-shadow: 0 0 0 0 rgba(255,79,71,0); }
-    50%     { box-shadow: 0 0 10px 2px rgba(255,79,71,.55); }
-  }
+  @keyframes laserbreathe { 0%,100% { box-shadow: 0 0 0 0 rgba(255,79,71,0); }
+                            50% { box-shadow: 0 0 10px 2px rgba(255,79,71,.55); } }
   .st.crit.live .dot { animation: laserbreathe 2.6s ease-in-out infinite; }
   @keyframes hvpulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.3); } }
   .st.warn.live .dot { animation: hvpulse 2.6s ease-in-out infinite; }
-  .ring { width: 11px; height: 11px; border-radius: 50%; align-self: center;
+  .ring { width: 10px; height: 10px; border-radius: 50%; align-self: center;
           border: 1.5px solid var(--tint); border-top-color: var(--accent);
           animation: rot 1s linear infinite; }
   @keyframes rot { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .st .dot, .ring { animation: none !important; } }
 
-  /* ============ tabs — sidebar-selection pills ========================== */
-  .tabs { display: flex; gap: 4px; overflow-x: auto; padding: 3px; border-radius: 12px;
-          background: var(--field); }
-  .tab { padding: 6px 14px; font-size: 12.5px; font-weight: 500; color: var(--muted);
-         border-radius: 9px; white-space: nowrap; cursor: default;
+  .frame .tabs { display: flex; gap: 4px; overflow-x: auto; padding: 10px 16px 0;
+                 background: transparent; }
+  .tab { padding: 6px 13px; font-size: 12.5px; font-weight: 500; color: var(--muted);
+         border-radius: 8px; white-space: nowrap; cursor: default;
          transition: background .16s ease, color .16s ease; }
   .tab:hover { background: var(--field); color: var(--text); }
   .tab.active { background: var(--tint); color: var(--accent); font-weight: 600; }
 
-  /* ============ viewer =================================================== */
-  .viewer { display: flex; flex-direction: column; gap: 16px; }
-  .viewer-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-  .viewer-head .crumb { font-size: 11px; font-weight: 590; color: var(--faint); }
-  .viewer-head .crumb::after { content: " ›"; color: var(--faint); }
-  .viewer-head .title { font-family: -apple-system, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", sans-serif;
-       font-size: 19px; font-weight: 650; letter-spacing: -.015em; }
-  .viewer-head .spacer { flex: 1; }
+  .frame .body { padding: 18px 20px 20px; display: flex; flex-direction: column; gap: 14px; }
+  .vhead { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+  .vhead .title { font-family: -apple-system, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", sans-serif;
+                  font-size: 18px; font-weight: 650; letter-spacing: -.015em; }
+  .vhead .spacer { flex: 1; }
 
-  .screen { background: var(--plot, #0a0b0d); border-radius: 12px;
-            border: 1px solid var(--hairline);
-            min-height: 170px; position: relative; overflow: hidden;
-            display: flex; align-items: center; justify-content: center;
-            box-shadow: inset 0 1px 0 rgba(255,255,255,.04), inset 0 0 40px rgba(0,0,0,.5); }
-  .screen .grid { position: absolute; inset: 0; background:
-      repeating-linear-gradient(0deg, transparent 0 23px, rgba(199,207,218,.045) 23px 24px),
-      repeating-linear-gradient(90deg, transparent 0 23px, rgba(199,207,218,.045) 23px 24px); }
-  .screen .blob { position: absolute; width: 140px; height: 96px; border-radius: 50%;
-      background: radial-gradient(closest-side, #f6df82 0%, #e3a63a 32%, #7c440f 68%, transparent 100%);
-      opacity: .92; filter: blur(1px); }
-  .screen .label { position: relative; font-family: "SF Mono", Consolas, monospace; font-size: 10px;
-      letter-spacing: .14em; color: rgba(199,207,218,.45); margin-top: 126px; }
+  /* segmented quantity control (the real map's quantity combo, re-clothed) */
+  .seg { display: inline-flex; gap: 2px; background: var(--field); border-radius: 9px; padding: 2.5px; }
+  .seg span { padding: 4px 11px; font-size: 11.5px; font-weight: 550; color: var(--muted);
+              border-radius: 7px; cursor: default; }
+  .seg span.on { background: var(--card); color: var(--text);
+                 box-shadow: 0 1px 3px rgba(0,0,0,.25); }
 
-  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .maprow { display: grid; grid-template-columns: 1fr 46px; gap: 12px; }
+  .screen { background: var(--plot,#0a0b0d); border-radius: 12px; border: 1px solid var(--hairline);
+            position: relative; overflow: hidden; min-height: 240px;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,.04), inset 0 0 46px rgba(0,0,0,.5); }
+  .screen canvas { display: block; width: 100%; height: 240px; }
+  .screen .readout { position: absolute; right: 10px; top: 8px;
+      font-family: "SF Mono", Consolas, monospace; font-size: 10.5px;
+      color: rgba(199,207,218,.75); background: rgba(10,11,13,.55);
+      -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+      border: 1px solid rgba(255,255,255,.07); border-radius: 6px; padding: 3px 8px; }
+  .cbar { background: var(--plot,#0a0b0d); border-radius: 10px; border: 1px solid var(--hairline);
+          position: relative; overflow: hidden; }
+  .cbar canvas { display: block; width: 100%; height: 100%; }
+  .cbar .fz { position: absolute; left: 0; right: 0; bottom: 0; text-align: center;
+      font-size: 11px; padding: 4px 0; color: rgba(199,207,218,.7);
+      background: rgba(10,11,13,.6); cursor: default; }
+
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
   .tile { background: var(--card-2); border: 1px solid var(--hairline); border-radius: 12px;
-          padding: 13px 16px 12px; }
-  .tile .k { font-size: 11px; font-weight: 590; color: var(--faint); letter-spacing: .01em; }
+          padding: 12px 15px 11px; box-shadow: inset 0 1px 0 var(--toplight); }
+  .tile .k { font-size: 11px; font-weight: 590; color: var(--faint); }
   .tile .v { font-family: -apple-system, "SF Pro Display", "Segoe UI Variable Display", "Segoe UI", sans-serif;
-             font-variant-numeric: tabular-nums; font-size: 27px; font-weight: 350;
+             font-variant-numeric: tabular-nums; font-size: 26px; font-weight: 350;
              letter-spacing: -.02em; margin-top: 2px; }
-  .tile .v .u { font-size: 12px; color: var(--faint); font-weight: 450; margin-left: 4px; letter-spacing: 0; }
+  .tile .v .u { font-size: 12px; color: var(--faint); font-weight: 450; margin-left: 4px; }
   @keyframes tickflash { 0% { color: var(--accent); } 100% { color: var(--text); } }
   .tile.flash .v { animation: tickflash 1.2s ease-out; }
 
-  .fld { display: inline-flex; flex-direction: column; gap: 5px; }
-  .fld .flab { font-size: 11px; font-weight: 590; color: var(--faint); }
-  .well { background: var(--field); border: 1px solid transparent; border-radius: 9px;
-          padding: 6px 12px; font-family: "SF Mono", Consolas, monospace; font-size: 13px;
-          font-variant-numeric: tabular-nums; min-width: 112px;
-          transition: box-shadow .15s ease, border-color .15s ease; }
-  .well .u { color: var(--faint); }
-  .well.focus { border-color: var(--accent);
-          box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--accent) 22%, transparent); }
-
-  .card2 { background: var(--card-2); border: 1px solid var(--hairline); border-radius: 12px;
-           padding: 16px 18px; }
-  .card2 h3 { margin: 0 0 14px; font-size: 13.5px; font-weight: 600; letter-spacing: -.005em; }
-  .card2 h3 .sub { color: var(--faint); font-weight: 400; margin-left: 10px; font-size: 11.5px; }
-
-  /* ============ buttons — Apple push buttons ============================= */
+  .actions { display: flex; gap: 10px; align-items: center; }
   .btn { display: inline-block; text-align: center; border-radius: 9px; padding: 7px 16px;
          font-size: 13px; font-weight: 590; cursor: default;
          -webkit-user-select: none; user-select: none;
@@ -226,11 +219,24 @@
   .btn.danger.prs { background: var(--crit); color: #fff; transform: scale(.97); }
   .btn.dis { background: var(--field); color: var(--faint); }
 
-  .btnrow { display: grid; grid-template-columns: 92px repeat(4, minmax(108px,1fr)); gap: 12px; align-items: center; }
+  .card2 { background: var(--card-2); border: 1px solid var(--hairline); border-radius: 12px;
+           padding: 15px 17px; box-shadow: inset 0 1px 0 var(--toplight); }
+  .card2 h3 { margin: 0 0 13px; font-size: 13.5px; font-weight: 600; }
+  .card2 h3 .sub { color: var(--faint); font-weight: 400; margin-left: 10px; font-size: 11.5px; }
+  .fld { display: inline-flex; flex-direction: column; gap: 5px; }
+  .fld .flab { font-size: 11px; font-weight: 590; color: var(--faint); }
+  .well { background: var(--field); border: 1px solid transparent; border-radius: 9px;
+          padding: 6px 12px; font-family: "SF Mono", Consolas, monospace; font-size: 13px;
+          font-variant-numeric: tabular-nums; min-width: 110px;
+          transition: box-shadow .15s ease, border-color .15s ease; }
+  .well .u { color: var(--faint); }
+  .well.focus { border-color: var(--accent);
+          box-shadow: 0 0 0 3.5px color-mix(in srgb, var(--accent) 22%, transparent); }
+
+  .btnrow { display: grid; grid-template-columns: 88px repeat(4, minmax(106px,1fr)); gap: 12px; align-items: center; }
   .btnrow .h { font-size: 11px; font-weight: 590; color: var(--faint); }
 
-  /* ============ palette ================================================== */
-  .cmp { display: grid; grid-template-columns: 92px 1fr 1fr; gap: 10px 16px; align-items: center; max-width: 560px; }
+  .cmp { display: grid; grid-template-columns: 88px 1fr 1fr; gap: 10px 16px; align-items: center; max-width: 540px; }
   .cmp .h { font-size: 11px; font-weight: 590; color: var(--faint); }
   .cmp .name { font-size: 12px; color: var(--muted); font-family: "SF Mono", Consolas, monospace; }
   .swb { display: flex; align-items: center; gap: 9px; font-family: "SF Mono", Consolas, monospace;
@@ -244,14 +250,17 @@
 <main>
   <header>
     <h1>TCT Cockpit</h1>
-    <p class="lede">Polish preview, v4 — the Apple pass. The interface defers: an almost-black canvas with
-    a faint ambient glow, frosted chrome floating above it, planes separated by light instead of lines,
-    and numerals that carry the room. Every widget on this page exists in the app today — nothing invented,
-    only re-clothed. Toggle the theme; both are first-class.</p>
+    <p class="lede">Polish preview v5 — same v4 direction you approved, composed as the real thing:
+    the frame below is the app as it would open tomorrow. Everything on it exists today (the map now
+    renders a credible dataset with the actual colorbar and your new freeze-levels toggle). Toggle the
+    artifact theme; both are first-class.</p>
   </header>
 
-  <div class="railwrap">
+  <!-- ============================ HERO ================================= -->
+  <div class="frame">
     <div class="rail">
+      <span class="wordmark"><span class="mark">T</span><span class="name">TCT Control</span></span>
+      <span class="sep"></span>
       <span class="dev on"><span class="dot"></span>Motor</span>
       <span class="dev on"><span class="dot"></span>RefMon</span>
       <span class="dev on"><span class="dot"></span>Camera</span>
@@ -261,16 +270,12 @@
       <span class="sep"></span>
       <span class="st warn live"><span class="dot"></span><span class="lab">HV</span><span class="val">−120.0<span class="u">V</span></span></span>
       <span class="st"><span class="dot"></span><span class="lab">I</span><span class="val">0.42<span class="u">µA</span></span></span>
-      <span class="st good"><span class="dot"></span><span class="lab">Compliance</span><span class="val">OK</span></span>
       <span class="spacer"></span>
       <span class="st good"><span class="dot"></span><span class="lab">Motion</span><span class="val">homed</span></span>
       <span class="st busy"><span class="ring"></span><span class="lab">Scan</span><span class="val">running</span></span>
       <span class="st crit live"><span class="dot"></span><span class="lab">Laser</span><span class="val">ON</span></span>
     </div>
-  </div>
 
-  <section>
-    <h2>Navigation</h2>
     <div class="tabs">
       <span class="tab">Motor Stage</span>
       <span class="tab">Reference Monitor</span>
@@ -279,31 +284,31 @@
       <span class="tab">Laser / Trigger</span>
       <span class="tab active">Scan Viewer</span>
       <span class="tab">Scan Planner</span>
-      <span class="tab" style="background:var(--field);color:var(--text)">Bias Supply</span>
+      <span class="tab">Bias Supply</span>
       <span class="tab">Calibration</span>
       <span class="tab">Monitor</span>
       <span class="tab">Analysis</span>
     </div>
-    <div class="spec">Selection-pill navigation (the macOS sidebar idiom): the active tab sits in a tinted
-      pill with accent ink; hover is a quiet material wash ("Bias Supply" frozen mid-hover). No borders,
-      no underline hardware.</div>
-  </section>
 
-  <section>
-    <h2>Scan Viewer</h2>
-    <div class="viewer">
-      <div class="viewer-head">
-        <span class="crumb">TCT Control</span>
+    <div class="body">
+      <div class="vhead">
         <span class="title">Scan Viewer</span>
+        <span class="seg">
+          <span class="on">Charge</span><span>Norm</span><span>Amplitude</span><span>Rise</span><span>CFD</span>
+        </span>
         <span class="spacer"></span>
-        <span class="st busy"><span class="ring"></span><span class="lab">Run</span><span class="val">128/400</span></span>
         <span class="btn dis">Open in Analysis</span>
       </div>
 
-      <div class="screen">
-        <div class="grid"></div>
-        <div class="blob"></div>
-        <div class="label">LIVE MAP — CANVAS FIXED DARK IN BOTH THEMES</div>
+      <div class="maprow">
+        <div class="screen">
+          <canvas id="map" width="820" height="240"></canvas>
+          <span class="readout" id="cursor">x 1.250 · y 0.375 · 8.42 pC</span>
+        </div>
+        <div class="cbar">
+          <canvas id="cbar" width="46" height="240"></canvas>
+          <span class="fz" title="Freeze levels">❄</span>
+        </div>
       </div>
 
       <div class="metrics">
@@ -313,7 +318,7 @@
         <div class="tile"><div class="k">Elapsed</div><div class="v" id="elVal">2.1<span class="u">min</span></div></div>
       </div>
 
-      <div style="display:flex; gap:10px;">
+      <div class="actions">
         <span class="btn">Pause</span>
         <span class="btn danger">Abort</span>
       </div>
@@ -329,12 +334,9 @@
         </div>
       </div>
     </div>
-    <div class="spec">Numerals at 27px in a light weight (SF-Display-style) with quiet inline units —
-      the data is the interface. Fields are filled wells, borderless until focus, where an accent ring
-      blooms (<code>3.5px</code> soft ring, the macOS focus idiom). Sentence-case labels; no shouting caps.
-      ETA flashes by numeral color — watch it tick.</div>
-  </section>
+  </div>
 
+  <!-- ========================== anatomy ================================ -->
   <section>
     <h2>Buttons</h2>
     <div class="btnrow">
@@ -355,9 +357,8 @@
       <span class="btn danger prs">Abort</span>
       <span class="btn dis">Abort</span>
     </div>
-    <div class="spec">Apple push buttons: borderless material fills, continuous 9px radius, press =
-      subtle scale-down + dim (alive under the finger). Danger is a red-tinted material that only goes
-      solid at the moment of commitment. Primary wears the accent with dark ink for real contrast.</div>
+    <div class="spec">Borderless material fills, continuous radii, press = scale + dim. Danger is tinted
+      material that goes solid only at the moment of commitment.</div>
   </section>
 
   <section>
@@ -379,37 +380,83 @@
       <span class="name">canvas</span>
       <span class="swb"><i style="background:#1f242b"></i>#1f242b</span>
       <span class="swb"><i style="background:#131316"></i>#131316 + ambient glow</span>
-      <span class="name">sim</span>
-      <span class="swb"><i style="background:#8e44ad"></i>#8e44ad</span>
-      <span class="swb"><i style="background:var(--sim)"></i>#bf8cff / #7d55d8</span>
     </div>
-    <div class="spec">The luminous system-color family (vivid on dark, deepened on light) replaces the
-      2013 flat set. Semantic colors are never the accent; the accent stays scope-cyan — your instrument's
-      identity — just recalibrated.</div>
+    <div class="spec">Semantic colors are never the accent; scope-cyan stays the identity. Values are
+      per-theme (vivid on dark, deepened on light) instead of shared.</div>
   </section>
 
   <footer>
-    <strong>Qt honesty, so the pitch is real:</strong> colors, radii, type scale, fills, pills, focus rings
-    and press-dim all map 1:1 to QSS (+ a tiny press-scale helper in code). Soft card shadows map to a
-    sparing QGraphicsDropShadowEffect on top-level cards only — never plot containers. The frosted rail is
-    the one aspirational element: true backdrop blur isn't a QSS facility, so the app approximates it with
-    a solid elevated surface in the same tint over the ambient-glow window background (the glow itself is a
-    paintEvent gradient — cheap). Everything else on this page is buildable exactly as shown.
-    If v4 is the direction: P1 ships tokens + QSS, P2 the dot-pulse / ring / numeral-flash motion,
-    P3 the rail. Zero new features, as agreed.
+    <strong>Qt honesty:</strong> everything in the hero maps 1:1 to QSS (+ a tiny press-scale helper and
+    a painted ambient background) except the frosted rail, which Qt approximates as a solid elevated tint —
+    ~80% of the effect. The map, colorbar, segmented quantity selector and ❄ freeze toggle are the real
+    ScanMapView features (the toggle shipped today). If v5 is the direction: P1 ships tokens + QSS,
+    P2 the motion set, P3 the rail. Zero new features throughout.
   </footer>
 </main>
 
 <script>
+  /* Credible live map: gridded 2D Gaussian charge blob, viridis-like ramp,
+     scanning fill front + crosshair. Pure demo of the REAL renderer's look. */
   (function () {
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    var eta = 4.2, el = 2.1;
-    setInterval(function () {
-      eta = Math.max(0.1, eta - 0.1); el += 0.1;
-      var t = document.getElementById("etaTile");
-      document.getElementById("etaVal").innerHTML = eta.toFixed(1) + '<span class="u">min</span>';
-      document.getElementById("elVal").innerHTML = el.toFixed(1) + '<span class="u">min</span>';
-      t.classList.remove("flash"); void t.offsetWidth; t.classList.add("flash");
-    }, 3000);
+    var reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    var V = [[68,1,84],[59,82,139],[33,145,140],[94,201,98],[253,231,37]];
+    function ramp(t) {
+      t = Math.max(0, Math.min(1, t)) * (V.length - 1);
+      var i = Math.min(V.length - 2, Math.floor(t)), f = t - i;
+      var a = V[i], b = V[i+1];
+      return [a[0]+(b[0]-a[0])*f, a[1]+(b[1]-a[1])*f, a[2]+(b[2]-a[2])*f];
+    }
+    var cv = document.getElementById("map"), cx = cv.getContext("2d");
+    var W = cv.width, H = cv.height, nx = 40, ny = 12, cw = W/nx, ch = H/ny;
+    function val(i,j) {
+      var x=(i+.5)/nx, y=(j+.5)/ny;
+      var g = Math.exp(-(Math.pow((x-.52)/.16,2) + Math.pow((y-.45)/.28,2)));
+      var g2 = .35*Math.exp(-(Math.pow((x-.24)/.09,2) + Math.pow((y-.7)/.2,2)));
+      return Math.min(1, g + g2 + 0.05*Math.sin(i*7+j*13)*Math.cos(i*3));
+    }
+    var front = reduced ? nx*ny : Math.floor(nx*ny*0.32);
+    function draw() {
+      cx.fillStyle = "#0a0b0d"; cx.fillRect(0,0,W,H);
+      for (var k=0; k<front; k++) {
+        var j = Math.floor(k/nx), i = (j%2===0) ? (k%nx) : (nx-1-(k%nx));
+        if (j>=ny) break;
+        var c = ramp(val(i,j));
+        cx.fillStyle = "rgb("+(c[0]|0)+","+(c[1]|0)+","+(c[2]|0)+")";
+        cx.fillRect(i*cw+0.5, j*ch+0.5, cw-1, ch-1);
+      }
+      // crosshair on the newest cell
+      var k2 = Math.min(front, nx*ny) - 1, j2 = Math.floor(k2/nx),
+          i2 = (j2%2===0) ? (k2%nx) : (nx-1-(k2%nx));
+      if (j2 < ny) {
+        cx.strokeStyle = "rgba(240,245,250,.8)"; cx.lineWidth = 1;
+        cx.strokeRect(i2*cw+0.5, j2*ch+0.5, cw-1, ch-1);
+      }
+    }
+    draw();
+    if (!reduced) setInterval(function () {
+      front = (front + 1); if (front > nx*ny) front = Math.floor(nx*ny*0.15);
+      draw();
+    }, 140);
+
+    var cb = document.getElementById("cbar"), cbx = cb.getContext("2d");
+    for (var y=0; y<cb.height; y++) {
+      var c = ramp(1 - y/cb.height);
+      cbx.fillStyle = "rgb("+(c[0]|0)+","+(c[1]|0)+","+(c[2]|0)+")";
+      cbx.fillRect(10, y, cb.width-20, 1);
+    }
+    cbx.fillStyle = "rgba(199,207,218,.75)";
+    cbx.font = "10px Consolas, monospace";
+    cbx.fillText("pC", 14, 12);
+
+    if (!reduced) {
+      var eta = 4.2, el = 2.1;
+      setInterval(function () {
+        eta = Math.max(0.1, eta - 0.1); el += 0.1;
+        var t = document.getElementById("etaTile");
+        document.getElementById("etaVal").innerHTML = eta.toFixed(1) + '<span class="u">min</span>';
+        document.getElementById("elVal").innerHTML = el.toFixed(1) + '<span class="u">min</span>';
+        t.classList.remove("flash"); void t.offsetWidth; t.classList.add("flash");
+      }, 3000);
+    }
   })();
 </script>
