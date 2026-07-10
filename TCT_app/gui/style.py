@@ -59,6 +59,15 @@ OK_GREEN = "#27ae60"
 WARN_AMBER = "#d98c17"
 WARN_RED = "#c0392b"
 
+# Device-manager status accents (gui/device_panel.py's ``_STATUS_STYLE``) —
+# two more fixed-both-themes status colours alongside OK_GREEN/WARN_AMBER/
+# WARN_RED above: "simulated" (purple — matches the existing
+# ``statusChip``/``statusLamp[state="simulated"]`` hue in ``build_qss``
+# below) and "error" (a hard device error, distinct from the general
+# WARN_AMBER "warn" look).
+SIM_PURPLE = "#8e44ad"
+ERROR_ORANGE = "#e67e22"
+
 # General amber token (distinct from the warn status colour): matches the
 # bias axis-rail hue so a "bias" accent is amber everywhere.
 AMBER_LIGHT = "#C67F14"

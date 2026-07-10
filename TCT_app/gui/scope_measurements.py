@@ -11,6 +11,8 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QWidget, QGroupBox, QGridLayout, QCheckBox, QLabel
 
+from gui.style import ACCENT_DARK
+
 
 # (key, label, unit) — order defines display order.
 MEASUREMENTS: list[tuple[str, str, str]] = [
@@ -141,7 +143,7 @@ class MeasurementPanel(QGroupBox):
             chk = QCheckBox(label)
             chk.setChecked(key in _DEFAULT_ON)
             val = QLabel("—")
-            val.setStyleSheet("font-weight: 700; color: #33c8ff;")
+            val.setStyleSheet(f"font-weight: 700; color: {ACCENT_DARK};")
             val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             grid.addWidget(chk, row, 0)
             grid.addWidget(val, row, 1)

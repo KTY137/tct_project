@@ -13,13 +13,14 @@ from PySide6.QtWidgets import (
 from controller.device_manager import DeviceManager
 from gui.panel_kit import Card
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
+from gui.style import ERROR_ORANGE, OK_GREEN, SIM_PURPLE, WARN_RED
 
 
 _STATUS_STYLE = {
-    "connected":    ("CONNECTED",    "#27ae60"),   # green
-    "simulated":    ("SIMULATED",    "#8e44ad"),   # purple
-    "disconnected": ("DISCONNECTED", "#c0392b"),   # red
-    "error":        ("ERROR",        "#e67e22"),   # orange
+    "connected":    ("CONNECTED",    OK_GREEN),      # green
+    "simulated":    ("SIMULATED",    SIM_PURPLE),    # purple
+    "disconnected": ("DISCONNECTED", WARN_RED),      # red
+    "error":        ("ERROR",        ERROR_ORANGE),  # orange
 }
 
 

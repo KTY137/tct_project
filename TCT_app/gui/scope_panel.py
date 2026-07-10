@@ -50,7 +50,7 @@ from gui.panel_kit import Card, panel_header
 from gui.scope_measurements import MeasurementPanel
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, StatusLamp
-from gui.style import DARK, LIGHT, SPACE_MD, SPACE_SM, axis_color
+from gui.style import DARK, LIGHT, SPACE_MD, SPACE_SM, WARN_AMBER, axis_color
 
 logger = logging.getLogger(__name__)
 
@@ -143,12 +143,18 @@ class _TriggerDialog(QDialog):
 
     def __init__(self, scope: Oscilloscope, config_path: str | None,
                  apply_trigger,
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None,
+                 theme_mode: str = "light") -> None:
         super().__init__(parent)
         self.setWindowTitle("Oscilloscope — Trigger Settings")
         self._scope = scope
         self._config_path = config_path
         self._apply_trigger_async = apply_trigger
+        # Theme mode for the status caption's muted colour (see
+        # _restyle_status()/refresh_theme() below) — passed in from
+        # ScopePanel at construction; ScopePanel.refresh_theme() re-pushes it
+        # live while this dialog is open (_restyle_theme_tokens()).
+        self._theme_mode = theme_mode
         form = QFormLayout(self)
 
         self._source = QComboBox()
@@ -175,7 +181,7 @@ class _TriggerDialog(QDialog):
         form.addRow("Slope:", self._slope)
 
         self._status = QLabel("")
-        self._status.setStyleSheet("color:#888;")
+        self._restyle_status()
         form.addRow(self._status)
 
         bb = QDialogButtonBox()
@@ -191,6 +197,17 @@ class _TriggerDialog(QDialog):
         slope = self._slope.currentText()
         self._status.setText("Applying…")
         self._apply_trigger_async(src, lvl, slope, self)
+
+    def _restyle_status(self) -> None:
+        p = DARK if self._theme_mode == "dark" else LIGHT
+        self._status.setStyleSheet(f"color: {p['muted']};")
+
+    def refresh_theme(self, mode: str) -> None:
+        """Re-resolve the status caption's muted colour after a light/dark
+        switch (called by ``ScopePanel._restyle_theme_tokens`` while this
+        dialog is open — same pattern as the panel's own refresh_theme)."""
+        self._theme_mode = str(mode)
+        self._restyle_status()
 
     def show_trigger_result(self, src: str, lvl: float, slope: str, err: str | None) -> None:
         if err:
@@ -266,7 +283,9 @@ class _ChannelCard(QFrame):
         self._role.currentTextChanged.connect(self._on_role)
 
         self._readout = QLabel("—")
-        self._readout.setStyleSheet("color:#888; font-size: 11px;")
+        # Colour resolved by ScopePanel._restyle_theme_tokens() via
+        # set_readout_color() below (theme-aware muted caption).
+        self._readout.setStyleSheet("font-size: 11px;")
 
         lay.addWidget(swatch,       0, 0)
         lay.addWidget(title,        0, 1)
@@ -292,6 +311,12 @@ class _ChannelCard(QFrame):
 
     def set_readout(self, text: str) -> None:
         self._readout.setText(text)
+
+    def set_readout_color(self, color: str) -> None:
+        """Re-resolve the live-readout's muted colour (ScopePanel's
+        ``_restyle_theme_tokens`` calls this for every card, once at
+        construction and again after every light/dark switch)."""
+        self._readout.setStyleSheet(f"color: {color}; font-size: 11px;")
 
     @property
     def state(self) -> _ChannelState:
@@ -650,7 +675,7 @@ class ScopePanel(QWidget):
 
         # Trigger badge
         self._btn_trigger = QPushButton()
-        ico = _icon("mdi.flash", "#f0a020")
+        ico = _icon("mdi.flash", WARN_AMBER)
         if ico is not None:
             self._btn_trigger.setIcon(ico)
         self._btn_trigger.setToolTip("Open the trigger settings (source / level / slope)")
@@ -889,6 +914,11 @@ class ScopePanel(QWidget):
 
         # Reflect the new enabled set into the reader thread and repaint.
         self._sync_reader_channels()
+        # Newly-added cards' readouts are unstyled until the next theme
+        # switch otherwise (their colour is only set in __init__ via this
+        # same call) — re-run now so a rebuild mid-session doesn't leave a
+        # stray uncoloured channel card.
+        self._restyle_theme_tokens()
         if self._last:
             self._render(self._last)
 
@@ -968,7 +998,8 @@ class ScopePanel(QWidget):
     def _open_trigger(self) -> None:
         if self._trigger_dialog is None:
             self._trigger_dialog = _TriggerDialog(
-                self._scope, self._config_path, self._queue_trigger_apply, self
+                self._scope, self._config_path, self._queue_trigger_apply, self,
+                theme_mode=self._theme_mode,
             )
         self._trigger_dialog.show()
         self._trigger_dialog.raise_()
@@ -1428,9 +1459,11 @@ class ScopePanel(QWidget):
         styles: the DUT Analysis stat readouts (amplitude/charge/RMS read
         the theme accent, the three time-domain quantities read the "delay"
         axis-rail colour — a TCT drift/rise/CFD time genuinely is a delay
-        measurement), the cursor readout, and the probe-attenuation safety
-        warning. Everything else in this panel repaints automatically via
-        the app-wide stylesheet ``gui.style.apply_theme()`` reapplies."""
+        measurement), the cursor readout, the per-channel-card live readout,
+        the (possibly open) trigger dialog's status caption, and the
+        probe-attenuation safety warning. Everything else in this panel
+        repaints automatically via the app-wide stylesheet
+        ``gui.style.apply_theme()`` reapplies."""
         p = DARK if self._theme_mode == "dark" else LIGHT
         accent = p["accent"]
         delay = axis_color("delay", self._theme_mode)
@@ -1445,6 +1478,11 @@ class ScopePanel(QWidget):
         cursor = getattr(self, "_lbl_cursor", None)
         if cursor is not None:
             cursor.setStyleSheet(f"color: {p['muted']};")
+        for card in getattr(self, "_cards", {}).values():
+            card.set_readout_color(p["muted"])
+        dialog = getattr(self, "_trigger_dialog", None)
+        if dialog is not None:
+            dialog.refresh_theme(self._theme_mode)
         warn = getattr(self, "_lbl_probe_warn", None)
         if warn is not None:
             warn.setStyleSheet(f"color: {p['warn']}; font-weight: 600;")

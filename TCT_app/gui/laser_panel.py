@@ -12,7 +12,7 @@ from devices.laser_manual import LaserManualMetadata
 from devices.waveform_generator import WaveformGenerator, list_visa_resources
 from gui.panel_kit import Card, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
-from gui.style import SPACE_MD
+from gui.style import SPACE_MD, WARN_AMBER, palette
 
 
 class LaserPanel(QWidget):
@@ -130,7 +130,8 @@ class LaserPanel(QWidget):
         self._pulse_mode = QComboBox()
         self._pulse_mode.addItems(["Pulse width", "Duty cycle"])
         self._pulse_hint = QLabel("")
-        self._pulse_hint.setStyleSheet("color:#888; font-size:11px;")
+        # Muted-caption colour is theme-token resolved by
+        # _restyle_theme_tokens() below (re-run on every refresh_theme()).
 
         self._spin_ampl = QDoubleSpinBox()
         self._spin_ampl.setRange(1e-3, 50.0)
@@ -197,7 +198,7 @@ class LaserPanel(QWidget):
         btn_row = QHBoxLayout()
         self._btn_on  = QPushButton("Output ON")
         self._btn_on.setObjectName("armedBtn")
-        set_button_icon(self._btn_on, "mdi.power-plug", color="#d98c17")
+        set_button_icon(self._btn_on, "mdi.power-plug", color=WARN_AMBER)
         self._btn_off = QPushButton("Output OFF")
         set_button_icon(self._btn_off, "mdi.power-plug-off")
         self._btn_on.clicked.connect(self._output_on)
@@ -465,9 +466,16 @@ class LaserPanel(QWidget):
         (the physical laser) reads "laser" (purple); the Waveform Generator
         (pulse width / frequency / trigger — the classic edge-TCT delay
         axis) reads "delay" (green). Same idiom as MotorPanel/BiasPanel's
-        axis-rail accents, applied to a whole Card via ``Card.set_rail``."""
+        axis-rail accents, applied to a whole Card via ``Card.set_rail``.
+
+        Also re-resolves the pulse-hint caption's muted colour — a per-
+        instance inline style baked in at construction time (same as the
+        rail colours above), so it needs this explicit refresh rather than
+        relying on the app-wide stylesheet."""
         self._card_pdl.set_rail("laser", self._theme_mode)
         self._card_wfg.set_rail("delay", self._theme_mode)
+        self._pulse_hint.setStyleSheet(
+            f"color: {palette(self._theme_mode)['muted']}; font-size: 11px;")
 
     def refresh_theme(self, mode: str | None = None) -> None:
         """Re-resolve the axis-rail accents after a light/dark switch (same

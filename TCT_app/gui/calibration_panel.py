@@ -31,6 +31,7 @@ from analysis.charge_calibration import ChargeCalibration, q_one_mip_pC
 from analysis.waveform_analysis import analyse_waveform
 from controller.repeatability import RepeatabilityTester
 from gui.status_widgets import ReadoutCell, StatusChip, flash_button, set_button_busy, set_button_icon
+from gui.style import LIGHT
 
 
 class _RepeatWorker(QObject):
@@ -200,7 +201,12 @@ class CalibrationPanel(QWidget):
         root.addWidget(self._status)
 
         self._current = QLabel("")
-        self._current.setStyleSheet("color:#2c3e50; font-weight:bold;")
+        # Fixed ink colour (LIGHT["text"]) rather than a live theme lookup:
+        # this panel has no theme_mode/refresh_theme (unlike laser_panel /
+        # scope_panel) — same "always this shade" treatment as PLOT_FG/
+        # PLOT_BG in gui/style.py, chosen because this label's colour was
+        # never theme-dependent before either.
+        self._current.setStyleSheet(f"color: {LIGHT['text']}; font-weight: bold;")
         root.addWidget(self._current)
 
         self._build_repeatability(root)
@@ -283,7 +289,8 @@ class CalibrationPanel(QWidget):
         form.addRow(bw)
 
         self._rep_progress = QLabel("")
-        self._rep_progress.setStyleSheet("color:#555;")
+        # Same fixed-colour rationale as self._current above (LIGHT["muted"]).
+        self._rep_progress.setStyleSheet(f"color: {LIGHT['muted']};")
         form.addRow(self._rep_progress)
         self._rep_result = QLabel("")
         self._rep_result.setFont(QFont("Consolas", 9))
