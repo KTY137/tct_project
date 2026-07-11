@@ -17,7 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QByteArray, QCoreApplication, QMimeData
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 
 from controller.danger_gate import DangerAction
 from controller.plan_estimate import PlanEstimate, estimate_plan
@@ -495,6 +495,57 @@ def test_dry_run_sets_ok_flag_and_arm_requires_confirmation_signal():
         assert panel._hv_armed is False
         panel.set_hv_armed(True)
         assert panel._hv_armed is True
+    finally:
+        panel.shutdown()
+
+
+def test_arm_confirmation_uses_live_plan_bias_range_not_stale_estimate(monkeypatch):
+    """Regression (Mary review NIT): the Arm HV confirmation text must always
+    match the plan being armed, even for a plan above
+    ``_estimate_async_threshold`` whose cached ``_safe_estimate()`` result is
+    stale (a fresh one is still in flight off-thread) or ``None``.  Seed a
+    stale cached estimate carrying an obviously-wrong pre-edit bias range,
+    edit the live plan's bias loop, and confirm the dialog text reflects the
+    POST-edit range -- computed synchronously from the plan's own bias loops,
+    never from the cache -- BEFORE any worker result could land (no
+    ``processEvents()`` runs between the edit and the arm click)."""
+    _app()
+    import gui.planner_panel as planner_module
+
+    captured: dict[str, str] = {}
+
+    def fake_warning(parent, title, text, *args, **kwargs):
+        captured["text"] = text
+        return QMessageBox.StandardButton.No
+
+    panel = PlannerPanel()
+    try:
+        panel._estimate_async_threshold = 0   # gate every plan as "large"
+
+        # Stale cache: as if computed before the edit below, and deliberately
+        # wrong so the test fails loudly if the dialog ever reads it.
+        panel._last_estimate = PlanEstimate(
+            total_points=1, total_leaf_visits=1, est_runtime_s=0.0,
+            est_data_bytes=0, stage_travel_mm={"x": 0.0, "y": 0.0, "z": 0.0},
+            hv_range_V=(-999.0, -999.0),
+        )
+        panel._last_estimate_key = "stale-key-not-matching-current-plan"
+
+        # Edit the live plan's bias loop to a distinctive post-edit range.
+        bias_loop = _bias_loop(panel._plan)
+        bias_loop.values = None
+        bias_loop.start = 12.0
+        bias_loop.stop = 34.0
+        bias_loop.step = 1.0
+
+        monkeypatch.setattr(planner_module.QMessageBox, "warning", fake_warning)
+
+        panel._on_arm_clicked()
+
+        assert "text" in captured, "QMessageBox.warning was never called"
+        assert "34" in captured["text"]
+        assert "12" in captured["text"]
+        assert "-999" not in captured["text"]
     finally:
         panel.shutdown()
 

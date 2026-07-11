@@ -85,6 +85,42 @@ def _block_at_path(root: list, path: list[int]):
     return block
 
 
+def _bias_range_from_plan(plan: ScanPlan) -> tuple[float, float] | None:
+    """Cheap, structural min/max target across every ``BIAS_V`` loop in *plan*.
+
+    Walks the block TREE directly -- NOT ``iter_leaf_contexts_ex()`` /
+    ``estimate_plan()`` -- so cost tracks the handful of loop *blocks*, never
+    the leaf-visit PRODUCT a large stage sweep multiplies it into. This is
+    what a HV-authorization confirmation must read: it has to reflect the
+    plan being armed right now, synchronously, even when the plan is above
+    ``_estimate_async_threshold`` and the cached :class:`PlanEstimate` is
+    stale (or ``None``) while a fresh one is still in flight off-thread.
+    Returns ``None`` when the plan has no bias loop at all."""
+    try:
+        return _bias_range_from_blocks(plan.root)
+    except (ValueError, TypeError):
+        return None
+
+
+def _bias_range_from_blocks(blocks: list[ScanBlock]) -> tuple[float, float] | None:
+    lo: float | None = None
+    hi: float | None = None
+    for b in blocks:
+        if isinstance(b, LoopBlock):
+            if b.axis == Axis.BIAS_V:
+                vals = b.materialize()
+                if vals:
+                    blo, bhi = min(vals), max(vals)
+                    lo = blo if lo is None else min(lo, blo)
+                    hi = bhi if hi is None else max(hi, bhi)
+            child_range = _bias_range_from_blocks(b.children)
+            if child_range is not None:
+                clo, chi = child_range
+                lo = clo if lo is None else min(lo, clo)
+                hi = chi if hi is None else max(hi, chi)
+    return None if lo is None else (lo, hi)
+
+
 def _list_for_parent(root: list, parent_path: list[int] | None) -> list:
     """The concrete list a block lives/will-live in: ``root`` itself when
     ``parent_path`` is ``None``, else that ancestor loop's ``children``."""
@@ -1901,8 +1937,15 @@ class PlannerPanel(QWidget):
     def _on_arm_clicked(self) -> None:
         if self._hv_armed:
             return
-        estimate = self._safe_estimate()
-        lo, hi = estimate.hv_range_V if estimate is not None else (0.0, 0.0)
+        # A confirmation dialog must never state a wrong number: compute the
+        # bias range synchronously from self._plan's own bias loops (cheap,
+        # structural -- see _bias_range_from_plan) rather than from
+        # _safe_estimate(), whose cache can be stale (or None, for a plan
+        # above _estimate_async_threshold whose fresh estimate is still
+        # in flight off-thread) and so could momentarily show a pre-edit
+        # bias range here.
+        bias_range = _bias_range_from_plan(self._plan)
+        lo, hi = bias_range if bias_range is not None else (0.0, 0.0)
         text = (
             f"This authorizes the run to ramp bias to {hi:g} V / {lo:g} V.\n\n"
             "Nothing moves yet — the stage and HV energize only when you "
