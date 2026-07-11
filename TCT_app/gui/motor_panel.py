@@ -117,6 +117,11 @@ class MotorPanel(QWidget):
 
     # Emitted when user clicks "Set as Scan Start" — carries (x, y, z)
     set_as_scan_start = Signal(float, float, float)
+    # Emitted after a home or Zero-Here completes successfully — either shifts
+    # the driver's user/machine display offset, so any consumer holding
+    # user-frame stage limits (the Scan Planner's PlanLimits) must re-read them.
+    # Authored as run-control/state logic (Abel); pure notification, no payload.
+    origin_changed = Signal()
     _poll_stop_requested = Signal()
 
     def __init__(self, motor: MotorStageBase, parent: QWidget | None = None) -> None:
@@ -125,6 +130,10 @@ class MotorPanel(QWidget):
         self._motion_widgets: list[QWidget] = []   # disabled while a move runs
         self._task_thread: QThread | None = None
         self._task: _MotorTask | None = None
+        # Kind of the in-flight async op ("home"/"zero"/None). Home and Zero
+        # Here shift the driver's display offset, so on success we notify
+        # (origin_changed) any consumer holding user-frame limits.
+        self._task_kind: str | None = None
         # Theme mode for the axis-rail accents (gui.style.axis_color).  Read
         # once from the same QSettings key main.py/tct_gui.py use, so a
         # freshly built panel matches the already-applied app theme; see
@@ -611,10 +620,10 @@ class MotorPanel(QWidget):
         self._run_async(self._motor.move_to_center)
 
     def _home(self) -> None:
-        self._run_async(self._motor.home)
+        self._run_async(self._motor.home, kind="home")
 
     def _zero_position(self) -> None:
-        self._run_async(self._motor.zero_position)
+        self._run_async(self._motor.zero_position, kind="zero")
 
     def _emergency_stop(self) -> None:
         # Runs on the GUI thread on purpose: it must fire immediately and the
@@ -628,10 +637,15 @@ class MotorPanel(QWidget):
     # Async motor-operation runner (keeps the GUI responsive)             #
     # ------------------------------------------------------------------ #
 
-    def _run_async(self, fn) -> None:
-        """Run a blocking motor call in a worker thread; ignore if one is busy."""
+    def _run_async(self, fn, kind: str | None = None) -> None:
+        """Run a blocking motor call in a worker thread; ignore if one is busy.
+
+        *kind* tags offset-changing ops ("home"/"zero") so ``_on_task_done``
+        can emit ``origin_changed`` on success — see that signal's docstring.
+        """
         if self._task_thread is not None and self._task_thread.isRunning():
             return
+        self._task_kind = kind
         self._set_busy(True)
         self._poller.set_paused(True)      # only the task thread talks serial now
         self._task = _MotorTask(fn)
@@ -648,8 +662,10 @@ class MotorPanel(QWidget):
 
     def _on_task_done(self, err: str) -> None:
         thread = self._task_thread
+        kind = self._task_kind
         self._task_thread = None
         self._task = None
+        self._task_kind = None
         if thread is not None:
             thread.quit()
             thread.wait(2000)
@@ -660,6 +676,11 @@ class MotorPanel(QWidget):
             self._show_error(err)
         else:
             self._chip_last.set_status("Last done", "good")
+            # Home/Zero Here shifted the driver's user/machine offset — tell any
+            # consumer holding user-frame stage limits (the Scan Planner) to
+            # re-read them so its soft-limit gate tracks the new origin.
+            if kind in ("home", "zero"):
+                self.origin_changed.emit()
 
     def _set_busy(self, busy: bool) -> None:
         for w in self._motion_widgets:

@@ -207,6 +207,32 @@ class MotorStageBase(BaseDevice):
     # Convenience helpers (concrete, may be overridden)                   #
     # ------------------------------------------------------------------ #
 
+    def limits_user_frame(self) -> "SoftwareLimits | None":
+        """Soft limits expressed in the SAME frame ``get_position()`` /
+        ``move_to()`` speak to the rest of the app.
+
+        Frame contract (single source of truth for the planner + validator):
+        every stage coordinate that crosses the device boundary — the value
+        ``get_position()`` returns, the target ``move_to()`` accepts, and
+        therefore every planner loop coordinate and ``PlanLimits`` the
+        pre-flight validator checks — lives in this backend's *user* frame.
+
+        For a backend whose user frame IS its machine frame (no software
+        display offset: ``SimulatedMotorStage``, ``PIMotorStage``), that is
+        just ``self.limits`` unchanged.  A backend that maintains a software
+        display offset (``GRBLMotorStage``, whose ``zero_position`` shifts the
+        origin without touching the controller) overrides this to translate
+        the machine-frame ``self.limits`` into the current user frame, so the
+        validator's bounds track the same origin the operator sees.
+
+        Callers must rebuild ``PlanLimits`` from THIS (not ``self.limits``)
+        and refresh whenever the offset can have changed (after home / zero).
+        The translation only shifts the envelope by the offset — it never
+        widens it — so validation can never become more permissive than the
+        real machine travel the driver enforces per-move in ``move_to``.
+        """
+        return self.limits
+
     def move_to_center(self) -> None:
         """Centre X/Y in the soft-limit envelope, keeping Z where it is.
 

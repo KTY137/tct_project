@@ -30,7 +30,7 @@ from typing import Any, TYPE_CHECKING
 if TYPE_CHECKING:
     import serial as _serial  # only for type checker; runtime import is deferred
 
-from .motor_base import MotorStageBase, MotorHomingError, Position
+from .motor_base import MotorStageBase, MotorHomingError, Position, SoftwareLimits
 from .base import DeviceError
 
 
@@ -354,6 +354,37 @@ class GRBLMotorStage(MotorStageBase):
     def _to_machine(self, u: Position) -> Position:
         o = self._offset()
         return Position(u.x_mm + o.x_mm, u.y_mm + o.y_mm, u.z_mm + o.z_mm)
+
+    def limits_user_frame(self) -> "SoftwareLimits | None":
+        """Machine soft limits translated into the CURRENT user frame.
+
+        The app-facing frame here is the user frame (machine minus
+        ``_offset()``): ``get_position`` returns it, ``move_to`` accepts it,
+        and ``zero_position`` shifts its origin.  ``self.limits`` however is
+        stored in MACHINE coordinates (what GRBL's MPos reports and what
+        ``_check_limits`` guards each move against).  The Scan Planner's
+        coordinates and the pre-flight validator's ``PlanLimits`` live in the
+        user frame, so they must be checked against the machine envelope
+        expressed in that same frame — otherwise a plan built around a
+        ``zero_position`` origin is rejected against machine-frame bounds it
+        never shared (the "Zero Here → planner complains about soft limits"
+        bug).
+
+        This subtracts the offset from each bound, so the envelope is only
+        SHIFTED, never widened: a user coordinate ``u`` passes here iff
+        ``u + offset`` (its machine coordinate) is inside ``self.limits`` —
+        exactly the gate ``move_to`` enforces per-move.  Must be re-read
+        (and ``PlanLimits`` rebuilt) after home/zero, which move the offset.
+        """
+        lim = self.limits
+        if lim is None:
+            return None
+        o = self._offset()
+        return SoftwareLimits(
+            x_min=lim.x_min - o.x_mm, x_max=lim.x_max - o.x_mm,
+            y_min=lim.y_min - o.y_mm, y_max=lim.y_max - o.y_mm,
+            z_min=lim.z_min - o.z_mm, z_max=lim.z_max - o.z_mm,
+        )
 
     def get_position(self) -> Position:
         # Always report in the user frame; ``_pos`` is machine coordinates.
