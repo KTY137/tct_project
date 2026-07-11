@@ -1,13 +1,13 @@
 """Headless construct/grab checks for the panel_kit rollout — Batch 3 /
-"parity pass" (Phase 0.5): the last two un-migrated panels, camera and
-analysis.
+"parity pass" (Phase 0.5): the camera and analysis panels that completed
+the core panel migration on 2026-07-07.
 
 Follows the existing gui test idiom (see ``test_panel_kit_rollout_batch1.py``):
 ``QT_QPA_PLATFORM=offscreen``, a shared ``QApplication.instance()`` helper, no
 pytest-qt.
 
-Each touched widget is constructed and rendered (``.grab()``) under BOTH
-themes (light/dark) to confirm the QGroupBox -> Card swap and the new
+Each batch-3 widget is constructed and rendered (``.grab()``) under BOTH
+themes (light/dark) to confirm the panel_kit Card presentation and the new
 ``panel_header()``s don't crash construction or leave a blank/zero-size
 widget in either theme, and — where the panel exposes one — that
 ``refresh_theme()`` runs cleanly.  A couple of behavioural spot-checks
@@ -183,7 +183,7 @@ def test_hot_path_widgets_have_no_graphics_effect():
 # No bleed into other already-migrated panels                                 #
 # --------------------------------------------------------------------------- #
 
-def test_motor_panel_still_constructs_untouched_by_this_batch():
+def test_motor_panel_constructs_without_batch3_bleed():
     from devices.motor_simulated import SimulatedMotorStage
     from gui.motor_panel import MotorPanel
     _app()
