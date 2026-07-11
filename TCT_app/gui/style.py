@@ -8,6 +8,15 @@ exactly the same layout/spacing and only the colours differ.  Applied via
 This module is the design-system foundation (Milestone 2.1).  Components should
 reference the shared *tokens* below (accent/status colours, spacing, radius and
 type scales, axis-rail palette) instead of hardcoding magic numbers or colours.
+
+v5 token-calibration pass (apple_style_ui_audit.md, Track A step 5) reconciled
+these tokens against ``artifacts_claude/tct_polish_preview.html``: a
+palette-reach fix for the toolbar Connect/Disconnect buttons (see the
+``#connectBtn``/``#disconnectBtn`` rules), a calmer label/heading weight
+scale (700 -> 600 on captions/eyebrows/section titles), and a distinct
+large/light ``FONT_DISPLAY`` role for hero numeric tiles (``#readoutCell``)
+so values "breathe" instead of reusing the small bold-mono instrument-LCD
+look everywhere. Theming-only: no widget/layout was added, removed, or moved.
 """
 from __future__ import annotations
 
@@ -35,13 +44,24 @@ RADIUS_PILL = 999
 RADIUS = {"xs": RADIUS_XS, "sm": RADIUS_SM, "md": RADIUS_MD,
           "lg": RADIUS_LG, "pill": RADIUS_PILL}
 
-# Type scale (px)
+# Type scale (px). Roles (see build_qss() call sites for where each lands):
+#   xs/sm  = caption / small label (eyebrows, table headers, chip text).
+#   md     = body — the "*" default; stays normal-weight, never bold.
+#   lg     = small heading (EmptyState headline).
+#   xl     = true instrument-readout digits (motor position LCD).
+#   display= hero numeric tile value (MetricTile/ReadoutCell) — large and
+#            light, the "values ... do not breathe enough" fix from
+#            apple_style_ui_audit.md. Monospace stays reserved for true
+#            numeric readouts/identifiers (MONO_FAMILY below); display
+#            values use the proportional UI face instead.
 FONT_XS = 11
 FONT_SM = 12
 FONT_MD = 13
-FONT_LG = 16
+FONT_LG = 18       # was 16 — EmptyState headline gets a touch more presence
 FONT_XL = 20
-FONT = {"xs": FONT_XS, "sm": FONT_SM, "md": FONT_MD, "lg": FONT_LG, "xl": FONT_XL}
+FONT_DISPLAY = 24  # hero tile values (artifact reference: 26px / weight 350)
+FONT = {"xs": FONT_XS, "sm": FONT_SM, "md": FONT_MD, "lg": FONT_LG, "xl": FONT_XL,
+        "display": FONT_DISPLAY}
 
 MONO_FAMILY = '"Consolas", "Cascadia Mono", "Cascadia Code", "Courier New", monospace'
 
@@ -255,7 +275,7 @@ QFrame#ribbonBrand {{ background: transparent; }}
 QLabel#ribbonMark {{
     min-width: 18px; max-width: 18px; min-height: 18px; max-height: 18px;
     border-radius: {RADIUS_SM - 1}px; background: {p['accent']};
-    color: {p['on_accent']}; font-weight: 800;
+    color: {p['on_accent']}; font-weight: 700;
 }}
 QLabel#ribbonWordmark {{ font-weight: 700; }}
 QFrame#ribbonGroup {{
@@ -263,18 +283,20 @@ QFrame#ribbonGroup {{
     border-radius: {RADIUS_MD}px;
 }}
 QLabel#ribbonLabel {{
-    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0;
+    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
 }}
 
-/* Group boxes: card-like with breathing room. The title is a section header —
-   a touch heavier and a hair tighter in tracking than body text so it reads
-   as a designed heading rather than a bigger label (size is unchanged). */
+/* Group boxes: card-like with breathing room — padding matches the v5
+   artifact's nested-card padding (tct_polish_preview.html's `.card2`, 15/17)
+   instead of the old, tighter 12/10. The title is a section header — medium
+   weight, not bold: apple_style_ui_audit.md flagged headings/labels as
+   "too loud/heavy" (was 700; size is unchanged). */
 QGroupBox {{
     background: {p['panel']};
     border: 1px solid {p['hairline']};
     border-radius: {RADIUS_MD}px;
     margin-top: {SPACE_LG - 2}px;
-    padding: {SPACE_MD}px {SPACE_MD}px {SPACE_SM + 2}px {SPACE_MD}px;
+    padding: {SPACE_LG - 1}px {SPACE_LG + 1}px {SPACE_LG - 1}px {SPACE_LG + 1}px;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
@@ -282,16 +304,18 @@ QGroupBox::title {{
     left: {SPACE_MD}px;
     padding: 2px {SPACE_SM - 2}px;
     color: {p['muted']};
-    font-weight: 700;
+    font-weight: 600;
     letter-spacing: 0;
 }}
 
-/* Inputs */
+/* Inputs — padding matches the v5 artifact's field treatment
+   (tct_polish_preview.html's `.well`, 6/12) for more breathing room than
+   the old, tighter 4/8. */
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
     background: {p['field']};
     border: 1px solid transparent;
     border-radius: {RADIUS_SM}px;
-    padding: {SPACE_XS}px {SPACE_SM}px;
+    padding: {SPACE_SM - 2}px {SPACE_MD}px;
     selection-background-color: {p['accent']};
     selection-color: {p['on_accent']};
 }}
@@ -318,12 +342,15 @@ QComboBox QAbstractItemView {{
     selection-color: {p['on_accent']};
 }}
 
-/* Buttons */
+/* Buttons — padding/weight match the v5 artifact's `.btn` (7/16, medium
+   weight) so a button label reads as a command rather than body text,
+   without shouting (apple_style_ui_audit.md: "medium labels"). */
 QPushButton {{
     background: {p['field']};
     border: 1px solid transparent;
     border-radius: {RADIUS_SM}px;
-    padding: {SPACE_XS + 2}px {SPACE_LG - 2}px;
+    padding: {SPACE_SM - 1}px {SPACE_LG}px;
+    font-weight: 500;
 }}
 QPushButton:hover {{ border-color: {p['border_strong']}; background: {p['hover']}; }}
 QPushButton:pressed {{ background: {p['active']}; }}
@@ -408,26 +435,38 @@ QToolButton#detachTabButton:hover {{
 }}
 QToolButton#detachTabButton:pressed {{ background: {_rgba(p['accent'], 0.20)}; }}
 
-/* Accent buttons by objectName (toolbar Connect/Disconnect). Hover/pressed
-   shades are derived from the same good/crit token via _darken() so there is
-   one source of truth per colour instead of a separately hand-picked hex. */
+/* Connect/Disconnect toolbar buttons (objectName set by tct_gui.py after
+   building the QToolBar action widgets — "objectNames for the green/red QSS
+   accents"). v5 palette-reach fix: this used to be a persistent SOLID
+   good/crit fill — the "loud flat-green CONNECT ALL" finding in
+   apple_style_ui_audit.md, a leftover pre-v5 button language the rest of
+   the app had already moved off of (see the tonal
+   QPushButton[state="good"/"crit"] rules above). Rest/hover now share that
+   same tonal language; press is the only moment that still goes fully
+   solid, matching tct_polish_preview.html's button spec note ("tinted
+   material that goes solid only at the moment of commitment"). Connect/
+   Disconnect are ordinary reversible actions, not hardware-dangerous ones
+   (see CLAUDE.md's confirmation-required list) — unlike dangerBtn below,
+   calming their rest state does not touch the danger-hierarchy rule. */
 QPushButton#connectBtn, QToolButton#connectBtn {{
-    background: {p['good']}; color: white; border: 1px solid {p['good']};
+    background: {_rgba(p['good'], 0.16)}; color: {p['good']};
+    border: 1px solid {_rgba(p['good'], 0.55)}; font-weight: 600;
 }}
 QPushButton#connectBtn:hover, QToolButton#connectBtn:hover {{
-    background: {_darken(p['good'], 0.12)}; border-color: {_darken(p['good'], 0.12)};
+    background: {_rgba(p['good'], 0.26)}; border-color: {p['good']};
 }}
 QPushButton#connectBtn:pressed, QToolButton#connectBtn:pressed {{
-    background: {_darken(p['good'], 0.22)};
+    background: {p['good']}; color: white; border-color: {p['good']};
 }}
 QPushButton#disconnectBtn, QToolButton#disconnectBtn {{
-    background: {p['crit']}; color: white; border: 1px solid {p['crit']};
+    background: {_rgba(p['crit'], 0.16)}; color: {p['crit']};
+    border: 1px solid {_rgba(p['crit'], 0.55)}; font-weight: 600;
 }}
 QPushButton#disconnectBtn:hover, QToolButton#disconnectBtn:hover {{
-    background: {_darken(p['crit'], 0.12)}; border-color: {_darken(p['crit'], 0.12)};
+    background: {_rgba(p['crit'], 0.26)}; border-color: {p['crit']};
 }}
 QPushButton#disconnectBtn:pressed, QToolButton#disconnectBtn:pressed {{
-    background: {_darken(p['crit'], 0.22)};
+    background: {p['crit']}; color: white; border-color: {p['crit']};
 }}
 QPushButton#connectBtn:disabled, QToolButton#connectBtn:disabled,
 QPushButton#disconnectBtn:disabled, QToolButton#disconnectBtn:disabled {{
@@ -442,7 +481,7 @@ QTabWidget::pane {{
 QTabBar::tab {{
     background: transparent; padding: {SPACE_SM - 2}px {SPACE_LG - 3}px; margin-right: 4px;
     border: 1px solid transparent; border-radius: {RADIUS_MD}px;
-    color: {p['muted']};
+    color: {p['muted']}; font-weight: 500;
 }}
 QTabBar::tab:selected {{
     background: {p['tint']}; color: {p['accent']};
@@ -541,7 +580,7 @@ QProgressBar::chunk {{ background: {p['accent']}; border-radius: {RADIUS_SM - 1}
 /* Tables (device/monitor panels) */
 QHeaderView::section {{
     background: {p['material']}; color: {p['muted']};
-    font-weight: 700; font-size: {FONT_XS}px; letter-spacing: 0;
+    font-weight: 600; font-size: {FONT_XS}px; letter-spacing: 0;
     padding: {SPACE_XS}px {SPACE_SM}px; border: none;
     border-bottom: 1px solid {p['hairline']}; border-right: 1px solid {p['hairline']};
 }}
@@ -573,29 +612,45 @@ QPushButton#dangerBtn:disabled, QPushButton[state="danger"]:disabled {{
     background: {p['disabled_bg']}; color: {p['muted']}; border: 1px solid {p['border']};
 }}
 
-/* Digital readout (e.g. motor position) — a dark instrument screen like the
-   plot canvas, so live numbers read as an instrument display rather than a
-   plain label. Values use a monospace face for tabular alignment. */
+/* Motor-style digital readout (gui/motor_panel.py only) — a dark instrument
+   screen like the plot canvas, so a true hardware readout (stage position)
+   reads as an instrument display. Values use a monospace face for tabular
+   alignment — the "reserve monospace for numeric readouts" half of the
+   apple_style_ui_audit.md typography finding. */
 QFrame#instrumentReadout {{
     background: {PLOT_BG}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_MD}px;
 }}
 QLabel#readoutAxis {{
-    color: {PLOT_FG}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0;
+    color: {PLOT_FG}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
 }}
 QLabel#readoutValue {{
     color: {p['accent']};
     font-family: {MONO_FAMILY};
     font-size: {FONT_XL}px; font-weight: 600;
 }}
+
+/* Metric tile (gui/status_widgets.py ReadoutCell / gui/panel_kit.py
+   MetricTile — the app-wide "hero number" tile: Scan Viewer progress/ETA,
+   Camera beam stats, calibration results, intensity readouts, ...). v5 fix:
+   this used to reuse the dark-LCD instrumentReadout look above (small bold
+   mono digits on a black plate) even though it is not a true instrument
+   screen — exactly the "metrics are too chunky/black-box" finding in
+   apple_style_ui_audit.md. Now it is a calm card-2 surface with a large,
+   light, PROPORTIONAL value (tct_polish_preview.html's `.tile`); monospace
+   is intentionally dropped here and stays reserved for the true instrument
+   readout above and for file/data identifiers. The tri-state colour hooks
+   below stay neutral-by-default: only a real good/warn/crit/armed state
+   earns colour, so that signal keeps meaning instead of every tile reading
+   permanently "active" (which the old fixed-accent value colour did). */
 QFrame#readoutCell {{
-    background: {PLOT_BG}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_SM}px;
+    background: {p['panel_2']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_MD}px;
 }}
 QLabel#readoutCellTitle {{
-    color: {PLOT_FG}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0;
+    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
 }}
 QLabel#readoutCellValue {{
-    color: {p['accent']}; font-family: {MONO_FAMILY};
-    font-size: {FONT_SM}px; font-weight: 700;
+    color: {p['text']};
+    font-size: {FONT_DISPLAY}px; font-weight: 400;
 }}
 /* Tri-state (+ "armed") value-colour hook — drive with a dynamic ``state``
    property in {{good, warn, crit}} via gui.status_widgets.ReadoutCell.set_state()
@@ -623,7 +678,7 @@ QFrame#controlCluster {{
     background: {p['field']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_LG}px;
 }}
 QLabel#clusterCaption {{
-    color: {p['muted']}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0;
+    color: {p['muted']}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
 }}
 
 /* Jog pad buttons — compact, square-ish directional keys inside a cluster. */
@@ -667,7 +722,7 @@ QFrame#channelCard {{
    spacing gives it the tracking real small-caps captions need to read
    comfortably at this size instead of looking merely "shrunk". */
 QLabel#eyebrow {{
-    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: 700; letter-spacing: 0;
+    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
 }}
 
 /* ---------------------------------------------------------------------
