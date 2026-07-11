@@ -41,7 +41,7 @@ tests still pass and their logic is correct.
 
 ## C2 — Calibration panel: theme-responsive status labels
 
-**Status: OPEN** · Effort: S-M · Source: docs/TECH_DEBT.md NIT (2026-07-10)
+**Status: DONE — Live theme labels wired; pytest blocked by broken venv interpreter.** · Effort: S-M · Source: docs/TECH_DEBT.md NIT (2026-07-10)
 
 `TCT_app/gui/calibration_panel.py` has two status labels styled with static
 LIGHT-palette tokens; they do not refresh when the theme toggles (every other
@@ -55,6 +55,14 @@ panel refreshes via the house pattern).
   DangerGate BLOCKER lives there — separate protected beat).
 - Verify headless: `tests/test_no_inline_hex_gui.py`,
   `tests/test_apply_theme_lifetime.py`, plus any calibration panel tests.
+
+**Codex findings (2026-07-11):**
+- Files touched: `TCT_app/gui/calibration_panel.py`, `TCT_app/tct_gui.py`, `TCT_app/tests/test_no_inline_hex_gui.py`, `docs/CODEX_QUEUE.md`.
+- `CalibrationPanel` now reads the saved theme mode, resolves `_current` and `_rep_progress` through `gui.style.palette()`, exposes `refresh_theme()`, and is included in `tct_gui._toggle_theme()`'s live refresh list.
+- Regression coverage updated so `test_calibration_panel_construct_and_theme_switch` exercises dark and light `refresh_theme()` paths.
+- Verification attempted from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_no_inline_hex_gui.py tests/test_apply_theme_lifetime.py`; it failed before pytest launched because `.venv\pyvenv.cfg` points to missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`.
+- Static checks completed: `git diff --check` passed; `rg -n "LIGHT\[|DARK\[|#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{3}" TCT_app/gui/calibration_panel.py -S` found no stale fixed palette/inline hex usage in the target file.
+- Risk: runtime pytest verification remains blocked until the local venv/base interpreter is repaired.
 
 ---
 
