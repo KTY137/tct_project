@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 
 from analysis.charge_calibration import ChargeCalibration, q_one_mip_pC
 from analysis.waveform_analysis import analyse_waveform
+from controller.danger_gate import DangerGate
 from controller.repeatability import RepeatabilityTester
 from gui.status_widgets import ReadoutCell, StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import LIGHT
@@ -102,9 +103,15 @@ class CalibrationPanel(QWidget):
 
     calibration_changed = Signal()   # emitted after a successful save
 
-    def __init__(self, devices, parent: QWidget | None = None) -> None:
+    def __init__(self, devices, parent: QWidget | None = None,
+                 *, gate: DangerGate | None = None) -> None:
         super().__init__(parent)
         self._devices = devices
+        # Confirmation gate for the (motion-driving) repeatability test.  The
+        # main window injects the same QtDangerGate the plan executor uses; with
+        # no gate the tester refuses to move (fail-safe), so the panel surfaces
+        # that up front rather than firing a worker that will raise.
+        self._gate = gate
         self._loading = True
         self._ref_thread: QThread | None = None
         self._ref_worker: _ReferenceWorker | None = None
@@ -434,6 +441,14 @@ class CalibrationPanel(QWidget):
             QMessageBox.warning(self, "Not connected",
                                 "Connect the camera first (Connect All).")
             return
+        if self._gate is None:
+            # Fail-safe: the tester refuses to move without a confirmation gate.
+            # Surface it here rather than letting the worker raise mid-run.
+            QMessageBox.warning(
+                self, "Confirmation unavailable",
+                "The repeatability test moves the stage and needs a "
+                "confirmation gate, which is not wired. Cannot proceed.")
+            return
         params = dict(
             n=self._rep_n.value(),
             approach=self._rep_approach.value(),
@@ -442,7 +457,7 @@ class CalibrationPanel(QWidget):
             cal_axis=self._rep_cal_axis.currentText().lower(),
             cal_dist=self._rep_cal_dist.value(),
         )
-        tester = RepeatabilityTester(motor, cam, logger)
+        tester = RepeatabilityTester(motor, cam, logger, gate=self._gate)
         self._rep_worker = _RepeatWorker(tester, params)
         self._rep_thread = QThread(self)
         self._rep_worker.moveToThread(self._rep_thread)
