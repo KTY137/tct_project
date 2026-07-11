@@ -65,11 +65,15 @@ python -m pytest tests/ -q   # tests — must pass headless, no hardware
 - **Recovery memory lives outside this repo** at
   `C:\Users\nukei\Desktop\agent_env\memory\`. Check `todos.local.md` after token
   limits, crashes, or interrupted subagent work. See `docs/AGENT_WORKFLOW.md`.
-- **External intercom lives in `agent_env`.** For Codex/Claude/bench handoffs,
-  use `C:\Users\nukei\Desktop\agent_env\outbox\` -> `inbox\` via:
-  `python -m agent_env.orchestrate "<task>" --project project_tct --lane auto`.
+- **External intercom is the Daedalus harness** (renamed from `agent_env`
+  2026-07-11; the folder is still `C:\Users\nukei\Desktop\agent_env\`, the
+  Python package is now `daedalus`). For Codex/Ollama/bench handoffs, use
+  `outbox\` -> `inbox\` via:
+  `python -m daedalus.orchestrate "<task>" --project project_tct --lane auto`.
   If Claude tokens are exhausted, use `--lane local_only`; that lane never calls
-  Claude and reports failure instead of spending senior-lane tokens.
+  Claude and reports failure instead of spending senior-lane tokens. Bench
+  check: `python -m daedalus.cli doctor`; harmless end-to-end proof:
+  `python -m daedalus.cli selftest`.
 - **Consult the architecture bookkeep first**: `docs/ARCHITECTURE.md` describes
   every module, its responsibilities, and its invariants. Point subagents to it.
   After any structural change (new/renamed module, class, signal, config key,
@@ -190,32 +194,42 @@ These apply to every agent and every change:
 
 <!-- AGENT_ENV_ENFORCED:BEGIN -->
 
-## Agent Env Enforcement
+## Daedalus Enforcement (harness renamed from agent_env, 2026-07-11)
 
-This repository is managed by the external `agent_env` harness. When delegating
-work, use the harness file bus instead of direct agent-to-agent messages.
+This repository is managed by the external **Daedalus** harness (folder still
+`C:\Users\nukei\Desktop\agent_env\`; Python package `daedalus`). When
+delegating to Codex/Ollama, use the harness file bus instead of direct
+agent-to-agent messages.
 
-- Token-safe local path:
+- Token-safe local path (Ollama via Ikarus, zero Claude tokens):
 
   ```powershell
-  python -m agent_env.file_bridge enqueue "<task>" --project project_tct --lane local_only --source claude
+  python -m daedalus.file_bridge enqueue "<task>" --project project_tct --lane local_only --source claude
   ```
 
 - Normal routed path:
 
   ```powershell
-  python -m agent_env.file_bridge enqueue "<task>" --project project_tct --lane auto --source claude
+  python -m daedalus.file_bridge enqueue "<task>" --project project_tct --lane auto --source claude
   ```
 
 - The watcher must be running:
 
   ```powershell
-  python -m agent_env.file_bridge watch --project project_tct
+  python -m daedalus.file_bridge watch --project project_tct
   ```
+
+- Bench readiness / end-to-end proof: `python -m daedalus.cli doctor` /
+  `python -m daedalus.cli selftest`. Direct one-shot offload (no watcher):
+  `python -m daedalus.cli offload "<task>" --repo-root <repo> --paths <file>`
+  (plan-only unless `--live`; the verifier gate trusts only real disk changes).
 
 Rules:
 - Prefer `local_only` while Claude tokens are exhausted.
 - Do not bypass Ikarus for local/Ollama work.
+- Route only well-bounded, mechanical tasks to the Ollama lane (docstrings,
+  renames, boilerplate); safety-critical code (devices/, HV, motion, scan
+  logic) stays with the Claude crew and always gets a Mary review.
 - Read reports from `C:\Users\nukei\Desktop\agent_env\inbox`.
 - Check recovery memory at `C:\Users\nukei\Desktop\agent_env\memory\todos.local.md`.
 
