@@ -496,6 +496,12 @@ class TCTMainWindow(QMainWindow):
         self._light_timer.setInterval(1000)
         self._light_timer.timeout.connect(self._refresh_lights)
         self._light_timer.timeout.connect(self._sync_app_state)
+        # QML mode only: the shell bridge polls the SAME cached state at the
+        # SAME cadence — one shared 1 Hz timer instead of a second QTimer
+        # doing duplicate work (slice 2a coffee-retro item; _ShellBridge owns
+        # no timer of its own — see gui/qml_shell.py).
+        if self._shell_bridge is not None:
+            self._light_timer.timeout.connect(self._shell_bridge.pull)
         self._light_timer.start()
         self._refresh_lights()
 
@@ -976,14 +982,20 @@ class TCTMainWindow(QMainWindow):
     def _teardown_panels(self) -> None:
         """Stop every panel-owned thread/timer before the panels are discarded
         (child-widget deletion does not fire closeEvent)."""
-        # Stop the QML shell bridge's cached-state poll timer (QML mode only) so
-        # it can't tick into discarded widgets after a soft-reload / on close.
+        # Detach the QML shell bridge from the shared light timer (QML mode
+        # only) so a tick can't reach into discarded widgets after a
+        # soft-reload / on close. The bridge owns no timer of its own (slice
+        # 2a — see gui/qml_shell.py); it only rides `_light_timer.timeout`,
+        # stopped a few lines below, so this disconnect is the only bridge-
+        # specific teardown needed and is safe to repeat (idempotent).
         bridge = getattr(self, "_shell_bridge", None)
         if bridge is not None:
-            try:
-                bridge.stop()
-            except Exception:
-                pass
+            light_timer = getattr(self, "_light_timer", None)
+            if light_timer is not None:
+                try:
+                    light_timer.timeout.disconnect(bridge.pull)
+                except (TypeError, RuntimeError):
+                    pass
             self._shell_bridge = None
         # Explicitly release the QML chrome's engine/scene-graph resources
         # BEFORE ``_build_central`` (a soft config reload) constructs a new

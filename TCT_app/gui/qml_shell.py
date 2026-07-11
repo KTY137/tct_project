@@ -157,8 +157,13 @@ class _ShellBridge(QObject):
 
     ``state_provider`` returns a dict of already-cached values (no I/O — it reads
     the same device flags / status-chip text the classic ribbon AND toolbar
-    show). A small GUI-thread ``QTimer`` (no I/O; pure widget/attribute reads)
-    re-pulls it, the same cadence the classic ribbon's light timer uses.
+    show). This bridge owns NO timer of its own (slice 2a — coffee-retro item):
+    the composition root's existing ``_light_timer`` (``tct_gui.py``, the same
+    1 Hz GUI-thread timer that already drives ``_refresh_lights``/
+    ``_sync_app_state``) also drives ``pull()``, so there is exactly one poll
+    of the same cached state per tick rather than two independent QTimers doing
+    duplicate work. ``start()`` only seeds the QML properties once, synchronously,
+    so the rail isn't empty for the first tick.
     ``connectAll``/``disconnectAll``/``toggleTheme``/``openDeviceManager``/
     ``openSettings``/``toggleLog``/``toggleDeviceDebug`` invoke the window's
     existing handlers — the QML rail is a second SURFACE for the same actions
@@ -202,23 +207,17 @@ class _ShellBridge(QObject):
             "scan": ["Scan --", "neutral"],
             "laser": ["Laser --", "neutral"],
             # The toolbar's app-state readout (see gui/qml/Shell.qml's "State"
-            # StatReadout) — separate from "scan" above.
+            # StatChip) — separate from "scan" above.
             "app": ["State --", "neutral"],
         }
         self._log_visible = False
         self._debug_visible = False
 
-        from PySide6.QtCore import QTimer
-        self._timer = QTimer(self)
-        self._timer.setInterval(1000)
-        self._timer.timeout.connect(self.pull)
-
     def start(self) -> None:
+        """Seed the QML properties once. No owned timer — see the class docstring;
+        the composition root connects its shared ``_light_timer.timeout`` to
+        ``pull`` for every tick after this initial one."""
         self.pull()
-        self._timer.start()
-
-    def stop(self) -> None:
-        self._timer.stop()
 
     @Slot()
     def pull(self) -> None:
@@ -368,7 +367,10 @@ def build_qml_chrome(
     Log / Show Device Debug / the app-state readout) are re-exposed as a rail
     cluster routed through ``on_open_devices``/``on_open_settings``/
     ``on_toggle_log``/``on_toggle_debug``, the SAME handlers the toolbar
-    actions call. ``bridge.start()`` begins the cached-state poll.
+    actions call. ``bridge.start()`` seeds the cached-state poll once; the
+    caller (``tct_gui._build_central``) connects its shared ``_light_timer``
+    to ``bridge.pull`` for every tick after that — this bridge owns no timer
+    of its own (see ``_ShellBridge``'s docstring).
     """
     from PySide6.QtCore import QUrl
     from PySide6.QtQuickWidgets import QQuickWidget
@@ -417,7 +419,6 @@ def build_qml_chrome(
             pass
         chrome.setParent(None)
         chrome.deleteLater()
-        bridge.stop()
         bridge.deleteLater()
         tab_adapter.deleteLater()
         return None, None

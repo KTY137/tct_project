@@ -469,6 +469,124 @@ def test_qml_shell_survives_repeated_production_soft_reload(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# 3e. Rail compression (slice 2a) — no Flickable/horizontal scroll on the rail, #
+#     content fits a >=1280px window in one view.                              #
+# --------------------------------------------------------------------------- #
+def test_qml_rail_has_no_flickable(monkeypatch):
+    """The rail (top 48px strip: wordmark/Connect-Disconnect/device dots/stat
+    chips/icon cluster/theme toggle) no longer wraps its content in a
+    Flickable — every affordance must be reachable without a horizontal
+    scroll. The pill tab shelf below the rail keeps its own Flickable (a
+    genuinely scrollable tab list is out of this task's scope), so the
+    assertion is scoped to "no Flickable is an ancestor of railRow", not
+    "zero Flickable objects anywhere in the chrome"."""
+    from PySide6.QtCore import QObject
+
+    app = _app()
+    win = _make_window(monkeypatch, qml=True)
+    try:
+        root = win._qml_chrome.rootObject()
+        assert root is not None
+
+        rail_row = root.findChild(QObject, "railRow")
+        assert rail_row is not None, "railRow object not found in Shell.qml"
+
+        # No ancestor of railRow is a QQuickFlickable.
+        node = rail_row.parent()
+        while node is not None:
+            assert node.metaObject().className() != "QQuickFlickable", (
+                "railRow is still wrapped in a Flickable — the rail must "
+                "fit without a horizontal scroll (slice 2a)"
+            )
+            node = node.parent()
+
+        # Exactly one Flickable remains in the chrome: the pill tab shelf's.
+        flickables = [
+            o for o in root.findChildren(QObject)
+            if o.metaObject().className() == "QQuickFlickable"
+        ]
+        assert len(flickables) == 1, (
+            f"expected exactly 1 Flickable (the pill shelf), found {len(flickables)}"
+        )
+    finally:
+        _destroy(win)
+        app.processEvents()
+
+
+def test_qml_rail_content_fits_1280_width(monkeypatch):
+    """The rail's natural (implicit) content width must clear a 1280px window
+    with room to spare — the actual compression check, independent of the
+    Flickable-absence structural check above. Measured against the real
+    devices.yaml (6 named devices) and the DISCONNECTED boot state, which is
+    also the longest-text AppState member (the worst case for the Scan/State
+    value chips: "Scan DISCONNECTED" / "State: DISCONNECTED")."""
+    from PySide6.QtCore import QObject
+
+    app = _app()
+    win = _make_window(monkeypatch, qml=True)
+    try:
+        root = win._qml_chrome.rootObject()
+        rail_row = root.findChild(QObject, "railRow")
+        assert rail_row is not None
+
+        implicit_width = rail_row.property("implicitWidth")
+        assert implicit_width is not None
+        assert implicit_width <= 1280, (
+            f"rail content needs {implicit_width}px — does not fit a 1280px "
+            "window without scrolling"
+        )
+    finally:
+        _destroy(win)
+        app.processEvents()
+
+
+# --------------------------------------------------------------------------- #
+# 3f. Single shared 1 Hz timer (coffee-retro item) — the bridge owns no timer;  #
+#     the composition root's existing `_light_timer` drives its poll too.      #
+# --------------------------------------------------------------------------- #
+def test_shell_bridge_owns_no_timer(monkeypatch):
+    from PySide6.QtCore import QTimer
+
+    app = _app()
+    win = _make_window(monkeypatch, qml=True)
+    try:
+        bridge = win._shell_bridge
+        assert not hasattr(bridge, "stop"), (
+            "bridge.stop() should be gone with the timer it used to stop"
+        )
+        # No QTimer child owned by the bridge itself.
+        assert bridge.findChildren(QTimer) == []
+    finally:
+        _destroy(win)
+        app.processEvents()
+
+
+def test_shell_bridge_pulled_by_shared_light_timer(monkeypatch):
+    """A tick of the window's existing `_light_timer` (the SAME timer driving
+    `_refresh_lights`/`_sync_app_state`) must refresh the bridge's cached
+    QML-facing state too, with no separate bridge-owned timer involved."""
+    app = _app()
+    win = _make_window(monkeypatch, qml=True)
+    try:
+        from controller.state_machine import AppState
+
+        bridge = win._shell_bridge
+        assert bridge.appText == "State: DISCONNECTED"
+        win._on_state_change(win._sm.state, AppState.CONNECTED)
+        # bridge.appText is still stale (no pull yet) until the shared timer ticks.
+        assert bridge.appText == "State: DISCONNECTED"
+
+        win._light_timer.timeout.emit()   # simulate one shared-timer tick
+        _pump()
+
+        assert bridge.appText == "State: CONNECTED"
+        assert bridge.appText == win._lbl_state.text()
+    finally:
+        _destroy(win)
+        app.processEvents()
+
+
+# --------------------------------------------------------------------------- #
 # 4. Theme singleton — tokens match style.py; NOTIFY fires on toggle            #
 # --------------------------------------------------------------------------- #
 def test_theme_singleton_tokens_match_style_for_both_modes():
