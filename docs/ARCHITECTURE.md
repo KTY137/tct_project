@@ -166,13 +166,20 @@ Core design rules (verified in code):
   (unknown keys → WARNING; silent typos never escape). Phase 3: oscilloscope
   `n_channels` must be a whole number in range 1..8, else validation fails (clamped
   to *IDN?-detected capability at runtime).
+- `yaml_persist.py` — comment-preserving persistence for `configs/devices.yaml`.
+  Walks YAML *source text* with an indentation stack and rewrites only the value
+  half of lines whose key path matches a caller-supplied update; every other line
+  (comments, blank lines, unrelated sections) passes through byte-for-byte unchanged.
+  Public API: `merge_yaml_text(text, updates) -> str`, `update_yaml_file(path, updates)`.
+  Fixes the historical round-trip bug where `yaml.safe_load → yaml.dump` silently
+  stripped all comments. Used by settings windows (scope_panel, settings_window).
 - `repeatability.py` — stage repeatability measurement logic.
 
 ## devices/ (one family = base + backends)
 
 | Family | Base | Backends |
 |---|---|---|
-| Motor stage | `motor_base.py` (`MotorStageBase`, `SoftwareLimits`) | `motor_grbl.py`, `motor_pi.py`, `motor_simulated.py` (+ `printer_presets.py`) |
+| Motor stage | `motor_base.py` (`MotorStageBase`, `SoftwareLimits`, `limits_user_frame()`) | `motor_grbl.py`, `motor_pi.py`, `motor_simulated.py` (+ `printer_presets.py`) |
 | Bias supply (HV) | `bias_supply_base.py` (`BiasSupplyBase`) | `bias_supply_iseg.py`, `bias_supply_keithley.py`, `bias_supply_e4control.py`, `bias_supply_simulated.py` |
 | Bias channel (proxy) | — | `bias_channel.py` (`BiasChannel` — binds one `(driver, channel_index)` pair; see below) |
 | Oscilloscope | — | `oscilloscope.py` (VISA), `oscilloscope_drs4.py` (PSI DRS4 eval board), `oscilloscope_tek_fastframe.py` (Tektronix MSO5204B FastFrame — currently non-functional, see Known constraints) |
@@ -183,6 +190,22 @@ Core design rules (verified in code):
 
 All inherit `base.py:BaseDevice` (`DeviceError`, `io_lock`, `simulation`,
 `is_alive()`, abstract `connect()`/`disconnect()`).
+
+**Motor frame contract (2026-07-11):**
+- `MotorStageBase.limits_user_frame() -> SoftwareLimits | None` (motor_base.py:210–234):
+  Soft limits expressed in the *same* frame `get_position()` / `move_to()` speak to
+  the rest of the app. Single source of truth for the planner + validator. A backend
+  whose user frame IS its machine frame (SimulatedMotorStage, PIMotorStage) returns
+  `self.limits` unchanged. A backend that maintains a software display offset
+  (GRBLMotorStage, whose `zero_position` shifts the origin without touching the
+  controller) overrides to translate the machine-frame `self.limits` into the
+  current user frame. Callers rebuild `PlanLimits` from THIS (not `self.limits`)
+  and refresh whenever the offset changes (after home / zero).
+- `gui/motor_panel.py:MotorPanel.origin_changed` (Signal, motor_panel.py:124): emitted
+  after home or zero-position succeeds. Wired to `TCTMainWindow._refresh_plan_limits()`
+  (tct_gui.py:472) so the planner's user-frame soft-limit gate tracks the new origin
+  and never validates against stale bounds — fixes the "Zero Here → planner rejects
+  the plan on soft limits" bug (2f91e00, 2026-07-11).
 
 **Multi-channel bias + polarity (verified in code):**
 - `bias_channel.py:BiasChannel` binds one `(driver, channel_index)` pair and
@@ -289,12 +312,12 @@ no FastFrame support), driven by the default `oscilloscope.py` VISA backend
 
 ## gui/ (PySide6 — never PyQt6)
 
-**QML-hybrid components (opt-in, 2026-07-11 slice 1):**
+**QML-hybrid components (opt-in, 2026-07-11 slice 1, 2a: unified polling):**
 
 - `qml_theme.py` — Theme QML singleton, fed from `style.py` token design system; NOTIFY fires on theme switch.
-- `qml_shell.py` — QML-hybrid shell host: `_ShellBridge` (QObject, tab index / live device state), `_TabShelfAdapter` (tab shelf ↔ classic tabs sync), QQuickWidget RHI pinned to OpenGL. Opt-in via `TCT_QML_SHELL=1` env flag; classic shell byte-identical when flag unset.
+- `qml_shell.py` — QML-hybrid shell host: `_ShellBridge` (QObject, tab index / live device state), `_TabShelfAdapter` (tab shelf ↔ classic tabs sync), QQuickWidget RHI pinned to OpenGL. Opt-in via `TCT_QML_SHELL=1` env flag; classic shell byte-identical when flag unset. **Slice 2a:** `_ShellBridge.pull()` rides `TCTMainWindow._light_timer.timeout` (1 Hz), no second timer of its own — unified polling cadence.
 - `scope_viewmodel.py` — Read-only scope-status mirror for QML binding (rateText stubbed empty; TODO: drive from scope reader cadence).
-- `qml/Shell.qml` — QML-hybrid chrome: rail (Devices/Settings/Log/Debug chips + app-state readout) + pill tab shelf (syncs DetachableTabWidget index).
+- `qml/Shell.qml` — QML-hybrid chrome: rail (Devices/Settings/Log/Debug chips + app-state readout, icon buttons compress without Flickable) + pill tab shelf (syncs DetachableTabWidget index).
 - **Invariants:** Classic DetachableTabWidget is the sole tab/detach engine—QML shelf is a *view*; pyqtgraph plots are NEVER inside QQuickWidget; style.py remains the single token source (Theme singleton mirrors it); soft-reload (production config reload) releases old QML engine before building new one.
 
 **Core panels & support (all on `panel_kit` Cards):**
@@ -481,6 +504,14 @@ The following files are autogenerated/maintained registries for fast O(1) lookup
 Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 ## Changelog
+
+- 2026-07-11 — **2f91e00 (fix):** Motor user-frame validation. `motor_base.py` adds `limits_user_frame()` contract (user frame ≠ machine frame for GRBLMotorStage's zero_position offset). `MotorPanel.origin_changed` signal emitted after home/zero; wired to `TCTMainWindow._refresh_plan_limits()` so planner's soft-limit gate tracks the new origin — fixes "Zero Here → plan rejected on stale bounds" bug. +2 integration tests (plan gate after zero).
+
+- 2026-07-11 — **c86e21a (feat/fix):** Bias-supply simulation mode + comment-preserving YAML writes. NEW `controller/yaml_persist.py` (comment-preserving line-level surgical editor; public `merge_yaml_text` / `update_yaml_file` API). scope_panel/settings_window now route through it instead of `yaml.safe_load → yaml.dump` round-trip that stripped all comments. Bias supply `simulation` key added to config_validator known-keys list (backend='simulated' preferred; legacy key supported).
+
+- 2026-07-11 — **4eb7f14 (feat):** Slice 2a unified polling & QML rail composition. `qml_shell.py` `_ShellBridge.pull()` now rides `TCTMainWindow._light_timer.timeout` (1 Hz cadence), no second timer of its own. `qml/Shell.qml` rail compressed without Flickable via icon buttons/overflow menu — content fits in ~1400px viewport.
+
+- 2026-07-11 — **7393c3d (merge):** experimental/qml-hybrid-slice1 → design/cockpit-v5. Merge commit; slice 1 + slice 2a work lands together. NEW `gui/qml_theme.py` (Theme singleton fed from style.py, NOTIFY on switch), `gui/qml_shell.py` (_ShellBridge + _TabShelfAdapter, QQuickWidget chrome), `gui/scope_viewmodel.py` (read-only scope mirror), `gui/qml/Shell.qml` (rail + pill shelf). Opt-in `TCT_QML_SHELL=1`; classic shell unchanged when flag unset. main.py OpenGL RHI pin; tct_gui opt-in branch + hardened soft-reload. NEW test `tests/test_qml_shell.py` (11 tests). Suite 742; Mary APPROVE_WITH_NITS (all nits fixed).
 
 - 2026-07-11 — **QML-hybrid slice 1 landed (experimental/qml-hybrid-slice1 @ 0f90573).** NEW `gui/qml_theme.py` (Theme singleton fed from style.py, NOTIFY on switch), `gui/qml_shell.py` (_ShellBridge + _TabShelfAdapter, QQuickWidget chrome), `gui/scope_viewmodel.py` (read-only scope mirror), `gui/qml/Shell.qml` (rail + pill shelf). Opt-in `TCT_QML_SHELL=1`; classic shell unchanged when flag unset. main.py OpenGL RHI pin; tct_gui opt-in branch + hardened soft-reload. NEW test `tests/test_qml_shell.py` (11 tests: default-classic boot, QML-boot smoke, detach/redock, rail reachability, fail-safe fallback, soft-reload engine cleanup, Theme singleton sync, tab-shelf sync, QML no-hex rule). Suite 742; Mary APPROVE_WITH_NITS (2 RISKs + NIT, all fixed).
 

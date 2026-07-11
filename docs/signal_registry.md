@@ -136,6 +136,7 @@ Organization: **one section per module**, signals listed in definition order. Fo
 | `_PollWorker.position_updated` | `(float, float, float)` | `motor_panel.py:54` | ? (to parent MotorPanel) |
 | `_CommandWorker.done` | `(str)` — "" on success, else the error message | `motor_panel.py:96` | ? (to parent MotorPanel) |
 | `MotorPanel.set_as_scan_start` | `(float, float, float)` | `motor_panel.py:119` | `PlannerPanel.set_position_from_motor()`, `tct_gui.py:TBD` |
+| `MotorPanel.origin_changed` | `()` — emitted after home/zero completes successfully | `motor_panel.py:124` | `TCTMainWindow._refresh_plan_limits()`, `tct_gui.py:472` (re-push user-frame planner limits after offset change) |
 | `MotorPanel._poll_stop_requested` | `()` | `motor_panel.py:120` | ? |
 
 ---
