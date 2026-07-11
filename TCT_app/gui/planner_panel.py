@@ -24,6 +24,7 @@ previous run.
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -333,6 +334,23 @@ class _RecipeTree(QTreeWidget):
         dest_parent_path, dest_index, payload = decision
         self._panel._apply_drop(dest_parent_path, dest_index, payload)
         event.acceptProposedAction()
+
+
+@dataclass(frozen=True)
+class _CandidatePreview:
+    """A drag-drop drop-indicator preview of a would-be plan mutation.
+
+    Only the fields the delta chip renders.  ``est_runtime_s`` is ``None`` when
+    the candidate is large enough that a full :func:`estimate_plan` leaf walk
+    would freeze the GUI thread: in that case the preview is a cheap
+    point-count-only upper bound (``total_points`` / ``total_leaf_visits`` are
+    structural products, not a leaf walk — see
+    :meth:`PlannerPanel._compute_candidate_estimate`), and the chip honestly
+    omits the runtime delta rather than fabricating one.
+    """
+    total_points: int
+    total_leaf_visits: int
+    est_runtime_s: float | None
 
 
 class _EstimateWorker(QObject):
@@ -1581,11 +1599,30 @@ class PlannerPanel(QWidget):
 
     def _compute_candidate_estimate(
         self, dest_parent_path: list[int] | None, dest_index: int, payload: dict,
-    ) -> PlanEstimate | None:
+    ) -> _CandidatePreview | None:
         """Build a throwaway candidate plan (``to_dict``/``from_dict`` copy +
-        the would-be mutation) and estimate it. The real plan object and the
-        undo stack are never touched -- this is a completely separate object
-        graph from the very first line."""
+        the would-be mutation) and preview its cost. The real plan object and
+        the undo stack are never touched -- this is a completely separate object
+        graph from the very first line.
+
+        A full :func:`estimate_plan` is a per-leaf walk; for a large candidate
+        that would freeze the GUI thread on the debounced preview slot (the
+        three-layer law: compute must never block the GUI thread).  So we gate on
+        the SAME ``_estimate_async_threshold`` used for the main estimate, read
+        off the cheap structural ``total_leaf_visits()`` product:
+
+        * small candidate -> full estimate (carries the runtime delta, unchanged
+          behaviour), returned as a :class:`_CandidatePreview`;
+        * large candidate -> point-count-only preview (``total_points`` /
+          ``total_leaf_visits`` are cheap structural products, no leaf walk),
+          with ``est_runtime_s=None`` so the chip drops the runtime delta instead
+          of blocking to compute one or fabricating a bogus number.
+
+        An async candidate estimate was rejected here on purpose: the ghost/drop
+        target is transient (it can be gone before a worker result lands), and a
+        second coalescing lane just to fill in a runtime delta the user is
+        actively dragging past is not worth the machinery — the honest
+        point-count upper bound keeps both the UX and the GUI thread clean."""
         try:
             candidate = ScanPlan.from_dict(self._plan.to_dict())
             op = payload.get("op")
@@ -1598,23 +1635,42 @@ class PlannerPanel(QWidget):
                 dest_list.insert(idx, block)
             else:
                 return None
-            return estimate_plan(candidate)
+            leaf_visits = candidate.total_leaf_visits()
+            if leaf_visits > self._estimate_async_threshold:
+                return _CandidatePreview(
+                    total_points=candidate.total_points(),
+                    total_leaf_visits=leaf_visits,
+                    est_runtime_s=None,
+                )
+            est = estimate_plan(candidate)
+            return _CandidatePreview(
+                total_points=est.total_points,
+                total_leaf_visits=est.total_leaf_visits,
+                est_runtime_s=est.est_runtime_s,
+            )
         except (ValueError, KeyError, TypeError, IndexError, AttributeError):
             return None
 
-    def _render_delta_preview(self, candidate: PlanEstimate | None) -> None:
+    def _render_delta_preview(self, candidate: _CandidatePreview | None) -> None:
         if candidate is None:
             self._chip_delta_preview.setVisible(False)
             return
+        # _safe_estimate() is non-blocking: it returns the cached/stale base
+        # estimate (never a fresh GUI-thread leaf walk) so a large base plan
+        # cannot freeze the preview slot.  During a drag the base plan is
+        # unchanged, so this is a cache hit anyway.
         base = self._safe_estimate()
         base_points = base.total_points if base is not None else 0
-        base_runtime = base.est_runtime_s if base is not None else 0.0
-        delta_runtime = candidate.est_runtime_s - base_runtime
         over_cap = candidate.total_leaf_visits > self._limits.max_points
-        text = (
-            f"Preview: {base_points:,} → {candidate.total_points:,} pts "
-            f"· {_fmt_duration_delta(delta_runtime)}"
-        )
+        # A runtime delta is only shown when BOTH sides have a real runtime — a
+        # large candidate carries est_runtime_s=None (point-count-only preview),
+        # so we honestly drop the delta rather than invent one.
+        if candidate.est_runtime_s is not None and base is not None:
+            delta_runtime = candidate.est_runtime_s - base.est_runtime_s
+            runtime_suffix = f" · {_fmt_duration_delta(delta_runtime)}"
+        else:
+            runtime_suffix = ""
+        text = f"Preview: {base_points:,} → {candidate.total_points:,} pts{runtime_suffix}"
         self._chip_delta_preview.set_status(text, "warn" if over_cap else "neutral")
         self._chip_delta_preview.setVisible(True)
 
@@ -1712,9 +1768,25 @@ class PlannerPanel(QWidget):
         self._render_estimate(estimate)
 
     def _safe_estimate(self) -> PlanEstimate | None:
+        """Best available estimate for the current plan WITHOUT ever blocking
+        the GUI thread.
+
+        * Cache hit -> the fresh cached estimate.
+        * Cache miss on a LARGE plan -> never run the leaf walk inline (that is
+          the founding three-layer-law breach).  Hand the plan to the existing
+          off-thread worker (latest-wins coalescing via :meth:`_queue_estimate`)
+          and return the last known estimate (stale-but-marked; may be ``None``
+          before the first result).  The worker's result lands on
+          :meth:`_on_estimate_done` and re-renders.
+        * Cache miss on a small plan -> the leaf walk is cheap, so compute inline
+          and cache (unchanged behaviour).
+        """
         key = self._estimate_key()
         if self._last_estimate_key == key:
             return self._last_estimate
+        if self._estimate_should_run_async():
+            self._queue_estimate(key)
+            return self._last_estimate      # stale-but-marked; fresh one follows
         try:
             estimate = estimate_plan(self._plan)
         except (ValueError, TypeError):
