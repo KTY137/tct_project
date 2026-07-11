@@ -15,6 +15,7 @@ Conventions:
 
 | Date | File | Topic | One-line takeaway |
 |---|---|---|---|
+| 2026-07-11 | `qml_hybrid_architecture.md` | QML chrome + pyqtgraph plots hybrid, 3-layer law | QML (QQuickWidget islands) + pyqtgraph sibling QWidgets + DetachableTabWidget unchanged; full-QML rejected (pyqtgraph 0.2–0.4 ms/frame vs QtCharts 4–6 ms + jank); RHI OpenGL; Theme singleton; 3-layer law (UI→backend→drivers, no GUI-thread compute) enforced by static contracts + watchdog test; slice 1 = Scope vertical. |
 | 2026-07-10 | `camera_optics_setup.md` | Camera / laser-relay optics — bench findings | BFLY-U3-23S6M-C coaxial beam-monitoring setup (shared laser/camera objective); 5 open bench actions (relay lens engravings, parfocality, height lock, ROI calibration, ROI writeability); known-good settings (Mono8/bin1/13009µs/14dB/gamma1.0/trigger-off); two app-side display bugs (Mono16 banding, binning white-frame). |
 | 2026-07-08 | `scan_viewer_design_review.md` | ScanPanel retirement design review | Endorse Planner-only config surface + separate ScanViewerPanel; identify 4 gaps (Z-focus, manual-pause, multi-channel vscan, fast-raster) for Phase 3 planning. |
 | 2026-07-07 | `printrun_printcore_motor_eval.md` | Motor backend evaluation | Reject Printrun `printcore` (GPLv3+ copyleft + dependency bloat); hybrid-harden custom GRBL driver with Marlin robustness patterns instead. |
