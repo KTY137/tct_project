@@ -225,6 +225,22 @@ Organization: **one section per module**, signals listed in definition order. Fo
 
 ---
 
+## gui/qml_theme.py
+
+| Signal | Signature | Defined at | Connected to |
+|--------|-----------|-----------|--------------|
+| `Theme.changed` | `(str, str)` — (key, value) — NOTIFY signal for QML binding | `qml_theme.py:TBD` | QML bindings in Shell.qml; fires on `refresh_theme(mode)` call from tct_gui |
+
+---
+
+## gui/qml_shell.py
+
+| Signal | Signature | Defined at | Connected to |
+|--------|-----------|-----------|--------------|
+| `_ShellBridge.changed` | `(dict)` — shell state dict (tab index, device names, app state) | `qml_shell.py:TBD` | QML Shell.qml `onChanged` handler (tab shelf / rail readouts) |
+
+---
+
 ## Notes
 
 - Signals marked `?` are internal to their panel/class and do not appear in the main window wiring log; some feed internal `QThread` workers or `QTimer` machinery.
