@@ -227,9 +227,23 @@ agent-to-agent messages.
 Rules:
 - Prefer `local_only` while Claude tokens are exhausted.
 - Do not bypass Ikarus for local/Ollama work.
-- Route only well-bounded, mechanical tasks to the Ollama lane (docstrings,
-  renames, boilerplate); safety-critical code (devices/, HV, motion, scan
-  logic) stays with the Claude crew and always gets a Mary review.
+- **Lane sizing (Kaya, 2026-07-11, updated same day):**
+  - **GPU lane (preferred local bench):** Kaya's home PC (RTX 5080) over
+    Tailscale — `OLLAMA_HOST=http://100.119.126.9:11434`,
+    `OLLAMA_MODEL=qwen2.5-coder:14b` (set per process for watcher/CLI, NEVER
+    user-wide — the laptop's own Ollama service would misread it as a bind
+    address). Measured 2026-07-11: 58.8 tok/s on 14b, 4.3 s cold load —
+    full-size mechanical beats are fine here. Own hardware over private VPN
+    ⇒ trusted like the local bench (egress deny-list does not apply), but
+    requires the PC to be on. Models can be pulled remotely via
+    `POST /api/pull`.
+  - **Laptop Ollama (fallback only):** CPU-bound i7-10510U, ~5 tok/s on 7b —
+    only tiny single-file tasks, only when idle.
+  - **Codex lane** (`--lane codex`, egress-gated external): medium
+    mechanical/GUI tasks; also `docs/CODEX_QUEUE.md` briefs (pointer in
+    AGENTS.md) for the VS Code extension flow. Kaya's account, logged in.
+  - Safety-critical code (devices/, HV, motion, scan logic) stays with the
+    Claude crew and always gets a Mary review.
 - Read reports from `C:\Users\nukei\Desktop\agent_env\inbox`.
 - Check recovery memory at `C:\Users\nukei\Desktop\agent_env\memory\todos.local.md`.
 
