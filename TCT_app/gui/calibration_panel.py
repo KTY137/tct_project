@@ -20,7 +20,7 @@ import time
 
 import numpy as np
 import yaml
-from PySide6.QtCore import Qt, QObject, QThread, Signal
+from PySide6.QtCore import Qt, QObject, QSettings, QThread, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout,
@@ -32,7 +32,7 @@ from analysis.waveform_analysis import analyse_waveform
 from controller.danger_gate import DangerGate
 from controller.repeatability import RepeatabilityTester
 from gui.status_widgets import ReadoutCell, StatusChip, flash_button, set_button_busy, set_button_icon
-from gui.style import LIGHT
+from gui.style import palette
 
 
 class _RepeatWorker(QObject):
@@ -117,6 +117,7 @@ class CalibrationPanel(QWidget):
         self._ref_worker: _ReferenceWorker | None = None
         self._rep_thread: QThread | None = None
         self._rep_worker: _RepeatWorker | None = None
+        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
         self._build_ui()
         self._load_from(devices.charge_calibration)
         self._loading = False
@@ -208,15 +209,10 @@ class CalibrationPanel(QWidget):
         root.addWidget(self._status)
 
         self._current = QLabel("")
-        # Fixed ink colour (LIGHT["text"]) rather than a live theme lookup:
-        # this panel has no theme_mode/refresh_theme (unlike laser_panel /
-        # scope_panel) — same "always this shade" treatment as PLOT_FG/
-        # PLOT_BG in gui/style.py, chosen because this label's colour was
-        # never theme-dependent before either.
-        self._current.setStyleSheet(f"color: {LIGHT['text']}; font-weight: bold;")
         root.addWidget(self._current)
 
         self._build_repeatability(root)
+        self._restyle_theme_tokens()
 
         root.addStretch()
         self._wire_dirty_tracking()
@@ -296,8 +292,6 @@ class CalibrationPanel(QWidget):
         form.addRow(bw)
 
         self._rep_progress = QLabel("")
-        # Same fixed-colour rationale as self._current above (LIGHT["muted"]).
-        self._rep_progress.setStyleSheet(f"color: {LIGHT['muted']};")
         form.addRow(self._rep_progress)
         self._rep_result = QLabel("")
         self._rep_result.setFont(QFont("Consolas", 9))
@@ -305,6 +299,22 @@ class CalibrationPanel(QWidget):
         form.addRow(self._rep_result)
 
         root.addWidget(box)
+
+    # ------------------------------------------------------------------ #
+    # Theme-token styling (gui.style) — re-run by refresh_theme()         #
+    # ------------------------------------------------------------------ #
+
+    def _restyle_theme_tokens(self) -> None:
+        """Re-resolve per-instance label colours after a light/dark switch."""
+        p = palette(self._theme_mode)
+        self._current.setStyleSheet(f"color: {p['text']}; font-weight: bold;")
+        self._rep_progress.setStyleSheet(f"color: {p['muted']};")
+
+    def refresh_theme(self, mode: str | None = None) -> None:
+        """Re-resolve label colours baked into instance-level styles."""
+        if mode:
+            self._theme_mode = str(mode)
+        self._restyle_theme_tokens()
 
     # ------------------------------------------------------------------ #
     # State <-> widgets                                                   #

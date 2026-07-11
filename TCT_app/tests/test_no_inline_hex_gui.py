@@ -207,19 +207,21 @@ def test_measurement_panel_construct_and_theme_switch():
 
 
 def test_calibration_panel_construct_and_theme_switch(tmp_path):
-    """self._current / self._rep_progress are fixed LIGHT[...] tokens by
-    design (this panel has no theme_mode/refresh_theme — see the inline
-    comment in gui/calibration_panel.py) — construction-only check, same
-    apply_theme() reasoning as test_measurement_panel above."""
+    """Exercises CalibrationPanel.refresh_theme() directly for its local
+    per-instance label colours, without calling global apply_theme()."""
     _app()
     from gui.calibration_panel import CalibrationPanel
-    from gui.style import LIGHT
+    from gui.style import palette
 
     dm = _sim_device_manager(tmp_path)
     panel = CalibrationPanel(dm)
     try:
-        assert LIGHT["text"] in panel._current.styleSheet()
-        assert LIGHT["muted"] in panel._rep_progress.styleSheet()
+        panel.refresh_theme("dark")
+        assert palette("dark")["text"] in panel._current.styleSheet()
+        assert palette("dark")["muted"] in panel._rep_progress.styleSheet()
+        panel.refresh_theme("light")
+        assert palette("light")["text"] in panel._current.styleSheet()
+        assert palette("light")["muted"] in panel._rep_progress.styleSheet()
     finally:
         panel.shutdown()   # no worker running (never clicked Run) — no-op, cheap
 

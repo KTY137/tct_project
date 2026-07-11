@@ -751,6 +751,7 @@ class TCTMainWindow(QMainWindow):
                       getattr(self, "_laser_panel", None),
                       getattr(self, "_monitor_panel", None),
                       getattr(self, "_camera_panel", None),
+                      getattr(self, "_calib_panel", None),
                       getattr(self, "_analysis_panel", None),
                       getattr(self, "_settings_window", None)):
             if panel is not None and hasattr(panel, "refresh_theme"):
