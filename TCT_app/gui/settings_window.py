@@ -174,6 +174,11 @@ class _ScanReaper(QObject):
     """Process-lifetime, GUI-thread-affine owner of every in-flight scan
     (thread, worker) pair.
 
+    Known bounded retention (accepted, Mary review 2026-07-11): if a scan fn
+    blocks forever (dead VISA backend), ``thread.finished`` never fires and
+    that one pair stays tracked for the process lifetime — same property as
+    the pre-fix design, and ``shutdown()``'s wait is deliberately best-effort.
+
     Root cause of the intermittent whole-process freeze this fixes
     (py-spy native dumps, 2026-07-11): a ``_ScanWorker``'s Python reference
     must never reach zero on a *worker* thread.  The previous design dropped
@@ -362,11 +367,13 @@ class _VisaScanManager(QObject):
         # must never be run inline on the emitting (worker) thread.
         worker.done.connect(on_done, Qt.QueuedConnection)
         worker.done.connect(thread.quit, Qt.QueuedConnection)
-        # Canonical single-thread-owned deletion: the worker deletes its own
-        # C++ object on its OWN still-running event loop (this deleteLater is
-        # posted before quit above), so ~QObject runs on the worker thread
-        # that exclusively owns it — never cross-thread.  The reaper then
-        # drops the now-invalidated Python wrapper on the GUI thread.
+        # Canonical single-thread-owned deletion: deleteLater posts a
+        # DeferredDelete to the WORKER thread's own event queue (quit above is
+        # queued to the GUI thread — independent queues, connection order is
+        # irrelevant), and Qt flushes DeferredDelete when the thread's exec()
+        # returns, so ~QObject runs on the worker thread that exclusively owns
+        # it — never cross-thread.  The reaper then drops the now-invalidated
+        # Python wrapper on the GUI thread.
         worker.done.connect(worker.deleteLater, Qt.QueuedConnection)
         thread.finished.connect(self._on_thread_finished, Qt.QueuedConnection)
         thread.start()
