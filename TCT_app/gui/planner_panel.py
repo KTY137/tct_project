@@ -26,12 +26,14 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, Qt, QMimeData, QSettings, QTimer, Signal, Slot
+from PySide6.QtCore import (
+    QByteArray, QObject, Qt, QMimeData, QSettings, QThread, QTimer, Signal, Slot,
+)
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
-    QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMenu,
-    QMessageBox, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QAbstractItemView, QApplication, QDoubleSpinBox, QFileDialog, QFormLayout,
+    QFrame, QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
+    QMenu, QMessageBox, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
     QWidget,
 )
 
@@ -333,6 +335,34 @@ class _RecipeTree(QTreeWidget):
         event.acceptProposedAction()
 
 
+class _EstimateWorker(QObject):
+    """Runs a pure :class:`~controller.scan_plan.ScanPlan` cost estimate off the
+    GUI thread.
+
+    A huge plan's estimate walks every materialised leaf visit (hundreds of
+    thousands to millions of them) — a multi-hundred-ms CPU walk.  Doing that in
+    the panel's debounced recompute slot stalled the whole window: the founding
+    breach of the three-layer law (compute must NEVER block the GUI thread; see
+    ``docs/research/qml_hybrid_architecture.md`` §9, R6).  Requests arrive here
+    as *queued* invocations carrying a monotonic ``seq`` so the panel can
+    discard a stale result.  Pure compute: it touches no hardware and no
+    QWidget — the plan crosses the thread boundary as a plain ``dict`` snapshot
+    taken on the GUI thread, reconstructed here, so the live plan object the GUI
+    thread keeps mutating is never shared.
+    """
+
+    done = Signal(int, object, str)   # seq, PlanEstimate|None, error
+
+    @Slot(int, dict)
+    def run_estimate(self, seq: int, plan_dict: dict) -> None:
+        try:
+            estimate = estimate_plan(ScanPlan.from_dict(plan_dict))
+        except Exception as exc:   # reported to the GUI, never re-raised on the worker
+            self.done.emit(seq, None, str(exc))
+            return
+        self.done.emit(seq, estimate, "")
+
+
 class PlannerPanel(QWidget):
     """The Scan Routine Planner: Recipe Tree + "Before you run" safety card.
 
@@ -368,6 +398,9 @@ class PlannerPanel(QWidget):
     start_plan_requested = Signal(object)
     arm_hv_requested = Signal()
     abort_requested = Signal()
+    # GUI → estimate worker: (seq, plan_dict).  Cross-thread → Qt queues it, so
+    # the worker's event queue preserves submission order (see _EstimateWorker).
+    _submit_estimate = Signal(int, dict)
 
     _DEFAULT_LIMITS = PlanLimits(
         x_min_mm=-5.0, x_max_mm=5.0,
@@ -412,6 +445,33 @@ class PlannerPanel(QWidget):
         self._preview_debounce.setSingleShot(True)
         self._preview_debounce.setInterval(150)
         self._preview_debounce.timeout.connect(self._on_preview_debounce_timeout)
+        # ── Off-thread plan estimate ─────────────────────────────────────
+        # A huge plan's cost estimate is a multi-hundred-ms leaf walk; running
+        # it inline in the debounced recompute slot stalled the window (the
+        # founding breach of the three-layer law — compute must never block the
+        # GUI thread).  Plans above _estimate_async_threshold leaf visits run on
+        # a persistent worker thread, delivered as a queued invocation carrying
+        # a monotonic seq; smaller plans stay inline (no round-trip).  The
+        # thread is parented to the long-lived QApplication (NOT this panel): a
+        # soft config-reload deletes the panel tree via setCentralWidget(), and
+        # a QThread destroyed as a child while still running is a hard Qt6 abort
+        # (the MotorPanel crash class).  shutdown() stops it with a bounded
+        # wait; it self-deletes on ``finished``.
+        self._estimate_async_threshold = 50_000
+        self._estimate_seq = 0                     # monotonic request id (generation)
+        self._estimate_inflight = False            # a job is on the worker now
+        self._estimate_inflight_key: str | None = None
+        self._estimate_pending: tuple[int, str, dict] | None = None
+        self._last_estimate: PlanEstimate | None = None
+        self._last_estimate_key: str | None = None
+        self._estimate_thread: QThread | None = QThread(QApplication.instance())
+        self._estimate_worker: _EstimateWorker | None = _EstimateWorker()
+        self._estimate_worker.moveToThread(self._estimate_thread)
+        self._submit_estimate.connect(self._estimate_worker.run_estimate)
+        self._estimate_worker.done.connect(self._on_estimate_done)
+        self._estimate_thread.finished.connect(self._estimate_worker.deleteLater)
+        self._estimate_thread.finished.connect(self._estimate_thread.deleteLater)
+        self._estimate_thread.start()
 
         self._build_ui()
         self._rebuild_tree()
@@ -1641,13 +1701,94 @@ class PlannerPanel(QWidget):
         self._after_structural_change()
 
     def _recompute_estimate(self) -> None:
-        self._render_estimate(self._safe_estimate())
+        key = self._estimate_key()
+        if self._last_estimate_key == key and self._last_estimate is not None:
+            self._render_estimate(self._last_estimate)
+            return
+        if self._estimate_should_run_async():
+            self._queue_estimate(key)
+            return
+        estimate = self._safe_estimate()
+        self._render_estimate(estimate)
 
     def _safe_estimate(self) -> PlanEstimate | None:
+        key = self._estimate_key()
+        if self._last_estimate_key == key:
+            return self._last_estimate
         try:
-            return estimate_plan(self._plan)
+            estimate = estimate_plan(self._plan)
         except (ValueError, TypeError):
             return None
+        self._last_estimate = estimate
+        self._last_estimate_key = key
+        return estimate
+
+    def _estimate_key(self) -> str:
+        # Serialises the plan TREE (a handful of loop blocks), NOT the
+        # materialised grid — cheap even for a million-point plan, so it stays
+        # on the GUI thread.  Only the leaf walk in estimate_plan() is
+        # expensive, and that is exactly what _queue_estimate ships off-thread.
+        return json.dumps(self._plan.to_dict(), sort_keys=True, separators=(",", ":"))
+
+    def _estimate_should_run_async(self) -> bool:
+        try:
+            return self._plan.total_leaf_visits() > self._estimate_async_threshold
+        except (ValueError, TypeError):
+            return False
+
+    def _queue_estimate(self, key: str) -> None:
+        """Ship the estimate for *key* to the worker, coalescing to latest.
+
+        At most ONE job is ever in flight; a request that arrives while the
+        worker is busy is stashed as the (single) pending request — a later
+        edit overwrites it, so a burst of rapid edits can never queue
+        unboundedly (latest wins)."""
+        self._render_estimate_pending()
+        self._estimate_seq += 1
+        req = (self._estimate_seq, key, self._plan.to_dict())
+        if self._estimate_inflight:
+            self._estimate_pending = req
+        else:
+            self._submit_estimate_request(req)
+
+    def _submit_estimate_request(self, req: tuple[int, str, dict]) -> None:
+        seq, key, plan_dict = req
+        self._estimate_inflight = True
+        self._estimate_inflight_key = key
+        # Cross-thread → Qt queues it; the worker computes and reports back on
+        # this (GUI) thread via the queued ``done`` signal.
+        self._submit_estimate.emit(seq, plan_dict)
+
+    @Slot(int, object, str)
+    def _on_estimate_done(self, seq: int, estimate: object, error: str) -> None:
+        self._estimate_inflight = False
+        # Generation guard: render only the newest request's result.  A seq
+        # below the latest means a newer edit already superseded this one (its
+        # plan is stale), so its late result must never clobber the fresher
+        # pending estimate — the whole point of the monotonic seq.
+        if seq == self._estimate_seq:
+            key = self._estimate_inflight_key
+            if error:
+                self._last_estimate = None
+                self._last_estimate_key = key
+                self._render_estimate(None)
+            else:
+                est = estimate if isinstance(estimate, PlanEstimate) else None
+                self._last_estimate = est
+                self._last_estimate_key = key
+                self._render_estimate(est)
+        # Kick the coalesced latest-wins request that landed mid-flight.
+        if self._estimate_pending is not None:
+            req = self._estimate_pending
+            self._estimate_pending = None
+            self._submit_estimate_request(req)
+
+    def _render_estimate_pending(self) -> None:
+        self._chip_points.set_status("Estimating...", "busy")
+        self._chip_runtime.set_status("...", "busy")
+        self._chip_data.set_status("...", "busy")
+        self._chip_travel.set_status("...", "busy")
+        self._chip_hv.set_status("...", "busy")
 
     def _render_estimate(self, estimate: PlanEstimate | None) -> None:
         if estimate is None:
@@ -1868,11 +2009,26 @@ class PlannerPanel(QWidget):
         self._populate_palette()
 
     def shutdown(self) -> None:
-        """Stop the debounce timers before the panel is discarded (called
-        from ``tct_gui._teardown_panels``, mirroring every other panel's
-        ``shutdown()``). Also clears any in-flight drag ghost/delta preview
-        so a panel torn down mid-drag never leaves a dangling tree-item
-        reference or a stray pending timer callback."""
+        """Stop the debounce timers and the estimate worker before the panel is
+        discarded (called from ``tct_gui._teardown_panels``, mirroring every
+        other panel's ``shutdown()``). Also clears any in-flight drag
+        ghost/delta preview so a panel torn down mid-drag never leaves a
+        dangling tree-item reference or a stray pending timer callback.
+
+        Bounded wait — a huge in-flight estimate is a CPU walk that ``quit()``
+        cannot interrupt until it returns, so never wait unbounded on the GUI
+        thread.  The worker thread is parented to QApplication and self-
+        ``deleteLater``s on ``finished``, so an estimate still running when the
+        3 s bound elapses finishes and cleans itself up rather than being
+        destroyed as a child of this (soon-deleted) widget — the MotorPanel
+        soft-reload crash class.  Idempotent."""
         self._debounce.stop()
         self._preview_debounce.stop()
+        self._estimate_pending = None
+        thread = self._estimate_thread
+        self._estimate_thread = None
+        self._estimate_worker = None
+        if thread is not None:
+            thread.quit()
+            thread.wait(3000)
         self._clear_drag_preview()

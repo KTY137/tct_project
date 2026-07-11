@@ -1,37 +1,29 @@
 """
 Dry-run cost estimate for a :class:`~controller.scan_plan.ScanPlan`.
 
-Given a compiled step list (from :func:`controller.plan_compiler.compile_plan`)
-and simple :class:`Timing` / :class:`Sizing` models, produce a
-:class:`PlanEstimate`: point counts, wall-clock runtime, on-disk bytes, per-axis
-stage travel and the HV range the plan will span.
+Given simple :class:`Timing` / :class:`Sizing` models, produce a
+:class:`PlanEstimate`: point counts, wall-clock runtime, on-disk bytes,
+per-axis stage travel and the HV range the plan will span.
 
 Settle time is NOT modelled here: the plan is the single source of truth for it,
-so the compiler emits an explicit settle :class:`WaitStep` after each move and
-this estimate simply sums those ``WaitStep``s.  A ``MoveStep`` contributes only
-travel-time; an axis whose target is ``None`` ("do not command") adds no travel.
+so the estimator adds the loop's effective settle time after each move. A move
+contributes only travel-time; an axis missing from the current loop context
+means "do not command" and adds no travel.
 
-Pure and hardware-free.  There is exactly **one** walk of the plan — the
-compiler's — so serpentine savings (fewer/shorter moves) are automatically
-reflected in both runtime and travel.  The estimate is deliberately a
-conservative upper bound (sequential-axis motion, initial approach excluded).
+Pure and hardware-free. The estimator walks the plan stream directly instead of
+compiling a giant ``list[Step]`` first, so large scans do not spend time and
+memory allocating transient step objects just to add their costs. Serpentine
+savings (fewer/shorter moves) are still reflected in both runtime and travel.
+The estimate is deliberately a conservative upper bound (sequential-axis
+motion, initial approach excluded).
 """
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
 
-from controller.plan_compiler import (
-    AcquireStep,
-    BiasStep,
-    ManualPauseStep,
-    MoveStep,
-    ReadSlowControlStep,
-    SaveStep,
-    WaitStep,
-    compile_plan,
-)
-from controller.scan_plan import ScanPlan
+from controller.plan_compiler import BiasStep
+from controller.scan_plan import ActionType, LeafMeta, ScanPlan
 
 
 @dataclass(frozen=True)
@@ -81,7 +73,7 @@ def estimate_plan(
     timing: Timing | None = None,
     sizing: Sizing | None = None,
 ) -> PlanEstimate:
-    """Estimate the cost of *plan* by walking its compiled step list.
+    """Estimate the cost of *plan* by walking its leaf stream directly.
 
     Runtime is summed per step:
       * MoveStep  -> (|dx|+|dy|+|dz|) / speed  (settle is a separate WaitStep)
@@ -96,7 +88,6 @@ def estimate_plan(
     """
     timing = timing or Timing()
     sizing = sizing or Sizing()
-    steps = compile_plan(plan)
 
     runtime = 0.0
     travel = {"x": 0.0, "y": 0.0, "z": 0.0}
@@ -105,17 +96,43 @@ def estimate_plan(
 
     # Per-axis last commanded position; None until that axis is first driven.
     cur = {"x": None, "y": None, "z": None}
+    cur_bias: float | None = None
     prev_bias = 0.0            # HV starts off / at 0 V
     bias_targets: list[float] = []
     speed = timing.motor_speed_mm_s if timing.motor_speed_mm_s > 0 else 1.0
     n_manual = 0
+    n_steps = 0
 
-    for step in steps:
-        if isinstance(step, MoveStep):
+    for ctx, action, meta in plan.iter_leaf_contexts_ex():
+        if "bias_V" in ctx:
+            target = float(ctx["bias_V"])
+            if cur_bias != target:
+                bias_targets.append(target)
+                dv = abs(target - prev_bias)
+                runtime += _bias_ramp_seconds(
+                    dv,
+                    BiasStep(
+                        target_V=target,
+                        ramp_step_V=meta.bias_ramp_step_V,
+                        ramp_delay_s=meta.bias_ramp_delay_s,
+                    ),
+                    timing,
+                ) + timing.bias_hold_s
+                cur_bias = target
+                prev_bias = target
+                n_steps += 1
+
+        moved = (
+            ("stage_x" in ctx and float(ctx["stage_x"]) != cur["x"])
+            or ("stage_y" in ctx and float(ctx["stage_y"]) != cur["y"])
+            or ("stage_z" in ctx and float(ctx["stage_z"]) != cur["z"])
+        )
+        if moved:
             move_dist = 0.0
-            for axis, val in (("x", step.x_mm), ("y", step.y_mm), ("z", step.z_mm)):
-                if val is None:
+            for ctx_key, axis in (("stage_x", "x"), ("stage_y", "y"), ("stage_z", "z")):
+                if ctx_key not in ctx:
                     continue          # axis not commanded by this move
+                val = float(ctx[ctx_key])
                 prev = cur[axis]
                 if prev is not None:  # first drive of an axis is a free approach
                     d = abs(val - prev)
@@ -123,27 +140,33 @@ def estimate_plan(
                     move_dist += d
                 cur[axis] = val
             runtime += move_dist / speed
-        elif isinstance(step, BiasStep):
-            bias_targets.append(step.target_V)
-            dv = abs(step.target_V - prev_bias)
-            runtime += _bias_ramp_seconds(dv, step, timing) + timing.bias_hold_s
-            prev_bias = step.target_V
-        elif isinstance(step, AcquireStep):
-            runtime += step.n_averages * timing.s_per_average
-        elif isinstance(step, WaitStep):
-            runtime += step.seconds
-        elif isinstance(step, SaveStep):
+            n_steps += 1
+            if meta.settle_s > 0.0:
+                runtime += meta.settle_s
+                n_steps += 1
+
+        params = action.params or {}
+        at = action.action
+        if at == ActionType.ACQUIRE_WAVEFORM:
+            runtime += _effective_n_averages(params, meta) * timing.s_per_average
+            n_steps += 1
+        elif at == ActionType.SAVE_POINT:
             n_saves += 1
-        elif isinstance(step, ManualPauseStep):
+            n_steps += 1
+        elif at == ActionType.WAIT:
+            runtime += float(params.get("seconds", 0.0))
+            n_steps += 1
+        elif at == ActionType.MANUAL_PAUSE:
             n_manual += 1
-        elif isinstance(step, ReadSlowControlStep):
-            pass  # slow-control read cost is negligible in this model
+            n_steps += 1
+        elif at == ActionType.READ_SLOW_CONTROL:
+            n_steps += 1  # slow-control read cost is negligible in this model
 
     if n_manual:
         warnings.append(
             f"{n_manual} manual pause(s): runtime excludes indeterminate human "
             "wait time")
-    if not steps:
+    if not n_steps:
         warnings.append("plan compiled to zero steps (nothing to run)")
 
     hv_range = (min(bias_targets), max(bias_targets)) if bias_targets else (0.0, 0.0)
@@ -190,3 +213,13 @@ def _bias_ramp_seconds(dv: float, step: BiasStep, timing: Timing) -> float:
                  else timing.bias_ramp_delay_s)
     n_steps = math.ceil(dv / eff_step) if dv > 0 else 0
     return n_steps * eff_delay
+
+
+def _effective_n_averages(params: dict, meta: LeafMeta) -> int:
+    """Effective averages for one acquire action, matching the compiler."""
+    raw = params.get("n_averages", meta.n_averages)
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        n = meta.n_averages
+    return n if n >= 1 else 1

@@ -41,6 +41,18 @@ def test_counts_are_exact():
     assert est.total_leaf_visits == 4
 
 
+def test_estimate_does_not_materialize_compiled_step_list(monkeypatch):
+    """Large-plan GUI estimates must not allocate the compiler's full Step list."""
+    import controller.plan_compiler as compiler
+
+    def fail_if_called(_plan):
+        raise AssertionError("estimate_plan should stream the plan directly")
+
+    monkeypatch.setattr(compiler, "compile_plan", fail_if_called)
+    est = estimate_plan(simple_plan())
+    assert est.total_points == 2
+
+
 def test_runtime_and_data_are_exact_with_default_models():
     est = estimate_plan(simple_plan(), Timing(), Sizing())
     # Bias 0->-50: (50/5)*0.1 + 1.0 = 2.0 ; first move free ; move 0->10:

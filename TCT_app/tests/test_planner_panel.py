@@ -20,7 +20,7 @@ from PySide6.QtCore import QByteArray, QCoreApplication, QMimeData
 from PySide6.QtWidgets import QApplication, QLabel
 
 from controller.danger_gate import DangerAction
-from controller.plan_estimate import estimate_plan
+from controller.plan_estimate import PlanEstimate, estimate_plan
 from controller.scan_plan import ActionBlock, ActionType, Axis, LoopBlock, ScanPlan, ScanBlock
 from controller.scan_plan_validator import PlanLimits, validate_plan
 from gui.planner_panel import _MIME_TYPE, PlannerPanel
@@ -29,6 +29,16 @@ from gui.qt_danger_gate import QtDangerGate
 
 def _app() -> QApplication:
     return QApplication.instance() or QApplication([])
+
+
+def _pump_until(predicate, timeout_s: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        QCoreApplication.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
 
 
 def _bias_loop(plan: ScanPlan) -> LoopBlock:
@@ -123,6 +133,158 @@ def test_default_template_validates_clean_under_default_limits():
         errors = [i for i in issues if i.severity == "ERROR"]
         assert errors == []
     finally:
+        panel.shutdown()
+
+
+def test_large_estimate_runs_off_gui_thread(monkeypatch):
+    _app()
+    import gui.planner_panel as planner_module
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_estimate(_plan):
+        started.set()
+        assert release.wait(2.0)
+        return PlanEstimate(
+            total_points=42,
+            total_leaf_visits=84,
+            est_runtime_s=1.0,
+            est_data_bytes=0,
+            stage_travel_mm={"x": 0.0, "y": 0.0, "z": 0.0},
+            hv_range_V=(0.0, 0.0),
+        )
+
+    panel = PlannerPanel()
+    try:
+        monkeypatch.setattr(planner_module, "estimate_plan", slow_estimate)
+        panel._estimate_async_threshold = 0
+        panel._last_estimate = None
+        panel._last_estimate_key = None
+
+        t0 = time.perf_counter()
+        panel._recompute_estimate()
+        elapsed = time.perf_counter() - t0
+
+        assert elapsed < 0.2
+        assert panel._chip_points.text() == "Estimating..."
+        assert started.wait(1.0)
+
+        release.set()
+        assert _pump_until(lambda: panel._chip_points.text() == "42")
+    finally:
+        release.set()
+        panel.shutdown()
+
+
+def test_estimate_worker_thread_not_parented_to_panel():
+    """Structural guard (MotorPanel crash class): the estimate worker QThread
+    must not be a child of the panel that a soft config-reload's
+    setCentralWidget() can delete mid-run (same guard as the laser worker)."""
+    _app()
+    panel = PlannerPanel()
+    try:
+        assert panel._estimate_thread is not None
+        assert panel._estimate_thread.parent() is not panel
+    finally:
+        panel.shutdown()
+
+
+def test_estimate_shutdown_bounded_when_estimate_in_flight(monkeypatch):
+    """A huge estimate is a CPU walk quit() cannot interrupt; shutdown() must
+    still RETURN within its bound (never hang the GUI thread waiting on it)."""
+    _app()
+    import gui.planner_panel as planner_module
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def slow_estimate(_plan):
+        started.set()
+        release.wait(5.0)
+        return PlanEstimate(
+            total_points=1, total_leaf_visits=1, est_runtime_s=0.0,
+            est_data_bytes=0, stage_travel_mm={"x": 0.0, "y": 0.0, "z": 0.0},
+            hv_range_V=(0.0, 0.0),
+        )
+
+    panel = PlannerPanel()
+    try:
+        # Patch AFTER construction so the constructor's (small default-template)
+        # estimate uses the real, fast path and does not wedge on `release`.
+        monkeypatch.setattr(planner_module, "estimate_plan", slow_estimate)
+        panel._estimate_async_threshold = 0
+        panel._last_estimate = None
+        panel._last_estimate_key = None
+        panel._recompute_estimate()
+        assert started.wait(3.0), "estimate worker never entered the slow path"
+
+        t0 = time.monotonic()
+        panel.shutdown()
+        elapsed = time.monotonic() - t0
+        assert elapsed < 4.0, \
+            f"shutdown() blocked {elapsed:.2f}s — the wait must be bounded"
+    finally:
+        release.set()          # let the still-running estimate finish + self-clean
+        QCoreApplication.processEvents()
+
+
+def test_rapid_estimate_edits_coalesce_latest_wins(monkeypatch):
+    """Edits landing while an estimate runs must coalesce to the LATEST (never
+    queue unboundedly), and a superseded result must not clobber the newer one.
+
+    Wedge estimate A on the worker, fire two more edits (B then C) while it is
+    in flight, release A: only A then C reach the worker — B is dropped — and
+    the seq generation-guard discards A's stale result."""
+    _app()
+    import gui.planner_panel as planner_module
+
+    calls: list[str] = []
+    gate = threading.Event()       # holds the first estimate until released
+    first = threading.Event()
+
+    def rec_estimate(plan):
+        calls.append(plan.name)
+        if plan.name == "A":
+            first.set()
+            gate.wait(3.0)
+        return PlanEstimate(
+            total_points=len(plan.name), total_leaf_visits=1, est_runtime_s=0.0,
+            est_data_bytes=0, stage_travel_mm={"x": 0.0, "y": 0.0, "z": 0.0},
+            hv_range_V=(0.0, 0.0),
+        )
+
+    def mk(name: str) -> ScanPlan:
+        loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0, 1.0],
+                         children=[ActionBlock(action=ActionType.ACQUIRE_WAVEFORM,
+                                               params={})])
+        return ScanPlan(name=name, root=[loop])
+
+    panel = PlannerPanel()
+    try:
+        # Patch AFTER construction (constructor's estimate is the real fast
+        # path); then only A/B/C reach the recording stub.
+        monkeypatch.setattr(planner_module, "estimate_plan", rec_estimate)
+        panel._estimate_async_threshold = 0
+        panel._plan = mk("A")
+        panel._last_estimate = None
+        panel._last_estimate_key = None
+        panel._recompute_estimate()               # A → worker (wedged on `gate`)
+        assert first.wait(3.0), "estimate A never started on the worker"
+
+        panel._plan = mk("B")                     # edit while A in flight
+        panel._last_estimate_key = None
+        panel._recompute_estimate()
+        panel._plan = mk("C")                     # newer edit supersedes B
+        panel._last_estimate_key = None
+        panel._recompute_estimate()
+        assert panel._estimate_pending is not None
+
+        gate.set()                                # A returns → C runs next
+        assert _pump_until(lambda: calls == ["A", "C"], 3.0), calls
+        assert "B" not in calls, "a superseded edit reached the worker"
+    finally:
+        gate.set()
         panel.shutdown()
 
 
