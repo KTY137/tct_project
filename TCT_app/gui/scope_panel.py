@@ -13,10 +13,8 @@ import logging
 import math
 import re
 from dataclasses import dataclass, field
-from pathlib import Path
 
 import numpy as np
-import yaml
 from PySide6.QtCore import QObject, QSettings, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
@@ -44,6 +42,7 @@ try:
 except ImportError:
     _HAS_SUPERQT = False
 
+from controller.yaml_persist import update_yaml_file
 from devices.oscilloscope import Oscilloscope
 from analysis.waveform_analysis import analyse_waveform
 from gui.panel_kit import Card, panel_header
@@ -219,15 +218,14 @@ class _TriggerDialog(QDialog):
 
 
 def _save_scope_keys_to_yaml(path: str | None, **keys) -> None:
-    """Persist oscilloscope config keys into devices.yaml (merge, keep the rest)."""
+    """Persist oscilloscope config keys into devices.yaml (merge, keep the
+    rest -- including comments; see controller/yaml_persist.py, the fix for
+    the comment-eating yaml.safe_load/yaml.dump round trip, TECH_DEBT.md
+    RISK 2026-07-10)."""
     if not path:
         return
-    p = Path(path)
     try:
-        cfg = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-        cfg.setdefault("oscilloscope", {}).update(keys)
-        p.write_text(yaml.dump(cfg, default_flow_style=False, sort_keys=False,
-                               allow_unicode=True), encoding="utf-8")
+        update_yaml_file(path, {"oscilloscope": keys})
     except Exception:
         pass
 
