@@ -242,6 +242,17 @@ Organization: **one section per module**, signals listed in definition order. Fo
 
 ---
 
+## QML Context Properties
+
+These are objects exposed to QML via `QQmlContext.setContextProperty()` in `tct_gui.py` (visible to all QML/QQuickWidget files; not traditional Qt signals but are bindable via property getters/NOTIFY).
+
+| Property | Type | Defined at | Exposed by | Notes |
+|---|---|---|---|---|
+| `'runState'` | `RunStateViewModel` (QObject) | `gui/run_state_viewmodel.py` | `tct_gui.py` _build_central() | Read-only run-state facade: step index/total, run-state enum, pause/resume/abort affordances. Fed by `_light_timer` (1 Hz) + coordinator signals. NOTIFY via `changed` signal for QML binding. |
+| `'Theme'` | `Theme` (QML singleton) | `gui/qml_theme.py` | `qml_theme.py` static registration | Token design system from `style.py`. `changed` signal (key, value) NOTIFY on theme toggle. |
+
+---
+
 ## Notes
 
 - Signals marked `?` are internal to their panel/class and do not appear in the main window wiring log; some feed internal `QThread` workers or `QTimer` machinery.
