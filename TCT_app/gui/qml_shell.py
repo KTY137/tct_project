@@ -346,6 +346,7 @@ def build_qml_chrome(
     on_open_settings=None,
     on_toggle_log=None,
     on_toggle_debug=None,
+    run_vm=None,
     theme_mode: str = "light",
 ):
     """Build the QML chrome ``QQuickWidget`` and its adapters.
@@ -405,6 +406,11 @@ def build_qml_chrome(
     ctx.setContextProperty("shell", bridge)
     ctx.setContextProperty("tabShelf", tab_adapter)
     ctx.setContextProperty("scopeVm", scope_vm)
+    # Read-only run/scan-state facade for the QML Scan Viewer (may be None in a
+    # future caller; QML then sees null and simply binds nothing). The bridge
+    # does NOT feed it — the composition root's shared _light_timer does, in
+    # both shells — so no run_vm plumbing lives on _ShellBridge.
+    ctx.setContextProperty("runState", run_vm)
     chrome.setSource(QUrl.fromLocalFile(str(_QML_DIR / "Shell.qml")))
 
     if chrome.status() == QQuickWidget.Status.Error:

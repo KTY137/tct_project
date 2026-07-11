@@ -221,13 +221,17 @@ class TCTMainWindow(QMainWindow):
             influx_writer=self._devices.influx,
         )
         self._analysis_panel  = AnalysisPanel()
-        self._calib_panel     = CalibrationPanel(self._devices)
-        # Scan-routine planner (Recipe Tree) + its danger-confirm gate.  The
-        # gate lives here (parented to the window) because the plan executor
-        # calls gate.confirm() from the scan worker thread; teardown must
-        # shutdown() it so a pending confirm can never block app exit.
-        self._planner_panel   = PlannerPanel(parent=self)
+        # Danger-confirm gate.  The gate lives here (parented to the window)
+        # because the plan executor calls gate.confirm() from the scan worker
+        # thread; teardown must shutdown() it so a pending confirm can never
+        # block app exit.  Constructed BEFORE the calibration panel because the
+        # panel now requires the SAME gate instance (repeatability motion is
+        # danger-gated — Abel, controller/repeatability.py) and refuses motion
+        # without it.
         self._danger_gate     = QtDangerGate(parent=self)
+        self._calib_panel     = CalibrationPanel(self._devices, gate=self._danger_gate)
+        # Scan-routine planner (Recipe Tree) — shares the gate above.
+        self._planner_panel   = PlannerPanel(parent=self)
 
         # ── Layout ────────────────────────────────────────────────────
         central = QWidget()
@@ -346,6 +350,13 @@ class TCTMainWindow(QMainWindow):
         self._qml_chrome = None
         self._shell_bridge = None
         self._scope_vm = None
+        # Read-only run/scan-state facade for the QML Scan Viewer. Built AND fed
+        # in BOTH modes (the poll + coordinator feeds below are mode-agnostic);
+        # registered as the "runState" QML context property only in QML mode.
+        # Holds no ScanController/StateMachine/coordinator reference — the
+        # read/command boundary is structural (docs/design/run_state_facade.md).
+        from gui.run_state_viewmodel import RunStateViewModel
+        self._run_vm = RunStateViewModel()
         if os.environ.get("TCT_QML_SHELL") == "1":
             from gui.qml_shell import build_qml_chrome
             from gui.scope_viewmodel import ScopeViewModel
@@ -354,6 +365,7 @@ class TCTMainWindow(QMainWindow):
                 self, self._tabs,
                 state_provider=self._collect_shell_state,
                 scope_vm=scope_vm,
+                run_vm=self._run_vm,
                 on_connect=self._connect_all,
                 on_disconnect=self._disconnect_all,
                 on_toggle_theme=self._toggle_theme_from_qml,
@@ -415,6 +427,16 @@ class TCTMainWindow(QMainWindow):
         coord.progress.connect(self._scan_viewer.on_progress)
         coord.scan_started.connect(self._scan_viewer.on_scan_started)
         coord.scan_finished.connect(self._scan_viewer.on_scan_finished)
+        # Coordinator → run-state facade (read-only mirror for the QML Scan
+        # Viewer; the SAME already-marshaled GUI-thread signals feed it in
+        # parallel with the classic panel — see run_state_facade.md §3 path 2).
+        # These connections die with the coordinator (reassigned on soft-reload),
+        # the same lifetime as the ScanViewerPanel connections above.
+        coord.scan_started.connect(self._run_vm.on_scan_started)
+        coord.progress.connect(self._run_vm.on_progress)
+        coord.point_done.connect(self._run_vm.on_point_done)
+        coord.scan_finished.connect(self._run_vm.on_scan_finished)
+        coord.error_dialog.connect(self._run_vm.on_error)
         # Publish the finished run's HDF5 path AFTER on_scan_finished has cleared
         # the viewer's run-active flag, so set_last_run_path can enable "Open in
         # Analysis" (order matters — see _publish_last_run_path).
@@ -501,6 +523,11 @@ class TCTMainWindow(QMainWindow):
         self._light_timer.setInterval(1000)
         self._light_timer.timeout.connect(self._refresh_lights)
         self._light_timer.timeout.connect(self._sync_app_state)
+        # BOTH modes: mirror machine state + run metadata into the read-only
+        # run-state facade on the SAME shared 1 Hz tick (no new QTimer, no new
+        # thread; single-timer law). Guarded feeder — safe after teardown drops
+        # _run_vm. See run_state_facade.md §3 path 1.
+        self._light_timer.timeout.connect(self._feed_run_state)
         # QML mode only: the shell bridge polls the SAME cached state at the
         # SAME cadence — one shared 1 Hz timer instead of a second QTimer
         # doing duplicate work (slice 2a coffee-retro item; _ShellBridge owns
@@ -867,6 +894,34 @@ class TCTMainWindow(QMainWindow):
             "debug_visible": bool(self._device_debug_dock.isVisible()),
         }
 
+    def _feed_run_state(self) -> None:
+        """Mirror machine state + run metadata into the run-state facade.
+
+        Runs on the shared 1 Hz ``_light_timer`` (GUI thread), in BOTH shells.
+        Pure reads: ``sm.state`` is an atomic enum-reference read (the same
+        cross-thread read the rail's app chip already tolerates — worst case one
+        tick stale), and ``current_scan_type``/``last_run_path`` are the
+        controller's thread-safe accessors. ``scan_type`` is ADVISORY: it reads
+        ``None`` for a sub-second window at run start, so ``running``/``active``
+        key off ``sm.state`` (above) — not this. Wholly guarded so a routine,
+        no-I/O poll step can never crash the process from a Qt-invoked slot."""
+        vm = getattr(self, "_run_vm", None)
+        if vm is None:
+            return
+        try:
+            sm = getattr(self, "_sm", None)
+            scanner = getattr(self, "_scanner", None)
+            state = getattr(sm, "state", None) if sm is not None else None
+            stype = getattr(scanner, "current_scan_type", None) if scanner is not None else None
+            rpath = getattr(scanner, "last_run_path", None) if scanner is not None else None
+            vm.update(
+                state=state,
+                scan_type=stype or "",
+                run_path=str(rpath) if rpath else "",
+            )
+        except Exception:
+            logger.debug("run-state facade poll feed failed", exc_info=True)
+
     def _toggle_theme_from_qml(self) -> None:
         """QML rail theme button → flip the same checkable View-menu action so
         the classic ``_toggle_theme`` path (QSS + panel refresh + QML sync)
@@ -1017,6 +1072,10 @@ class TCTMainWindow(QMainWindow):
                 pass
             self._qml_chrome = None
         self._scope_vm = None
+        # Drop the run-state facade here too (poll feed is a guarded shared-timer
+        # slot stopped a few lines below; coordinator connections die with the
+        # coordinator on rebuild). See run_state_facade.md §5 step 3.
+        self._run_vm = None
         # The OLD central widget (built by the PREVIOUS ``_build_central()``
         # call, holding the chrome released above) is not deleted by a later
         # ``setCentralWidget()`` call — confirmed empirically: Qt only detaches
