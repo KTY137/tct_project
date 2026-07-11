@@ -1,5 +1,6 @@
 """Entry point for the TCT Setup application."""
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -21,6 +22,13 @@ def _setup_logging() -> None:
 
 def main() -> None:
     _setup_logging()
+    # Opt-in QML chrome shell (TCT_QML_SHELL=1): pin the Qt Quick scene-graph to
+    # OpenGL BEFORE any QQuickWidget/QApplication-driven Quick window exists, so
+    # the chrome QQuickWidget and the Motor Stage GLViewWidget agree on one RHI
+    # backend (docs/research/qml_hybrid_architecture.md §6). No-op by default.
+    if os.environ.get("TCT_QML_SHELL") == "1":
+        from gui.qml_shell import pin_opengl_rhi
+        pin_opengl_rhi()
     app = QApplication(sys.argv)
     app.setApplicationName("TCT Setup")
     # Apply the last-used theme before building the window so there is no flash.

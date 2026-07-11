@@ -8,9 +8,10 @@ device interfaces so hardware swaps need no UI code changes.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
-from PySide6.QtCore import Qt, Slot, Signal, QObject, QThread, QTimer, QSettings
+from PySide6.QtCore import Qt, Slot, Signal, QObject, QThread, QTimer, QSettings, QUrl
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QTabWidget, QApplication, QStyle,
@@ -197,8 +198,12 @@ class TCTMainWindow(QMainWindow):
 
         Called once at startup and again by ``_reload_config`` after the config
         is saved, so every ``devices.yaml`` change applies without restarting
-        the process.  ``setCentralWidget`` deletes the previous panels, so
-        ``_teardown_panels`` must stop their threads first."""
+        the process.  ``setCentralWidget`` does NOT delete the previous
+        central widget it replaces (confirmed empirically — Qt only detaches
+        it from the layout, leaving it alive as a hidden orphan otherwise), so
+        ``_teardown_panels`` must both stop every panel's threads/timers AND
+        explicitly ``deleteLater()`` the outgoing central widget itself before
+        this method builds and installs the next one."""
         # ── GUI panels ────────────────────────────────────────────────
         self._motor_panel     = MotorPanel(self._devices.motor)
         self._intensity_panel = IntensityPanel(self._devices.intensity_monitor)
@@ -305,7 +310,6 @@ class TCTMainWindow(QMainWindow):
         strip_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         strip_scroll.setFixedHeight(54)
         strip_scroll.setWidget(ribbon)
-        outer.addWidget(strip_scroll)
 
         # Main tabs — detachable (double-click / ⧉ to pop into a window).  Each
         # page is wrapped in a QScrollArea so panels scroll instead of cropping.
@@ -325,7 +329,64 @@ class TCTMainWindow(QMainWindow):
         self._tabs.addTab(_scrollable(self._monitor_panel), "Monitor")
         self._tabs.addTab(_scrollable(self._analysis_panel), "Analysis")
 
-        outer.addWidget(self._tabs)
+        # ── QML chrome shell (opt-in: TCT_QML_SHELL=1) ────────────────────
+        # DEFAULT (flag unset) is the classic QWidget shell, byte-for-byte
+        # unchanged: the ribbon strip + toolbar are shown and no QQuickWidget
+        # is built. When set, the QML rail + pill shelf REPLACE the ribbon
+        # strip AND the classic toolbar (hidden, not removed — the toolbar's
+        # non-duplicated affordances (Device Manager / Settings / Show Log /
+        # Show Device Debug / the app-state readout) are re-exposed as a
+        # compact rail cluster routed to the SAME existing handlers, so there
+        # is exactly one visible Connect/Disconnect/Devices/Settings/Log/Debug
+        # surface, never two — see gui/qml_shell.py / gui/qml/Shell.qml). The
+        # classic ribbon strip and toolbar widgets stay alive (hidden,
+        # parented to `central`) so they remain the cached-state source the
+        # QML rail mirrors, and the DetachableTabWidget stays the tab/detach
+        # engine (its native tab bar is hidden by build_qml_chrome).
+        self._qml_chrome = None
+        self._shell_bridge = None
+        self._scope_vm = None
+        if os.environ.get("TCT_QML_SHELL") == "1":
+            from gui.qml_shell import build_qml_chrome
+            from gui.scope_viewmodel import ScopeViewModel
+            scope_vm = ScopeViewModel()
+            chrome, bridge = build_qml_chrome(
+                self, self._tabs,
+                state_provider=self._collect_shell_state,
+                scope_vm=scope_vm,
+                on_connect=self._connect_all,
+                on_disconnect=self._disconnect_all,
+                on_toggle_theme=self._toggle_theme_from_qml,
+                on_open_devices=self._open_device_manager,
+                on_open_settings=self._open_settings,
+                on_toggle_log=self._toggle_log_from_qml,
+                on_toggle_debug=self._toggle_debug_from_qml,
+                theme_mode=getattr(self, "_theme_mode", "light"),
+            )
+            if chrome is not None:
+                self._qml_chrome = chrome
+                self._shell_bridge = bridge
+                self._scope_vm = scope_vm
+                strip_scroll.setParent(central)   # keep chips alive; not shown
+                strip_scroll.hide()
+                self._toolbar.setVisible(False)
+                outer.addWidget(chrome)
+                outer.addWidget(self._tabs)
+            else:
+                # Fail safe (Rule 5 spirit): Shell.qml failed to load —
+                # build_qml_chrome already released everything it constructed
+                # and touched neither the toolbar nor the native tab bar.
+                # Stay fully classic and operable rather than run with a
+                # half-built/missing chrome.
+                notify("QML chrome failed to load — using the classic shell. "
+                       "See the log for the QML error.", "error")
+                self._toolbar.setVisible(True)
+                outer.addWidget(strip_scroll)
+                outer.addWidget(self._tabs)
+        else:
+            self._toolbar.setVisible(True)
+            outer.addWidget(strip_scroll)
+            outer.addWidget(self._tabs)
 
         # Status bar
         self._status = QStatusBar()
@@ -608,6 +669,10 @@ class TCTMainWindow(QMainWindow):
         tb.setMovable(False)
         tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)  # icon + label
         self.addToolBar(tb)
+        # Kept as an attribute so the QML branch of _build_central can hide it
+        # (QML mode replaces it with a rail cluster routed to the SAME actions
+        # below — see _collect_shell_state / gui/qml_shell.py).
+        self._toolbar = tb
         tb.addAction(self._act_connect)
         tb.addAction(self._act_disconnect)
         tb.addSeparator()
@@ -632,6 +697,11 @@ class TCTMainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             apply_theme(app, self._theme_mode)
+        # Keep the QML chrome (if built) in lockstep with the QSS theme: swap the
+        # Theme singleton's active palette so its bound QML properties repaint.
+        if getattr(self, "_qml_chrome", None) is not None:
+            from gui.qml_theme import set_theme_mode
+            set_theme_mode(self._theme_mode)
         # apply_theme() repaints every QSS hook globally, but axis_color()-based
         # instance styles (motor axis rails, bias amber, plot pens) are baked at
         # construction — panels expose refresh_theme() to re-resolve them live.
@@ -738,6 +808,71 @@ class TCTMainWindow(QMainWindow):
             self._chip_laser.set_status("Laser unknown", "warn")
             set_pulse(self._chip_laser, True, kind="laser")
 
+    def _collect_shell_state(self) -> dict:
+        """Snapshot the cached ribbon state for the QML rail (QML-mode only).
+
+        Pure reads of already-cached values — device connection flags and the
+        classic status chips (which the existing pollers keep current) — plus
+        the scope panel's Live-button state. No hardware I/O: this is the same
+        cached state the classic ribbon shows, mirrored into the QML view.
+        """
+        dot_map = {"connected": "on", "simulated": "sim", "disconnected": "off"}
+        devices: list[list[str]] = []
+        for disp, dev in self._devices.named_devices().items():
+            devices.append([disp, dot_map.get(device_state(dev), "off")])
+
+        def _chip(chip) -> list[str]:
+            return [chip.text(), str(chip.property("state") or "neutral")]
+
+        scope = getattr(self._devices, "scope", None)
+        sc_conn = bool(getattr(scope, "connected", False))
+        sc_sim = bool(getattr(scope, "simulation", False))
+        live_btn = getattr(getattr(self, "_scope_panel", None), "_btn_live", None)
+        acquiring = bool(live_btn is not None and live_btn.isChecked())
+        if not (sc_conn or sc_sim):
+            sc_status = "Scope offline"
+        elif acquiring:
+            sc_status = "Scope live"
+        else:
+            sc_status = "Scope sim" if sc_sim else "Scope ready"
+
+        return {
+            "devices": devices,
+            "hv": _chip(self._chip_bias_v),
+            "motion": _chip(self._chip_motion),
+            "scan": _chip(self._chip_scan),
+            "laser": _chip(self._chip_laser),
+            # The toolbar's app-state readout (self._lbl_state) — distinct from
+            # the "Scan" chip above — re-exposed on the rail since the classic
+            # toolbar is hidden in QML mode (see _build_central's QML branch).
+            "app": _chip(self._lbl_state),
+            "scope": {
+                "connected": sc_conn, "simulated": sc_sim,
+                "acquiring": acquiring, "status": sc_status,
+            },
+            # Dock visibility — drives the rail's Log/Debug button highlight so
+            # a QML click and the View-menu checkbox never disagree.
+            "log_visible": bool(self._log_dock.isVisible()),
+            "debug_visible": bool(self._device_debug_dock.isVisible()),
+        }
+
+    def _toggle_theme_from_qml(self) -> None:
+        """QML rail theme button → flip the same checkable View-menu action so
+        the classic ``_toggle_theme`` path (QSS + panel refresh + QML sync)
+        runs unchanged."""
+        self._act_dark.setChecked(not self._act_dark.isChecked())
+
+    def _toggle_log_from_qml(self) -> None:
+        """QML rail Log button → flip the same checkable ``_act_log`` action
+        (toggled → ``self._log_dock.setVisible``), so the toolbar/menu and the
+        QML rail can never fall out of sync."""
+        self._act_log.setChecked(not self._act_log.isChecked())
+
+    def _toggle_debug_from_qml(self) -> None:
+        """QML rail Debug button → flip the same checkable ``_act_device_debug``
+        action, mirroring ``_toggle_log_from_qml`` above."""
+        self._act_device_debug.setChecked(not self._act_device_debug.isChecked())
+
     @Slot(str)
     def _on_device_lost(self, name: str) -> None:
         """A liveness probe found a dead link — surface it loudly.
@@ -841,6 +976,62 @@ class TCTMainWindow(QMainWindow):
     def _teardown_panels(self) -> None:
         """Stop every panel-owned thread/timer before the panels are discarded
         (child-widget deletion does not fire closeEvent)."""
+        # Stop the QML shell bridge's cached-state poll timer (QML mode only) so
+        # it can't tick into discarded widgets after a soft-reload / on close.
+        bridge = getattr(self, "_shell_bridge", None)
+        if bridge is not None:
+            try:
+                bridge.stop()
+            except Exception:
+                pass
+            self._shell_bridge = None
+        # Explicitly release the QML chrome's engine/scene-graph resources
+        # BEFORE ``_build_central`` (a soft config reload) constructs a new
+        # QQuickWidget. A QQuickWidget owns its own QQmlEngine; clearing its
+        # source releases the root object graph and engine-owned resources
+        # synchronously (Qt's own recommended teardown for a QQuickWidget
+        # about to be discarded) instead of leaving that to whatever/whenever
+        # discards the widget itself.
+        chrome = getattr(self, "_qml_chrome", None)
+        if chrome is not None:
+            try:
+                chrome.setSource(QUrl())
+            except Exception:
+                pass
+            self._qml_chrome = None
+        self._scope_vm = None
+        # The OLD central widget (built by the PREVIOUS ``_build_central()``
+        # call, holding the chrome released above) is not deleted by a later
+        # ``setCentralWidget()`` call — confirmed empirically: Qt only detaches
+        # the widget it replaces from the layout, leaving it alive as a
+        # hidden, still-parented child of this window forever unless something
+        # explicitly deletes it. In QML mode that silently accumulates live
+        # QQuickWidgets (each with its own QQmlEngine/RHI resources) across
+        # repeated soft reloads. Schedule the whole old subtree for deletion
+        # now, before ``_build_central`` constructs the next one.
+        #
+        # Deliberately a plain, UNFORCED ``deleteLater()`` — do not "help" it
+        # along with an immediate/forced delete. Two forcing alternatives were
+        # tried and rejected: a raw ``shiboken6.delete()`` and forcing
+        # ``QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)``
+        # through synchronously. Both crashed the real, fully populated app
+        # (reproduced with the live ``TCTMainWindow``, its threads and every
+        # panel — not just the QML chrome in isolation); only the natural,
+        # deferred ``deleteLater()`` proved stable. A soft reload is only ever
+        # re-triggered by another user click — another real event-loop turn —
+        # so Qt's normal idle processing reclaims this cycle's deferred
+        # deletion well before the next reload can start.
+        # ``getattr``-guarded (not a direct ``self.centralWidget()`` call): a
+        # lightweight test stub for this method's panel-iteration loop (see
+        # tests/test_camera_panel_worker.py::
+        # test_teardown_panels_shuts_down_camera_and_laser) passes a bare
+        # ``SimpleNamespace`` as ``self``, with no real ``QMainWindow``
+        # underneath — matching the same "provide only what you use" idiom
+        # this method already applies to every other panel/thread attribute.
+        get_central = getattr(self, "centralWidget", None)
+        old_central = get_central() if callable(get_central) else None
+        if old_central is not None:
+            old_central.deleteLater()
         # Re-dock any floating panels so their windows don't orphan on rebuild.
         if hasattr(self, "_tabs"):
             self._tabs.redock_all()
