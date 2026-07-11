@@ -200,6 +200,17 @@ class ScanController:
         self._run_path_lock = threading.Lock()
         self._last_run_path: Path | None = None
 
+        # Scan type of the run currently in flight, for the run-state facade the
+        # GUI polls (~1 Hz) so it can label the active scan without owning any
+        # run state itself.  Set in _begin_run (where the canonical scan_type
+        # string is already known) and cleared back to None in _end_run, so it
+        # is non-None exactly while a run is executing.  A plain attribute, read
+        # lock-free from the GUI thread exactly like ``sm.state`` is polled: a
+        # str/None reference read/write is atomic under the GIL, so no lock is
+        # needed (unlike last_run_path, kept behind a lock only for parity with
+        # the pre-existing design).
+        self._current_scan_type: str | None = None
+
         # Per-run HV arm latch (plan executor).  Only ever set True by
         # arm_hv(True) after a real user confirmation; cleared at the end of
         # every run so arming is never sticky across runs.
@@ -252,11 +263,28 @@ class ScanController:
         with self._run_path_lock:
             self._last_run_path = path
 
+    @property
+    def current_scan_type(self) -> str | None:
+        """Scan type of the run currently executing, or ``None`` when idle.
+
+        Read-only, lock-free accessor for the GUI's run-state facade (polled
+        ~1 Hz): the canonical scan_type string (``"xy_scan"``,
+        ``"voltage_scan"``, ``"recipe_plan"``, …) while a run is in flight,
+        ``None`` before any run starts and again once a run finishes/aborts.
+        Set in :meth:`_begin_run`, cleared in :meth:`_end_run`.  A plain
+        attribute read — atomic under the GIL, mirroring how ``sm.state`` is
+        polled cross-thread — so it never needs a lock.
+        """
+        return self._current_scan_type
+
     def _begin_run(self, scan_type: str, cfg) -> HDF5Writer:
         """Allocate a fresh run directory + writer, attach run metadata, open it."""
         # A new run supersedes any previous run's path (cleared on start; set
         # again in _end_run once this run's file is closed).
         self._set_last_run_path(None)
+        # Publish the active scan type for the GUI's run-state facade; cleared
+        # in _end_run's finally so it is non-None exactly while a run runs.
+        self._current_scan_type = scan_type
         run_info = self._build_run_info(scan_type, cfg)
         self._writer = HDF5Writer(
             self._next_run_dir(),
@@ -285,6 +313,8 @@ class ScanController:
             # accessor exposes it whether or not the flush/close succeeded.
             if self._writer is not None:
                 self._set_last_run_path(self._writer.path)
+            # Run over: current_scan_type reverts to None (idle) for the facade.
+            self._current_scan_type = None
 
     def _save_z_focus(self, z_mm: float, metric: float) -> None:
         try:

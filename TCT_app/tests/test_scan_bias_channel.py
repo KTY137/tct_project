@@ -193,3 +193,30 @@ class TestRefuseToStart:
             ctrl.start(ScanConfig(bias_channel=9))
         assert sm.state is AppState.READY
         assert ctrl._thread is None
+
+
+# --------------------------------------------------------------------------- #
+# current_scan_type — read-only run-state accessor for the GUI facade          #
+# --------------------------------------------------------------------------- #
+class TestCurrentScanType:
+    def test_none_before_any_run(self, sim):
+        _, ctrl, _ = sim
+        assert ctrl.current_scan_type is None
+
+    def test_set_during_run_and_cleared_after(self, sim):
+        _, ctrl, sm = sim
+
+        # Sample the accessor from inside the running scan (the callback fires
+        # on the worker thread, after _begin_run has published the type).
+        seen: list[str | None] = []
+        ctrl.on_vscan_point = lambda v, q, i: seen.append(ctrl.current_scan_type)
+
+        ctrl.start_voltage_scan(_fast_vscan())
+        ctrl._thread.join(timeout=10)
+
+        assert not ctrl._thread.is_alive()
+        assert sm.state is AppState.FINISHED
+        # It read the canonical scan-type string while the run was in flight...
+        assert seen and all(t == "voltage_scan" for t in seen)
+        # ...and reverted to None (idle) once the run finished.
+        assert ctrl.current_scan_type is None
