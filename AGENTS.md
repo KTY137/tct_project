@@ -1,27 +1,36 @@
 # AGENTS.md -- Codex rules for project_tct
 
-This repo is connected to the external `agent_env` harness at
-`C:\Users\nukei\Desktop\agent_env`. Use it for Codex/Claude/local-bench
+This repo is connected to the external **Daedalus** harness (renamed from
+`agent_env` 2026-07-11; the folder is still `C:\Users\nukei\Desktop\agent_env`,
+the Python package is now `daedalus`). Use it for Codex/Claude/local-bench
 handoffs instead of inventing ad hoc cross-agent messages.
+
+## Your work queue
+
+**Check `docs/CODEX_QUEUE.md` first** — Adam (the Claude orchestrator)
+maintains stateless task briefs for Codex there, with per-task constraints,
+verification commands, and handback rules. Work it top-to-bottom unless Kaya
+scopes otherwise. Leave results uncommitted; Adam reviews (qa-critic gate)
+and commits.
 
 ## Route Through The Harness
 
 - For token-safe local delegation, queue work with:
 
   ```powershell
-  python -m agent_env.file_bridge enqueue "<task>" --project project_tct --lane local_only
+  python -m daedalus.file_bridge enqueue "<task>" --project project_tct --lane local_only
   ```
 
 - For normal routing when Claude tokens are available, use:
 
   ```powershell
-  python -m agent_env.file_bridge enqueue "<task>" --project project_tct --lane auto
+  python -m daedalus.file_bridge enqueue "<task>" --project project_tct --lane auto
   ```
 
 - The watcher must be running for queued requests to be processed:
 
   ```powershell
-  python -m agent_env.file_bridge watch --project project_tct
+  python -m daedalus.file_bridge watch --project project_tct
   ```
 
 Reports land in `C:\Users\nukei\Desktop\agent_env\inbox\`; queued requests live
@@ -31,7 +40,9 @@ in `C:\Users\nukei\Desktop\agent_env\outbox\`; recovery memory is in
 ## Rules
 
 - Never talk directly to Claude Code or another agent. Use the file bridge.
-- Prefer `local_only` while Claude tokens are exhausted.
+- Prefer `local_only` while Claude tokens are exhausted. Note (2026-07-11):
+  the local Ollama lane is CPU-bound on this laptop — only SMALL single-file
+  mechanical tasks belong there; medium tasks come to Codex via the queue.
 - Do not run code that can touch real hardware. Tests must stay simulated/headless.
 - Treat `TCT_app/devices/`, `TCT_app/controller/`, real instrument configs, and
   lab reference material as protected unless the user explicitly scopes the work.
@@ -40,27 +51,27 @@ in `C:\Users\nukei\Desktop\agent_env\outbox\`; recovery memory is in
 
 <!-- AGENT_ENV_ENFORCED:BEGIN -->
 
-## Agent Env Enforcement
+## Daedalus Enforcement (harness renamed from agent_env, 2026-07-11)
 
-This repository is managed by the external `agent_env` harness. When delegating
+This repository is managed by the external Daedalus harness. When delegating
 work, use the harness file bus instead of direct agent-to-agent messages.
 
 - Token-safe local path:
 
   ```powershell
-  python -m agent_env.file_bridge enqueue "<task>" --project project_tct --lane local_only --source codex
+  python -m daedalus.file_bridge enqueue "<task>" --project project_tct --lane local_only --source codex
   ```
 
 - Normal routed path:
 
   ```powershell
-  python -m agent_env.file_bridge enqueue "<task>" --project project_tct --lane auto --source codex
+  python -m daedalus.file_bridge enqueue "<task>" --project project_tct --lane auto --source codex
   ```
 
 - The watcher must be running:
 
   ```powershell
-  python -m agent_env.file_bridge watch --project project_tct
+  python -m daedalus.file_bridge watch --project project_tct
   ```
 
 Rules:

@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 _CONFIG_PATH = Path(__file__).parent.parent / "configs" / "devices.yaml"
 # Plain import — prime_pyvisa() itself does no bus enumeration, so this has
 # no hardware side effects at module load (see _VisaScanManager below).
+from controller.yaml_persist import merge_yaml_text
 from devices.waveform_generator import prime_pyvisa
 from gui.panel_kit import Card, form_row, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
@@ -903,6 +904,14 @@ class _BiasSection(QWidget):
         comp_widget = QWidget()
         comp_widget.setLayout(comp_row)
         form.addRow("Compliance:", comp_widget)
+        # Simulation toggle — like every other device tab.  Default true so a
+        # fresh/home rig never reaches an HV supply without an explicit opt-in.
+        # For a real hardware backend (keithley/e4control/iseg) this is passed to
+        # the driver, which runs its internal no-I/O sim path; the "simulated"
+        # backend is inherently offline regardless.
+        self._sim = _combo(["true", "false"],
+                           "true" if cfg.get("simulation", True) else "false")
+        form.addRow("Simulation:", self._sim)
         card.add_layout(form)
 
         self._backend.currentTextChanged.connect(self._on_backend)
@@ -910,7 +919,7 @@ class _BiasSection(QWidget):
 
         for w in (self._k_visa, self._e4c_dev, self._conn_type,
                   self._host, self._port, self._compliance,
-                  self._iseg_visa, self._iseg_ch, self._iseg_ramp):
+                  self._iseg_visa, self._iseg_ch, self._iseg_ramp, self._sim):
             _connect_changed(w, self.changed)
 
     def _on_backend(self, text: str) -> None:
@@ -923,6 +932,7 @@ class _BiasSection(QWidget):
         backend = self._backend.currentText()
         d: dict[str, Any] = {
             "backend": backend,
+            "simulation": self._sim.currentText() == "true",
             "compliance_A": self._compliance.value() * 1e-6,
         }
         if backend == "keithley":
@@ -1459,43 +1469,50 @@ class SettingsWindow(QDialog):
 
     def _on_quick_settings_changed(self) -> None:
         """
-        Regenerate the YAML editor content from the Quick Settings form values.
+        Merge the Quick Settings form values into the YAML editor's current
+        text in place (see controller/yaml_persist.py -- the fix for the
+        comment-eating yaml.safe_load/yaml.dump round trip that used to
+        regenerate this whole document from scratch, TECH_DEBT.md RISK
+        2026-07-10). Only the keys named below are rewritten; comments, key
+        order, and every other section are left byte-for-byte untouched.
         Called whenever any form widget changes.
         """
         if self._suppress_yaml_update:
             return
-        # Parse existing YAML to preserve other sections
-        try:
-            cfg = yaml.safe_load(self._editor.toPlainText()) or {}
-        except yaml.YAMLError:
-            cfg = {}
+        current_text = self._editor.toPlainText()
 
-        # Overwrite changed sections
+        # Sections keyed by the widgets' to_dict() -- merge_yaml_text only
+        # touches the keys present here (same "merge, keep the rest" effect
+        # the old .update()-based sections had; motor_stage/bias_supply/
+        # output previously did a wholesale dict replace, which could not
+        # survive a comment-preserving merge -- a switched backend's
+        # now-unused keys, e.g. GRBL-only serial_port after switching to
+        # "pi", are simply left stale in the file rather than deleted).
+        updates: dict[str, Any] = {}
         if self._scope_section:
-            # .update() so the trigger_* keys (now owned by the panel's Trigger
-            # Settings window) survive a Quick-Settings save.
-            cfg.setdefault("oscilloscope", {}).update(self._scope_section.to_dict())
+            updates["oscilloscope"] = self._scope_section.to_dict()
         if self._motor_section:
-            cfg["motor_stage"] = self._motor_section.to_dict()
+            updates["motor_stage"] = self._motor_section.to_dict()
         if self._wfg_section:
-            cfg.setdefault("waveform_generator", {}).update(self._wfg_section.to_dict())
+            updates["waveform_generator"] = self._wfg_section.to_dict()
         if self._cam_section:
-            # .update() so YAML-only keys (pixel_format, gamma_*) survive.
-            cfg.setdefault("camera", {}).update(self._cam_section.to_dict())
+            updates["camera"] = self._cam_section.to_dict()
         if self._bias_section:
-            cfg["bias_supply"] = self._bias_section.to_dict()
+            updates["bias_supply"] = self._bias_section.to_dict()
         if self._data_section:
-            cfg["output"] = self._data_section.to_dict()
+            updates["output"] = self._data_section.to_dict()
 
-        new_text = yaml.dump(cfg, default_flow_style=False, sort_keys=False, allow_unicode=True)
+        new_text = merge_yaml_text(current_text, updates)
         self._suppress_yaml_update = True
-        self._editor.setPlainText(
-            "# Generated by Quick Settings — edit freely below\n" + new_text
-        )
+        self._editor.setPlainText(new_text)
         self._suppress_yaml_update = False
         self._set_yaml_valid(True)
         self._set_dirty(True)
-        self._update_sim_chip(cfg)
+        try:
+            merged_cfg = yaml.safe_load(new_text) or {}
+        except yaml.YAMLError:
+            merged_cfg = {}
+        self._update_sim_chip(merged_cfg)
         self._set_tab_badge(self._tabs.currentIndex(), "dirty")
 
     # ------------------------------------------------------------------ #

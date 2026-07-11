@@ -465,6 +465,11 @@ class TCTMainWindow(QMainWindow):
         self._motor_panel.set_as_scan_start.connect(
             self._planner_panel.set_position_from_motor
         )
+        # Home / Zero Here shift the motor's user/machine display offset, so the
+        # planner's user-frame soft limits (PlanLimits) must be recomputed from
+        # the new origin — otherwise a plan built around a fresh Zero Here is
+        # gated against stale bounds. Re-push on every offset change.
+        self._motor_panel.origin_changed.connect(self._refresh_plan_limits)
 
         # Scan Viewer → Scan Planner: "Apply to Planner" stages the Z-focus
         # assist's best-Z result into the planner's "Use focus Z" affordance
@@ -1287,8 +1292,25 @@ class TCTMainWindow(QMainWindow):
     def _plan_limits(self) -> PlanLimits:
         """PlanLimits from the live device config — the motor's SoftwareLimits
         and the bias supply's voltage range (conservative defaults when a
-        device doesn't expose them)."""
-        lim = getattr(self._devices.motor, "limits", None)
+        device doesn't expose them).
+
+        Frame contract: planner coordinates live in the motor's USER frame
+        (what ``get_position``/``move_to`` speak, what ``set_position_from_motor``
+        receives), so the validator bounds must be the machine soft limits
+        expressed in that SAME frame — i.e. ``motor.limits_user_frame()``, which
+        tracks the current ``zero_position`` origin.  Using raw ``motor.limits``
+        (machine frame) here was the "Zero Here → planner rejects the plan on
+        soft limits" bug.  This is re-pushed on every offset change (home/zero)
+        via the motor panel's ``origin_changed`` signal, so it never goes stale.
+        """
+        motor = getattr(self._devices, "motor", None)
+        lim = None
+        if motor is not None:
+            try:
+                lim = motor.limits_user_frame()
+            except Exception:
+                logger.debug("motor.limits_user_frame() failed", exc_info=True)
+                lim = getattr(motor, "limits", None)
         try:
             rng = self._devices.bias_supply.voltage_range_V
         except Exception:
@@ -1303,6 +1325,20 @@ class TCTMainWindow(QMainWindow):
             voltage_range_V=float(rng) if rng else 3000.0,
             max_points=250_000,
         )
+
+    @Slot()
+    def _refresh_plan_limits(self) -> None:
+        """Re-push user-frame plan limits to the planner after an offset change.
+
+        Wired to ``MotorPanel.origin_changed`` (home / Zero Here). Rebuilding
+        the planner's ``PlanLimits`` from the driver's current offset keeps its
+        soft-limit gate in the same frame the operator now sees; the panel
+        re-validates against the fresh bounds (a plan edit / dry run re-locks
+        Start regardless, so this never silently unlocks a run)."""
+        try:
+            self._planner_panel.set_limits(self._plan_limits())
+        except Exception:
+            logger.debug("planner limit refresh (origin change) failed", exc_info=True)
 
     @Slot()
     def _publish_last_run_path(self) -> None:
