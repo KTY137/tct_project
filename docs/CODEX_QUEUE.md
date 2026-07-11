@@ -18,7 +18,7 @@ Ground rules (in addition to AGENTS.md):
 
 ## C1 — Retitle stale panel-kit rollout test names (wording only)
 
-**Status: OPEN** · Effort: S · Source: docs/TECH_DEBT.md NIT (2026-07-07)
+**Status: DONE — Retitled stale rollout wording; pytest blocked by broken venv interpreter.** · Effort: S · Source: docs/TECH_DEBT.md NIT (2026-07-07)
 
 The batch1/batch2 panel-kit rollout test files contain test names and
 docstrings that are stale in WORDING only — e.g.
@@ -32,6 +32,12 @@ tests still pass and their logic is correct.
   asserts TODAY. **Wording-only refactor: zero changes to assertions, imports,
   fixtures, or behavior.**
 - Verify: run the touched test files headless — same pass count as before.
+
+**Codex findings (2026-07-11):**
+- Files touched: `TCT_app/tests/test_panel_kit_rollout_batch1.py`, `TCT_app/tests/test_panel_kit_rollout_batch3.py`, `TCT_app/tests/test_settings_window_panel_kit_rollout.py`, `docs/CODEX_QUEUE.md`.
+- Wording-only retitles: stale "untouched"/"un-migrated" rollout wording now describes current no-bleed checks and the completed batch3 camera/analysis migration; assertions, imports, fixtures, and test bodies were left unchanged.
+- Verification attempted from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_panel_kit_rollout_batch1.py tests/test_panel_kit_rollout_batch3.py tests/test_settings_window_panel_kit_rollout.py` before and after edits. Both attempts failed before collection because `.venv\pyvenv.cfg` points to missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`; pass count could not be measured locally. Static test function count remains 31.
+- Risk: runtime verification remains blocked until the venv/base interpreter is repaired.
 
 ## C2 — Calibration panel: theme-responsive status labels
 

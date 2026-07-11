@@ -249,10 +249,10 @@ def test_known_drs4_trigger_hardcode_untouched():
 
 
 # --------------------------------------------------------------------------- #
-# No bleed into an untouched panel                                            #
+# No bleed into the separately migrated camera panel                          #
 # --------------------------------------------------------------------------- #
 
-def test_camera_panel_still_constructs_untouched():
+def test_camera_panel_constructs_without_settings_rollout_bleed():
     _app()
     panel = CameraPanel(BlackflyCamera(simulation=True))
     try:

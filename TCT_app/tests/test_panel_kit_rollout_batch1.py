@@ -6,12 +6,12 @@ Follows the existing gui test idiom (see ``test_status_widgets.py`` /
 ``test_planner_panel.py``): ``QT_QPA_PLATFORM=offscreen``, a shared
 ``QApplication.instance()`` helper, no pytest-qt.
 
-Each touched widget is constructed and rendered (``.grab()``) under BOTH
-themes (light/dark) to confirm the QGroupBox -> Card swap and the new
+Each batch-1 widget is constructed and rendered (``.grab()``) under BOTH
+themes (light/dark) to confirm the Card presentation and the new
 panel_header()s don't crash construction or leave a blank/zero-size widget
-in either theme. Two untouched panels (camera, settings) are also
-constructed to confirm the design-system swap in this batch has no bleed
-into panels outside its scope.
+in either theme. Two panels outside this batch's scope (camera, settings)
+are also constructed to confirm the batch-1 design-system swap has no bleed
+into other panel surfaces.
 """
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ from gui.style import apply_theme
 
 @pytest.fixture(autouse=True)
 def _stub_visa_scan(monkeypatch):
-    """test_settings_window_still_constructs_untouched() below builds a real
+    """test_settings_window_constructs_without_batch1_bleed() below builds a real
     ``SettingsWindow``, whose ``_VisaScanManager`` fires a real
     ``list_visa_resources()`` VISA bus enumeration off-thread unless stubbed
     — real hardware I/O during a test run, and (per the 2026-07-08 pyvisa
@@ -172,10 +172,10 @@ def test_multi_bias_panel_all_off_button_still_dangerous():
 
 
 # --------------------------------------------------------------------------- #
-# Untouched panels — construct only, to prove no bleed from this batch        #
+# Cross-batch bleed checks — construct only, to prove no bleed from batch 1   #
 # --------------------------------------------------------------------------- #
 
-def test_camera_panel_still_constructs_untouched():
+def test_camera_panel_constructs_without_batch1_bleed():
     _app()
     panel = CameraPanel(BlackflyCamera(simulation=True))
     try:
@@ -185,7 +185,7 @@ def test_camera_panel_still_constructs_untouched():
         panel.shutdown()   # stops the frame-acquisition worker thread
 
 
-def test_settings_window_still_constructs_untouched():
+def test_settings_window_constructs_without_batch1_bleed():
     _app()
     win = SettingsWindow()
     try:
