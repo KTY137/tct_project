@@ -143,40 +143,109 @@ def _scan_lan_instruments() -> list[str]:
     return discover_lan_instruments()
 
 
-# Durable, process-lifetime registry keeping every in-flight _ScanWorker
-# alive.  A worker cannot have a Qt parent (QObject.moveToThread() refuses
-# to move an object that has one), so its Python-side reference is the only
-# thing keeping the underlying C++ object alive; without this, a worker
-# built and moveToThread()'d inside _VisaScanManager._start() is a purely
-# local variable that CPython garbage-collects the instant _start() returns
-# — typically before the freshly spawned OS thread has even been scheduled
-# — silently dropping the started -> run connection (Qt auto-disconnects a
-# connection whose receiver was destroyed), so the scan simply never runs.
-# Registering here, independent of any _VisaScanManager/SettingsWindow
-# instance, is what lets a worker survive its own manager being torn down
-# mid-scan (matching the QApplication-parented QThread in _start()).
-_ACTIVE_SCAN_WORKERS: set["_ScanWorker"] = set()
-
-
 class _ScanWorker(QObject):
     """Runs one blocking discovery callable (VISA list / LAN mDNS browse) on
     a dedicated QThread and reports back via a signal — never touches any
-    widget itself (see ``_VisaScanManager``)."""
+    widget itself (see ``_VisaScanManager``).
+
+    Deliberately does **not** manage its own Python lifetime: its strong
+    reference is held by the GUI-thread-affine ``_ScanReaper`` (below) and
+    dropped only on the GUI thread.  A worker whose Python refcount reaches
+    zero on a *worker* thread — or that is left reachable only through a
+    self-referential Qt connection cycle and later reclaimed by CPython's
+    cyclic GC on some *other* worker thread — runs ``QObject::~QObject`` off
+    the GUI thread, which is exactly the ABBA deadlock this module was
+    rewritten (2026-07-11) to prevent (see ``_ScanReaper``)."""
 
     done = Signal(list, str)   # (resources, error) — error is "" on success
 
     def __init__(self, fn) -> None:
         super().__init__()
         self._fn = fn
-        _ACTIVE_SCAN_WORKERS.add(self)
 
     def run(self) -> None:
         try:
             self.done.emit(list(self._fn()), "")
         except Exception as exc:
             self.done.emit([], str(exc))
-        finally:
-            _ACTIVE_SCAN_WORKERS.discard(self)
+
+
+class _ScanReaper(QObject):
+    """Process-lifetime, GUI-thread-affine owner of every in-flight scan
+    (thread, worker) pair.
+
+    Root cause of the intermittent whole-process freeze this fixes
+    (py-spy native dumps, 2026-07-11): a ``_ScanWorker``'s Python reference
+    must never reach zero on a *worker* thread.  The previous design dropped
+    it from a module-level ``set`` inside ``_ScanWorker.run`` (on the worker
+    thread) and otherwise kept the worker alive only through its own
+    ``done -> deleteLater`` / ``started -> run`` connections — a reference
+    *cycle*.  A cycle is reclaimed only by CPython's cyclic garbage
+    collector, which can fire on ANY thread at ANY allocation — including a
+    freshly-started *sibling* scan thread while it is still inside
+    ``QThread.started`` delivery.  Collecting a dead worker there runs
+    ``QObject::~QObject`` (needs the GIL *and* the Qt connection-pool mutex,
+    which the running ``QMetaObject::activate`` already holds) on the worker
+    thread, while the GUI thread sits in ``QLineEdit`` / ``connectImpl``
+    holding the GIL and blocked on the same connection-pool mutex bucket
+    (the pool is hashed by object address, so any concurrent ``connect()``
+    can collide) → a textbook ABBA deadlock: whole process at 0 CPU, even
+    pytest-timeout's watchdog thread wedged.
+
+    Fix: keep a *plain, reachable* strong reference (no cycle) to each worker
+    here and drop it — plus ``deleteLater`` the thread — ONLY from a slot
+    that runs on the GUI thread (``QThread.finished`` queued to this
+    GUI-thread-affine singleton).  The worker still self-deletes on its own
+    still-running event loop via ``done -> deleteLater`` (the canonical,
+    single-thread-owned deletion point); by the time ``finished`` lands the
+    worker's C++ object is already gone, so dropping our reference on the GUI
+    thread merely frees an already-invalidated Shiboken wrapper — no
+    cross-thread ``~QObject``, no connection mutex, no deadlock.  Being a
+    process-lifetime singleton (parented to the QApplication) it also keeps
+    the worker alive if its originating ``_VisaScanManager`` / dialog is torn
+    down mid-scan, replacing the old module-level ``set`` in that role too.
+    """
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        # Both maps are only ever mutated on the GUI thread (track() from
+        # _start(); _reap() via a queued finished signal), so no locking.
+        self._pairs: dict[QThread, _ScanWorker] = {}
+
+    def track(self, thread: QThread, worker: _ScanWorker) -> None:
+        self._pairs[thread] = worker
+        # Queued so it always runs on THIS object's (GUI) thread, never on
+        # the emitting worker thread — the whole point of the reaper.
+        thread.finished.connect(self._reap, Qt.QueuedConnection)
+
+    def _reap(self) -> None:
+        thread = self.sender()
+        if thread is None:
+            return
+        # Drop our strong ref on the GUI thread.  The worker already
+        # deleted its own C++ object on its own event loop
+        # (done -> deleteLater), so this frees an invalidated wrapper only.
+        self._pairs.pop(thread, None)
+        thread.deleteLater()
+
+    def active_count(self) -> int:
+        """Number of (thread, worker) pairs not yet retired — the observable
+        the deadlock regression tests assert against."""
+        return len(self._pairs)
+
+
+# Lazily-created, process-lifetime reaper singleton.  Created on first use,
+# which is always the GUI thread (every _start() call originates from a
+# picker / manager slot on the GUI thread), and parented to the
+# QApplication so its thread affinity is the main thread for its whole life.
+_SCAN_REAPER: "_ScanReaper | None" = None
+
+
+def _scan_reaper() -> _ScanReaper:
+    global _SCAN_REAPER
+    if _SCAN_REAPER is None:
+        _SCAN_REAPER = _ScanReaper(QApplication.instance())
+    return _SCAN_REAPER
 
 
 class _VisaScanManager(QObject):
@@ -217,6 +286,13 @@ class _VisaScanManager(QObject):
         self.cache: list[str] | None = None   # None == never scanned yet
         self._visa_busy = False
         self._threads: set[QThread] = set()
+        # Process-lifetime, GUI-thread-affine owner of every (thread, worker)
+        # pair started here.  It — not this manager — holds each worker's
+        # strong Python reference and retires it on the GUI thread, so a
+        # worker is never destroyed on a worker thread (the 2026-07-11 ABBA
+        # deadlock).  Shared across every _VisaScanManager; the reference is
+        # kept so the regression tests can read ``active_count()``.
+        self._reaper = _scan_reaper()
 
     # -- shared VISA resource cache ------------------------------------ #
     def ensure_scanned(self) -> None:
@@ -264,23 +340,35 @@ class _VisaScanManager(QObject):
         # cascade-deleted while it is still running is a hard Qt6 crash
         # ("QThread: Destroyed while thread is still running"); parenting to
         # the long-lived QApplication instead means the thread survives its
-        # manager's teardown and finishes cleanly via its own
-        # done -> quit/deleteLater chain below, regardless of what happens
-        # to this manager or the dialog that created it.
+        # manager's teardown and finishes cleanly via its own done -> quit
+        # chain below, regardless of what happens to this manager or the
+        # dialog that created it.
         thread = QThread(QApplication.instance())
         worker = _ScanWorker(fn)
         worker.moveToThread(thread)
         self._threads.add(thread)
+        # The reaper holds the worker's ONLY strong Python reference (a plain
+        # reachable one, not a connection cycle) and drops it on the GUI
+        # thread at ``finished`` — never on a worker thread.  It also owns the
+        # thread's deleteLater.  Register BEFORE start() so the reference is
+        # in place before the OS thread can be scheduled.
+        self._reaper.track(thread, worker)
+        # started -> worker.run: the receiver IS the worker, moved to this
+        # thread, so run() executes on the worker thread (the standard
+        # moveToThread idiom); no other Python slot rides on started.
         thread.started.connect(worker.run)
-        worker.done.connect(on_done)
-        # Canonical Qt "worker object" teardown: the worker asks its own
-        # thread to stop and schedules its own deletion (both queued/direct
-        # appropriately since each receiver lives in its own home thread);
-        # the QThread controller deletes itself once fully stopped.
-        worker.done.connect(thread.quit)
-        worker.done.connect(worker.deleteLater)
-        thread.finished.connect(self._on_thread_finished)
-        thread.finished.connect(thread.deleteLater)
+        # done is emitted on the worker thread; on_done / thread.quit both
+        # live on the GUI thread, so force an explicit queued delivery — it
+        # must never be run inline on the emitting (worker) thread.
+        worker.done.connect(on_done, Qt.QueuedConnection)
+        worker.done.connect(thread.quit, Qt.QueuedConnection)
+        # Canonical single-thread-owned deletion: the worker deletes its own
+        # C++ object on its OWN still-running event loop (this deleteLater is
+        # posted before quit above), so ~QObject runs on the worker thread
+        # that exclusively owns it — never cross-thread.  The reaper then
+        # drops the now-invalidated Python wrapper on the GUI thread.
+        worker.done.connect(worker.deleteLater, Qt.QueuedConnection)
+        thread.finished.connect(self._on_thread_finished, Qt.QueuedConnection)
         thread.start()
 
     def _on_thread_finished(self) -> None:
