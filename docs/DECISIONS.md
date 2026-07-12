@@ -80,3 +80,36 @@ this spec; violations do not merge. OPEN for Kaya: arm-envelope model
 Migration mode (Kaya, same day): implementation first, heavy verification
 batched at milestones; per-beat tests targeted-only, full suites at phase
 gates.
+
+## 2026-07-12 (night) — Kaya RATIFIES the danger-gate boundary for motion
+
+Context: the Coffee-Break-of-Kings retro exposed a real safety rule 2 gap —
+neither the bias panel (manual HV ramp, IV/vscan sweeps, polarity) nor the
+motor panel (jog, absolute move, center, home, zero-here) routed through a
+`DangerGate`, while `calibration_panel` already did. Fixed in a4d05f6 (HV)
+and the motion follow-up.
+
+**RATIFIED — where the gate sits:**
+
+1. **GATED** (unbounded or frame-changing): HV enable/ramp (incl. IV and
+   bias+waveform sweeps), HV polarity switch, **homing**, **absolute /
+   center moves**, and **zero-here** (it does not move the stage, but it
+   redefines the user origin that every later soft-limit check validates
+   against — the frame-mix bug class Kaya hit). All confirm BEFORE any
+   driver call, with the real numbers in the dialog text; `gate is None`
+   REFUSES the action (never degrades to "no gate = no confirmation").
+2. **UNGATED BY RULING — jog** (Kaya, 2026-07-12): a jog click is itself the
+   explicit, deliberate, bounded act (fixed step, soft-limit checked). A
+   modal per jog would make the panel unusable and would train operators to
+   click through dialogs — a worse safety outcome than no dialog. Jog keeps
+   the amber motion class and the soft-limit guard. Code routes motion
+   through one `_confirm_motion()` helper, so re-gating jog stays a one-line
+   change if the bench ever demands it.
+3. **UNGATED BY LAW 5 — fail-safe stops** stay one-tap: STOP, emergency
+   HV-off, "All outputs off". A stop can only make things safer; a gate in
+   front of it is itself the hazard.
+
+Rationale recorded because it is a deliberate *narrowing* of a literal
+reading of safety rule 2 ("stage motion" would include jog), made by Kaya
+with the trade-off stated. Any future agent proposing to gate jog must bring
+this entry to Kaya, not silently "harden" it.
