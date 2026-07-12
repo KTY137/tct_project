@@ -115,9 +115,26 @@ class SimulatedBiasSupply(BiasSupplyBase):
         self.logger.info("SimulatedBiasSupply connected")
 
     def disconnect(self) -> None:
+        """Fail-safe teardown, mirroring the real backends' contract: every live
+        channel is ramped down to 0 V and switched OFF *before* the link drops —
+        not just zeroed in local state on the way out.
+
+        The ramp is delay-free (there is no real HV to slew here), so teardown
+        stays instant in tests while still exercising the same ramp-down path the
+        iseg driver takes.  Nothing can fail in simulation, so there is no
+        fail-loud branch to mirror — the observable end state is identical:
+        output off, setpoint 0 V.
+        """
+        if self._connected:
+            for ch in list(self._sim_state):
+                if self._scs(ch)["output_on"]:
+                    self.ramp_to_ch(ch, 0.0, step_V=25.0, delay_s=0.0)
+                self.output_off_ch(ch)
         self._connected = False
         for st in self._sim_state.values():
             st["setpoint_V"] = 0.0
+            # Unlike output_off_ch (which models charge held on the DUT), a full
+            # teardown ends with the simulated stack discharged.
             st["measured_V"] = 0.0
             st["output_on"] = False
         self.logger.info("SimulatedBiasSupply disconnected")

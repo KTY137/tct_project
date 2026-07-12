@@ -202,6 +202,13 @@ class PIMotorStage(MotorStageBase):
         keep the two consistent.  (If this proves surprising in practice, switch
         to a pure software display offset like GRBLMotorStage._zero, which never
         touches the controller's coordinate system.)
+
+        Sets a USER ORIGIN, **not** machine home: ``_homed`` is deliberately left
+        untouched (see ``MotorStageBase.zero_position``).  ``DFH`` only redefines
+        where a *future* ``FRF`` reference move lands — it does not perform one,
+        so it cannot establish the referencing this stage still needs.  Zeroing an
+        un-referenced stage therefore leaves it un-homed and the next move is
+        refused by ``_require_homed``.
         """
         self._require_connected()
         if self._gcs is not None:
@@ -211,7 +218,12 @@ class PIMotorStage(MotorStageBase):
                 except Exception:
                     pass
         self._pos = Position(0.0, 0.0, 0.0)
-        self._homed = True
+        if not self._homed:
+            logger.warning(
+                "PIMotorStage: zeroed while UN-HOMED — DFH redefined the origin, "
+                "but the stage is still un-referenced (no FRF), so moves remain "
+                "refused until home() runs.  Home first, then zero."
+            )
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                     #

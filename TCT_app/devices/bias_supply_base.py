@@ -46,6 +46,35 @@ class BiasReading:
     current_A: float
     compliant: bool        # True if compliance limit was hit
 
+    # ------------------------------------------------------------------ #
+    # Optional hardware-status surface (additive; every field defaults, so   #
+    # existing backends and every 3-argument BiasReading(...) construction   #
+    # keep working byte-for-byte).                                           #
+    #                                                                        #
+    # Why: without a status readback a LATCHED hardware trip is invisible —  #
+    # the module switches its channel off on its own while the driver's local #
+    # _output_on flag stays stale-True, so the app keeps believing HV is on   #
+    # (or, worse, believes it is off when it is not).                         #
+    #                                                                        #
+    # ``None`` means UNKNOWN (no status word could be read).  Callers must    #
+    # not conflate None with False ("known healthy") — an un-readable status  #
+    # is a reason to be careful, not a clean bill of health.                  #
+    # ------------------------------------------------------------------ #
+
+    # Raw, undecoded module status word (iseg: ``:READ:CHAN:STAT?``).  Kept raw
+    # alongside the decoded flags so a caller can inspect bits this driver
+    # deliberately does not decode, without the driver inventing meanings.
+    status_word: int | None = None
+
+    # The supply latched a protective fault (emergency-off / arc error /
+    # current trip): the HV is NOT doing what was asked.
+    tripped: bool | None = None
+
+    # What the HARDWARE says about the output, as distinct from the driver's
+    # local _output_on flag.  Comparing the two is how a stale local flag —
+    # e.g. after a trip switched the channel off behind our back — is caught.
+    output_on_hw: bool | None = None
+
 
 class BiasSupplyBase(BaseDevice):
     """

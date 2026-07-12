@@ -61,7 +61,8 @@ def sim(tmp_path):
     results = dm.connect_all()
     assert all(v == "ok" for v in results.values()), results
 
-    dm.motor.zero_position()
+    # Real homing cycle (was zero_position(), which used to fake _homed=True).
+    dm.motor.home()
 
     sm = StateMachine()
     for st in (AppState.CONNECTED, AppState.HOMED, AppState.CONFIGURED, AppState.READY):

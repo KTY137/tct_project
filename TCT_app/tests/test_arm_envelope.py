@@ -223,7 +223,7 @@ def sim(tmp_path):
     assert dm.config_errors() == []
     results = dm.connect_all()
     assert all(v == "ok" for v in results.values()), results
-    dm.motor.zero_position()
+    dm.motor.home()                      # real homing (sim: instant, at origin)
     sm = StateMachine()
     for st in (AppState.CONNECTED, AppState.HOMED, AppState.CONFIGURED, AppState.READY):
         sm.transition(st)

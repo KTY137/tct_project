@@ -581,15 +581,31 @@ class GRBLMotorStage(MotorStageBase):
         always sent in machine coordinates via G53 — so the display and the
         hardware can never drift out of sync (the old G92 approach did, which
         is why "Zero Here" appeared to do nothing).
+
+        Sets a USER ORIGIN, **not** machine home: ``_homed`` is deliberately left
+        untouched (see ``MotorStageBase.zero_position``).  Only a real homing
+        cycle ($H / G28) against the endstops establishes the machine reference
+        that G53 absolute moves are issued in — zeroing cannot conjure it.  So
+        zeroing an un-homed stage leaves it un-homed, the next move is refused by
+        ``_require_homed``, and we say so loudly here rather than fabricating a
+        homed flag that would send G53 moves against a reference that never
+        existed and check soft limits against the same lie.
         """
         self._require_connected()
         if not self.simulation and not self._marlin:
             self._grbl_get_position()          # refresh machine position
         self._zero = Position(self._pos.x_mm, self._pos.y_mm, self._pos.z_mm)
-        self._homed = True
+        if not self._homed:
+            self.logger.warning(
+                "GRBLMotorStage: 'Zero Here' on an UN-HOMED stage — the display "
+                "origin was set, but the stage stays UN-HOMED: there is no machine "
+                "reference yet, so moves remain refused until a real homing cycle "
+                "($H / G28) runs.  Home first, then zero."
+            )
         self.logger.info(
             "GRBLMotorStage: zeroed — display origin set to machine "
-            "X=%.3f Y=%.3f Z=%.3f", self._zero.x_mm, self._zero.y_mm, self._zero.z_mm,
+            "X=%.3f Y=%.3f Z=%.3f (homed=%s)",
+            self._zero.x_mm, self._zero.y_mm, self._zero.z_mm, self._homed,
         )
 
     def _collect(self, cmd: str, timeout: float = 3.0) -> list[str]:

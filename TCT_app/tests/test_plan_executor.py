@@ -61,7 +61,10 @@ def sim(tmp_path):
     results = dm.connect_all()
     assert all(v == "ok" for v in results.values()), results
 
-    dm.motor.zero_position()            # homed without moving
+    # Real homing cycle: the sim stage is already at the origin, so this is an
+    # instant, zero-distance move.  (Was zero_position(), which used to fake
+    # _homed=True — a user origin is NOT a machine home; see motor_base.)
+    dm.motor.home()
 
     sm = StateMachine()
     for st in (AppState.CONNECTED, AppState.HOMED, AppState.CONFIGURED, AppState.READY):

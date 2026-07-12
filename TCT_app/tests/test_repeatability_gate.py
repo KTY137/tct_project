@@ -161,7 +161,7 @@ def test_no_gate_refuses_calibration():
 def test_approved_run_completes_on_simulated_backend():
     motor = SimulatedMotorStage()
     motor.connect()
-    motor.zero_position()          # declares origin + homed, no motion off-origin
+    motor.home()                   # real homing; sim stage is already at origin
     cam = _FakeCamera()
     tester = RepeatabilityTester(motor, cam, gate=AutoConfirmGate())
 

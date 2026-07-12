@@ -82,9 +82,20 @@ class SimulatedMotorStage(MotorStageBase):
         self._moving = False
 
     def zero_position(self) -> None:
-        """Declare current position as origin without moving."""
+        """Declare current position as origin without moving.
+
+        USER ORIGIN only — never machine home (see
+        ``MotorStageBase.zero_position``).  ``_homed`` is deliberately left
+        untouched so this twin keeps the SAME contract as the real backends:
+        zeroing an un-homed stage leaves it un-homed and the next ``move_to``
+        raises ``MotorHomingError``.
+        """
         self._pos = Position(0.0, 0.0, 0.0)
-        self._homed = True
+        if not self._homed:
+            self.logger.warning(
+                "SimulatedMotorStage: zeroed while UN-HOMED — origin set, but the "
+                "stage stays un-homed and moves remain refused until home()."
+            )
 
     # ------------------------------------------------------------------ #
     # Internal helpers                                                     #

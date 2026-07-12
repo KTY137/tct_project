@@ -181,7 +181,7 @@ def _ready_iseg_sim(tmp_path):
     dm = DeviceManager(config_path=path)
     assert dm.config_errors() == []
     assert all(v == "ok" for v in dm.connect_all().values())
-    dm.motor.zero_position()
+    dm.motor.home()                      # real homing (sim: instant, at origin)
     sm = StateMachine()
     for st in (AppState.CONNECTED, AppState.HOMED, AppState.CONFIGURED, AppState.READY):
         sm.transition(st)

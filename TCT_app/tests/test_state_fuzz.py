@@ -96,7 +96,7 @@ def _make_env(work_dir):
     dm = DeviceManager(config_path=str(path))
     assert dm.config_errors() == [], dm.config_errors()
     assert all(v == "ok" for v in dm.connect_all().values())
-    dm.motor.zero_position()
+    dm.motor.home()                      # real homing (sim: instant, at origin)
     sm = StateMachine()
     ctrl = ScanController(dm, sm)
     # Non-raising recorders (the GUI wires these; a raising callback would be a

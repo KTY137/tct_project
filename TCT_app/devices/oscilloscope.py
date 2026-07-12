@@ -384,8 +384,31 @@ class Oscilloscope(BaseDevice):
         return self._query_text(self._cmds["pre_query"])
 
     def set_channel_scale(self, channel: int, volts_per_div: float) -> None:
-        self._last_vdiv = volts_per_div
-        self._write(f"CH{channel}:SCAle {volts_per_div}")
+        """Set the vertical scale (Tektronix ``CH<x>:SCAle``).
+
+        Vendor-guarded exactly like the sibling setters (set_coupling /
+        set_bandwidth_limit / set_probe_attenuation / set_channel_display): the
+        command form is only verified for Tektronix, so any other vendor gets a
+        clear refusal instead of a silently-wrong write.  Previously this fired
+        Tektronix SCPI at Keysight/Rigol/LeCroy unconditionally, where
+        ``CH1:SCAle`` is not the vertical-scale header at all — the write was
+        simply rejected and the scope kept its old scale while the app believed
+        the new one had been applied.
+        """
+        if self.simulation:
+            # Simulated instrument state: with no hardware, the scope's scale IS
+            # whatever was last set.  Recorded ONLY here (never on a real
+            # backend), so read_settings can never echo a request as a readback.
+            self._last_vdiv = volts_per_div
+            return
+        if self._vendor != "tektronix":
+            raise DeviceError(
+                f"set_channel_scale is not implemented for vendor "
+                f"'{self._vendor}' — command not verified against a manual."
+            )
+        with self.io_lock:
+            self._write(f"CH{channel}:SCAle {volts_per_div}")
+            self._check_scpi_errors("channel scale")
 
     def set_channel_position(self, channel: int, divisions: float) -> None:
         """Vertical trace position, in divisions (Tektronix CH:POSition)."""
@@ -436,22 +459,51 @@ class Oscilloscope(BaseDevice):
             self._check_scpi_errors("bandwidth limit")
 
     def set_timebase(self, time_per_div_s: float) -> None:
-        self._last_tdiv = time_per_div_s
-        self._write(f"HORizontal:SCAle {time_per_div_s}")
+        """Set the horizontal scale (Tektronix ``HORizontal:SCAle``).
+
+        Vendor-guarded exactly like ``set_channel_scale`` and the other sibling
+        setters — see that docstring for why an unguarded write is worse than a
+        refusal.
+        """
+        if self.simulation:
+            # Simulated instrument state — see set_channel_scale.
+            self._last_tdiv = time_per_div_s
+            return
+        if self._vendor != "tektronix":
+            raise DeviceError(
+                f"set_timebase is not implemented for vendor "
+                f"'{self._vendor}' — command not verified against a manual."
+            )
+        with self.io_lock:
+            self._write(f"HORizontal:SCAle {time_per_div_s}")
+            self._check_scpi_errors("timebase")
 
     def read_settings(self) -> dict:
         """Read the instrument's current display / trigger settings (best effort).
 
         Tektronix SCPI; returns any of ``tdiv``, ``vdiv``, ``voff_div``,
-        ``trig_level`` that could be queried.  Empty in simulation unless a scale
-        was set this session (so the round-trip is testable)."""
-        if self.simulation or self._instr is None:
+        ``trig_level`` that could be queried.
+
+        Honesty contract: every value returned here is a genuine READBACK.  In
+        simulation the returned tdiv/vdiv are the simulated instrument's state
+        (there is no hardware, so what was set IS what it reads back — truthful
+        for a simulated scope).  On a REAL backend with no open session, nothing
+        is returned at all: the previous code echoed the last *requested* vdiv /
+        tdiv back to the caller as though it had been read off the instrument,
+        so a scale that a rejected/never-sent write had failed to apply still
+        showed up in the panel as the scope's current setting.
+        """
+        if self.simulation:
             out = {}
             if getattr(self, "_last_tdiv", None):
                 out["tdiv"] = self._last_tdiv
             if getattr(self, "_last_vdiv", None):
                 out["vdiv"] = self._last_vdiv
             return out
+        if self._instr is None:
+            # Real backend, no session: report nothing rather than passing a
+            # requested value off as an instrument readback.
+            return {}
 
         def q(cmd: str):
             try:

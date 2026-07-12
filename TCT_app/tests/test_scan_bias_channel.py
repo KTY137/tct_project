@@ -67,7 +67,7 @@ def sim(tmp_path):
     assert len(dm.bias_channels) == 2
     assert dm.bias_channels[0] is dm.bias_supply
 
-    dm.motor.zero_position()            # homed without moving
+    dm.motor.home()                     # real homing (sim: instant, at origin)
 
     sm = StateMachine()
     for st in (AppState.CONNECTED, AppState.HOMED, AppState.CONFIGURED, AppState.READY):

@@ -50,7 +50,52 @@ class IsegBiasSupply(BiasSupplyBase):
     _DISCHARGE_FRACTION = 0.002       # |V| must be < 0.002·Vnom to switch (iseg spec)
     _POL_CONFIRM_BUDGET_S = 0.5       # relay settle is undocumented: poll readback ~0.5 s
     _POL_POLL_INTERVAL_S = 0.05
-    _STATUS_IS_ON = 0x8               # channel status word bit 3 = "Is On"
+
+    # ------------------------------------------------------------------ #
+    # Channel status word (``:READ:CHAN:STAT?``) bit map.                 #
+    #                                                                      #
+    # Every bit below is taken from the CITED table in                     #
+    # docs/research/iseg_polarity_scpi.md §6, which reproduces the iseg    #
+    # NHS/SHR Programmer's Manual channel-status register.  Do NOT add     #
+    # bits that are not in that table (safety rule 4: never invent         #
+    # instrument semantics).  Bits 22 and 24-31 are reserved /             #
+    # model-specific in the source and are deliberately NOT decoded — they #
+    # stay visible to callers through the raw ``status_word``.             #
+    # ------------------------------------------------------------------ #
+    _STATUS_IS_POSITIVE      = 0x1      # bit  0 — positive output polarity
+    _STATUS_IS_ARC           = 0x2      # bit  1 — arc detected (transient)
+    _STATUS_IS_INPUT_ERROR   = 0x4      # bit  2 — input / parameter error
+    _STATUS_IS_ON            = 0x8      # bit  3 — channel switched on
+    _STATUS_IS_VOLTAGE_RAMP  = 0x10     # bit  4 — voltage is ramping
+    _STATUS_IS_EMERGENCY_OFF = 0x20     # bit  5 — emergency off asserted
+    _STATUS_IS_CONST_CURRENT = 0x40     # bit  6 — current-controlled (compliance)
+    _STATUS_IS_CONST_VOLTAGE = 0x80     # bit  7 — voltage-controlled (normal)
+    _STATUS_IS_ARC_ERROR     = 0x200    # bit  9 — arc error LATCHED
+    _STATUS_IS_CURRENT_TRIP  = 0x2000   # bit 13 — current trip triggered
+
+    # TODO(bench): on the lab's iseg module, confirm the channel-status bit map
+    # end-to-end — force a real over-current trip into a resistive dummy load and
+    # check that ``:READ:CHAN:STAT? (@ch)`` actually sets bit 13 (0x2000) and
+    # clears bit 3 ("Is On").  The map below is from the manual (cited), not yet
+    # observed on our hardware; if the module reports a trip on a different bit,
+    # _STATUS_TRIP_MASK is the single place to correct.
+
+    # A "trip" here = the module latched a PROTECTIVE fault, i.e. the HV is not
+    # doing what was asked and the operator must intervene.  Deliberately narrow:
+    #   * bit 5  emergency off  — output killed by the emergency-off input
+    #   * bit 9  arc error      — arc condition LATCHED (bit 1 "Is Arc" is only a
+    #                             transient detection, so it is NOT a trip on its
+    #                             own and is left to the raw word)
+    #   * bit 13 current trip   — over-current protection fired
+    # "Is Input Error" (bit 2) is a rejected-command error, not an HV fault, so it
+    # is surfaced via the raw word rather than being escalated to a trip.
+    _STATUS_TRIP_MASK = (
+        _STATUS_IS_EMERGENCY_OFF | _STATUS_IS_ARC_ERROR | _STATUS_IS_CURRENT_TRIP
+    )
+
+    # Fail-safe teardown: 1 initial ramp-down attempt + 1 retry before giving up
+    # and surfacing the failure loudly (see disconnect / _shutdown_channel).
+    _SHUTDOWN_ATTEMPTS = 2
 
     def __init__(
         self,
@@ -183,32 +228,115 @@ class IsegBiasSupply(BiasSupplyBase):
             raise DeviceError(f"iseg connect failed: {exc}") from exc
 
     def disconnect(self) -> None:
+        """Ramp every touched channel to 0 V and switch it off, THEN close the link.
+
+        Fail-safe — and it never fails *silently*.  The old path wrapped the
+        ramp-down in ``except: pass`` and closed the socket regardless, so a
+        supply that refused to come down was abandoned ENERGIZED with no trace
+        in the log.  Now:
+
+          * the ramp-down is retried once per channel (``_shutdown_channel``),
+          * a channel that still will not come down is logged at ERROR and its
+            local state is left truthful (NOT reset to "0 V / off" it never
+            reached),
+          * the transport is released only AFTER that best-effort teardown, so
+            the handle is not leaked, and
+          * a ``DeviceError`` naming the offending channels is raised, so the
+            failure reaches the operator instead of being swallowed on the way
+            out.
+
+        Raising is safe here: ``DeviceManager.disconnect_all()`` logs and moves
+        on to the next device (one bad supply cannot block the rest of teardown)
+        and ``disconnect_device()`` returns the message to the UI — loud, without
+        taking the app down.
+
+        TODO(bench): on the lab's iseg module, confirm the teardown end-to-end —
+        ramp a channel up into a dummy load, pull the USB/LAN link mid-teardown,
+        and check that disconnect() reports the failure loudly (rather than
+        exiting quietly) and that the module's own ramp-down still brings the
+        channel to a safe state.
+        """
+        failures: list[str] = []
         if not self.simulation and self._inst is not None:
-            try:
-                self.ramp_to(0.0)
-                self.output_off()
-            except Exception:
-                pass
-            # Safety net: any OTHER channel this driver has touched must also be
-            # ramped down and switched off, so a multi-channel session never
-            # leaves a secondary channel biased on teardown.  Single-channel use
-            # has no such entries, so this loop is a no-op there (behaviour is
-            # unchanged).
-            for ch in [c for c in self._ch_state if c != self._ch]:
+            # Primary channel first, then every OTHER channel this driver has
+            # touched, so a multi-channel session never abandons a secondary
+            # channel biased.  Single-channel use has no extra entries.
+            for ch in [self._ch] + [c for c in self._ch_state if c != self._ch]:
                 try:
-                    self.ramp_to_ch(ch, 0.0)
-                    self.output_off_ch(ch)
-                except Exception:
-                    self.logger.warning("iseg CH%d shutdown on disconnect failed", ch)
+                    self._shutdown_channel(ch)
+                except Exception as exc:
+                    failures.append(f"CH{ch} ({exc})")
+                    self.logger.error(
+                        "iseg CH%d: fail-safe ramp-down FAILED on disconnect after "
+                        "%d attempts — THE OUTPUT MAY STILL BE ENERGIZED. Verify "
+                        "the supply physically. Last error: %s",
+                        ch, self._SHUTDOWN_ATTEMPTS, exc,
+                    )
+            # Release the link only AFTER the best-effort ramp-down above.
             try:
                 self._inst.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                self.logger.warning("iseg: closing the VISA session failed: %s", exc)
             self._inst = None
         self._connected = False
-        self._setpoint_V = 0.0
-        self._output_on = False
-        self.logger.info("IsegBiasSupply disconnected")
+        if failures:
+            raise DeviceError(
+                "iseg disconnect: fail-safe ramp-down FAILED for "
+                + ", ".join(failures)
+                + " — the output may still be energized. The link has been closed; "
+                  "verify the supply physically before leaving the setup."
+            )
+        self.logger.info(
+            "IsegBiasSupply disconnected (every touched channel ramped to 0 V and off)"
+        )
+
+    def _shutdown_channel(self, channel: int) -> None:
+        """Ramp *channel* to 0 V and switch its output off — **raises** on failure.
+
+        The fail-safe teardown primitive behind :meth:`disconnect`.  Deliberately
+        does NOT go through :meth:`output_off_ch`, which swallows write errors so
+        it stays usable from a ``finally`` block: here a failure MUST be visible,
+        because the entire point is to prove the HV actually came down before the
+        link is dropped.
+
+        Retried once by the loop below.  Both commands are idempotent and drive
+        the channel toward the SAME safe state (``:VOLT 0`` then ``:VOLT OFF``);
+        neither can raise the voltage, so re-issuing them after a dropped frame —
+        common on the USB-VCP transport — is safe (safety rule: retry only
+        proven-safe operations).
+
+        The ramp is skipped when the channel is already off: the base ``ramp_to``
+        turns the output ON when it is off (to ramp *to* the target), which on a
+        teardown path would mean ENABLING HV on an idle channel just to walk it
+        to zero — an auto-HV-enable we must never do.  An off channel only needs
+        the idempotent 0 V + OFF writes.
+
+        Local state is updated only after the hardware has acknowledged.
+        """
+        last: Exception | None = None
+        for attempt in range(self._SHUTDOWN_ATTEMPTS):
+            try:
+                if self.output_is_on_ch(channel):
+                    # Walk the HV down gently while the output is still enabled.
+                    self.ramp_to_ch(channel, 0.0)
+                self._write(f":VOLT 0,(@{channel})")
+                self._write(f":VOLT OFF,(@{channel})")
+                st = self._chs(channel)
+                st["output_on"] = False
+                st["setpoint_V"] = 0.0
+                self.logger.info(
+                    "iseg CH%d ramped to 0 V and switched OFF (disconnect)", channel
+                )
+                return
+            except Exception as exc:
+                last = exc
+                self.logger.warning(
+                    "iseg CH%d: fail-safe ramp-down attempt %d/%d failed: %s",
+                    channel, attempt + 1, self._SHUTDOWN_ATTEMPTS, exc,
+                )
+        raise DeviceError(
+            f"ramp-down failed after {self._SHUTDOWN_ATTEMPTS} attempts: {last}"
+        )
 
     # ------------------------------------------------------------------ #
     # BiasSupplyBase interface                                             #
@@ -236,11 +364,21 @@ class IsegBiasSupply(BiasSupplyBase):
     # ------------------------------------------------------------------ #
 
     def set_voltage_ch(self, channel: int, voltage_V: float) -> None:
+        """Command a new setpoint on *channel* (no ramp — internal use).
+
+        Order matters: the hardware is written FIRST and the local setpoint is
+        recorded only once that write is acknowledged.  Recording first (the old
+        order) meant a failed/refused write still advanced the driver's idea of
+        the setpoint — mid-ramp, that left it believing -295 V while the supply
+        was still sitting at -300 V, and the next ramp then started from a lie.
+        The base-class ``ramp_to`` already follows this write-then-record
+        discipline; this brings the per-channel path in line with it.
+        """
         self._require_connected()
         self.check_voltage_in_range(voltage_V)
-        self._chs(channel)["setpoint_V"] = voltage_V
         if not self.simulation:
             self._write(f":VOLT {voltage_V:.4f},(@{channel})")
+        self._chs(channel)["setpoint_V"] = voltage_V
 
     def set_compliance_ch(self, channel: int, current_A: float) -> None:
         self._chs(channel)["compliance_A"] = current_A
@@ -256,21 +394,51 @@ class IsegBiasSupply(BiasSupplyBase):
         self.logger.info("iseg CH%d output ON", channel)
 
     def output_off_ch(self, channel: int) -> None:
+        """Switch the channel output off.  Fail-safe: never raises.
+
+        Abort / ``finally`` paths (scan_controller, MultiBiasPanel's ALL-OFF)
+        depend on this not raising, so the non-raising contract is kept — but it
+        must not *lie* either.  A write that FAILED no longer silently clears the
+        local ``output_on`` flag (which would claim an OFF that was never
+        achieved, exactly the stale-flag class of bug this driver is being
+        hardened against): the failure is logged at ERROR and the local state is
+        left as-is, so the UI keeps showing the channel as ON — which is the
+        truth, because we do not know that it is off.
+        """
+        st = self._chs(channel)
         if not self.simulation and self._inst is not None:
             try:
                 self._write(f":VOLT 0,(@{channel})")
                 self._write(f":VOLT OFF,(@{channel})")
-            except Exception:
-                pass
-        st = self._chs(channel)
+            except Exception as exc:
+                self.logger.error(
+                    "iseg CH%d: OUTPUT-OFF WRITE FAILED (%s) — the channel may "
+                    "still be ENERGIZED; leaving local state ON rather than "
+                    "claiming an OFF we never achieved.", channel, exc,
+                )
+                return
         st["output_on"] = False
         st["setpoint_V"] = 0.0
         self.logger.info("iseg CH%d output OFF", channel)
 
     def read_ch(self, channel: int) -> BiasReading:
+        """Measure V/I **and** the channel status word.
+
+        Reading ``:READ:CHAN:STAT?`` here is what makes a latched hardware trip
+        visible: the module can switch a channel off on its own (over-current
+        trip, arc error, emergency off) while this driver's local ``output_on``
+        flag stays stale-True, so a V/I-only read reports a healthy-looking 0 V
+        and nobody ever learns the HV tripped.  The decoded trip / hardware-on
+        flags and the raw word ride out on the :class:`BiasReading`.
+
+        Reacting to a trip is the controller's job, not the driver's — this only
+        surfaces the truth (and logs it loudly).
+        """
         st = self._chs(channel)
         if self.simulation:
             import random
+            # Simulation has no module status word: leave the status fields at
+            # their "unknown" default (None) rather than fabricating a healthy one.
             return BiasReading(
                 voltage_V=st["setpoint_V"],
                 current_A=st["setpoint_V"] * 1e-9 + random.gauss(0, 1e-11),
@@ -280,11 +448,51 @@ class IsegBiasSupply(BiasSupplyBase):
             v = _parse_num(self._query(f":MEAS:VOLT? (@{channel})"))
             i = _parse_num(self._query(f":MEAS:CURR? (@{channel})"))
             compliant = (not (i != i)) and abs(i) >= st["compliance_A"] * 0.99
-            return BiasReading(voltage_V=v, current_A=i, compliant=compliant)
+            # _channel_status never raises (returns None on error), so a status
+            # hiccup can never break the V/I read that callers depend on.
+            status = self._channel_status(channel)
+            tripped, output_on_hw = self._decode_status(status)
+            if tripped:
+                self.logger.error(
+                    "iseg CH%d: module reports a LATCHED FAULT (status=0x%X, "
+                    "hardware output_on=%s, driver believed on=%s) — the HV is NOT "
+                    "doing what was asked.  Check the supply.",
+                    channel, status, output_on_hw, st["output_on"],
+                )
+            elif output_on_hw is False and st["output_on"]:
+                self.logger.error(
+                    "iseg CH%d: hardware reports the output OFF (status=0x%X) but "
+                    "the driver believed it was ON — the channel switched off "
+                    "behind our back (trip / inhibit / front panel).",
+                    channel, status,
+                )
+            return BiasReading(
+                voltage_V=v, current_A=i, compliant=compliant,
+                status_word=status, tripped=tripped, output_on_hw=output_on_hw,
+            )
         except Exception as exc:
             self.logger.warning("iseg read error: %s", exc)
+            # Status stays None = UNKNOWN.  Never report a clean bill of health
+            # for a channel we could not actually read.
             return BiasReading(voltage_V=st["setpoint_V"], current_A=float("nan"),
                                compliant=False)
+
+    def _decode_status(self, status: int | None) -> tuple[bool | None, bool | None]:
+        """Decode ``(tripped, output_on_hw)`` from a channel status word.
+
+        Only bits whose meaning is grounded in the CITED bit map
+        (docs/research/iseg_polarity_scpi.md §6, reproducing the iseg NHS/SHR
+        Programmer's Manual channel-status register) are decoded — never invent
+        bits.  Undecoded bits remain available to callers via the raw
+        ``status_word`` on the reading.
+
+        ``(None, None)`` means the status word could not be read: UNKNOWN, which
+        callers must not treat as "known healthy".
+        """
+        if status is None:
+            return None, None
+        return (bool(status & self._STATUS_TRIP_MASK),
+                bool(status & self._STATUS_IS_ON))
 
     def ramp_to_ch(
         self,

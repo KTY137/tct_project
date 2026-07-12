@@ -201,6 +201,19 @@ class MotorStageBase(BaseDevice):
         Declare the current physical position as (0, 0, 0) in software
         without moving the stage.  Equivalent to G92 X0 Y0 Z0 in G-code.
         Useful for setting a local scan origin after homing.
+
+        Establishes a **user origin only — never machine home.**  Implementations
+        MUST NOT set ``_homed``: homing is a *physical* referencing cycle
+        ($H / G28 / FRF) against the endstops, and only :meth:`home` may assert
+        it.  A backend that fakes ``_homed`` here lets ``move_to`` — gated by
+        :meth:`_require_homed` — issue absolute moves against a machine
+        reference that was never established, and then validate soft limits
+        against that same lie.
+
+        Consequence, by design: zeroing an *un-homed* stage leaves it un-homed,
+        so the next ``move_to`` / ``move_relative`` raises ``MotorHomingError``.
+        That refusal is the intended safety behaviour — home first, then zero.
+        Backends additionally log a loud warning when zeroed while un-homed.
         """
 
     # ------------------------------------------------------------------ #
