@@ -405,6 +405,17 @@ class ScanMapView(QWidget):
 
         grid = result.grid
         finite = grid[~np.isnan(grid)]
+        # autoHistogramRange defaults True on pg.ImageView.setImage() and, if
+        # left on, pyqtgraph independently nanmin/nanmax's the RAW grid for
+        # the histogram widget's own auto-range (ImageView.updateImage() ->
+        # quickMinMax()) — a path entirely separate from the explicit
+        # levels= kwarg below. For an all-NaN grid that recompute yields
+        # NaN, which ViewBox.setRange then rejects with "Cannot set range
+        # [nan, nan]", raising out of this Qt slot (Mary review finding,
+        # reproduced: reachable by switching the map quantity to one absent
+        # from the loaded file). Disabled for exactly that branch — the
+        # explicit levels below still drive the actual colour mapping.
+        auto_hist_range = True
         if finite.size:
             if self._freeze_levels:
                 # Keep whatever range was captured when freezing began (or,
@@ -423,9 +434,11 @@ class ScanMapView(QWidget):
                 vmax = vmin + 1e-9
         else:
             # Points exist but every value is NaN (e.g. all per-point
-            # analyses failed) — arbitrary finite levels; every cell renders
+            # analyses failed, or the selected quantity is absent from this
+            # run's data) — arbitrary finite levels; every cell renders
             # transparent below, which is the honest picture.
             vmin, vmax = 0.0, 1.0
+            auto_hist_range = False
         # NaN honesty (design system §4: "Unsampled cells are never
         # data-colored" — the NaN→vmin bug fix): the grid goes to the
         # ImageItem with its NaNs INTACT. pyqtgraph maps non-finite pixels
@@ -434,7 +447,7 @@ class ScanMapView(QWidget):
         # entry — instead of silently wearing the coldest data colour.
         self._image_view.setImage(
             grid, autoRange=True, autoLevels=False, levels=(vmin, vmax),
-            pos=self._pos, scale=self._scale,
+            pos=self._pos, scale=self._scale, autoHistogramRange=auto_hist_range,
         )
 
         # Colorbar unit bound to the selected quantity (§4).

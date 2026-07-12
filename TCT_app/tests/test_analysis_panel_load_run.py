@@ -765,3 +765,84 @@ def test_slice_toggled_on_with_no_data_does_not_crash_and_shows_honest_subtitle(
 
     panel._btn_slice.setChecked(False)
     assert panel._slice_active is False
+
+
+# --------------------------------------------------------------------------- #
+# Data-provenance regressions (Mary review, REQUEST-CHANGES on 9b91ed1):      #
+# the slicer must never slice a stale run's grid.                            #
+# --------------------------------------------------------------------------- #
+
+def test_loading_map_less_run_after_map_run_clears_shared_map_view(tmp_path, monkeypatch):
+    """Reproduced end-to-end: loading a map-less run (a pure voltage scan)
+    right after a map run left the PREVIOUS run's grid/points accumulated
+    in the shared ScanMapView, so re-enabling "Slice" sliced (and exported)
+    the OLD run's values under the NEW run's filename while
+    ``panel._run_path`` already named the map-less run."""
+    _app()
+    h5_map = _write_grid_run(tmp_path / "run_slice_prov_a")
+    h5_volt = _write_voltage_scan_run(tmp_path / "run_slice_prov_b")
+    panel = AnalysisPanel(runs_dir=tmp_path)
+
+    assert panel.load_run(h5_map) is True
+    assert panel._map_view.grid_result() is not None
+    assert panel._map_view.point_count() == 12   # 3 (X) x 4 (Y) fixture
+
+    assert panel.load_run(h5_volt) is True
+
+    # The map-less run must have cleared the SHARED widget's own
+    # accumulated state, not just swapped panel._data/_voltage_scan.
+    assert panel._map_view.grid_result() is None
+    assert panel._map_view.point_count() == 0
+    assert panel._slice_active is False
+    assert panel._btn_slice.isChecked() is False
+
+    # Re-enabling the slicer over the now map-less run must not resurrect
+    # the old run's grid or curve.
+    panel._btn_slice.setChecked(True)
+    assert panel._map_view.grid_result() is None
+    xdata, _ = panel._slice_curve.getData()
+    assert xdata is None or len(xdata) == 0
+
+    # Export must be a genuine no-op: no dialog is even opened, no file
+    # written — grid_result() is None guards _export_slice_csv() before it
+    # gets anywhere near a filesystem write.
+    out = tmp_path / "should_not_exist.csv"
+    called = []
+    monkeypatch.setattr(
+        "gui.analysis_panel.QFileDialog.getSaveFileName",
+        lambda *a, **k: called.append(1) or (str(out), "CSV (*.csv)"),
+    )
+    panel._export_slice_csv()
+    assert called == []
+    assert not out.exists()
+
+
+def test_quantity_switch_to_absent_quantity_clears_profile_honestly(tmp_path):
+    """_update_map_info() early-returns as soon as the newly selected
+    quantity isn't stored in the file ('Map missing' chip) — that early
+    return must not leave the slice profile showing the PREVIOUS
+    quantity's stale curve/label/unit. 'drift_time_s' is a real QUANTITIES
+    entry the writer never stores under that name (it writes
+    'drift_time_ns' instead, see SCAN_DATA_FORMAT.md) — a genuinely
+    reachable absent-quantity case on any normal run, not a synthetic one."""
+    _app()
+    h5_path = _write_grid_run(tmp_path / "run_slice_prov_c")
+    panel = AnalysisPanel(runs_dir=tmp_path)
+    panel.load_run(h5_path)
+    panel._combo_qty.setCurrentText("dut_charge_pC")
+    panel._btn_slice.setChecked(True)
+    _, ydata_before = panel._slice_curve.getData()
+    assert not np.isnan(ydata_before).all()   # real data plotted first
+
+    panel._combo_qty.setCurrentText("drift_time_s")   # no exception raised
+
+    assert "drift_time_s" not in panel._data
+    assert panel._chip_map.text() == "Map missing"
+
+    xdata, ydata = panel._slice_curve.getData()
+    assert len(ydata) > 0
+    assert np.isnan(ydata).all()   # honest "0/N valid" — no stale curve data
+    # Label matches the NEWLY selected quantity's own native unit, not the
+    # previous quantity's.
+    assert panel._slice_figure.plot.getAxis("left").labelUnits == "s"
+    assert "0/" in panel._slice_figure._subtitle_label.text()

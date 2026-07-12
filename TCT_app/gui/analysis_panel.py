@@ -54,24 +54,6 @@ from gui.style import DARK, PLOT_FG, PLOT_OVERLAY, SPACE_MD, SPACE_SM
 _RECENT_RUNS_MAX = 8
 
 
-def _translucent_brush(hex_color: str, alpha: int):
-    """A low-alpha ``pg.mkBrush`` from a ``gui.style`` colour token — the
-    slicer's averaging-band fill. Takes a token (never a literal ``#rrggbb``
-    in this file — the no-inline-hex guard, ``tests/test_no_inline_hex_gui.py``)
-    and resolves the alpha via ``QColor.setAlpha`` rather than a 4th positional
-    hex digit, so the source never spells out an ``#rrggbbaa`` literal either.
-    Kept intentionally low (matches ``gui/scope_panel.py``'s own
-    ``_int_region`` integration-window overlay, alpha 40/255) — a translucent
-    fill sitting on the viridis map pixels must stay as unobtrusive as
-    possible (design system council_v5_jonathan.md §1a: translucency must
-    never meaningfully shift a map pixel's perceived colour)."""
-    if not _HAS_PG:  # pragma: no cover - exercised only without pyqtgraph
-        return None
-    color = pg.mkColor(hex_color)
-    color.setAlpha(alpha)
-    return pg.mkBrush(color)
-
-
 class AnalysisPanel(QWidget):
     """Load a completed run HDF5 file and re-analyse / re-plot.
 
@@ -203,6 +185,15 @@ class AnalysisPanel(QWidget):
         # widget; existing callers/tests drive panel._combo_qty.
         self._combo_qty = self._map_view._combo_qty
         self._combo_qty.currentTextChanged.connect(self._update_map_info)
+        # Slicer recompute wired DIRECTLY to the combo, not nested inside
+        # _update_map_info's tail — _update_map_info early-returns as soon
+        # as the newly selected quantity isn't stored in this file (honest
+        # "Map missing" chip), and that must not also leave the profile
+        # plot showing the PREVIOUS quantity's stale curve/label/unit
+        # (Mary review, REQUEST-CHANGES on 9b91ed1). _update_slice_profile
+        # already self-guards on _HAS_PG/_slice_active, so this is a no-op
+        # whenever the slicer is off.
+        self._combo_qty.currentTextChanged.connect(self._update_slice_profile)
 
         lay.addLayout(self._build_slice_row())
 
@@ -316,15 +307,21 @@ class AnalysisPanel(QWidget):
         self._slice_line.sigPositionChanged.connect(self._on_slice_line_moved)
         plot_item.addItem(self._slice_line)
 
-        band_brush = _translucent_brush(PLOT_OVERLAY, 40)
+        # Outline-only — no translucent fill (Mary review ruling, overrules
+        # the original alpha-40 fill call: §1a's translucency-over-hue-data
+        # ban keys on the SUBSTRATE. The averaging band sits directly on
+        # viridis image-data pixels — hue-encoded, hue IS the value — so the
+        # scope_panel._int_region precedent (a flat PLOT_BG canvas, no hue
+        # encoding) does not transfer here. brush=None keeps the pen-only
+        # edges, which already show which rows/cols are averaged).
         band_pen = pg.mkPen(PLOT_OVERLAY, width=1)
         # Two pre-built regions (one per orientation) rather than mutating
         # one in place — pyqtgraph's LinearRegionItem has no public
         # setOrientation(), so switching X<->Y swaps which one is visible.
         self._slice_band_h = pg.LinearRegionItem(
-            orientation="horizontal", movable=False, brush=band_brush, pen=band_pen)
+            orientation="horizontal", movable=False, brush=None, pen=band_pen)
         self._slice_band_v = pg.LinearRegionItem(
-            orientation="vertical", movable=False, brush=band_brush, pen=band_pen)
+            orientation="vertical", movable=False, brush=None, pen=band_pen)
         for band in (self._slice_band_h, self._slice_band_v):
             band.setVisible(False)
             plot_item.addItem(band)
@@ -554,17 +551,32 @@ class AnalysisPanel(QWidget):
     def _replot_map(self) -> None:
         """Seed the shared map view from the loaded arrays. All rendering
         truth (viridis, NaN transparency, colorbar unit, missing/duplicate
-        counts) lives in :class:`~gui.scan_map_view.ScanMapView`."""
+        counts) lives in :class:`~gui.scan_map_view.ScanMapView`.
+
+        ``_map_view`` is SHARED across loads — every early-return path below
+        (no map data at all, missing x_mm/y_mm, a truncated-file length
+        mismatch) MUST clear it via ``set_points({})`` before returning.
+        Without this the PREVIOUS run's grid/points stayed accumulated in
+        the widget after loading a map-less run, so re-enabling "Slice"
+        would slice (and export) the OLD run's values under the NEW run's
+        filename — self._run_path already names the new run while the
+        slicer was still reading the old one (Mary review, REQUEST-CHANGES
+        on 9b91ed1, reproduced end-to-end). ``set_points({})`` drives
+        ``_redraw`` -> ``_grid_result = None`` + the empty-state page, so
+        ``grid_result()`` honestly reports "nothing to slice" and this also
+        fixes the pre-existing stale-map display bug on its own."""
         # A new run may have a completely different extent than whatever the
         # slicer's cut line/position/band referenced before — start clean
         # rather than risk an out-of-range or now-meaningless cut (design
         # brief: "slice state resets when a different run ... loads").
         self._reset_slice_state()
         if not _HAS_PG or not self._data:
+            self._map_view.set_points({})
             return
         x = self._data.get("x_mm")
         y = self._data.get("y_mm")
         if x is None or y is None:
+            self._map_view.set_points({})
             self._lbl_map_info.setText("Missing x_mm / y_mm arrays in file")
             self._chip_map.set_status("Map invalid", "crit")
             return
@@ -577,6 +589,7 @@ class AnalysisPanel(QWidget):
         bad = [k for k in ("y_mm", *QUANTITIES)
                if k in self._data and len(self._data[k]) != n]
         if bad:
+            self._map_view.set_points({})
             self._lbl_map_info.setText(
                 f"Map invalid: array length mismatch vs x_mm ({', '.join(bad)})")
             self._chip_map.set_status("Map invalid", "crit")
@@ -612,11 +625,11 @@ class AnalysisPanel(QWidget):
         )
         self._chip_map.set_status(f"Map {len(xs)}x{len(ys)}", "good")
         self._chip_export.set_status("Export ready", "good")
-        # Same run, new quantity/grid — recompute the profile in place (the
-        # cut position/orientation/width are still meaningful; only the
-        # plotted values change) rather than resetting the slicer.
-        if _HAS_PG and getattr(self, "_slice_active", False):
-            self._update_slice_profile()
+        # Slicer recompute on a quantity switch is wired directly to the
+        # combo (see _build_map_mode) rather than nested here — this method
+        # early-returns before this point whenever the quantity isn't
+        # stored in the file, and the profile must recompute (to an honest
+        # "0/N valid") in that case too.
 
     # ------------------------------------------------------------------ #
     # 1D map slicer                                                        #

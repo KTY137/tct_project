@@ -520,6 +520,41 @@ def test_empty_view_shows_placeholder_page_with_toolbar_live():
     assert not view.is_showing_map()
 
 
+def test_all_nan_grid_does_not_raise_and_levels_are_finite():
+    """Regression (Mary review, REQUEST-CHANGES on 9b91ed1, reproduced):
+    switching to a quantity whose every accumulated point-entry is missing
+    (e.g. AnalysisPanel selecting a quantity absent from the loaded HDF5
+    file — see test_analysis_panel_load_run.py's
+    test_quantity_switch_to_absent_quantity_clears_profile_honestly)
+    reconstructs an all-NaN grid. pg.ImageView.setImage()'s internal
+    auto-histogram-range recompute (quickMinMax() over the RAW grid — a
+    path separate from this widget's own explicit levels= kwarg) then
+    nanmin/nanmax's that all-NaN grid and feeds NaN into
+    ViewBox.setRange, which used to raise 'Cannot set range [nan, nan]'
+    out of this Qt slot."""
+    _app()
+    view = ScanMapView()
+    if view.image_view() is None:
+        pytest.skip("pyqtgraph not installed")
+    # Plain-dict points with the quantity key entirely absent -> every cell
+    # of the reconstructed grid is NaN via _extract_values()'s float("nan")
+    # default (same shape as an AnalysisPanel quantity switch to a
+    # not-stored quantity).
+    view.set_points({
+        (0.0, 0.0): {},
+        (1.0, 0.0): {},
+        (0.0, 1.0): {},
+        (1.0, 1.0): {},
+    })
+
+    result = view.grid_result()
+    assert result is not None             # points exist...
+    assert bool(np.isnan(result.grid).all())   # ...but every cell is NaN
+
+    levels = view.image_view().imageItem.getLevels()
+    assert all(math.isfinite(v) for v in levels)
+
+
 def test_freeze_toggled_before_any_data_captures_on_first_arrival():
     _app()
     view = ScanMapView()
