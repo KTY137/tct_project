@@ -41,7 +41,7 @@ from __future__ import annotations
 import json
 import re
 
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QColor, QFont, QPalette
 
 # ---------------------------------------------------------------------------
 # Scales — reference these instead of magic numbers so spacing/rounding/type
@@ -160,6 +160,28 @@ def _apply_app_font(app) -> None:
         _HINTING_PREFS.get(FONT_HINTING, QFont.HintingPreference.PreferDefaultHinting))
     if app.font() != f:
         app.setFont(f)
+
+
+def _apply_app_palette(app, p: dict) -> None:
+    """Backstop the canvas colour in the *application palette*, not just in QSS.
+
+    The QSS canvas rule names the real shells (``QMainWindow``, ``QDialog``,
+    ``QWidget#mainShell``) instead of the old bare-``QWidget`` blanket that
+    painted a black box behind every label. A widget shown as its OWN top-level
+    window without being one of those (a panel grabbed standalone by
+    ``scripts/capture_panels.py``, a future popup) then has no styled ancestor to
+    inherit from and would fall back to the platform's light grey — wrong in the
+    dark theme. Qt fills exactly that case from ``QPalette.Window``.
+
+    Deliberately minimal: only ``Window``/``WindowText``. Nothing in this GUI
+    sets ``autoFillBackground``, so these roles reach *only* the unstyled
+    top-level fill — they cannot repaint styled widgets. Roles like ``Base``
+    are left alone; item views carry explicit QSS surfaces."""
+    pal = app.palette()
+    pal.setColor(QPalette.ColorRole.Window, QColor(p["bg"]))
+    pal.setColor(QPalette.ColorRole.WindowText, QColor(p["text"]))
+    app.setPalette(pal)
+
 
 # ---------------------------------------------------------------------------
 # Type-scale ROLES (docs/design/cockpit_design_system.md §3, Codex-calibrated).
@@ -526,8 +548,32 @@ def build_qss(p: dict) -> str:
     color: {p['text']};
 }}
 
-QMainWindow, QDialog, QWidget {{ background: {p['bg']}; }}
+/* Canvas — ONLY the real shells paint it.
+   HISTORY (2026-07-13, the "black box behind every label" bug): this rule used
+   to read `QMainWindow, QDialog, QWidget {{ ... }}`. A bare `QWidget` type
+   selector is a trap: Qt QSS type selectors match SUBCLASSES, and QLabel,
+   QCheckBox, QSplitter, QStackedWidget, QFrame ... are all QWidgets. Every one
+   of them got `background: bg` (the near-black canvas) AND — because setting any
+   background turns on WA_StyledBackground — actually PAINTED it. Invisible on
+   the canvas itself, a black slab on every card and panel.
+   Never re-add a bare-QWidget background rule; paint shells by name.
+   Every top-level window in this app IS a QMainWindow (TCTMainWindow,
+   DeviceManagerWindow, detachable_tabs._DetachedWindow) or a QDialog
+   (SettingsWindow, ThemeEditorDialog, the ROI/trigger dialogs), so children
+   always have a painted shell above them to inherit from. The app palette
+   (see `_apply_app_palette`) is the belt-and-braces backstop for anything
+   shown as its own window without being one of those (e.g. a panel grabbed
+   standalone by scripts/capture_panels.py).
+   Guard: tests/test_style_no_label_box.py. */
+QMainWindow, QDialog {{ background: {p['bg']}; }}
 QWidget#mainShell {{ background: {p['bg']}; }}
+
+/* Text-ish widgets are transparent — they sit ON a surface, they are not one.
+   Explicit (not merely "inherited by omission") so that re-introducing a
+   blanket rule above cannot silently put the box back: these three still win.
+   Chips/marks/pills keep their own fill — ID and class selectors outrank a
+   type selector (QLabel#statusChip, QLabel#ribbonMark, ...). */
+QLabel, QCheckBox, QRadioButton {{ background: transparent; }}
 
 QScrollArea#ribbonScroll {{ background: transparent; border: none; }}
 QFrame#systemRibbon {{
@@ -786,8 +832,14 @@ QPushButton#disconnectBtn:disabled, QToolButton#disconnectBtn:disabled {{
    pill (panel-2 + hairline-strong + specular top edge), not an accent-
    tinted one — a selected tab is a place, not a state, so it carries no
    colour. */
+/* The pane is a container, not a surface (third instance of the black box):
+   it hard-coded `background: bg`, which is right for the SHELL's tab widget
+   (it sits on the canvas anyway) but punched a canvas-coloured hole through
+   every NESTED tab widget — multi_bias_panel's channel tabs, settings_window's
+   section tabs, both of which sit on a panel. Transparent renders identically
+   on the shell and correctly inside a panel. */
 QTabWidget::pane {{
-    border: none; top: -1px; background: {p['bg']};
+    border: none; top: -1px; background: transparent;
 }}
 QTabBar::tab {{
     background: transparent; padding: {SPACE_SM - 2}px {SPACE_LG - 3}px; margin-right: 4px;
@@ -842,7 +894,13 @@ QCheckBox {{ spacing: {SPACE_SM}px; }}
 QCheckBox:focus, QRadioButton:focus {{
     outline: 2px solid {_rgba(p['accent'], 0.30)}; outline-offset: 1px;
 }}
-QScrollArea {{ border: none; background: {p['bg']}; }}
+/* Scroll areas are containers, not surfaces — the SECOND source of the black
+   box (independent of the blanket QWidget rule above): this used to hard-code
+   `background: bg`, so any QScrollArea nested inside a card/panel punched a
+   canvas-coloured hole through it. Transparent = it shows whatever surface it
+   was placed on. (QScrollArea only; QAbstractItemView / QGraphicsView are NOT
+   QScrollArea subclasses, so plots and item views are untouched here.) */
+QScrollArea {{ border: none; background: transparent; }}
 
 /* Tooltip — a bordered surface matching the panels (Qt's stock tooltip is an
    abrupt inverted-colour flag; this keeps it calm and legible in both
@@ -894,6 +952,45 @@ QProgressBar {{
 }}
 QProgressBar::chunk {{ background: {p['accent']}; border-radius: {RADIUS_SM - 1}px; margin: 1px; }}
 
+/* Sliders (scope t/div + offsets, theme editor) — these had NO rule of their
+   own and were themed only as a side effect of the old blanket QWidget
+   background: with the blanket gone they fell back to the base style's default
+   (light-grey) groove, which is wrong in the dark theme. Named explicitly: a
+   recessed well groove, a raised machined handle, accent fill up to the value.
+   superqt's QSlider subclasses inherit this too. */
+QSlider::groove:horizontal {{
+    background: {p['well']}; border: 1px solid {p['hairline']};
+    height: 4px; border-radius: 2px;
+}}
+QSlider::sub-page:horizontal {{
+    background: {p['accent']}; border: 1px solid {p['accent']};
+    height: 4px; border-radius: 2px;
+}}
+QSlider::groove:vertical {{
+    background: {p['well']}; border: 1px solid {p['hairline']};
+    width: 4px; border-radius: 2px;
+}}
+QSlider::sub-page:vertical {{
+    background: {p['well']}; border-radius: 2px;
+}}
+QSlider::handle {{
+    background: {p['field']}; border: 1px solid {p['hairline_strong']};
+    border-top-color: {p['edge']};
+}}
+QSlider::handle:horizontal {{
+    width: 12px; margin: -6px 0; border-radius: 7px;
+}}
+QSlider::handle:vertical {{
+    height: 12px; margin: 0 -6px; border-radius: 7px;
+}}
+QSlider::handle:hover {{ border-color: {p['accent']}; }}
+QSlider::handle:pressed {{ background: {p['accent']}; border-color: {p['accent']}; }}
+QSlider:disabled {{ }}
+QSlider::groove:disabled {{ background: {p['disabled_bg']}; }}
+QSlider::handle:disabled {{
+    background: {p['disabled_bg']}; border-color: {p['hairline']};
+}}
+
 /* Tables (device/monitor panels) */
 QHeaderView::section {{
     background: {p['material']}; color: {p['muted']};
@@ -904,6 +1001,15 @@ QHeaderView::section {{
 QTableView, QTableWidget {{
     background: {p['panel']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_SM}px;
     gridline-color: {p['hairline']};
+    selection-background-color: {_rgba(p['accent'], 0.22)}; selection-color: {p['text']};
+}}
+/* Item views are a real surface (like the tables above) — they used to get one
+   only by accident, from the blanket QWidget rule that painted the canvas on
+   everything. Named explicitly now, on the same `panel` surface as QTableView,
+   so dropping the blanket cannot leave a list floating on nothing. */
+QListWidget, QTreeWidget, QListView, QTreeView {{
+    background: {p['panel']}; border: 1px solid {p['hairline']};
+    border-radius: {RADIUS_SM}px;
     selection-background-color: {_rgba(p['accent'], 0.22)}; selection-color: {p['text']};
 }}
 QTreeWidget::item, QListWidget::item {{ padding: 3px 2px; }}
@@ -1755,9 +1861,14 @@ def apply_theme(app, mode: str = "light") -> str:
     hinting — see ``_apply_app_font``): the QSS below only reaches QWidgets,
     while the QML chrome and unstyled text inherit the app font. Set BEFORE
     the stylesheet so the one global repolish QSS application triggers already
-    sees the final font (no second repolish, no flash)."""
+    sees the final font (no second repolish, no flash).
+
+    Also sets the app QPalette's canvas roles (``_apply_app_palette``) — the
+    backstop for a widget shown as its own top-level window, now that the QSS
+    canvas rule names shells instead of blanket-painting every QWidget."""
     palette = DARK if str(mode).lower() == "dark" else LIGHT
     _apply_app_font(app)
+    _apply_app_palette(app, palette)
     app.setStyleSheet(build_qss(palette))
     _apply_pyqtgraph(palette)
     return "dark" if palette is DARK else "light"
