@@ -1,15 +1,21 @@
 """
-Intensity monitor panel.
+Reference Monitor panel (laser-intensity reference).
 
-Displays real-time reference photodiode / SiPM amplitude, charge, and
-a live mini-waveform plot.  Works with any IntensityMonitorBase
-implementation — swap the backend and this panel adapts automatically.
+Displays real-time reference photodiode / SiPM amplitude + stability with the
+live waveform as the hero (design system §7 "Reference Monitor: 2 tiles +
+chip + waveform hero").  Works with any IntensityMonitorBase implementation —
+swap the backend and this panel adapts automatically.
+
+No ``refresh_theme`` needed by design: the waveform lives on the fixed-dark
+instrument canvas (``gui.style.PLOT_BG`` — identical in both themes), its pen
+is resolved once against that fixed canvas, and every other surface here is
+app-stylesheet QSS that repaints globally on a theme switch.
 """
 from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import Qt, QTimer, QThread, QObject, Signal
+from PySide6.QtCore import QTimer, QThread, QObject, Signal
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QDoubleSpinBox, QPushButton,
@@ -22,9 +28,9 @@ except ImportError:
     _HAS_PG = False
 
 from devices.intensity_base import IntensityMonitorBase
-from gui.panel_kit import Card, panel_header
-from gui.status_widgets import ReadoutCell, StatusChip, flash_button, set_button_icon
-from gui.style import OK_GREEN, PLOT_BG, WARN_RED
+from gui.panel_kit import FigureCard, MetricGrid, panel_header
+from gui.status_widgets import StatusChip, flash_button, set_button_icon
+from gui.style import axis_color
 
 logger = logging.getLogger(__name__)
 
@@ -97,63 +103,58 @@ class IntensityPanel(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
-        root.addWidget(panel_header("TCT Control · Instrument", "Intensity Monitor"))
+        # ONE status chip (§7): live/offline/saturated, most-important-wins.
+        self._chip_live = StatusChip("Monitor offline", "disconnected")
+        root.addWidget(panel_header(
+            "TCT Control · Instrument", "Reference Monitor",
+            trailing=[self._chip_live],
+        ))
 
-        # ── Live values ───────────────────────────────────────────────
-        vals_box = Card("Reference Monitor")
-        vals_v = vals_box.body
-        status_row = QHBoxLayout()
-        self._chip_live = StatusChip("Monitor offline", "neutral")
-        self._chip_sat = StatusChip("Saturation --", "neutral")
-        self._chip_stab = StatusChip("Stability --", "neutral")
-        self._chip_scale = StatusChip("Scale --", "neutral")
-        for chip in (self._chip_live, self._chip_sat, self._chip_stab, self._chip_scale):
-            status_row.addWidget(chip)
-        status_row.addStretch(1)
-        vals_v.addLayout(status_row)
-        vals_layout = QHBoxLayout()
-        self._lbl_amp = ReadoutCell("Amplitude", "--")
-        self._lbl_chg = ReadoutCell("Charge", "--")
-        vals_layout.addWidget(self._lbl_amp)
-        vals_layout.addWidget(self._lbl_chg)
-        vals_layout.addStretch(1)
-        vals_v.addLayout(vals_layout)
-        root.addWidget(vals_box)
+        # ── Top strip: exactly two tiles (§7) ─────────────────────────
+        # Amplitude carries charge in its caption (subordinated, still
+        # reachable); Stability holds the last stability-check result.
+        self._metrics = MetricGrid(columns=2)
+        self._tile_amp = self._metrics.add_tile(("Amplitude", "--"))
+        self._tile_stab = self._metrics.add_tile(("Stability", "--"))
+        self._tile_amp.set_stale(True, "monitor offline")
+        self._tile_stab.set_stale(True, "not yet measured")
+        root.addWidget(self._metrics)
 
-        # ── Scale control ─────────────────────────────────────────────
-        scale_row = QHBoxLayout()
-        scale_row.addWidget(QLabel("Scale (V/div):"))
+        # ── Waveform hero ─────────────────────────────────────────────
+        if _HAS_PG:
+            self._figure = FigureCard("Reference waveform")
+            self._plot = self._figure.plot
+            self._plot.setLabel("left",   "Amplitude", units="V")
+            self._plot.setLabel("bottom", "Time",      units="s")
+            # Laser-reference data ink, resolved once against the fixed-dark
+            # instrument canvas (PLOT_BG is theme-invariant, so the dark-mode
+            # rail colour is always the right contrast — no refresh needed).
+            self._curve = self._plot.plot(
+                pen=pg.mkPen(axis_color("laser", "dark"), width=1))
+            root.addWidget(self._figure, 1)
+        else:
+            root.addWidget(QLabel("(install pyqtgraph for live waveform)"))
+
+        # ── Command row: scale + stability check ──────────────────────
+        cmd_row = QHBoxLayout()
+        cmd_row.addWidget(QLabel("Scale (V/div):"))
         self._spin_scale = QDoubleSpinBox()
         self._spin_scale.setRange(0.001, 10.0)
         self._spin_scale.setValue(0.1)
         self._spin_scale.setDecimals(3)
-        self._btn_apply_scale = QPushButton("Apply")
+        cmd_row.addWidget(self._spin_scale)
+        self._btn_apply_scale = QPushButton("Apply scale")
+        self._btn_apply_scale.setProperty("state", "secondary")
         set_button_icon(self._btn_apply_scale, "mdi.tune")
         self._btn_apply_scale.clicked.connect(self._apply_scale)
-        scale_row.addWidget(self._spin_scale)
-        scale_row.addWidget(self._btn_apply_scale)
-        root.addLayout(scale_row)
-
-        # ── Stability check ───────────────────────────────────────────
-        stab_row = QHBoxLayout()
-        self._btn_stab = QPushButton("Check Stability (10 shots)")
+        cmd_row.addWidget(self._btn_apply_scale)
+        cmd_row.addStretch(1)
+        self._btn_stab = QPushButton("Check stability (10 shots)")
+        self._btn_stab.setProperty("state", "secondary")
         set_button_icon(self._btn_stab, "mdi.chart-bell-curve")
         self._btn_stab.clicked.connect(self._check_stability)
-        self._lbl_stab = QLabel("")
-        stab_row.addWidget(self._btn_stab)
-        stab_row.addWidget(self._lbl_stab)
-        root.addLayout(stab_row)
-
-        # ── Waveform plot ─────────────────────────────────────────────
-        if _HAS_PG:
-            self._plot = pg.PlotWidget(title="Reference waveform", background=PLOT_BG)
-            self._plot.showGrid(x=True, y=True, alpha=0.25)
-            self._plot.setLabel("left",   "Amplitude", units="V")
-            self._plot.setLabel("bottom", "Time",      units="s")
-            self._curve = self._plot.plot(pen=pg.mkPen("y", width=1))
-            root.addWidget(self._plot)
-        else:
-            root.addWidget(QLabel("(install pyqtgraph for live waveform)"))
+        cmd_row.addWidget(self._btn_stab)
+        root.addLayout(cmd_row)
 
     # ------------------------------------------------------------------ #
     # Slots                                                               #
@@ -161,19 +162,24 @@ class IntensityPanel(QWidget):
 
     def _on_reading(self, reading) -> None:
         if reading is None:
-            self._lbl_amp.set_value("--")
-            self._lbl_chg.set_value("--")
-            self._chip_live.set_status("Monitor offline", "neutral")
-            self._chip_sat.set_status("Saturation --", "neutral")
+            # Law 4: the tile keeps its last value but goes stale with a
+            # caption saying why — never a silently frozen number.
+            self._tile_amp.set_stale(True, "monitor offline")
+            self._chip_live.set_status("Monitor offline", "disconnected")
             return
         try:
-            self._chip_live.set_status("Monitor live", "busy")
-            self._lbl_amp.set_value(f"{reading.amplitude_V*1000:.2f} mV")
-            self._lbl_chg.set_value(f"{reading.charge_pC:.3f} pC")
+            self._tile_amp.set_value(f"{reading.amplitude_V*1000:.2f} mV")
+            self._tile_amp.set_stale(False, f"charge {reading.charge_pC:.3f} pC")
             if reading.saturated:
-                self._chip_sat.set_status("Saturated", "warn")
+                # The single chip carries the most important state (law 2:
+                # saturation is a data-validity warning, amber not red).
+                self._chip_live.set_status(
+                    "Saturated", "warn",
+                    "Reference signal is clipping — reduce intensity or scale")
+                self._tile_amp.set_state("warn")
             else:
-                self._chip_sat.set_status("Saturation OK", "good")
+                self._chip_live.set_status("Monitor live", "busy")
+                self._tile_amp.set_state("normal")
 
             if _HAS_PG and reading.time_s is not None and reading.waveform_V is not None:
                 self._curve.setData(reading.time_s, reading.waveform_V)
@@ -186,26 +192,23 @@ class IntensityPanel(QWidget):
     def _apply_scale(self) -> None:
         try:
             self._monitor.set_scale(self._spin_scale.value())
-            self._chip_scale.set_status(f"Scale {self._spin_scale.value():.3g} V/div", "good")
             flash_button(self._btn_apply_scale, "good", "Applied")
         except Exception as exc:
             from PySide6.QtWidgets import QMessageBox
-            self._chip_scale.set_status("Scale error", "crit", str(exc))
-            QMessageBox.warning(self, "Scale Error", str(exc))
+            QMessageBox.warning(self, "Scale error", str(exc))
 
     def _check_stability(self) -> None:
         try:
             stable, rms_rel = self._monitor.check_stability()
-            msg = f"RMS {rms_rel*100:.2f} % — {'STABLE' if stable else 'UNSTABLE'}"
-            self._lbl_stab.setText(msg)
-            color = OK_GREEN if stable else WARN_RED
-            self._lbl_stab.setStyleSheet(f"color: {color};")
-            self._chip_stab.set_status("Stable" if stable else "Unstable",
-                                       "good" if stable else "warn")
+            self._tile_stab.set_value(f"{rms_rel*100:.2f} %")
+            self._tile_stab.set_state("normal" if stable else "warn")
+            self._tile_stab.set_stale(
+                False, "stable over 10 shots" if stable else "unstable over 10 shots")
             flash_button(self._btn_stab, "good" if stable else "warn")
         except Exception as exc:
-            self._lbl_stab.setText(str(exc))
-            self._chip_stab.set_status("Stability error", "crit", str(exc))
+            self._tile_stab.set_value("--")
+            self._tile_stab.set_state("crit")
+            self._tile_stab.set_stale(False, f"check failed: {exc}")
 
     def set_monitor(self, monitor: IntensityMonitorBase) -> None:
         """Hot-swap the intensity monitor backend at runtime."""

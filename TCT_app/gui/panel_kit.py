@@ -27,8 +27,8 @@ from collections.abc import Iterable
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLayout, QLabel,
-    QPushButton, QVBoxLayout, QWidget,
+    QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLayout,
+    QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget,
 )
 
 from gui.status_widgets import ReadoutCell, StatusLamp
@@ -50,6 +50,8 @@ __all__ = [
     "MetricGrid",
     "ActionBar",
     "CheckableCard",
+    "CollapsibleCard",
+    "SegmentedControl",
     "EmptyState",
 ]
 
@@ -398,9 +400,18 @@ class MetricTile(ReadoutCell):
         *,
         min_width: int = 110,
         caption: str = "",
+        compact: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(label, value, parent=parent, min_width=min_width)
+        # Compact variant (spec §3: primary values 24-28 px, "compact
+        # 17-20 px") — drives the QSS ``[compact="true"]`` size rule on the
+        # value label (gui/style.py FONT_VALUE_COMPACT_PX) instead of an
+        # inline font-size, so state/stale ink rules still cascade normally.
+        self._compact = bool(compact)
+        if self._compact:
+            self._value.setProperty("compact", "true")
+            repolish(self._value)
         self._led = StatusLamp("neutral")
         self._led.setFixedSize(6, 6)
         self._install_led()
@@ -416,21 +427,28 @@ class MetricTile(ReadoutCell):
 
     def _install_led(self) -> None:
         """Re-parent the (already-built, by ``ReadoutCell.__init__``) title
-        label into a small centred [led][title] row — the "LED-in-label"
-        look — without touching ``ReadoutCell`` itself (every OTHER
-        ``ReadoutCell`` consumer, e.g. motor/calibration readouts, keeps its
-        plain title; this is a ``MetricTile``-only augmentation, per the
-        task brief's scope)."""
+        label into a [led][title] head row — the "LED-in-label" look —
+        without touching ``ReadoutCell`` itself (every OTHER ``ReadoutCell``
+        consumer, e.g. motor/calibration readouts, keeps its plain title;
+        this is a ``MetricTile``-only augmentation).
+
+        Layout note (bug fix, batch A): the title label inherits
+        ``QSizePolicy.Ignored`` horizontally from ``ReadoutCell`` (the
+        anti-overflow rule — its full-text size hint must never inflate the
+        tile). An Ignored-policy widget between two stretches is allocated
+        ZERO width, which silently blanked every MetricTile title app-wide.
+        Give the title the row's leftover width via a stretch factor instead
+        (Ignored + stretch fills, exactly like the value label fills the
+        VBox) and let its own centred text alignment do the centring; the
+        LED reads as a status dot anchored at the row's left edge."""
         outer = self.layout()
         outer.removeWidget(self._title)
         head = QWidget()
         head_lay = QHBoxLayout(head)
         head_lay.setContentsMargins(0, 0, 0, 0)
         head_lay.setSpacing(SPACE_XS)
-        head_lay.addStretch(1)
         head_lay.addWidget(self._led, 0, Qt.AlignmentFlag.AlignVCenter)
-        head_lay.addWidget(self._title)
-        head_lay.addStretch(1)
+        head_lay.addWidget(self._title, 1)
         outer.insertWidget(0, head)
 
     def set_state(self, state: str | None) -> None:
@@ -471,6 +489,9 @@ class MetricTile(ReadoutCell):
     def is_stale(self) -> bool:
         return self._stale
 
+    def is_compact(self) -> bool:
+        return self._compact
+
 
 class MetricGrid(QWidget):
     """A grid arrangement of :class:`MetricTile`\\ s — pure layout, no custom
@@ -485,10 +506,12 @@ class MetricGrid(QWidget):
         tiles: Iterable[MetricTile | tuple] | None = None,
         *,
         columns: int = 4,
+        compact: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._columns = max(1, int(columns))
+        self._compact = bool(compact)
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setSpacing(SPACE_SM)
@@ -498,11 +521,12 @@ class MetricGrid(QWidget):
 
     def add_tile(self, tile: MetricTile | tuple) -> MetricTile:
         """Append *tile* (a built ``MetricTile``, or a ``(label, value)``/
-        ``(label, value, state)`` tuple) to the next grid cell."""
+        ``(label, value, state)`` tuple) to the next grid cell. Tuple-built
+        tiles inherit this grid's ``compact`` mode (see ``MetricTile``)."""
         if not isinstance(tile, MetricTile):
             label, value, *rest = tile
             state = rest[0] if rest else "normal"
-            tile = MetricTile(label, value, state)
+            tile = MetricTile(label, value, state, compact=self._compact)
         idx = len(self._tiles)
         row, col = divmod(idx, self._columns)
         self._grid.addWidget(tile, row, col)
@@ -625,6 +649,130 @@ class CheckableCard(Card):
 
     def set_checked(self, checked: bool) -> None:
         self._checkbox.setChecked(checked)
+
+
+# --------------------------------------------------------------------------- #
+# CollapsibleCard — a Card whose header discloses/hides its body (cockpit v5) #
+# --------------------------------------------------------------------------- #
+
+class CollapsibleCard(Card):
+    """A :class:`Card` with a disclosure toggle in the header that shows or
+    hides the body — the design-system §7 "collapsed by default" recipe
+    (Scan Viewer's Z-focus card, Bias's "Standalone sweeps (advanced)").
+
+    Unlike :class:`CheckableCard` (whose checkbox *disables* the body — an
+    enable/off semantic), collapsing only hides detail: whatever summary the
+    caller puts in the header (a status chip, a primary action via
+    ``add_header_widget``) stays live and reachable while collapsed, so the
+    card still says what it knows and offers its main verb at a glance.
+
+    Pure layout/visibility — no timers, no animation (law 8: nothing
+    decorative moves; expansion is an instant relayout).
+    """
+
+    expansion_changed = Signal(bool)
+
+    def __init__(
+        self,
+        title: str,
+        subtitle: str | None = None,
+        *,
+        expanded: bool = False,
+        margins: tuple[int, int, int, int] = (SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD),
+        spacing: int = SPACE_SM,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(title, subtitle, margins=margins, spacing=spacing, parent=parent)
+        self._toggle = QToolButton()
+        self._toggle.setObjectName("collapseToggle")
+        self._toggle.setCheckable(True)
+        self._toggle.setChecked(bool(expanded))
+        self._toggle.setToolTip(f"Show/hide {title} details")
+        self._toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        self.add_header_widget(self._toggle, before_title=True)
+        self._body_widget = self.body.parentWidget()
+        self._toggle.toggled.connect(self._on_toggled)
+        if self._body_widget is not None:
+            self._body_widget.setVisible(bool(expanded))
+
+    def _on_toggled(self, expanded: bool) -> None:
+        self._toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        if self._body_widget is not None:
+            self._body_widget.setVisible(expanded)
+        self.expansion_changed.emit(expanded)
+
+    def is_expanded(self) -> bool:
+        return self._toggle.isChecked()
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._toggle.setChecked(bool(expanded))
+
+
+# --------------------------------------------------------------------------- #
+# SegmentedControl — exclusive mode switcher on the shared #segmented QSS     #
+# --------------------------------------------------------------------------- #
+
+class SegmentedControl(QFrame):
+    """An exclusive row of mode buttons styled by the pre-existing
+    ``QFrame#segmented`` / ``QPushButton#segBtn`` QSS hooks (``gui/style.py``
+    — the jog-step-preset look ``gui/motor_panel.py``/``gui/stage_view.py``
+    already hand-roll), generalised for the design-system §7 "segmented
+    modes" recipe (Analysis 2D-map/CCE modes, Scope Live/Single/Avg).
+
+    *segments* is an iterable of ``(key, label)`` pairs (or bare label
+    strings, in which case the label is its own key). Emits
+    ``selection_changed(key)`` and exposes ``current_key()`` /
+    ``set_current(key)``. Layout + the shared QSS only — no bespoke painting,
+    no new colours.
+    """
+
+    selection_changed = Signal(str)
+
+    def __init__(
+        self,
+        segments: Iterable[str | tuple[str, str]],
+        *,
+        current: str | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("segmented")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(3, 3, 3, 3)
+        lay.setSpacing(2)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._buttons: dict[str, QPushButton] = {}
+        for seg in segments:
+            key, label = (seg, seg) if isinstance(seg, str) else seg
+            btn = QPushButton(label)
+            btn.setObjectName("segBtn")
+            btn.setCheckable(True)
+            btn.toggled.connect(
+                lambda on, _key=key: on and self.selection_changed.emit(_key))
+            self._group.addButton(btn)
+            self._buttons[str(key)] = btn
+            lay.addWidget(btn)
+        if self._buttons:
+            start = str(current) if current in self._buttons else next(iter(self._buttons))
+            self._buttons[start].setChecked(True)
+
+    def current_key(self) -> str | None:
+        for key, btn in self._buttons.items():
+            if btn.isChecked():
+                return key
+        return None
+
+    def set_current(self, key: str) -> None:
+        btn = self._buttons.get(str(key))
+        if btn is not None:
+            btn.setChecked(True)
+
+    def button(self, key: str) -> QPushButton | None:
+        return self._buttons.get(str(key))
 
 
 # --------------------------------------------------------------------------- #

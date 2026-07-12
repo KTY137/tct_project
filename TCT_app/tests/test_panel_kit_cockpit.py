@@ -327,6 +327,100 @@ def test_metric_grid_constructs_both_themes():
         has_refresh=False)
 
 
+def test_metric_tile_title_gets_real_width_next_to_led():
+    """Regression (batch A): the LED head row used to sandwich the
+    Ignored-size-policy title label between two stretches — a zero-width
+    allocation that silently blanked every MetricTile title app-wide. The
+    title must end up with real width (and its text intact) once the tile
+    has geometry."""
+    _app()
+    tile = MetricTile("Progress", "0/0")
+    tile.resize(160, 70)
+    tile.show()
+    QApplication.instance().processEvents()
+    try:
+        assert tile._title.width() > 40
+        assert tile._title.text() == "PROGRESS"
+    finally:
+        tile.hide()
+
+
+def test_metric_tile_compact_variant_sets_qss_property():
+    _app()
+    tile = MetricTile("Point", "x=1 y=2 z=3", compact=True)
+    assert tile.is_compact()
+    assert tile._value.property("compact") == "true"
+    # Non-compact tiles carry no property (full 24-28 px hero face).
+    plain = MetricTile("Points", "128")
+    assert not plain.is_compact()
+    assert not plain._value.property("compact")
+
+
+def test_metric_grid_compact_propagates_to_tuple_tiles():
+    _app()
+    grid = MetricGrid([("A", "1"), ("B", "2")], columns=2, compact=True)
+    assert all(t.is_compact() for t in grid.tiles())
+
+
+def test_compact_value_qss_rule_present():
+    from gui.style import FONT_VALUE_COMPACT_PX, build_qss
+    for mode in ("light", "dark"):
+        qss = build_qss(palette(mode))
+        assert 'QLabel#readoutCellValue[compact="true"]' in qss
+        assert f"{FONT_VALUE_COMPACT_PX}px" in qss
+
+
+# --------------------------------------------------------------------------- #
+# CollapsibleCard / SegmentedControl (batch A kit additions)                   #
+# --------------------------------------------------------------------------- #
+
+def test_collapsible_card_collapsed_by_default_header_stays_live():
+    from gui.panel_kit import CollapsibleCard
+    _app()
+    card = CollapsibleCard("Z focus", "assist")
+    assert not card.is_expanded()
+    assert card.body.parentWidget().isHidden()
+    # Header widgets (chip/action) stay reachable while collapsed.
+    btn = QPushButton("Find focus")
+    card.add_header_widget(btn)
+    assert btn.parent() is not None
+
+    seen = []
+    card.expansion_changed.connect(seen.append)
+    card.set_expanded(True)
+    assert card.is_expanded()
+    assert not card.body.parentWidget().isHidden()
+    assert seen == [True]
+
+
+def test_collapsible_card_constructs_both_themes():
+    from gui.panel_kit import CollapsibleCard
+    _grab_both_themes(lambda: CollapsibleCard("T", expanded=True), has_refresh=False)
+
+
+def test_segmented_control_exclusive_selection_and_signal():
+    from gui.panel_kit import SegmentedControl
+    _app()
+    seg = SegmentedControl([("map", "2D map"), ("cce", "CCE vs bias")], current="map")
+    assert seg.current_key() == "map"
+    seen = []
+    seg.selection_changed.connect(seen.append)
+    seg.set_current("cce")
+    assert seg.current_key() == "cce"
+    assert seen == ["cce"]
+    # Exclusive: exactly one checked at a time.
+    assert not seg.button("map").isChecked()
+    assert seg.button("cce").isChecked()
+    # Uses the shared #segmented / #segBtn QSS hooks — no bespoke styling.
+    assert seg.objectName() == "segmented"
+    assert seg.button("map").objectName() == "segBtn"
+
+
+def test_segmented_control_constructs_both_themes():
+    from gui.panel_kit import SegmentedControl
+    _grab_both_themes(lambda: SegmentedControl(["A", "B"]), has_refresh=False)
+
+
 # --------------------------------------------------------------------------- #
 # ActionBar                                                                    #
 # --------------------------------------------------------------------------- #

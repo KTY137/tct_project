@@ -846,6 +846,12 @@ QLabel#readoutCellValue {{
     font-size: {FONT_VALUE_PX}px; font-weight: {WEIGHT_VALUE};
     letter-spacing: 0;
 }}
+/* Compact tile variant (spec §3 "compact 17-20 px") — the dense mode for
+   tiles whose values are long strings (a position triple, a channel value
+   with unit) or that sit 4-across in a dashboard row. Property set by
+   ``gui.panel_kit.MetricTile(compact=True)``; placed before the state rules
+   so semantic ink still wins the cascade. */
+QLabel#readoutCellValue[compact="true"] {{ font-size: {FONT_VALUE_COMPACT_PX}px; }}
 QLabel#readoutCellValue[state="good"] {{ color: {p['good']}; }}
 QLabel#readoutCellValue[state="warn"], QLabel#readoutCellValue[state="armed"] {{
     color: {p['armed']}; font-weight: 700;
