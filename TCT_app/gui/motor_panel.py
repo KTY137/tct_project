@@ -516,7 +516,10 @@ class MotorPanel(QWidget):
         stage_card.setAttribute(Qt.WA_StyledBackground, True)
         stage_card_v = QVBoxLayout(stage_card)
         stage_card_v.setContentsMargins(12, 12, 12, 12)
-        self._stage_view = StageView(getattr(self._motor, "limits", None))
+        self._stage_view = StageView(
+            getattr(self._motor, "limits", None),
+            theme_mode=self._theme_mode,
+        )
         stage_card_v.addWidget(self._stage_view)
 
         split = QSplitter(Qt.Horizontal)
@@ -590,6 +593,9 @@ class MotorPanel(QWidget):
         self._restyle_axis_readouts()
         self._restyle_jog_buttons()
         self._restyle_abs_move_captions()
+        stage_view = getattr(self, "_stage_view", None)
+        if stage_view is not None:
+            stage_view.refresh_theme(self._theme_mode)
 
     # ------------------------------------------------------------------ #
     # Slots                                                               #

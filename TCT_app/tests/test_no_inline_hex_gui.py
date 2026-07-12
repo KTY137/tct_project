@@ -247,6 +247,37 @@ def test_laser_panel_construct_and_theme_switch():
         _pump(app, 0.1)
 
 
+def test_motor_panel_stage_view_refreshes_theme_tokens():
+    """MotorPanel owns StageView, so its refresh hook must fan the live theme
+    into the cached stage-plot colors."""
+    app = _app()
+    from devices.motor_simulated import SimulatedMotorStage
+    from gui.motor_panel import MotorPanel
+    from gui.stage_view import _HAS_PG
+    from gui.style import palette
+
+    panel = MotorPanel(SimulatedMotorStage())
+    try:
+        panel.refresh_theme("light")
+        assert panel._stage_view._theme_mode == "light"
+        assert panel._stage_view._v2d._theme_mode == "light"
+        assert panel._stage_view._v3d._theme_mode == "light"
+        if _HAS_PG:
+            bg = panel._stage_view._v2d._top["w"].backgroundBrush().color().name()
+            assert bg.lower() == palette("light")["sunk"].lower()
+
+        panel.refresh_theme("dark")
+        assert panel._stage_view._theme_mode == "dark"
+        assert panel._stage_view._v2d._theme_mode == "dark"
+        assert panel._stage_view._v3d._theme_mode == "dark"
+        if _HAS_PG:
+            bg = panel._stage_view._v2d._top["w"].backgroundBrush().color().name()
+            assert bg.lower() == palette("dark")["sunk"].lower()
+    finally:
+        panel.shutdown()
+        _pump(app, 0.1)
+
+
 def test_channel_card_readout_color_resolves_from_palette():
     """Exercises gui.scope_panel._ChannelCard.set_readout_color() directly —
     the actual unit this task's mechanical fix touched — without paying for a
