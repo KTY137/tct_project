@@ -244,6 +244,14 @@ Rules:
     AGENTS.md) for the VS Code extension flow. Kaya's account, logged in.
   - Safety-critical code (devices/, HV, motion, scan logic) stays with the
     Claude crew and always gets a Mary review.
+  - **Free-lane-first routing (Kaya, 2026-07-12):** before waking an
+    Opus/Sonnet specialist, Adam routes mechanical/draft beats to the GPU
+    lane (`--lane local_only`, zero Claude tokens) and medium
+    GUI-mechanical beats to `--lane codex`. Free-lane output is always
+    reviewed by Adam (the diff on disk is the truth, not the report) and
+    committed by the crew; verify-gate escalations go back to specialists.
+    Codex real-task budget is 8-20 min (provider timeout 1500 s; lane
+    fixes: agent_env 3c13d89/6a7e6bd/8022213).
 - Read reports from `C:\Users\nukei\Desktop\agent_env\inbox`.
 - Check recovery memory at `C:\Users\nukei\Desktop\agent_env\memory\todos.local.md`.
 
