@@ -22,6 +22,83 @@ opaque/glass like? or make it setable."
 - Design twin: interactive artifact `artifacts_claude/v5/themes.html`
   (5 presets, live preview, JSON token export).
 
+## 1b. Theme editor round 2 — Kaya, 2026-07-13 (QUEUED, Noah)
+
+Live feedback after using it: "ich will mehr theme presets" + "können wir das
+Fenster leicht transparent machen, also dafür auch nen Regler? irgendwie
+funkt das opaque teil net so."
+
+**Diagnosis (honest):** the glass slider is NOT weak — it is doing exactly
+what it can. QSS has no backdrop blur, so "glass" is a pre-blend of three
+surface tokens (chrome/strip/edge) toward `panel`. Moving it changes how
+much two greys differ. It can never make the window see-through, which is
+what the word promises. The knob Kaya actually wants is a different one.
+
+**Build:**
+1. **Window opacity slider** — `QMainWindow.setWindowOpacity(x)`: REAL
+   compositor translucency (DWM does it natively on Win11), the whole window
+   incl. content. Range **0.80 … 1.00**, default 1.00, step 0.01, persisted
+   under `theme/window_opacity`. **Floor is a safety clamp, not taste**: an
+   HV-live chip and an abort button must stay legible at every reachable
+   setting; do not expose a value that makes the cockpit ghostly. Applies to
+   the main window; detached panels inherit it.
+2. **Rename the existing knob** so it stops over-promising: "Glass" →
+   **"Surface tint"** (or "Material depth"), with a one-line hint in the
+   dialog: *"Qt cannot blur behind a window — this tints the chrome
+   surfaces. For see-through, use Window opacity."* Honesty over marketing
+   (law 8 applies to our own UI copy too).
+3. **More built-in presets** (5, all law-safe — safety palette stays locked):
+   Cockpit Dark (default) · Graphite · Deep Violet · Lab Light · Paper.
+   Token sets already designed and eyeball-checked in
+   `artifacts_claude/v5/src/themes.body.html` (the playground's `P` map) —
+   port them; do not invent new ones.
+4. Tests: opacity clamped to [0.80, 1.00] (a persisted 0.2 from a hand-edited
+   QSettings must be clamped, not obeyed); every built-in preset round-trips
+   and none of them can touch a locked safety token; renamed slider still
+   drives the same pre-blend.
+
+**File conflict note:** touches `gui/style.py`, `gui/theme_editor.py`,
+`tct_gui.py` — must NOT run concurrently with any other beat holding those.
+
+## 1c. The black box behind every label — ROOT-CAUSED (Kaya, 2026-07-13)
+
+Kaya: "Siehst du diese schwarze Box um den Text? Das haben wir an ganz vielen
+Stellen und ich glaube das zerstört einen großen Teil der Aesthetics."
+
+**Root cause (proven, not guessed)** — `gui/style.py:529`:
+
+```
+QMainWindow, QDialog, QWidget { background: {p['bg']}; }
+```
+
+A bare `QWidget` type selector. Qt QSS type selectors match SUBCLASSES, and
+`QLabel` is a QWidget — so every label gets `background: bg` (#0A0D13, the
+near-black canvas). Once a stylesheet sets a background, Qt turns on
+`WA_StyledBackground` and the label actually PAINTS it. Invisible on the
+canvas itself; a black slab on every card/panel (#121824). Same defect is
+inherited by other text widgets (check QCheckBox / QRadioButton).
+
+Measured (offscreen probe, label on a panel-coloured card):
+
+| | pixel behind the text |
+|---|---|
+| as shipped | `#0a0d13` (canvas) -> box |
+| + `QLabel { background: transparent; }` | `#121824` (the card) -> gone |
+| StatusChip with the fix | `#192134` -> chips KEEP their background (ID selector wins) |
+
+**Fix, two stages:**
+1. **Surgical (do first):** `QLabel, QCheckBox, QRadioButton { background: transparent; }`
+   — sweep for every text-ish widget with the same inheritance. Chips, marks
+   and pills are unaffected (ID/class selectors are more specific).
+2. **Proper (do after, verified with panel captures):** drop `QWidget` from the
+   bare background rule entirely; paint only the top-level shells
+   (`QMainWindow`, `QDialog`, `QWidget#mainShell`) and let children inherit.
+   This is the Qt-textbook fix; it is riskier because some containers may rely
+   on the blanket rule — hence captures before/after, not a blind edit.
+
+Guard test: assert no plain QLabel on a Card paints a colour different from
+its parent surface (the probe in this entry is directly reusable).
+
 ## 2. QML shell default — RATIFIED (Kaya): QML default, classic = fallback
 
 Noah W3 beat: flip in `tct_gui._build_central`, classic behind a fallback
