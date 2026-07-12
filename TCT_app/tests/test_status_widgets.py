@@ -58,7 +58,10 @@ def test_button_busy_restores_text_and_enabled_state():
 
 
 def test_state_aliases_cover_operator_terms():
-    assert normalize_state("connected") == "good"
+    # Design law 1 (quiet nominal, D0): nominal states are NEUTRAL grey —
+    # "connected" must never resolve to green; color is reserved for
+    # abnormal / armed / live states.
+    assert normalize_state("connected") == "neutral"
     assert normalize_state("running") == "busy"
     assert normalize_state("on") == "armed"
     assert normalize_state("invalid") == "crit"
