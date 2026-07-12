@@ -142,16 +142,27 @@ class FakeScanner:
         self.on_vscan_point = None
         self.on_manual_pause = None
         self.calls: list = []
+        # Per-entry-point RuntimeError injection — models the controller's
+        # fail-closed _refuse_if_active() raising while PAUSED / worker alive.
+        self.start_raises: Exception | None = None
+        self.start_z_focus_raises: Exception | None = None
+        self.start_voltage_raises: Exception | None = None
         self.start_plan_raises: Exception | None = None
 
     def start(self, cfg):
         self.calls.append(("start", cfg))
+        if self.start_raises is not None:
+            raise self.start_raises
 
     def start_z_focus_scan(self, cfg, on_point=None, on_done=None):
         self.calls.append(("z_focus", cfg))
+        if self.start_z_focus_raises is not None:
+            raise self.start_z_focus_raises
 
     def start_voltage_scan(self, cfg):
         self.calls.append(("vscan", cfg))
+        if self.start_voltage_raises is not None:
+            raise self.start_voltage_raises
 
     def start_plan(self, plan, limits, gate):
         self.calls.append(("start_plan", plan))
@@ -290,6 +301,59 @@ def test_refused_zfocus_and_vscan_warn():
 
 
 # --------------------------------------------------------------------------- #
+# (3b) controller-side fail-closed refusal (PAUSED / worker still alive):      #
+#      the state gate passes but _refuse_if_active() raises RuntimeError.       #
+#      Every start slot must surface it via error_dialog, NEVER paint a         #
+#      running status/signal, and never let the exception escape the Qt slot.   #
+# --------------------------------------------------------------------------- #
+def test_zfocus_start_refused_by_controller_fails_closed():
+    _app()
+    coord, fake, sm = _fake_coord(AppState.READY)       # passes can(RUNNING)
+    fake.start_z_focus_raises = RuntimeError(
+        "A run is already active (paused or running).")
+    err = Spy(coord.error_dialog)
+    status = Spy(coord.status_message)
+
+    from controller.scan_controller import ZFocusScanConfig
+    coord.start_z_focus(ZFocusScanConfig())             # must not raise
+
+    assert err.count == 1
+    assert err.last[0] == "Z-focus scan refused"
+    assert status.count == 0                            # never painted "running…"
+
+
+def test_voltage_start_refused_by_controller_fails_closed():
+    _app()
+    coord, fake, sm = _fake_coord(AppState.READY)
+    fake.start_voltage_raises = RuntimeError(
+        "A run is already active (paused or running).")
+    err = Spy(coord.error_dialog)
+    status = Spy(coord.status_message)
+
+    from controller.scan_controller import VoltageScanConfig
+    coord.start_voltage_scan(VoltageScanConfig())       # must not raise
+
+    assert err.count == 1
+    assert err.last[0] == "Voltage scan refused"
+    assert status.count == 0                            # never painted "running…"
+
+
+def test_classic_start_refused_by_controller_fails_closed():
+    _app()
+    coord, fake, sm = _fake_coord(AppState.READY)
+    fake.start_raises = RuntimeError(
+        "A run is already active (paused or running).")
+    err = Spy(coord.error_dialog)
+    started = Spy(coord.scan_started)
+
+    coord.start_scan(ScanConfig())                      # must not raise
+
+    assert err.count == 1
+    assert err.last[0] == "Scan refused"
+    assert started.count == 0                           # never painted running
+
+
+# --------------------------------------------------------------------------- #
 # (4) pause / resume / abort routing                                           #
 # --------------------------------------------------------------------------- #
 def test_pause_resume_abort_routing():
@@ -346,12 +410,14 @@ def test_plan_start_exception_unarms():
     fake.start_plan_raises = RuntimeError("plan drives HV but HV is not armed")
     err = Spy(coord.error_dialog)
     armed = Spy(coord.hv_armed)
+    started = Spy(coord.scan_started)
 
     coord.start_plan(_stage_plan([0.0]))
 
     assert err.count == 1
     assert err.last[0] == "Plan refused"
     assert armed.last == (False,)
+    assert started.count == 0                        # never painted running cockpit
     assert coord.plan_run_active is False           # never set on a failed start
 
 

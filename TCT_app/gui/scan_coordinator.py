@@ -269,14 +269,22 @@ class ScanCoordinator(QObject):
                 f"Cannot start Z-focus scan in state {self._sm.state.name}.\n"
                 "Ensure devices are connected.")
             return
-        self.status_message.emit("Z-focus scan running…")
         # Bridge signals are connected once in __init__ — connecting them here
         # leaked a duplicate connection per run.
-        self._scanner.start_z_focus_scan(
-            cfg,
-            on_point=lambda z, a: self._bridge.z_focus_pt.emit(z, a),
-            on_done=lambda z:     self._bridge.z_focus_done.emit(z),
-        )
+        try:
+            self._scanner.start_z_focus_scan(
+                cfg,
+                on_point=lambda z, a: self._bridge.z_focus_pt.emit(z, a),
+                on_done=lambda z:     self._bridge.z_focus_done.emit(z),
+            )
+        except RuntimeError as exc:
+            # start_z_focus_scan() is fail-closed (refuses a 2nd worker while
+            # PAUSED/running); surface the refusal instead of painting a false
+            # "running" status for a live motion scan.  Match start_plan/
+            # start_scan: emit the running status only after start returns.
+            self.error_dialog.emit("Z-focus scan refused", str(exc))
+            return
+        self.status_message.emit("Z-focus scan running…")
 
     @Slot(VoltageScanConfig)
     def start_voltage_scan(self, cfg: VoltageScanConfig) -> None:
@@ -286,8 +294,16 @@ class ScanCoordinator(QObject):
                 f"Cannot start voltage scan in state {self._sm.state.name}.\n"
                 "Ensure devices are connected.")
             return
+        try:
+            self._scanner.start_voltage_scan(cfg)
+        except RuntimeError as exc:
+            # start_voltage_scan() is fail-closed (refuses a 2nd worker while
+            # PAUSED/running); surface the refusal instead of painting a false
+            # "running" status for a live HV scan.  Match start_plan/start_scan:
+            # emit the running status only after start returns.
+            self.error_dialog.emit("Voltage scan refused", str(exc))
+            return
         self.status_message.emit("Voltage scan running…")
-        self._scanner.start_voltage_scan(cfg)
 
     @Slot(bool)
     def toggle_pause(self, pause: bool) -> None:
