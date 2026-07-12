@@ -473,10 +473,17 @@ class TCTMainWindow(QMainWindow):
         # Scan Viewer → Analysis handoff: open the just-finished run's HDF5 file.
         self._scan_viewer.open_in_analysis_requested.connect(self._open_in_analysis)
 
-        # Planner panel → coordinator.
+        # Planner panel → coordinator. arm_hv_requested/start_plan_requested are
+        # the legacy dialog-confirm fallback (arm-latch flag off);
+        # execute_plan_requested is the two-step-latch path (design law 5),
+        # carrying the ArmedEnvelopeGate the panel built over the rendered
+        # envelope. The panel derives that envelope via the controller's
+        # read-only arm_envelope_for (real bias-channel resolution).
         self._planner_panel.arm_hv_requested.connect(coord.arm_hv)
         self._planner_panel.start_plan_requested.connect(coord.start_plan)
+        self._planner_panel.execute_plan_requested.connect(coord.execute_plan)
         self._planner_panel.abort_requested.connect(coord.abort)
+        self._planner_panel.set_envelope_provider(self._scanner.arm_envelope_for)
 
         # Bias panel → coordinator (voltage scan also starts from the bias panel).
         self._bias_panel.vscan_requested.connect(coord.start_voltage_scan)

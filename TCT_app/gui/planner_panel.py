@@ -38,11 +38,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from controller.arm_envelope import (
+    ArmedEnvelope, ArmedEnvelopeGate, envelope_from_plan,
+)
 from controller.plan_estimate import PlanEstimate, estimate_plan
 from controller.scan_plan import (
     ActionBlock, ActionType, Axis, LoopBlock, STAGE_AXES, ScanBlock, ScanPlan,
 )
 from controller.scan_plan_validator import PlanIssue, PlanLimits, validate_plan
+from gui.arm_latch import ArmLatch
 from gui.panel_kit import EmptyState, MetricGrid, MetricTile
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
@@ -72,6 +76,32 @@ _MIME_TYPE = "application/x-tct-plan-block"
 _ROLE_BLOCK = Qt.ItemDataRole.UserRole
 _ROLE_PATH = Qt.ItemDataRole.UserRole + 1
 _UNDO_CAP = 20
+
+# QSettings key for the two-step arm latch (design law 5). Default ON; setting
+# it False restores the legacy per-action "Arm HV" dialog + Start flow as a
+# bench fallback (a per-action DangerGate still confirms each live danger).
+_ARM_LATCH_SETTING = "planner/arm_latch"
+
+
+def _arm_latch_enabled() -> bool:
+    """Read the two-step-latch flag (default ON). QSettings can round-trip a
+    bool as the string ``"false"``, so coerce explicitly."""
+    raw = QSettings("TCT", "TCTSetup").value(_ARM_LATCH_SETTING, True)
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in ("false", "0", "no", "off")
+
+
+def _default_envelope_provider(plan: ScanPlan) -> ArmedEnvelope:
+    """Fallback :class:`ArmedEnvelope` derivation when no controller-backed
+    provider is injected (standalone / tests). Resolves the bias channel from
+    ``plan.safety['bias_channel']`` (else channel 0) and derives the pure,
+    hardware-free envelope. ``tct_gui`` injects ``ScanController.arm_envelope_for``
+    via :meth:`PlannerPanel.set_envelope_provider`, which resolves the channel
+    through the real device manager instead."""
+    channel = (plan.safety or {}).get("bias_channel")
+    ch = int(channel) if channel is not None else 0
+    return envelope_from_plan(plan, ch)
 
 
 def _split_path(path: list[int]) -> tuple[list[int] | None, int]:
@@ -456,6 +486,11 @@ class PlannerPanel(QWidget):
     start_plan_requested = Signal(object)
     arm_hv_requested = Signal()
     abort_requested = Signal()
+    # Two-step-latch Execute path (design law 5): (plan, ArmedEnvelopeGate). The
+    # gate wraps the exact ArmedEnvelope rendered over the latch; the coordinator
+    # arms HV and calls ScanController.start_plan(plan, limits, gate). Distinct
+    # from start_plan_requested, which is the legacy dialog-confirm fallback.
+    execute_plan_requested = Signal(object, object)
     # GUI → estimate worker: (seq, plan_dict).  Cross-thread → Qt queues it, so
     # the worker's event queue preserves submission order (see _EstimateWorker).
     _submit_estimate = Signal(int, dict)
@@ -476,6 +511,14 @@ class PlannerPanel(QWidget):
         self._hv_armed = False
         self._dry_run_ok = False
         self._running = False
+        # Two-step arm latch (design law 5). When enabled the danger well hosts
+        # the ArmLatch; when disabled the legacy Arm-HV dialog + Start buttons
+        # remain (bench fallback, _ARM_LATCH_SETTING).
+        self._latch_enabled = _arm_latch_enabled()
+        self._envelope_provider = _default_envelope_provider
+        self._env_cache: ArmedEnvelope | None = None
+        self._env_cache_key: str | None = None
+        self._armed_env: ArmedEnvelope | None = None
         self._loop_editors: dict[int, dict[str, QDoubleSpinBox]] = {}
         self._issue_labels: list[QLabel] = []
         self._undo_stack: list[dict] = []
@@ -535,6 +578,7 @@ class PlannerPanel(QWidget):
         self._rebuild_tree()
         self._rebuild_legend()
         self._recompute_estimate()
+        self._refresh_latch_readiness()
 
     # ------------------------------------------------------------------ #
     # UI construction                                                      #
@@ -744,6 +788,23 @@ class PlannerPanel(QWidget):
         btn_grid.addWidget(self._btn_arm, 1, 0, 1, 2)
         btn_grid.addWidget(self._btn_start, 2, 0, 1, 2)
         aside_lay.addLayout(btn_grid)
+
+        # Two-step arm latch (design law 5) — the danger well that renders the
+        # ArmedEnvelope and gates Execute behind a hold-3s / press-twice arm.
+        # Shown instead of the legacy Arm-HV/Start buttons when enabled; those
+        # (and the disarmed HV chip) stay for the bench-fallback path.
+        self._latch = ArmLatch(theme_mode=self._theme_mode)
+        self._latch.arm_started.connect(self._on_latch_arm_started)
+        self._latch.armed.connect(self._on_latch_armed)
+        self._latch.disarmed.connect(self._on_latch_disarmed)
+        self._latch.execute_requested.connect(self._on_latch_execute)
+        aside_lay.addWidget(self._latch)
+        if self._latch_enabled:
+            self._btn_arm.setVisible(False)
+            self._btn_start.setVisible(False)
+            self._chip_hv_status.setVisible(False)
+        else:
+            self._latch.setVisible(False)
 
         # Abort stays the loudest control in the panel (law 5) -- nothing
         # decorative/other command here goes solid-opaque the way this does.
@@ -1365,6 +1426,16 @@ class PlannerPanel(QWidget):
             self._chip_hv_status.set_status(
                 "Plan changed — HV disarmed, Start locked", "armed"
             )
+        # The two-step latch authorizes ONE plan: any edit drops a prior arm and
+        # discards the derived envelope (a stale envelope must never start a run).
+        latch = getattr(self, "_latch", None)
+        if latch is not None:
+            latch.disarm("invalidated")
+            latch.set_envelope_text("")
+        self._armed_env = None
+        self._env_cache = None
+        self._env_cache_key = None
+        self._refresh_latch_readiness()
         self._update_start_enabled()
 
     def _after_structural_change(self) -> None:
@@ -2032,6 +2103,7 @@ class PlannerPanel(QWidget):
         self._btn_dry_run.setText("✓ Dry run" if self._dry_run_ok else "Dry run")
         self._recompute_estimate()
         self._update_start_enabled()
+        self._refresh_latch_readiness()
 
     def _on_arm_clicked(self) -> None:
         if self._hv_armed:
@@ -2075,6 +2147,108 @@ class PlannerPanel(QWidget):
         self._btn_start.setEnabled(
             (not self._running) and self._hv_armed and self._dry_run_ok
         )
+
+    # ------------------------------------------------------------------ #
+    # Two-step arm latch (design law 5)                                    #
+    # ------------------------------------------------------------------ #
+
+    def set_envelope_provider(self, provider) -> None:
+        """Inject the read-only :class:`ArmedEnvelope` derivation the latch
+        renders (``tct_gui`` wires ``ScanController.arm_envelope_for``). Pure /
+        hardware-free by contract; the default resolves the channel structurally
+        (see :func:`_default_envelope_provider`)."""
+        self._envelope_provider = provider or _default_envelope_provider
+        self._env_cache = None
+        self._env_cache_key = None
+
+    def _latch_readiness(self) -> tuple[bool, str]:
+        """Readiness ladder for the Arm control — say WHY it is unavailable
+        (design law 5 / §5). The panel owns the recipe-level gate (a fresh dry
+        run); deeper hardware readiness (connected/homed) is enforced fail-closed
+        at ``start_plan`` and surfaced via :meth:`on_error`."""
+        if self._running:
+            return False, "Run in progress — Abort is the live stop."
+        if not self._dry_run_ok:
+            return False, "Dry run the recipe first — arming unlocks once the walk passes."
+        return True, ""
+
+    def _refresh_latch_readiness(self) -> None:
+        latch = getattr(self, "_latch", None)
+        if latch is None or not self._latch_enabled:
+            return
+        ready, reason = self._latch_readiness()
+        latch.set_ready(ready, reason)
+        if ready:
+            # Render the envelope preview as soon as the recipe is armable so the
+            # operator can review it before committing to the hold.
+            self._refresh_envelope_well()
+
+    def _derive_envelope(self) -> ArmedEnvelope | None:
+        """Derive (and cache by plan identity) the ArmedEnvelope for the live
+        plan. Cached so a repeated arm gesture on an unchanged plan never
+        recompiles; any plan edit clears the cache via :meth:`_invalidate_run_state`."""
+        key = self._estimate_key()
+        if self._env_cache_key == key and self._env_cache is not None:
+            return self._env_cache
+        try:
+            env = self._envelope_provider(self._plan)
+        except Exception:   # a bad plan / provider must never crash the panel
+            logger.debug("envelope derivation failed", exc_info=True)
+            return None
+        self._env_cache = env
+        self._env_cache_key = key
+        return env
+
+    def _refresh_envelope_well(self) -> None:
+        env = self._derive_envelope()
+        if env is None:
+            self._latch.set_envelope_text(
+                "Could not derive the arm envelope for this recipe."
+            )
+            self._armed_env = None
+            return
+        self._armed_env = env
+        self._latch.set_envelope_text(self._envelope_rich_text(env))
+
+    def _envelope_rich_text(self, env: ArmedEnvelope) -> str:
+        """Render the ArmedEnvelope over the latch: the HV energization line in
+        danger-red (law 2 — "its HV line called out red inside the envelope
+        text"), then ``env.summary`` verbatim as quiet prose beneath."""
+        danger = palette(self._theme_mode)["danger"]
+        parts: list[str] = []
+        if env.drives_hv:
+            chans = "/".join(f"CH{c}" for c in sorted(env.channels))
+            parts.append(
+                f"<div style=\"color:{danger}; font-weight:600;\">⚡ Ramps HV "
+                f"{env.hv_min_V:g} … {env.hv_max_V:g} V on {chans}</div>"
+            )
+        parts.append(f"<div>{env.summary}</div>")
+        return "".join(parts)
+
+    def _on_latch_arm_started(self) -> None:
+        # Derive at arm-press time (re-render even if the preview was already
+        # shown, so the text is guaranteed current for the gesture in flight).
+        self._refresh_envelope_well()
+
+    def _on_latch_armed(self) -> None:
+        # Commit the rendered envelope as the authorized one.
+        if self._armed_env is None:
+            self._armed_env = self._derive_envelope()
+
+    def _on_latch_disarmed(self, reason: str) -> None:
+        # The envelope preview stays visible (the recipe is unchanged); only the
+        # armed authorization is dropped. A plan edit path clears the text.
+        pass
+
+    def _on_latch_execute(self) -> None:
+        env = self._armed_env or self._derive_envelope()
+        if env is None:
+            notify("Cannot start — arm envelope unavailable", "error")
+            return
+        gate = ArmedEnvelopeGate(env)
+        # Abel's Execute sequence: the coordinator arms HV and calls
+        # start_plan(plan, limits, gate) with this armed-envelope gate.
+        self.execute_plan_requested.emit(self._plan, gate)
 
     # ------------------------------------------------------------------ #
     # Issues list                                                          #
@@ -2199,6 +2373,9 @@ class PlannerPanel(QWidget):
         self._btn_load_routine.setEnabled(not running)
         self._tree.setEnabled(not running)
         self._btn_abort.setEnabled(running)
+        # The latch is inert during a run (Arm disabled, any arm dropped) — the
+        # always-live Abort button, never the latch, is the run's stop (law 5).
+        self._latch.set_running(running)
         self._update_use_position_enabled()
         if running:
             # law 8's pulse-phase hook (StatusChip.set_pulse_phase) is
@@ -2224,12 +2401,14 @@ class PlannerPanel(QWidget):
         self._chip_hv_status.set_status("Run finished", "good")
         flash_button(self._btn_start, "good", "Done")
         self._recompute_estimate()
+        self._refresh_latch_readiness()
 
     @Slot(str)
     def on_error(self, message: str) -> None:
         self.set_running(False)
         self._add_issue_row(f"Run error: {message}", "crit")
         self._chip_hv_status.set_status("Run error — see issues below", "crit")
+        self._refresh_latch_readiness()
 
     def refresh_theme(self, mode: str | None = None) -> None:
         """Re-resolve axis-rail colours after a light/dark theme switch (same
@@ -2243,6 +2422,11 @@ class PlannerPanel(QWidget):
         self._rebuild_tree()
         self._rebuild_legend()
         self._populate_palette()
+        # The latch caches token colours (well rail/surface, HV danger span) at
+        # build time — re-resolve them and re-render the envelope span.
+        self._latch.refresh_theme(self._theme_mode)
+        if self._latch_enabled and self._armed_env is not None:
+            self._latch.set_envelope_text(self._envelope_rich_text(self._armed_env))
 
     def shutdown(self) -> None:
         """Stop the debounce timers and the estimate worker before the panel is
@@ -2260,6 +2444,7 @@ class PlannerPanel(QWidget):
         soft-reload crash class.  Idempotent."""
         self._debounce.stop()
         self._preview_debounce.stop()
+        self._latch.shutdown()
         self._estimate_pending = None
         thread = self._estimate_thread
         self._estimate_thread = None
