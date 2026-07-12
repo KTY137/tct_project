@@ -651,6 +651,12 @@ Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 - 2026-07-12 — **76f86ef+1479554 (test):** Migration-invalidated tests updated. Test suite updated post-migration; all previously-passing tests restored.
 
+- 2026-07-12 — **8a2ee7d/3235347 (docs):** V5 artifact suite in `artifacts_claude/v5/` (overview + 11 panels + theme playground + mosaic with build.py assembler) + `docs/design/feature_requests_v5.md` backlog. Council decision evidence.
+
+- 2026-07-12 — **10237fb/af58400 (docs):** V5 council seats complete: Codex/Noah/Jonathan/Paul/Abel + Adam gap notes + `docs/design/panel_inventory_v5.md` + `docs/research/apple_vibrancy_qt_feasibility.md` research note.
+
+- 2026-07-12 — **5730644 (fix/safety):** `ScanController._refuse_if_active()` fail-closed guard on all four start entry points (start/start_plan/start_z_focus_scan/start_voltage_scan); `scan_coordinator.start_scan` now surfaces RuntimeError on rejection.
+
 - 2026-07-04 — Initial bookkeep created from source inspection (main, tct_gui,
   state_machine, scan_controller, device_manager, base device, hdf5_writer,
   SCAN_DATA_FORMAT.md). Some sections marked TODO for deepening.
