@@ -21,6 +21,23 @@ instruments physically attached.
 4. ``set_channel_scale`` / ``set_timebase`` fired Tektronix SCPI at every vendor
    unconditionally (their siblings refuse), and ``read_settings()`` echoed the last
    *requested* v/div back as if it had been read off the instrument.
+
+5. ``ramp_to`` / ``_ramp_channel`` ENABLED the output before walking to the target,
+   so every fail-safe "ramp to 0 V, then switch off" path — the slow-control ALARM
+   handler, EMERGENCY OFF, ALL-OFF, scan abort, app shutdown — ENERGIZED an idle HV
+   channel in order to bring it to zero.  An over-temperature alarm could switch the
+   HV on (safety rule 1).
+
+6. ``KeithleyBiasSupply.disconnect()`` was the un-swept twin of (2): ``except: pass``
+   around the ramp-down, then an unconditional ``_setpoint_V = 0 / _output_on =
+   False`` — a supply that never came down was abandoned energized AND declared safe.
+
+7. The compliance setters recorded the new HV CURRENT LIMIT *before* writing it, so a
+   failed write left the driver believing a limit the hardware never took — and the
+   scan's trip detection then compares readings against a limit that does not exist.
+
+8. ``compliant`` was inferred from the measured current against that same local limit
+   while the iseg module publishes its own authoritative "I am current-controlled" bit.
 """
 from __future__ import annotations
 
@@ -30,7 +47,9 @@ import pytest
 
 from devices.base import DeviceError
 from devices.bias_supply_base import BiasReading
+from devices.bias_supply_e4control import E4ControlBiasSupply
 from devices.bias_supply_iseg import IsegBiasSupply
+from devices.bias_supply_keithley import KeithleyBiasSupply
 from devices.bias_supply_simulated import SimulatedBiasSupply
 from devices.motor_base import MotorHomingError, Position, SoftwareLimits
 from devices.motor_grbl import GRBLMotorStage
@@ -450,3 +469,565 @@ class TestScopeReadbackIsNotAnEcho:
         out = scope.read_settings()
         assert out["tdiv"] == pytest.approx(4e-7)
         assert out["vdiv"] == pytest.approx(0.05)
+
+
+# --------------------------------------------------------------------------- #
+# Fake sessions for the two remaining HV backends                              #
+# --------------------------------------------------------------------------- #
+
+class FakeVisaInst:
+    """Stand-in for the pyvisa resource the Keithley driver holds."""
+
+    def __init__(self, fail_writes: bool = False, reply: str = "0.0,1e-9,0,0,0"):
+        self.fail_writes = fail_writes
+        self.reply = reply
+        self.writes: list[str] = []
+        self.closed = False
+        self.closed_after: list[str] = []
+
+    def write(self, cmd: str) -> None:
+        if self.fail_writes:
+            raise OSError("VISA write failed: link down")
+        self.writes.append(cmd)
+
+    def query(self, cmd: str) -> str:
+        return self.reply
+
+    def close(self) -> None:
+        self.closed = True
+        self.closed_after = list(self.writes)
+
+
+def _live_keithley(inst: FakeVisaInst) -> KeithleyBiasSupply:
+    sup = KeithleyBiasSupply(visa_address="GPIB0::15::INSTR",
+                             compliance_A=10e-6, voltage_range_V=1100.0,
+                             simulation=False)
+    sup._inst = inst
+    sup._connected = True
+    return sup
+
+
+class FakeE4Dev:
+    """Stand-in for the e4control device object (K2410 & friends)."""
+
+    def __init__(self, fail_writes: bool = False, fail_limit: bool = False):
+        self.fail_writes = fail_writes
+        self.fail_limit = fail_limit
+        self.calls: list[tuple[str, object]] = []
+        self.closed = False
+        self.closed_after: list[tuple[str, object]] = []
+        self.voltage = 0.0
+
+    def setVoltage(self, v: float) -> None:          # noqa: N802 (vendor API)
+        if self.fail_writes:
+            raise OSError("e4control link down")
+        self.voltage = v
+        self.calls.append(("setVoltage", v))
+
+    def setOutput(self, on: bool) -> None:           # noqa: N802
+        if self.fail_writes:
+            raise OSError("e4control link down")
+        self.calls.append(("setOutput", bool(on)))
+
+    def setCurrentLimit(self, a: float) -> None:     # noqa: N802
+        if self.fail_limit:
+            raise OSError("e4control link down")
+        self.calls.append(("setCurrentLimit", a))
+
+    def setRampSpeed(self, step: int, delay: float) -> None:   # noqa: N802
+        self.calls.append(("setRampSpeed", (step, delay)))
+
+    def rampVoltage(self, v: float) -> None:         # noqa: N802
+        if self.fail_writes:
+            raise OSError("e4control link down")
+        self.voltage = v
+        self.calls.append(("rampVoltage", v))
+
+    def getVoltage(self) -> float:                   # noqa: N802
+        return self.voltage
+
+    def getCurrent(self) -> float:                   # noqa: N802
+        return 1e-9
+
+    def close(self) -> None:
+        self.closed = True
+        self.closed_after = list(self.calls)
+
+
+def _live_e4c(dev: FakeE4Dev) -> E4ControlBiasSupply:
+    sup = E4ControlBiasSupply(compliance_A=10e-6, simulation=False)
+    sup._dev = dev
+    sup._connected = True
+    return sup
+
+
+def _enabled(dev: FakeE4Dev) -> bool:
+    return ("setOutput", True) in dev.calls
+
+
+# --------------------------------------------------------------------------- #
+# 5. Ramping to ZERO must never energize an idle channel (safety rule 1).      #
+#                                                                              #
+#    THE defect: ramp_to()/_ramp_channel() switched the output ON before       #
+#    walking to the target, so the slow-control ALARM fail-safe, the EMERGENCY  #
+#    OFF button and ALL-OFF each ENERGIZED an idle HV channel in order to ramp  #
+#    it to zero.  An over-temp alarm could switch the HV on.                    #
+# --------------------------------------------------------------------------- #
+
+class TestZeroRampNeverEnergizes:
+    """A ramp to 0 V on an OFF channel: no output-on, on ANY backend."""
+
+    def test_simulated_offline_channel_is_not_switched_on(self):
+        sup = SimulatedBiasSupply(voltage_range_V=1000.0)
+        sup.connect()
+        assert sup.output_is_on_ch(0) is False
+
+        sup.ramp_to(0.0, step_V=20.0, delay_s=0.0)   # the fail-safe call
+
+        assert sup.output_is_on_ch(0) is False, "ramp-to-zero ENERGIZED an idle channel"
+        assert sup.setpoint_V == 0.0
+
+    def test_simulated_offline_channel_with_a_stale_setpoint_stays_off(self):
+        """The dangerous shape: the register holds real HV while the output is off.
+
+        set_voltage() writes the setpoint even with the output OFF, so an idle
+        channel can hold a non-zero voltage register.  The old ramp_to() called
+        output_on() first — which would have ramped that channel to REAL HV during
+        an over-temperature ALARM.
+        """
+        sup = SimulatedBiasSupply(voltage_range_V=1000.0)
+        sup.connect()
+        sup.set_voltage(-600.0)                      # output still OFF
+        assert sup.output_is_on_ch(0) is False
+
+        sup.ramp_to(0.0, step_V=20.0, delay_s=0.0)
+
+        assert sup.output_is_on_ch(0) is False
+        assert sup.setpoint_V == 0.0, "the stale HV setpoint must be parked at zero"
+        assert sup.read().voltage_V == pytest.approx(0.0), "no HV may have appeared"
+
+    def test_simulated_secondary_channel_is_not_switched_on(self):
+        """ALL-OFF walks every channel to zero — including idle ones."""
+        sup = SimulatedBiasSupply(channel_count=2, voltage_range_V=1000.0)
+        sup.connect()
+
+        sup.ramp_to_ch(1, 0.0, step_V=20.0, delay_s=0.0)
+
+        assert sup.output_is_on_ch(1) is False
+        assert sup.setpoint_V_ch(1) == 0.0
+
+    def test_simulated_nonzero_target_still_enables_the_output(self):
+        """Unchanged behaviour: a genuine energize request DOES turn HV on."""
+        sup = SimulatedBiasSupply(voltage_range_V=1000.0)
+        sup.connect()
+
+        sup.ramp_to(-100.0, step_V=25.0, delay_s=0.0)
+
+        assert sup.output_is_on_ch(0) is True
+        assert sup.setpoint_V == pytest.approx(-100.0)
+
+    def test_simulated_zero_ramp_on_a_LIVE_channel_still_walks_it_down(self):
+        """The edge Mary named: an ON channel must still ramp down (and stay on
+        until the caller switches it off — that pairing is unchanged)."""
+        sup = SimulatedBiasSupply(voltage_range_V=1000.0)
+        sup.connect()
+        sup.ramp_to(-100.0, step_V=25.0, delay_s=0.0)
+
+        sup.ramp_to(0.0, step_V=25.0, delay_s=0.0)
+
+        assert sup.setpoint_V == pytest.approx(0.0)
+        assert sup.read().voltage_V == pytest.approx(0.0)   # HV actually came down
+        assert sup.output_is_on_ch(0) is True               # caller opens the output
+        sup.output_off()
+        assert sup.output_is_on_ch(0) is False
+
+    def test_iseg_offline_channel_is_not_switched_on(self):
+        inst = FakeIsegInst()
+        sup = _live_iseg(inst)
+        sup._chs(0)["output_on"] = False
+        sup._chs(0)["setpoint_V"] = -300.0          # stale register
+
+        sup.ramp_to(0.0, step_V=20.0, delay_s=0.0)
+
+        assert not any("VOLT ON" in w.upper() for w in inst.writes), \
+            "ramp-to-zero must never enable an idle HV channel"
+        assert sup._chs(0)["output_on"] is False
+
+    def test_iseg_zero_ramp_parks_the_voltage_register(self):
+        """Recording 0 V without writing it would leave the register at -300 V —
+        a later, deliberate output_on() would then energize into the stale value."""
+        inst = FakeIsegInst()
+        sup = _live_iseg(inst)
+        sup._chs(0)["setpoint_V"] = -300.0
+
+        sup.ramp_to(0.0, step_V=20.0, delay_s=0.0)
+
+        assert any(w.upper().startswith(":VOLT 0") for w in inst.writes)
+        assert sup.setpoint_V == 0.0
+
+    def test_iseg_failed_park_write_does_not_claim_zero(self):
+        """Write-then-record: a park that never landed must not be reported as 0 V."""
+        inst = FakeIsegInst(fail_writes=True)
+        sup = _live_iseg(inst)
+        sup._chs(0)["setpoint_V"] = -300.0
+
+        with pytest.raises(Exception):
+            sup.ramp_to(0.0, step_V=20.0, delay_s=0.0)
+
+        assert sup.setpoint_V == -300.0, "must not claim a 0 V it never achieved"
+
+    def test_iseg_nonzero_target_still_enables_the_output(self):
+        inst = FakeIsegInst()
+        sup = _live_iseg(inst)
+
+        sup.ramp_to(-50.0, step_V=25.0, delay_s=0.0)
+
+        assert any("VOLT ON" in w.upper() for w in inst.writes)
+        assert sup._chs(0)["output_on"] is True
+        assert sup.setpoint_V == pytest.approx(-50.0)
+
+    def test_iseg_secondary_channel_zero_ramp_is_not_an_energize(self):
+        inst = FakeIsegInst()
+        sup = _live_iseg(inst, channel=0)
+
+        sup.ramp_to_ch(1, 0.0, step_V=20.0, delay_s=0.0)
+
+        assert not any("VOLT ON" in w.upper() for w in inst.writes)
+        assert sup.output_is_on_ch(1) is False
+
+    def test_keithley_offline_output_is_not_switched_on(self):
+        inst = FakeVisaInst()
+        sup = _live_keithley(inst)
+        sup._setpoint_V = -300.0                    # stale register, output off
+
+        sup.ramp_to(0.0, step_V=20.0, delay_s=0.0)
+
+        assert not any(":OUTP ON" in w.upper() for w in inst.writes), \
+            "ramp-to-zero must never enable an idle HV output"
+        assert sup._output_on is False
+        assert sup.setpoint_V == 0.0
+
+    def test_keithley_nonzero_target_still_enables_the_output(self):
+        inst = FakeVisaInst()
+        sup = _live_keithley(inst)
+
+        sup.ramp_to(-50.0, step_V=25.0, delay_s=0.0)
+
+        assert any(":OUTP ON" in w.upper() for w in inst.writes)
+        assert sup._output_on is True
+        assert sup.setpoint_V == pytest.approx(-50.0)
+
+    def test_e4control_offline_output_is_not_switched_on(self):
+        """The e4control backend OVERRIDES ramp_to, so it needs its own guard —
+        fixing only the base class would leave this third HV backend energizing."""
+        dev = FakeE4Dev()
+        sup = _live_e4c(dev)
+        sup._setpoint_V = -300.0
+
+        sup.ramp_to(0.0, step_V=20.0, delay_s=0.0)
+
+        assert not _enabled(dev), "ramp-to-zero must never enable an idle HV output"
+        assert sup._output_on is False
+        assert sup.setpoint_V == 0.0
+        assert ("setVoltage", 0.0) in dev.calls      # register parked at zero
+
+    def test_e4control_nonzero_target_still_enables_the_output(self):
+        dev = FakeE4Dev()
+        sup = _live_e4c(dev)
+
+        sup.ramp_to(-10.0, step_V=5.0, delay_s=0.0)
+
+        assert _enabled(dev)
+        assert sup._output_on is True
+        assert sup.setpoint_V == pytest.approx(-10.0)
+
+
+# --------------------------------------------------------------------------- #
+# 6. Keithley teardown: as loud as the iseg one.                               #
+# --------------------------------------------------------------------------- #
+
+class TestKeithleyDisconnectFailsLoud:
+    def test_persistent_rampdown_failure_raises_instead_of_silent_close(self):
+        inst = FakeVisaInst(fail_writes=True)
+        sup = _live_keithley(inst)
+        sup._output_on = True
+        sup._setpoint_V = -300.0
+
+        with pytest.raises(DeviceError, match="(?i)ramp-down failed|may still be energized"):
+            sup.disconnect()
+
+        assert inst.closed              # link released — but LOUDLY, not silently
+        assert sup.connected is False
+
+    def test_failed_teardown_keeps_truthful_state_not_a_fake_zero(self):
+        """THE defect: it declared 0 V / output-off after a ramp-down that failed."""
+        inst = FakeVisaInst(fail_writes=True)
+        sup = _live_keithley(inst)
+        sup._output_on = True
+        sup._setpoint_V = -300.0
+
+        with pytest.raises(DeviceError):
+            sup.disconnect()
+
+        assert sup._output_on is True, "must not claim an OFF it never achieved"
+        assert sup._setpoint_V == -300.0
+
+    def test_rampdown_is_retried_once_before_giving_up(self):
+        inst = FakeVisaInst()
+        sup = _live_keithley(inst)
+        sup._output_on = True
+
+        calls = {"n": 0}
+        real_write = sup._write
+
+        def flaky(cmd: str) -> None:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("dropped frame")
+            real_write(cmd)
+
+        sup._write = flaky              # type: ignore[method-assign]
+        sup.disconnect()                # retry succeeds -> no raise
+
+        assert sup._output_on is False
+        assert inst.closed
+
+    def test_link_is_closed_only_after_the_rampdown_attempt(self):
+        inst = FakeVisaInst()
+        sup = _live_keithley(inst)
+        sup._output_on = True
+        sup._setpoint_V = -50.0
+
+        sup.disconnect()
+
+        assert inst.closed
+        assert any(":OUTP OFF" in w.upper() for w in inst.closed_after), \
+            "session closed before the output was switched off"
+
+    def test_offline_output_is_not_switched_on_just_to_ramp_it_down(self):
+        inst = FakeVisaInst()
+        sup = _live_keithley(inst)
+        sup._output_on = False
+
+        sup.disconnect()
+
+        assert not any(":OUTP ON" in w.upper() for w in inst.writes), \
+            "disconnect must never enable HV on an already-off output"
+
+    def test_clean_disconnect_does_not_raise_and_resets_state(self):
+        inst = FakeVisaInst()
+        sup = _live_keithley(inst)
+        sup._output_on = True
+        sup._setpoint_V = -20.0
+
+        sup.disconnect()
+
+        assert inst.closed and sup.connected is False
+        assert sup._output_on is False and sup._setpoint_V == 0.0
+
+    def test_simulated_keithley_disconnect_is_safe(self):
+        sup = KeithleyBiasSupply(simulation=True)
+        sup.connect()
+        sup.disconnect()                # no session, must not raise
+        assert sup.connected is False
+
+
+class TestKeithleyOutputOffNeverLies:
+    def test_failed_output_off_write_does_not_claim_off(self):
+        inst = FakeVisaInst(fail_writes=True)
+        sup = _live_keithley(inst)
+        sup._output_on = True
+
+        sup.output_off()                # fail-safe: must NOT raise
+
+        assert sup._output_on is True, \
+            "a failed output-off must not report the output as OFF"
+
+
+class TestE4ControlDisconnectFailsLoud:
+    def test_persistent_rampdown_failure_raises_instead_of_silent_close(self):
+        dev = FakeE4Dev(fail_writes=True)
+        sup = _live_e4c(dev)
+        sup._output_on = True
+        sup._setpoint_V = -300.0
+
+        with pytest.raises(DeviceError, match="(?i)ramp-down failed|may still be energized"):
+            sup.disconnect()
+
+        assert dev.closed
+        assert sup._output_on is True, "must not claim an OFF it never achieved"
+        assert sup._setpoint_V == -300.0
+
+    def test_offline_output_is_not_ramped_by_enabling_it(self):
+        dev = FakeE4Dev()
+        sup = _live_e4c(dev)
+        sup._output_on = False
+
+        sup.disconnect()
+
+        assert not _enabled(dev)
+        assert ("rampVoltage", 0) not in dev.calls   # nothing to ramp: it was off
+        assert dev.closed
+
+
+# --------------------------------------------------------------------------- #
+# 7. The compliance setters write BEFORE they record.                          #
+#                                                                              #
+#    Compliance is the HV CURRENT LIMIT — the DUT's protection.  A failed write #
+#    that still advanced the driver's belief left it reporting e.g. 10 µA while #
+#    the hardware kept its old, possibly far higher limit, and the scan's trip   #
+#    detection then compared readings against a limit that never existed.        #
+# --------------------------------------------------------------------------- #
+
+class TestComplianceSetterWritesBeforeItRecords:
+    def test_iseg_failed_compliance_write_leaves_the_old_limit(self):
+        inst = FakeIsegInst()
+        sup = _live_iseg(inst)
+        sup.set_compliance_ch(0, 10e-6)
+        assert sup.compliance_A_ch(0) == pytest.approx(10e-6)
+
+        inst.fail_writes = True
+        with pytest.raises(Exception):
+            sup.set_compliance_ch(0, 1e-3)
+
+        assert sup.compliance_A_ch(0) == pytest.approx(10e-6), \
+            "the driver must not believe a current limit the hardware never took"
+
+    def test_iseg_successful_compliance_write_is_recorded(self):
+        inst = FakeIsegInst()
+        sup = _live_iseg(inst)
+
+        sup.set_compliance_ch(0, 25e-6)
+
+        assert any(":CURR" in w.upper() for w in inst.writes)
+        assert sup.compliance_A_ch(0) == pytest.approx(25e-6)
+
+    def test_keithley_failed_compliance_write_leaves_the_old_limit(self):
+        inst = FakeVisaInst()
+        sup = _live_keithley(inst)
+        sup.set_compliance(10e-6)
+
+        inst.fail_writes = True
+        with pytest.raises(Exception):
+            sup.set_compliance(1e-3)
+
+        assert sup.compliance_A == pytest.approx(10e-6)
+
+    def test_e4control_failed_compliance_write_leaves_the_old_limit(self):
+        dev = FakeE4Dev()
+        sup = _live_e4c(dev)
+        sup.set_compliance(10e-6)
+
+        dev.fail_limit = True
+        with pytest.raises(Exception):
+            sup.set_compliance(1e-3)
+
+        assert sup.compliance_A == pytest.approx(10e-6)
+
+    def test_iseg_failed_voltage_write_leaves_the_old_setpoint(self):
+        """The same discipline on the voltage setter (already fixed — pinned here)."""
+        inst = FakeIsegInst()
+        sup = _live_iseg(inst)
+        sup.set_voltage_ch(0, -100.0)
+
+        inst.fail_writes = True
+        with pytest.raises(Exception):
+            sup.set_voltage_ch(0, -200.0)
+
+        assert sup.setpoint_V_ch(0) == pytest.approx(-100.0)
+
+    def test_keithley_failed_voltage_write_leaves_the_old_setpoint(self):
+        inst = FakeVisaInst()
+        sup = _live_keithley(inst)
+        sup.set_voltage(-100.0)
+        assert sup.setpoint_V == pytest.approx(-100.0)   # the real path records now
+
+        inst.fail_writes = True
+        with pytest.raises(Exception):
+            sup.set_voltage(-200.0)
+
+        assert sup.setpoint_V == pytest.approx(-100.0)
+
+    def test_e4control_failed_voltage_write_leaves_the_old_setpoint(self):
+        dev = FakeE4Dev()
+        sup = _live_e4c(dev)
+        sup.set_voltage(-100.0)
+
+        dev.fail_writes = True
+        with pytest.raises(Exception):
+            sup.set_voltage(-200.0)
+
+        assert sup.setpoint_V == pytest.approx(-100.0)
+
+
+# --------------------------------------------------------------------------- #
+# 8. iseg status: the external inhibit is a trip; compliance comes from bit 6.  #
+#    Bit map: docs/research/iseg_polarity_scpi.md §6 (cited iseg manual).       #
+# --------------------------------------------------------------------------- #
+
+_EXT_INHIBIT   = 0x1000     # bit 12
+_CONST_CURRENT = 0x40       # bit  6
+
+
+class TestIsegStatusDerivedFlags:
+    def test_external_inhibit_is_a_trip(self):
+        """Bit 12 'Is External Inhibit': the INTERLOCK CHAIN is asserted and the
+        module is holding the output off on its own authority — the HV is not
+        doing what was asked, which is exactly this driver's trip definition."""
+        sup = _live_iseg(FakeIsegInst(status=_EXT_INHIBIT))
+        r = sup.read_ch(0)
+        assert r.tripped is True
+        assert r.status_word == _EXT_INHIBIT
+
+    def test_compliant_comes_from_the_modules_own_const_current_bit(self):
+        """The module says 'I am current-controlled' — believe IT, not a guess
+        against the driver's local idea of the limit."""
+        inst = FakeIsegInst(status=_IS_ON | _CONST_CURRENT,
+                            meas_V=-300.0, meas_I=1e-9)   # far below the local limit
+        sup = _live_iseg(inst)
+
+        r = sup.read_ch(0)
+
+        assert r.compliant is True
+        assert r.tripped is False        # constant-current is not a latched fault
+
+    def test_voltage_controlled_channel_is_not_compliant(self):
+        inst = FakeIsegInst(status=_IS_ON | _CONST_VOLTAGE, meas_V=-300.0, meas_I=1e-9)
+        sup = _live_iseg(inst)
+        assert sup.read_ch(0).compliant is False
+
+    def test_current_at_the_configured_limit_still_trips_compliance(self):
+        """The comparison is kept as an OR, never dropped: compliance_A is the
+        OPERATOR's DUT-protection limit.  If the current reaches it while the
+        module still thinks it is voltage-controlled (its own hardware limit is
+        higher), the run must still trip — a missed alarm is the one that burns
+        a sensor."""
+        inst = FakeIsegInst(status=_IS_ON | _CONST_VOLTAGE,
+                            meas_V=-300.0, meas_I=20e-6)   # limit is 10 µA
+        sup = _live_iseg(inst)
+
+        assert sup.read_ch(0).compliant is True
+
+    def test_unreadable_status_falls_back_to_the_current_comparison(self):
+        class NoStatus(FakeIsegInst):
+            def query(self, cmd: str) -> str:
+                if ":READ:CHAN:STAT?" in cmd.upper():
+                    raise OSError("status query timed out")
+                return super().query(cmd)
+
+        over = _live_iseg(NoStatus(meas_I=20e-6))          # above the 10 µA limit
+        under = _live_iseg(NoStatus(meas_I=1e-9))
+
+        assert over.read_ch(0).compliant is True
+        assert over.read_ch(0).status_word is None
+        assert under.read_ch(0).compliant is False
+
+    def test_failed_read_is_never_reported_as_compliant(self):
+        """A measurement we could not take (NaN) is unknown, not 'in compliance'."""
+        class DeadLink(FakeIsegInst):
+            def query(self, cmd: str) -> str:
+                raise OSError("link down")
+
+        r = _live_iseg(DeadLink()).read_ch(0)
+        assert r.compliant is False
+        assert r.tripped is None          # unknown, not a clean bill of health

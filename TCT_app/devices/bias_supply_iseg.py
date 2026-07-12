@@ -71,6 +71,7 @@ class IsegBiasSupply(BiasSupplyBase):
     _STATUS_IS_CONST_CURRENT = 0x40     # bit  6 — current-controlled (compliance)
     _STATUS_IS_CONST_VOLTAGE = 0x80     # bit  7 — voltage-controlled (normal)
     _STATUS_IS_ARC_ERROR     = 0x200    # bit  9 — arc error LATCHED
+    _STATUS_IS_EXT_INHIBIT   = 0x1000   # bit 12 — external inhibit asserted
     _STATUS_IS_CURRENT_TRIP  = 0x2000   # bit 13 — current trip triggered
 
     # TODO(bench): on the lab's iseg module, confirm the channel-status bit map
@@ -86,12 +87,27 @@ class IsegBiasSupply(BiasSupplyBase):
     #   * bit 9  arc error      — arc condition LATCHED (bit 1 "Is Arc" is only a
     #                             transient detection, so it is NOT a trip on its
     #                             own and is left to the raw word)
+    #   * bit 12 external inhibit — the INTERLOCK CHAIN is asserted: the module
+    #                             holds/kills the output on its own authority, so
+    #                             the HV is not doing what was asked and no scan
+    #                             may proceed until a human clears the interlock.
+    #                             That is the definition of a trip above, so it is
+    #                             in the mask; treating it as merely informational
+    #                             would let the app keep polling a channel the
+    #                             hardware has already forced off.
     #   * bit 13 current trip   — over-current protection fired
     # "Is Input Error" (bit 2) is a rejected-command error, not an HV fault, so it
     # is surfaced via the raw word rather than being escalated to a trip.
     _STATUS_TRIP_MASK = (
-        _STATUS_IS_EMERGENCY_OFF | _STATUS_IS_ARC_ERROR | _STATUS_IS_CURRENT_TRIP
+        _STATUS_IS_EMERGENCY_OFF | _STATUS_IS_ARC_ERROR
+        | _STATUS_IS_EXT_INHIBIT | _STATUS_IS_CURRENT_TRIP
     )
+
+    # TODO(bench): on the lab's iseg module, confirm bit 12 ("Is External
+    # Inhibit") is CLEAR when the interlock chain is closed and the inhibit input
+    # is idle.  If the module instead reports the bit asserted at rest (e.g. an
+    # unconnected, active-low inhibit input), every read would report a trip —
+    # in that case wire the interlock or drop the bit from _STATUS_TRIP_MASK.
 
     # Fail-safe teardown: 1 initial ramp-down attempt + 1 retry before giving up
     # and surfacing the failure loudly (see disconnect / _shutdown_channel).
@@ -381,10 +397,21 @@ class IsegBiasSupply(BiasSupplyBase):
         self._chs(channel)["setpoint_V"] = voltage_V
 
     def set_compliance_ch(self, channel: int, current_A: float) -> None:
-        self._chs(channel)["compliance_A"] = current_A
+        """Set the HV CURRENT LIMIT on *channel*.  Hardware FIRST, record after.
+
+        Same write-then-record discipline as :meth:`set_voltage_ch`, and for a
+        sharper reason: compliance IS the DUT's protection limit.  Recording
+        first meant a failed/refused ``:CURR`` write still advanced the driver's
+        belief — it would report a 10 µA limit while the module kept its old,
+        possibly far higher one, and the scan's compliance/trip detection would
+        then compare every reading against a limit the supply never took.  On
+        failure the OLD value stays in place and the exception reaches the
+        caller.
+        """
         if not self.simulation:
             self._write(f":CURR {current_A:.4e},(@{channel})")
             self.logger.debug("iseg CH%d current limit %.3e A", channel, current_A)
+        self._chs(channel)["compliance_A"] = current_A
 
     def output_on_ch(self, channel: int) -> None:
         self._require_connected()
@@ -447,11 +474,11 @@ class IsegBiasSupply(BiasSupplyBase):
         try:
             v = _parse_num(self._query(f":MEAS:VOLT? (@{channel})"))
             i = _parse_num(self._query(f":MEAS:CURR? (@{channel})"))
-            compliant = (not (i != i)) and abs(i) >= st["compliance_A"] * 0.99
             # _channel_status never raises (returns None on error), so a status
             # hiccup can never break the V/I read that callers depend on.
             status = self._channel_status(channel)
             tripped, output_on_hw = self._decode_status(status)
+            compliant = self._decode_compliant(status, i, st["compliance_A"])
             if tripped:
                 self.logger.error(
                     "iseg CH%d: module reports a LATCHED FAULT (status=0x%X, "
@@ -493,6 +520,34 @@ class IsegBiasSupply(BiasSupplyBase):
             return None, None
         return (bool(status & self._STATUS_TRIP_MASK),
                 bool(status & self._STATUS_IS_ON))
+
+    def _decode_compliant(
+        self, status: int | None, current_A: float, limit_A: float
+    ) -> bool:
+        """Is the channel in current compliance?
+
+        The module publishes its own authoritative answer — bit 6 "Is Constant
+        Current" (cited §6 table): the channel is current-controlled, i.e. it has
+        given up holding the voltage in order to hold the current limit.  That is
+        the ground truth and it is used whenever the status word is readable; the
+        old current-vs-``compliance_A`` comparison could only ever be a guess
+        against the driver's LOCAL idea of the limit.
+
+        The measured-current comparison is kept as an OR, not replaced, and that
+        is deliberate: ``compliance_A`` is the operator's DUT-protection limit
+        from devices.yaml.  If the measured current reaches it while the module
+        still considers itself voltage-controlled (its own hardware limit is
+        higher — a front-panel change, or a limit write that never landed), the
+        run must still trip.  Dropping the comparison would trade a false alarm
+        for a MISSED one, and only one of those two burns a sensor.
+
+        With no status word (None) the comparison is all there is.  NaN current
+        (a failed measurement) is never "compliant".
+        """
+        over_limit = (current_A == current_A) and abs(current_A) >= limit_A * 0.99
+        if status is None:
+            return bool(over_limit)
+        return bool(status & self._STATUS_IS_CONST_CURRENT) or bool(over_limit)
 
     def ramp_to_ch(
         self,

@@ -95,6 +95,10 @@ class E4ControlBiasSupply(BiasSupplyBase):
     imported from a local vendor or reference checkout at connect time.
     """
 
+    # Fail-safe teardown: 1 initial ramp-down attempt + 1 retry before giving up
+    # and surfacing the failure loudly (see disconnect / _shutdown_output).
+    _SHUTDOWN_ATTEMPTS = 2
+
     def __init__(
         self,
         e4c_device: str = "K2410",
@@ -142,49 +146,119 @@ class E4ControlBiasSupply(BiasSupplyBase):
         except Exception:
             pass  # not all devices have initialize()
 
-        self.set_compliance(self._compliance_A)
-        self.set_voltage(0.0)
+        # The link is up, so the driver counts as connected BEFORE the
+        # compliance-then-park-at-0 V init below: set_voltage() goes through
+        # _require_connected(), which would otherwise raise here and make this
+        # backend impossible to connect at all.  A failing init rolls the flag
+        # back rather than leaving a half-configured supply claiming "connected".
         self._connected = True
+        try:
+            self.set_compliance(self._compliance_A)   # compliance BEFORE any HV
+            self.set_voltage(0.0)                     # park at 0 V
+        except Exception as exc:
+            self._connected = False
+            raise DeviceError(
+                f"e4control {self._e4c_device_name}: compliance/park-at-0V init "
+                f"failed: {exc}"
+            ) from exc
         logger.info(
             "e4control %s connected (%s %s:%s)",
             self._e4c_device_name, self._connection_type, self._host, self._port,
         )
 
     def disconnect(self) -> None:
+        """Ramp the output to 0 V and switch it off, THEN close the link.
+
+        Fail-safe, and never fail-silent: a supply that refuses to come down is
+        logged at ERROR, keeps its TRUTHFUL local state (not a fabricated
+        "0 V / off"), and the failure is raised so it reaches the operator.
+        Mirrors IsegBiasSupply.disconnect().  ``rampVoltage(0)`` is only issued
+        when the output is actually ON — never enable HV to walk it to zero.
+        """
+        failure: Exception | None = None
         if self._dev is not None and not self.simulation:
             try:
-                self._dev.rampVoltage(0)
-                self._dev.setOutput(False)
-            except Exception:
-                pass
+                self._shutdown_output()
+            except Exception as exc:
+                failure = exc
+                logger.error(
+                    "e4control: fail-safe ramp-down FAILED on disconnect after %d "
+                    "attempts — THE OUTPUT MAY STILL BE ENERGIZED. Verify the "
+                    "supply physically. Last error: %s",
+                    self._SHUTDOWN_ATTEMPTS, exc,
+                )
             try:
                 self._dev.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("e4control: closing the device link failed: %s", exc)
         self._dev = None
         self._connected = False
+        if failure is not None:
+            raise DeviceError(
+                f"e4control disconnect: fail-safe ramp-down FAILED ({failure}) — "
+                "the output may still be energized. The link has been closed; "
+                "verify the supply physically before leaving the setup."
+            )
         self._setpoint_V = 0.0
         self._output_on = False
+
+    def _shutdown_output(self) -> None:
+        """Bring the output to 0 V and switch it off — **raises** on failure.
+
+        Retried once: ``setVoltage(0)`` / ``setOutput(False)`` are idempotent and
+        drive the supply toward the SAME safe state, so re-issuing them after a
+        dropped frame cannot raise the voltage.  Local state is updated only once
+        the hardware has acknowledged.
+        """
+        last: Exception | None = None
+        for attempt in range(self._SHUTDOWN_ATTEMPTS):
+            try:
+                with self.io_lock:
+                    if self._output_on:
+                        self._dev.rampVoltage(0)
+                    self._dev.setVoltage(0.0)
+                    self._dev.setOutput(False)
+                self._output_on = False
+                self._setpoint_V = 0.0
+                logger.info("e4control output ramped to 0 V and switched OFF (disconnect)")
+                return
+            except Exception as exc:
+                last = exc
+                logger.warning(
+                    "e4control: fail-safe ramp-down attempt %d/%d failed: %s",
+                    attempt + 1, self._SHUTDOWN_ATTEMPTS, exc,
+                )
+        raise DeviceError(
+            f"ramp-down failed after {self._SHUTDOWN_ATTEMPTS} attempts: {last}"
+        )
 
     # ------------------------------------------------------------------ #
     # BiasSupplyBase interface                                             #
     # ------------------------------------------------------------------ #
 
     def set_voltage(self, voltage_V: float) -> None:
+        """Command a new setpoint (no ramp).  Hardware FIRST, local state after —
+        a write that failed must not advance the driver's idea of the setpoint."""
         self._require_connected()
         self.check_voltage_in_range(voltage_V)
+        if not (self.simulation or self._dev is None):
+            with self.io_lock:
+                self._dev.setVoltage(float(voltage_V))
         self._setpoint_V = voltage_V
-        if self.simulation or self._dev is None:
-            return
-        with self.io_lock:
-            self._dev.setVoltage(float(voltage_V))
 
     def set_compliance(self, current_A: float) -> None:
+        """Set the HV CURRENT LIMIT.  Hardware FIRST, local state after.
+
+        Recording first meant a failed write left the driver believing a limit
+        the supply never took (e.g. 10 µA while the hardware kept a far higher
+        one) — and the scan's trip detection then compares readings against a
+        limit that does not exist.  On failure the OLD value stays in place and
+        the exception reaches the caller.
+        """
+        if not (self.simulation or self._dev is None):
+            self._dev.setCurrentLimit(float(current_A))
+            logger.debug("Compliance set to %.3e A", current_A)
         self._compliance_A = current_A
-        if self.simulation or self._dev is None:
-            return
-        self._dev.setCurrentLimit(float(current_A))
-        logger.debug("Compliance set to %.3e A", current_A)
 
     def output_on(self) -> None:
         self._require_connected()
@@ -194,12 +268,27 @@ class E4ControlBiasSupply(BiasSupplyBase):
         logger.info("e4control output ON")
 
     def output_off(self) -> None:
+        """Switch the output off.  Fail-safe: never raises.
+
+        Abort / ``finally`` paths depend on this not raising, so the non-raising
+        contract is kept — but it must not *lie* either: a write that FAILED no
+        longer clears the local ``_output_on`` flag (which would claim an OFF
+        that was never achieved).  The failure is logged at ERROR and the state
+        is left as-is, so the UI keeps showing the channel as ON — the truth,
+        because we do not know that it is off.
+        """
         if not self.simulation and self._dev is not None:
             try:
-                self._dev.setVoltage(0.0)
-                self._dev.setOutput(False)
-            except Exception:
-                pass
+                with self.io_lock:
+                    self._dev.setVoltage(0.0)
+                    self._dev.setOutput(False)
+            except Exception as exc:
+                logger.error(
+                    "e4control: OUTPUT-OFF WRITE FAILED (%s) — the output may "
+                    "still be ENERGIZED; leaving local state ON rather than "
+                    "claiming an OFF we never achieved.", exc,
+                )
+                return
         self._output_on = False
         self._setpoint_V = 0.0
         logger.info("e4control output OFF")
@@ -233,6 +322,12 @@ class E4ControlBiasSupply(BiasSupplyBase):
         """
         Ramp to target_V using e4control's built-in rampVoltage when connected
         to a real device, otherwise use the base-class step ramp.
+
+        SAFETY — like BiasSupplyBase.ramp_to, a ramp to zero NEVER enables an
+        idle output (rule 1: never auto-enable HV).  This override re-implements
+        the ramp locally, so it must re-implement the guard locally too: fixing
+        only the base class would leave this third HV backend energizing a
+        channel on every fail-safe "ramp to 0 V, then switch off" path.
         """
         self._require_connected()
         self.check_voltage_in_range(target_V)
@@ -241,7 +336,13 @@ class E4ControlBiasSupply(BiasSupplyBase):
             return
 
         if not self._output_on:
-            self.output_on()
+            if target_V == 0.0:
+                # Park the setpoint register only — a write to a disabled output
+                # moves no HV.  set_voltage() records after the write, so a
+                # failed write cannot leave a 0 V claim we never achieved.
+                self.set_voltage(0.0)
+                return
+            self.output_on()      # genuine energize request only
 
         # Update ramp params on the device object for this call
         ramp_step = max(abs(step_V), 1.0)

@@ -81,6 +81,10 @@ class KeithleyBiasSupply(BiasSupplyBase):
         timeout_ms      : 10000
     """
 
+    # Fail-safe teardown: 1 initial ramp-down attempt + 1 retry before giving up
+    # and surfacing the failure loudly (see disconnect / _shutdown_output).
+    _SHUTDOWN_ATTEMPTS = 2
+
     def __init__(
         self,
         visa_address: str = "",
@@ -141,37 +145,130 @@ class KeithleyBiasSupply(BiasSupplyBase):
             raise DeviceError(f"Keithley connect failed: {exc}") from exc
 
     def disconnect(self) -> None:
+        """Ramp the output to 0 V and switch it off, THEN close the link.
+
+        Fail-safe — and never fail-*silent*.  The old path wrapped the ramp-down
+        in ``except: pass``, closed the session regardless, and then declared
+        ``_setpoint_V = 0`` / ``_output_on = False`` unconditionally: a supply
+        that refused to come down was abandoned ENERGIZED while the driver
+        claimed a 0 V / off state it never achieved.  Now (mirroring
+        :meth:`IsegBiasSupply.disconnect`):
+
+          * the ramp-down is retried once (:meth:`_shutdown_output`),
+          * an output that still will not come down is logged at ERROR and its
+            local state is left TRUTHFUL,
+          * the VISA session is released only AFTER that best-effort teardown,
+          * a ``DeviceError`` is raised so the failure reaches the operator.
+
+        Raising is safe here: ``DeviceManager.disconnect_all()`` logs and moves
+        on to the next device, and ``disconnect_device()`` returns the message to
+        the UI — loud, without taking the app down.
+
+        TODO(bench): on the lab's Keithley (2410 / 6517), confirm the teardown
+        end-to-end — bias into a dummy load, pull the GPIB/USB link mid-teardown,
+        and check that disconnect() reports the failure loudly instead of exiting
+        quietly.
+        """
+        failure: Exception | None = None
         if not self.simulation and self._inst is not None:
             try:
-                self.ramp_to(0.0)
-                self.output_off()
-            except Exception:
-                pass
-            self._inst.close()
+                self._shutdown_output()
+            except Exception as exc:
+                failure = exc
+                self.logger.error(
+                    "Keithley: fail-safe ramp-down FAILED on disconnect after %d "
+                    "attempts — THE OUTPUT MAY STILL BE ENERGIZED. Verify the "
+                    "supply physically. Last error: %s",
+                    self._SHUTDOWN_ATTEMPTS, exc,
+                )
+            # Release the link only AFTER the best-effort ramp-down above.
+            try:
+                self._inst.close()
+            except Exception as exc:
+                self.logger.warning("Keithley: closing the VISA session failed: %s", exc)
             self._inst = None
         self._connected = False
+        if failure is not None:
+            raise DeviceError(
+                f"Keithley disconnect: fail-safe ramp-down FAILED ({failure}) — "
+                "the output may still be energized. The link has been closed; "
+                "verify the supply physically before leaving the setup."
+            )
         self._setpoint_V = 0.0
         self._output_on = False
-        self.logger.info("KeithleyBiasSupply disconnected")
+        self.logger.info(
+            "KeithleyBiasSupply disconnected (output ramped to 0 V and off)"
+        )
+
+    def _shutdown_output(self) -> None:
+        """Ramp to 0 V and switch the output off — **raises** on failure.
+
+        The fail-safe teardown primitive behind :meth:`disconnect`.  Deliberately
+        does NOT go through :meth:`output_off`, which swallows write errors so it
+        stays usable from a ``finally`` block: here a failure MUST be visible,
+        because the whole point is to prove the HV actually came down before the
+        link is dropped.
+
+        Retried once.  Both commands are idempotent and drive the supply toward
+        the SAME safe state (source level 0 V, then output off); neither can
+        raise the voltage, so re-issuing them after a dropped frame is safe.
+
+        The ramp is skipped when the output is already off — walking an idle
+        output to zero must never enable it (safety rule 1).  Local state is
+        updated only after the hardware has acknowledged.
+        """
+        last: Exception | None = None
+        for attempt in range(self._SHUTDOWN_ATTEMPTS):
+            try:
+                if self._output_on:
+                    # Walk the HV down gently while the output is still enabled.
+                    self.ramp_to(0.0)
+                self._write(self._cmds["src_volt"].format(v=0.0))
+                self._write(self._cmds["output_off"])
+                self._output_on = False
+                self._setpoint_V = 0.0
+                self.logger.info("Keithley ramped to 0 V and switched OFF (disconnect)")
+                return
+            except Exception as exc:
+                last = exc
+                self.logger.warning(
+                    "Keithley: fail-safe ramp-down attempt %d/%d failed: %s",
+                    attempt + 1, self._SHUTDOWN_ATTEMPTS, exc,
+                )
+        raise DeviceError(
+            f"ramp-down failed after {self._SHUTDOWN_ATTEMPTS} attempts: {last}"
+        )
 
     # ------------------------------------------------------------------ #
     # BiasSupplyBase interface                                             #
     # ------------------------------------------------------------------ #
 
     def set_voltage(self, voltage_V: float) -> None:
+        """Command a new setpoint (no ramp).  Hardware FIRST, local state after.
+
+        The real path also RECORDS the setpoint now: it previously wrote the
+        level and never updated ``_setpoint_V``, so a direct set_voltage() left
+        the driver (and the UI) reporting a voltage the supply was no longer at.
+        """
         self._require_connected()
         self.check_voltage_in_range(voltage_V)
-        if self.simulation:
-            self._setpoint_V = voltage_V
-            return
-        self._write(self._cmds["src_volt"].format(v=voltage_V))
+        if not self.simulation:
+            self._write(self._cmds["src_volt"].format(v=voltage_V))
+        self._setpoint_V = voltage_V
 
     def set_compliance(self, current_A: float) -> None:
+        """Set the HV CURRENT LIMIT.  Hardware FIRST, local state after.
+
+        Recording first meant a failed write left the driver believing a limit
+        the supply never took — and the scan's compliance/trip detection then
+        compares readings against a limit that does not exist on the hardware.
+        On failure the OLD value stays in place and the exception reaches the
+        caller.
+        """
+        if not self.simulation:
+            self._write(self._cmds["compliance"].format(a=current_A))
+            self.logger.debug("Compliance set to %.3e A", current_A)
         self._compliance_A = current_A
-        if self.simulation:
-            return
-        self._write(self._cmds["compliance"].format(a=current_A))
-        self.logger.debug("Compliance set to %.3e A", current_A)
 
     def output_on(self) -> None:
         self._require_connected()
@@ -181,12 +278,25 @@ class KeithleyBiasSupply(BiasSupplyBase):
         self.logger.info("Keithley output ON")
 
     def output_off(self) -> None:
+        """Switch the output off.  Fail-safe: never raises.
+
+        Abort / ``finally`` paths depend on this not raising, so the non-raising
+        contract is kept — but a FAILED write no longer clears the local
+        ``_output_on`` flag: claiming an OFF that was never achieved is exactly
+        the stale-flag bug this driver is being hardened against.  The failure is
+        logged at ERROR and the local state is left as-is.
+        """
         if not self.simulation and self._inst is not None:
             try:
                 self._write(self._cmds["src_volt"].format(v=0.0))
                 self._write(self._cmds["output_off"])
-            except Exception:
-                pass
+            except Exception as exc:
+                self.logger.error(
+                    "Keithley: OUTPUT-OFF WRITE FAILED (%s) — the output may "
+                    "still be ENERGIZED; leaving local state ON rather than "
+                    "claiming an OFF we never achieved.", exc,
+                )
+                return
         self._output_on = False
         self._setpoint_V = 0.0
         self.logger.info("Keithley output OFF")

@@ -173,6 +173,17 @@ class BiasSupplyBase(BaseDevice):
             Sign is determined automatically.
         delay_s : float
             Pause between steps (s).
+
+        SAFETY — ramping to zero NEVER energizes an idle channel (rule 1: never
+        auto-enable HV).  The output is enabled here only for a genuine energize
+        request (a non-zero target).  Every fail-safe path in the app is a "ramp
+        to 0 V, then switch off" pair — the slow-control ALARM handler, the
+        EMERGENCY-OFF button, ALL-OFF, scan abort, app shutdown — so enabling the
+        output in order to walk it down meant an over-temperature alarm could
+        switch the HV ON.  On an already-OFF channel a ramp to 0 V only parks the
+        voltage *register* at zero (a write to a disabled output moves no HV, and
+        is exactly what output_off() already does) so a later, deliberate
+        output_on() cannot energize into a stale non-zero setpoint.
         """
         self._require_connected()
         self.check_voltage_in_range(target_V)
@@ -180,7 +191,13 @@ class BiasSupplyBase(BaseDevice):
         current = self._setpoint_V
 
         if not self._output_on:
-            self.output_on()
+            if target_V == 0.0:
+                # Park the register, then record — a write that failed must not
+                # leave the driver claiming a 0 V it never achieved.
+                self.set_voltage(0.0)
+                self._setpoint_V = 0.0
+                return
+            self.output_on()      # genuine energize request only
 
         sign = 1.0 if target_V >= current else -1.0
         while abs(target_V - current) > step_V / 2:
@@ -310,9 +327,11 @@ class BiasSupplyBase(BaseDevice):
     ) -> None:
         """Generic per-channel ramp for multi-channel backends.
 
-        Mirrors :meth:`ramp_to` step-for-step but routes every voltage step and
-        the output-enable through the channel-aware primitives, so a backend
-        gets a correct per-channel ramp just by overriding those primitives.
+        Mirrors :meth:`ramp_to` step-for-step — including its SAFETY rule that a
+        ramp to zero never enables an idle channel (see :meth:`ramp_to`) — but
+        routes every voltage step and the output-enable through the
+        channel-aware primitives, so a backend gets a correct per-channel ramp
+        just by overriding those primitives.
         """
         self._require_connected()
         self.check_voltage_in_range(target_V)
@@ -320,7 +339,11 @@ class BiasSupplyBase(BaseDevice):
         current = self.setpoint_V_ch(channel)
 
         if not self.output_is_on_ch(channel):
-            self.output_on_ch(channel)
+            if target_V == 0.0:
+                # Never switch a channel ON just to walk it to zero.
+                self.set_voltage_ch(channel, 0.0)
+                return
+            self.output_on_ch(channel)   # genuine energize request only
 
         sign = 1.0 if target_V >= current else -1.0
         while abs(target_V - current) > step_V / 2:
