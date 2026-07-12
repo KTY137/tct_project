@@ -103,11 +103,23 @@ Core design rules (verified in code):
   `start()` / `start_voltage_scan()` retained for API stability but have no
   GUI callers since ScanPanel retirement. Read-only property `last_run_path: Path | None`
   (thread-safe, set after HDF5 write completes) allows the GUI to link to the just-written run file.
+  Design-system law 5: `execute_plan(plan, gate)` slot accepts a `DangerGate` and
+  runs it; `slow_control_manager` feeds channel WARN/ALARM thresholds into per-point
+  analysis status (scan continues; warnings are advisory). `_move_action` and
+  `_acquire_core` (shared by estimate + executor) ensure derived HV/motion bounds
+  for the `ArmedEnvelope` are byte-for-byte identical to live execution.
 - `danger_gate.py` — danger action protocol and authorization gates. `DangerAction`
   dataclass (action kind, `requires_confirm: bool`); `DangerGate` protocol (async
   request/confirm workflow). `AutoConfirmGate` (auto-approves in simulation);
   `DenyAllGate` (always refuses); `QtDangerGate` (worker→GUI bridge, timeout
   fail-closed). Used by executor step 2 to gate HV ramps and moves.
+- `arm_envelope.py` — pure, hardware-free arm-envelope model (design-system law 5).
+  `ArmedEnvelope` (frozen, enumerated authorization: bias channels, HV min/max V,
+  ramp shape, per-axis motion bounds, human-readable summary). `derive_envelope` /
+  `envelope_from_plan` (build from compiled plan, reusing executor's exact seams
+  so armed bounds match execution). `ArmedEnvelopeGate` (DangerGate impl:
+  auto-approves any live DangerAction provably inside envelope, denies outside
+  or after expiry; fail-closed, no side effects).
 - `scan_plan.py` — `ScanPlan` tree dataclass: fail-closed nested parameter loops
   (Axis, Bias, Delay loops), action leaves (Move, Settle, Acquire, Extract, Save),
   guard nodes, and danger nodes. YAML round-trip via `load()`/`save()`;
@@ -351,7 +363,12 @@ handle; dispatches start/abort/pause/z-focus/vscan/arm-hv/start-plan with plan-v
 dual-dispatch; `start_plan` emits `scan_started` on success; signals: `point_done`, `progress`, `scan_started`, `scan_finished`,
 `z_focus_pt`, `z_focus_done`, `vscan_point`, `plan_progress`, `plan_error`,
 `plan_finished`, `plan_running`, `hv_armed`, `manual_pause`, `warn_dialog`, `error_dialog`,
-`status_message`), `stage_view.py` (3D GL stage view),
+`status_message`; new `execute_plan(plan, gate)` slot wires ScanController.execute_plan),
+`arm_latch.py` (design-system law 5: `ArmLatch` two-step gesture well — hold-to-arm
+or press-twice, ~10 s auto-disarm countdown, instant-stop abort separate; pure view
+with no hardware I/O or controller refs; renders envelope summary; signals arm_started/
+armed/disarmed/execute_requested; parent panel derives `ArmedEnvelope` and reacts to
+signals to build `ArmedEnvelopeGate` and start run), `stage_view.py` (3D GL stage view),
 `scope_measurements.py`, `detachable_tabs.py`, `style.py` (token design system:
 scope-cyan accent, tokens for UI states, spacing/radius/type scales, axis-rail
 palette, `axis_color()` helper, `statusChip`/`statusPill`/`eyebrow` objectName
@@ -621,6 +638,18 @@ Maintained by Kiroku; drift-checked by Mamoru on every change.
 - 2026-07-12 — **a69af95 (fix): finished-slot ordering.** Confirmed DirectConnection re-home on thread.finished must precede the queued _reap slot; ordering enforced by connection sequence in track(). Mary review validated the dependency.
 
 - 2026-07-12 — **e45496d (feat): first QML cockpit panel — ScanStatusStrip.** NEW `gui/qml/MetricTile.qml` (Theme-bound reusable tile: title/value/unit/caption/accent/stale/compact) and `gui/qml/ScanStatusStrip.qml` (Flow of 5 tiles: State/Progress/ETA/Elapsed/Scan; bound to runState context property, pure view, 3-layer law). Integrated into Shell.qml as third chrome strip; chrome height 96 → 204 px, `qml_shell.py` setFixedHeight(204).
+
+- 2026-07-12 — **f8f6a00 (feat):** Design-system law 5 arm-envelope model. NEW `controller/arm_envelope.py`: `ArmedEnvelope` (frozen enumerated authorization: bias channels, HV min/max, ramp shape, motion bounds, human-readable summary); `derive_envelope`/`envelope_from_plan` (build from compiled plan, byte-identical to executor's seams); `ArmedEnvelopeGate` (DangerGate: auto-approve in-envelope actions, fail-closed deny outside/expired). `config_validator` checks slow_control channel warn/alarm thresholds (low ≤ high). `scan_controller.execute_plan(plan, gate)` new slot; slow_control feeds per-point WARN/ALARM status; `_move_action` and `_acquire_core` ensure derived bounds match execution.
+
+- 2026-07-12 — **0f0157f (feat):** D0 design-system tokens (quiet-nominal, type, render). `style.py`/`panel_kit.py`/`status_widgets.py`/`qml_theme.py` updated with new palette and constants (SIM_PURPLE, ERROR_ORANGE). Type scale enhancements for compact/expanded rendering modes.
+
+- 2026-07-12 — **7cf18ed (refactor):** D1 Planner reference and cosmetic restyle. PlannerPanel cosmetic updates for consistency with design system. No functional change.
+
+- 2026-07-12 — **4498040+eafff38 (feat):** Design-system law 5 arm-latch widget. NEW `gui/arm_latch.py`: `ArmLatch` two-step gesture well (hold-3s or press-twice, ~10s auto-disarm, instant-stop abort separate). Pure view: no hardware I/O, no controller refs, renders envelope summary. Signals: arm_started, armed, disarmed, execute_requested. `PlannerPanel.execute_plan_requested(plan, gate)` signal; `ScanCoordinator.execute_plan` slot. QSettings key 'planner/arm_latch' (persist armed state). 30s envelope freshness window in tct_gui.
+
+- 2026-07-12 — **9fe849a+0d21c1c (refactor):** Stage-view theme tokens + motor panel wiring. `stage_view.py` tokens-only (no inline hex). Motor panel wiring updates for law-5 compliance.
+
+- 2026-07-12 — **76f86ef+1479554 (test):** Migration-invalidated tests updated. Test suite updated post-migration; all previously-passing tests restored.
 
 - 2026-07-04 — Initial bookkeep created from source inspection (main, tct_gui,
   state_machine, scan_controller, device_manager, base device, hdf5_writer,

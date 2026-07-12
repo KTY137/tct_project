@@ -194,10 +194,10 @@ Environmental monitoring (temperature, humidity, bias voltage, leakage current, 
 | `channels[].noise` | float | — | (nested validation) | (simulated backend) |
 | `channels[].drift_amplitude` | float | — | (nested validation) | (simulated backend) |
 | `channels[].drift_period_s` | float | — | (nested validation) | (simulated backend) |
-| `channels[].warn_low` | float | — | (nested validation) | Status alarm thresholds |
-| `channels[].warn_high` | float | — | (nested validation) | Status alarm thresholds |
-| `channels[].alarm_low` | float | — | (nested validation) | Status alarm thresholds |
-| `channels[].alarm_high` | float | — | (nested validation) | Status alarm thresholds |
+| `channels[].warn_low` | float | — | `SlowControlManager.from_config()` ERROR if low ≥ high | Per-point analysis status (advisory WARN level, scan continues) |
+| `channels[].warn_high` | float | — | `SlowControlManager.from_config()` ERROR if low ≥ high | Per-point analysis status (advisory WARN level, scan continues) |
+| `channels[].alarm_low` | float | — | `SlowControlManager.from_config()` ERROR if low ≥ high | Per-point analysis status (critical ALARM level, scan continues) |
+| `channels[].alarm_high` | float | — | `SlowControlManager.from_config()` ERROR if low ≥ high | Per-point analysis status (critical ALARM level, scan continues) |
 
 ---
 

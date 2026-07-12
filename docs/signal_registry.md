@@ -56,6 +56,7 @@ Organization: **one section per module**, signals listed in definition order. Fo
 | `ScanCoordinator.warn_dialog` | `(str, str)` — (title, message) | `scan_coordinator.py:118` | ? (status-bus warning) |
 | `ScanCoordinator.error_dialog` | `(str, str)` — (title, message) | `scan_coordinator.py:119` | ? (status-bus error) |
 | `ScanCoordinator.status_message` | `(str)` | `scan_coordinator.py:120` | ? (status bar) |
+| `ScanCoordinator.execute_plan(plan, gate)` | `(object, object)` — (ScanPlan, DangerGate) — slot | `scan_coordinator.py:TBD` | Called by `PlannerPanel.execute_plan_requested` via `tct_gui.py:TBD` (arm-latch workflow, 2026-07-12) |
 
 ---
 
@@ -149,6 +150,7 @@ Organization: **one section per module**, signals listed in definition order. Fo
 | `PlannerPanel.start_plan_requested` | `(object)` | `planner_panel.py:358` | `TCTMainWindow._start_plan_from_planner()`, `tct_gui.py:349` |
 | `PlannerPanel.arm_hv_requested` | `()` | `planner_panel.py:359` | `TCTMainWindow._on_arm_hv_requested()`, `tct_gui.py:348` |
 | `PlannerPanel.abort_requested` | `()` | `planner_panel.py:360` | `ScanController.abort()`, `tct_gui.py:350` |
+| `PlannerPanel.execute_plan_requested` | `(object, object)` — (plan, gate) | `planner_panel.py:TBD` | `ScanCoordinator.execute_plan()` (arm-latch workflow, 2026-07-12) |
 | `PlannerPanel.set_position_from_motor(x_mm, y_mm, z_mm)` | `(float, float, float)` — slot | `planner_panel.py:TBD` | Called from `MotorPanel.set_as_scan_start` via `tct_gui.py:TBD` |
 
 ---
