@@ -210,12 +210,22 @@ def test_calibration_panel_construct_and_theme_switch(tmp_path):
     """Exercises CalibrationPanel.refresh_theme() directly for its local
     per-instance label colours, without calling global apply_theme()."""
     _app()
+    from PySide6.QtWidgets import QLabel
+
     from gui.calibration_panel import CalibrationPanel
     from gui.style import palette
 
     dm = _sim_device_manager(tmp_path)
     panel = CalibrationPanel(dm)
     try:
+        intro_text = "Set charge-conversion parameters, then apply and save them for analysis."
+        labels = {label.text(): label for label in panel.findChildren(QLabel)}
+        assert "TCT CONTROL · CALIBRATION" in labels
+        assert "Calibration" in labels
+        assert intro_text in labels
+        assert labels[intro_text].objectName() == ""
+        assert "font-family" not in labels[intro_text].styleSheet().lower()
+
         panel.refresh_theme("dark")
         assert palette("dark")["text"] in panel._current.styleSheet()
         assert palette("dark")["muted"] in panel._rep_progress.styleSheet()

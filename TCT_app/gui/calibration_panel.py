@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 from analysis.charge_calibration import ChargeCalibration, q_one_mip_pC
 from analysis.waveform_analysis import analyse_waveform
 from controller.repeatability import RepeatabilityTester
+from gui.panel_kit import panel_header
 from gui.status_widgets import ReadoutCell, StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import palette
 
@@ -123,11 +124,9 @@ class CalibrationPanel(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
-        intro = QLabel(
-            "Charge calibration converts the raw integrated signal "
-            "(∫V·dt ⁄ 50 Ω) into a meaningful charge. Pick a method, set the "
-            "parameters, then <b>Apply &amp; Save</b>."
-        )
+        root.addWidget(panel_header("TCT Control · Calibration", "Calibration"))
+
+        intro = QLabel("Set charge-conversion parameters, then apply and save them for analysis.")
         intro.setWordWrap(True)
         root.addWidget(intro)
 

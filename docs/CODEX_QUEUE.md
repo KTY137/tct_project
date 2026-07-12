@@ -179,3 +179,29 @@ Two tests still assert the removed design and fail:
 - Static branch check found the target tests present, but this branch still has the pre-D0 implementation: `gui/panel_kit.py` still gives `MetricTile("armed")` an instance border via `glow_color("armed")`, and `gui/status_widgets.py` still maps `connected`/`ok` to `good`. Updating only the tests to D0 value-ink/quiet-nominal expectations would make them contradict current `gui/` code, and C5 explicitly forbids `gui/` edits.
 - Verification attempted from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_panel_kit_cockpit.py tests/test_shell_cockpit_v5.py`; it failed before pytest launched because `.venv\pyvenv.cfg` points to missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`.
 - Risk: if D0 is later merged onto this branch, this C5 should be reopened and the two stale assertions updated then.
+
+## C6 — Calibration panel: add the standard panel header (missing)
+
+**Status: DONE — Added standard header and guarded body intro; pytest blocked by broken venv interpreter.** · Effort: S · Source: render audit + design spec §7 (2026-07-12)
+
+`TCT_app/gui/calibration_panel.py` is the ONLY panel missing the standard
+eyebrow+title header every other panel has (e.g. "TCT CONTROL · MOTOR
+STAGE" / title) — it opens directly with prose. Also its intro paragraph
+must become ONE sentence-case line (it currently renders as shouty
+uppercase prose via the mono label role).
+
+- Task: add the standard header using the EXISTING `panel_header` /
+  header pattern from gui/panel_kit.py exactly as other panels use it
+  (copy the Motor or Monitor panel's usage); eyebrow "TCT Control ·
+  Calibration" equivalent, title "Calibration". Reduce the intro paragraph
+  to one short sentence-case line using the normal body label style (NOT
+  the mono/uppercase role). Do not touch method/repeatability logic.
+- Verify headless: calibration tests + tests/test_no_inline_hex_gui.py.
+- Do NOT commit; set C6 DONE with findings per Handback.
+
+**Codex findings (2026-07-12):**
+- Files touched: `TCT_app/gui/calibration_panel.py`, `TCT_app/tests/test_no_inline_hex_gui.py`, `docs/CODEX_QUEUE.md`.
+- `CalibrationPanel` now uses the shared `panel_header("TCT Control · Calibration", "Calibration")` at the top of the panel, matching the existing panel-kit pattern, and the opening prose is reduced to one short sentence-case body label. Calibration method and repeatability logic were not touched.
+- Added a focused assertion to `test_calibration_panel_construct_and_theme_switch` that guards the header eyebrow/title and confirms the intro label remains a normal body label rather than a mono/styled caption.
+- Verification: `git diff --check` passed; static `rg -n "#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{3}|LIGHT\[|DARK\[" TCT_app/gui/calibration_panel.py -S` found no inline hex or fixed LIGHT/DARK palette usage. Requested pytest from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_bias_and_calibration.py tests/test_no_inline_hex_gui.py` executed 0 tests because the venv launcher failed before process start: it still tries to use missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`.
+- Risk: runtime pytest verification remains blocked until the local Python/venv interpreter is repaired.
