@@ -103,11 +103,23 @@ Core design rules (verified in code):
   `start()` / `start_voltage_scan()` retained for API stability but have no
   GUI callers since ScanPanel retirement. Read-only property `last_run_path: Path | None`
   (thread-safe, set after HDF5 write completes) allows the GUI to link to the just-written run file.
+  Design-system law 5: `execute_plan(plan, gate)` slot accepts a `DangerGate` and
+  runs it; `slow_control_manager` feeds channel WARN/ALARM thresholds into per-point
+  analysis status (scan continues; warnings are advisory). `_move_action` and
+  `_acquire_core` (shared by estimate + executor) ensure derived HV/motion bounds
+  for the `ArmedEnvelope` are byte-for-byte identical to live execution.
 - `danger_gate.py` — danger action protocol and authorization gates. `DangerAction`
   dataclass (action kind, `requires_confirm: bool`); `DangerGate` protocol (async
   request/confirm workflow). `AutoConfirmGate` (auto-approves in simulation);
   `DenyAllGate` (always refuses); `QtDangerGate` (worker→GUI bridge, timeout
   fail-closed). Used by executor step 2 to gate HV ramps and moves.
+- `arm_envelope.py` — pure, hardware-free arm-envelope model (design-system law 5).
+  `ArmedEnvelope` (frozen, enumerated authorization: bias channels, HV min/max V,
+  ramp shape, per-axis motion bounds, human-readable summary). `derive_envelope` /
+  `envelope_from_plan` (build from compiled plan, reusing executor's exact seams
+  so armed bounds match execution). `ArmedEnvelopeGate` (DangerGate impl:
+  auto-approves any live DangerAction provably inside envelope, denies outside
+  or after expiry; fail-closed, no side effects).
 - `scan_plan.py` — `ScanPlan` tree dataclass: fail-closed nested parameter loops
   (Axis, Bias, Delay loops), action leaves (Move, Settle, Acquire, Extract, Save),
   guard nodes, and danger nodes. YAML round-trip via `load()`/`save()`;
@@ -166,13 +178,20 @@ Core design rules (verified in code):
   (unknown keys → WARNING; silent typos never escape). Phase 3: oscilloscope
   `n_channels` must be a whole number in range 1..8, else validation fails (clamped
   to *IDN?-detected capability at runtime).
+- `yaml_persist.py` — comment-preserving persistence for `configs/devices.yaml`.
+  Walks YAML *source text* with an indentation stack and rewrites only the value
+  half of lines whose key path matches a caller-supplied update; every other line
+  (comments, blank lines, unrelated sections) passes through byte-for-byte unchanged.
+  Public API: `merge_yaml_text(text, updates) -> str`, `update_yaml_file(path, updates)`.
+  Fixes the historical round-trip bug where `yaml.safe_load → yaml.dump` silently
+  stripped all comments. Used by settings windows (scope_panel, settings_window).
 - `repeatability.py` — stage repeatability measurement logic.
 
 ## devices/ (one family = base + backends)
 
 | Family | Base | Backends |
 |---|---|---|
-| Motor stage | `motor_base.py` (`MotorStageBase`, `SoftwareLimits`) | `motor_grbl.py`, `motor_pi.py`, `motor_simulated.py` (+ `printer_presets.py`) |
+| Motor stage | `motor_base.py` (`MotorStageBase`, `SoftwareLimits`, `limits_user_frame()`) | `motor_grbl.py`, `motor_pi.py`, `motor_simulated.py` (+ `printer_presets.py`) |
 | Bias supply (HV) | `bias_supply_base.py` (`BiasSupplyBase`) | `bias_supply_iseg.py`, `bias_supply_keithley.py`, `bias_supply_e4control.py`, `bias_supply_simulated.py` |
 | Bias channel (proxy) | — | `bias_channel.py` (`BiasChannel` — binds one `(driver, channel_index)` pair; see below) |
 | Oscilloscope | — | `oscilloscope.py` (VISA), `oscilloscope_drs4.py` (PSI DRS4 eval board), `oscilloscope_tek_fastframe.py` (Tektronix MSO5204B FastFrame — currently non-functional, see Known constraints) |
@@ -183,6 +202,22 @@ Core design rules (verified in code):
 
 All inherit `base.py:BaseDevice` (`DeviceError`, `io_lock`, `simulation`,
 `is_alive()`, abstract `connect()`/`disconnect()`).
+
+**Motor frame contract (2026-07-11):**
+- `MotorStageBase.limits_user_frame() -> SoftwareLimits | None` (motor_base.py:210–234):
+  Soft limits expressed in the *same* frame `get_position()` / `move_to()` speak to
+  the rest of the app. Single source of truth for the planner + validator. A backend
+  whose user frame IS its machine frame (SimulatedMotorStage, PIMotorStage) returns
+  `self.limits` unchanged. A backend that maintains a software display offset
+  (GRBLMotorStage, whose `zero_position` shifts the origin without touching the
+  controller) overrides to translate the machine-frame `self.limits` into the
+  current user frame. Callers rebuild `PlanLimits` from THIS (not `self.limits`)
+  and refresh whenever the offset changes (after home / zero).
+- `gui/motor_panel.py:MotorPanel.origin_changed` (Signal, motor_panel.py:124): emitted
+  after home or zero-position succeeds. Wired to `TCTMainWindow._refresh_plan_limits()`
+  (tct_gui.py:472) so the planner's user-frame soft-limit gate tracks the new origin
+  and never validates against stale bounds — fixes the "Zero Here → planner rejects
+  the plan on soft limits" bug (2f91e00, 2026-07-11).
 
 **Multi-channel bias + polarity (verified in code):**
 - `bias_channel.py:BiasChannel` binds one `(driver, channel_index)` pair and
@@ -289,13 +324,26 @@ no FastFrame support), driven by the default `oscilloscope.py` VISA backend
 
 ## gui/ (PySide6 — never PyQt6)
 
+**QML-hybrid components (opt-in, 2026-07-11 slice 1, 2a: unified polling):**
+
+- `qml_theme.py` — Theme QML singleton, fed from `style.py` token design system; NOTIFY fires on theme switch.
+- `qml_shell.py` — QML-hybrid shell host: `_ShellBridge` (QObject, tab index / live device state), `_TabShelfAdapter` (tab shelf ↔ classic tabs sync), QQuickWidget RHI pinned to OpenGL. Opt-in via `TCT_QML_SHELL=1` env flag; classic shell byte-identical when flag unset. **Slice 2a:** `_ShellBridge.pull()` rides `TCTMainWindow._light_timer.timeout` (1 Hz), no second timer of its own — unified polling cadence.
+- `scope_viewmodel.py` — Read-only scope-status mirror for QML binding (rateText stubbed empty; TODO: drive from scope reader cadence).
+- `run_state_viewmodel.py` — Read-only run-state facade (2026-07-11 slice 1, commit 713eeae): `RunStateViewModel` exposes current step index, total steps, run-state enum, pause/resume/abort affordances via no-controller-refs `changed` notifier, fed by shared 1 Hz `_light_timer` + coordinator signals. Exposed to QML as `'runState'` context property (only notifies via `changed`, no direct signal binding). Built before `CalibrationPanel` in `_build_central()`. Teardown in viewmodel-release block ensures Qt lifecycle safety.
+- `qml/Shell.qml` — QML-hybrid chrome: rail (Devices/Settings/Log/Debug chips + app-state readout, icon buttons compress without Flickable) + pill tab shelf (syncs DetachableTabWidget index).
+- `qml/MetricTile.qml` — Reusable Theme-bound metric tile: title/value/unit/caption/accent/stale/compact modes; pure view, 3-layer law; consumed by ScanStatusStrip.
+- `qml/ScanStatusStrip.qml` — Flow of 5 metric tiles (State/Progress/ETA/Elapsed/Scan) bound to the runState context property; pure view, 3-layer law; surfaced as the third chrome strip in Shell.qml. Chrome height increased 96 → 204 px; `qml_shell.py` setFixedHeight(204).
+- **Invariants:** Classic DetachableTabWidget is the sole tab/detach engine—QML shelf is a *view*; pyqtgraph plots are NEVER inside QQuickWidget; style.py remains the single token source (Theme singleton mirrors it); soft-reload (production config reload) releases old QML engine before building new one.
+
+**Core panels & support (all on `panel_kit` Cards):**
+
 Panels: `motor_panel`, `bias_panel`, `multi_bias_panel`, `scope_panel`,
 `laser_panel`, `intensity_panel`, `camera_panel`,
 `monitor_panel`, `analysis_panel`, `calibration_panel`, `device_panel`
-(`DeviceManagerWindow`, `device_state`), `settings_window`, `planner_panel`
+(`DeviceManagerWindow`, `device_state`), `settings_window` (owns a `_VisaRescanWorker` scan + a `_ScanReaper` GUI-thread-affine strong owner of the old background scan worker for deadlock-safe teardown — see VISA-scan deadlock postmortem in `docs/DECISIONS.md`), `planner_panel`
 (Recipe-Tree QTreeWidget, editable loop rows, live estimate, validate/dry-run/
 arm/start latch chain; v2: drag-drop palette, movable nodes, right-click ops,
-20-deep undo; G4: gained `set_focus_z(z_mm)` slot that writes selected STAGE_Z loop's start spinbox, staging-only, wired from ScanViewerPanel's "Use Focus Z" button), `scan_viewer_panel` (S2b+S2c+G4: live scan monitor & cockpit —
+20-deep undo; G4: gained `set_focus_z(z_mm)` slot that writes selected STAGE_Z loop's start spinbox, staging-only, wired from ScanViewerPanel's "Use Focus Z" button; 2026-07-11: off-thread estimate via persistent `_EstimateWorker` (QObject on dedicated QThread), streaming `estimate_plan` calls), `scan_viewer_panel` (S2b+S2c+G4: live scan monitor & cockpit —
 shared ScanMapView, MetricGrid progress/ETA/point/elapsed, Pause/Abort ActionBar,
 Z-focus CheckableCard, EmptyState until first run, "Open in Analysis" handoff;
 G4: added best_z_apply_requested(float) signal + "Apply to Planner" button (gated: enabled only after Z-focus completes);
@@ -315,7 +363,12 @@ handle; dispatches start/abort/pause/z-focus/vscan/arm-hv/start-plan with plan-v
 dual-dispatch; `start_plan` emits `scan_started` on success; signals: `point_done`, `progress`, `scan_started`, `scan_finished`,
 `z_focus_pt`, `z_focus_done`, `vscan_point`, `plan_progress`, `plan_error`,
 `plan_finished`, `plan_running`, `hv_armed`, `manual_pause`, `warn_dialog`, `error_dialog`,
-`status_message`), `stage_view.py` (3D GL stage view),
+`status_message`; new `execute_plan(plan, gate)` slot wires ScanController.execute_plan),
+`arm_latch.py` (design-system law 5: `ArmLatch` two-step gesture well — hold-to-arm
+or press-twice, ~10 s auto-disarm countdown, instant-stop abort separate; pure view
+with no hardware I/O or controller refs; renders envelope summary; signals arm_started/
+armed/disarmed/execute_requested; parent panel derives `ArmedEnvelope` and reacts to
+signals to build `ArmedEnvelopeGate` and start run), `stage_view.py` (3D GL stage view),
 `scope_measurements.py`, `detachable_tabs.py`, `style.py` (token design system:
 scope-cyan accent, tokens for UI states, spacing/radius/type scales, axis-rail
 palette, `axis_color()` helper, `statusChip`/`statusPill`/`eyebrow` objectName
@@ -424,7 +477,7 @@ bias-scan CCE, `estimate_depletion_voltage`).
   connection parameters, `output.data_dir`, `output.save` toggles, calibration,
   software limits. Validated by `config_validator`.
 - `pytest.ini` — pytest configuration (timeout=60s per test, preventing hangs on
-  unresponsive mock transports).
+  unresponsive mock transports; faulthandler_timeout=90s because pytest-timeout's killer thread is itself GIL-starved when a worker thread holds the GIL indefinitely — see VISA-scan deadlock postmortem in `docs/DECISIONS.md`).
 - `tests/conftest.py` — shared pytest fixtures; T6 (2026-07-10): added autouse fixture that drains Qt's DeferredDelete queue after every test, curing accumulation hang (suite wedged in pyqtgraph grab() past ~450 GUI tests).
 - `tests/` — pytest, headless, simulated backends only: state machine, config
   validator, GRBL mock, scope preamble, waveform analysis, bias & calibration.
@@ -471,6 +524,32 @@ The following files are autogenerated/maintained registries for fast O(1) lookup
 Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 ## Changelog
+
+- 2026-07-11 — **VISA-scan deadlock postmortem & worker safety hardening (commits 4d887b4 + 97c07f4).** GIL-vs-Qt-mutex ABBA deadlock: worker GC-refcount reaching zero on non-owning thread → `_ScanReaper` pattern (GUI-thread-affine strong owner prevents GC on background thread). QueuedConnection audit for all cross-thread slots. pytest.ini faulthandler_timeout=90 added (pytest-timeout killer thread GIL-starved). Detailed analysis in `docs/DECISIONS.md`. +2 regression tests (deadlock-free full-suite smoke; worker teardown safe).
+
+- 2026-07-11 — **Codex-lane C1: panel-kit rollout test retitles (57e053a).** Batch1/batch2 test names now use current naming (camera/analysis panels migrated in batch3 on 2026-07-07). No functional change.
+
+- 2026-07-11 — **Planner estimate off-thread (7903ffe).** Last sync `estimate_plan()` call sites (drag delta-preview, ungated `_safe_estimate`) moved to persistent `_EstimateWorker` (QThread). `_CandidatePreview` structural counts for large drag candidates. Watchdog test `tests/test_gui_thread_watchdog.py` full coverage.
+
+- 2026-07-11 — **Plan estimate/compile parity tested (adff735).** NEW `tests/test_plan_parity.py` property tests: compiled plan step count == estimate cost. Bias/move/settle emission-rule parity verified via shared leaf walker.
+
+- 2026-07-11 — **RepeatabilityTester now requires DangerGate (33d1664).** `controller/repeatability.py` gates motion via DangerGate; `gui/calibration_panel.py` passes gate instance. CalibrationPanel builds gate before construction. No danger until user explicitly confirms. Closes BLOCKER.
+
+- 2026-07-11 — **Atomic devices.yaml writes via comment-preserving yaml_persist (d810c55).** NEW `controller/yaml_persist.py`: line-level surgical YAML editor (indentation stack, key-path matching, value replacement only). scope_panel/settings_window route through `merge_yaml_text` / `update_yaml_file` instead of `yaml.safe_load → yaml.dump` round-trip that stripped comments. Bias supply `simulation` key added to validator (legacy support kept).
+
+- 2026-07-11 — **RunStateViewModel read-only facade for QML binding (713eeae).** NEW `gui/run_state_viewmodel.py`: `RunStateViewModel` (no controller refs; 3-layer law). Exposes step index/total, run-state enum via `changed` notifier, fed by shared 1 Hz `_light_timer` + coordinator signals. Exposed to QML as `'runState'` context property. Built before CalibrationPanel; teardown in viewmodel-release block.
+
+- 2026-07-11 — **2f91e00 (fix):** Motor user-frame validation. `motor_base.py` adds `limits_user_frame()` contract (user frame ≠ machine frame for GRBLMotorStage's zero_position offset). `MotorPanel.origin_changed` signal emitted after home/zero; wired to `TCTMainWindow._refresh_plan_limits()` so planner's soft-limit gate tracks the new origin — fixes "Zero Here → plan rejected on stale bounds" bug. +2 integration tests (plan gate after zero).
+
+- 2026-07-11 — **c86e21a (feat/fix):** Bias-supply simulation mode + comment-preserving YAML writes. NEW `controller/yaml_persist.py` (comment-preserving line-level surgical editor; public `merge_yaml_text` / `update_yaml_file` API). scope_panel/settings_window now route through it instead of `yaml.safe_load → yaml.dump` round-trip that stripped all comments. Bias supply `simulation` key added to config_validator known-keys list (backend='simulated' preferred; legacy key supported).
+
+- 2026-07-11 — **4eb7f14 (feat):** Slice 2a unified polling & QML rail composition. `qml_shell.py` `_ShellBridge.pull()` now rides `TCTMainWindow._light_timer.timeout` (1 Hz cadence), no second timer of its own. `qml/Shell.qml` rail compressed without Flickable via icon buttons/overflow menu — content fits in ~1400px viewport.
+
+- 2026-07-11 — **7393c3d (merge):** experimental/qml-hybrid-slice1 → design/cockpit-v5. Merge commit; slice 1 + slice 2a work lands together. NEW `gui/qml_theme.py` (Theme singleton fed from style.py, NOTIFY on switch), `gui/qml_shell.py` (_ShellBridge + _TabShelfAdapter, QQuickWidget chrome), `gui/scope_viewmodel.py` (read-only scope mirror), `gui/qml/Shell.qml` (rail + pill shelf). Opt-in `TCT_QML_SHELL=1`; classic shell unchanged when flag unset. main.py OpenGL RHI pin; tct_gui opt-in branch + hardened soft-reload. NEW test `tests/test_qml_shell.py` (11 tests). Suite 742; Mary APPROVE_WITH_NITS (all nits fixed).
+
+- 2026-07-11 — **QML-hybrid slice 1 landed (experimental/qml-hybrid-slice1 @ 0f90573).** NEW `gui/qml_theme.py` (Theme singleton fed from style.py, NOTIFY on switch), `gui/qml_shell.py` (_ShellBridge + _TabShelfAdapter, QQuickWidget chrome), `gui/scope_viewmodel.py` (read-only scope mirror), `gui/qml/Shell.qml` (rail + pill shelf). Opt-in `TCT_QML_SHELL=1`; classic shell unchanged when flag unset. main.py OpenGL RHI pin; tct_gui opt-in branch + hardened soft-reload. NEW test `tests/test_qml_shell.py` (11 tests: default-classic boot, QML-boot smoke, detach/redock, rail reachability, fail-safe fallback, soft-reload engine cleanup, Theme singleton sync, tab-shelf sync, QML no-hex rule). Suite 742; Mary APPROVE_WITH_NITS (2 RISKs + NIT, all fixed).
+
+- 2026-07-11 — **3-layer-law enforcement + planner estimate off-thread (design/cockpit-v5 @ e85a94c).** planner_panel.py now off-threads estimate via persistent `_EstimateWorker` (QThread); controller/plan_estimate.py streaming ready. NEW `tests/test_gui_thread_watchdog.py` (dynamic enforcement: GUI 10 ms heartbeat + heavy workload, asserts 35 ms max stall; proves old sync path would have failed ~1.31 s) + `tests/test_layer_contracts.py` (static AST import scan: layer rank matrix, UI→backend→drivers down-only, no compute/blocking I/O on GUI thread; catching "wrong layer" violations; dynamic half catches "right layer, wrong thread"). Enforcement detail in `docs/research/qml_hybrid_architecture.md` §9. Suite 731; Mary APPROVE.
 
 - 2026-07-11 — **Architecture decisions: QML hybrid frontend + 3-layer law (ratified).** Two decisions logged in `docs/DECISIONS.md`: (1) **QML hybrid frontend** — QML chrome (QQuickWidget islands) + pyqtgraph for all real-time plots as sibling QWidgets + existing DetachableTabWidget unchanged; full-QML migration rejected (measured: pyqtgraph 0.2–0.4 ms/frame vs QtCharts 4–6 ms + jank); RHI pinned to OpenGL; Theme QObject singleton from gui/style.py; slice 1 = Scope vertical (assessment: `docs/research/qml_hybrid_architecture.md` §1–7, spike on experimental/qml-shell-spike). (2) **3-layer law** — UI→backend→drivers, down-only; no compute/blocking I/O on GUI thread; enforcement: static import-linter contracts + dynamic watchdog test; allowed edge: gui→analysis for offline (governed by watchdog, detail in §9). Core design rules updated; new registry pointer added to qml_hybrid_architecture.md.
 
@@ -554,6 +633,24 @@ Maintained by Kiroku; drift-checked by Mamoru on every change.
   to `lab_assets/`.
 - 2026-07-05 — Marked third-party and lab reference folders as local-only ignored
   material; documented the clean-root policy in `docs/REFERENCE_MATERIAL.md`.
+- 2026-07-12 — **7ac5304 (fix): VISA deadlock head #2 — worker.deleteLater on worker thread.** Extended `_ScanReaper` pattern: `_reap()` DirectConnection re-homes finished worker to GUI thread via `moveToThread(app.thread())` before `deleteLater()` to prevent `~QObject` (Shiboken GIL re-entry + connection-pool mutex) from running off worker thread. CONNECTION ORDER on thread.finished is load-bearing: DirectConnection re-home MUST be wired BEFORE queued _reap in track(). Invariant recorded: **panel worker teardown MUST remain blocking quit()+wait() on GUI thread** (parks GUI thread with GIL released, preventing ABBA); do NOT convert panel workers to async/non-waiting teardown without moving destruction GUI-side first.
+
+- 2026-07-12 — **a69af95 (fix): finished-slot ordering.** Confirmed DirectConnection re-home on thread.finished must precede the queued _reap slot; ordering enforced by connection sequence in track(). Mary review validated the dependency.
+
+- 2026-07-12 — **e45496d (feat): first QML cockpit panel — ScanStatusStrip.** NEW `gui/qml/MetricTile.qml` (Theme-bound reusable tile: title/value/unit/caption/accent/stale/compact) and `gui/qml/ScanStatusStrip.qml` (Flow of 5 tiles: State/Progress/ETA/Elapsed/Scan; bound to runState context property, pure view, 3-layer law). Integrated into Shell.qml as third chrome strip; chrome height 96 → 204 px, `qml_shell.py` setFixedHeight(204).
+
+- 2026-07-12 — **f8f6a00 (feat):** Design-system law 5 arm-envelope model. NEW `controller/arm_envelope.py`: `ArmedEnvelope` (frozen enumerated authorization: bias channels, HV min/max, ramp shape, motion bounds, human-readable summary); `derive_envelope`/`envelope_from_plan` (build from compiled plan, byte-identical to executor's seams); `ArmedEnvelopeGate` (DangerGate: auto-approve in-envelope actions, fail-closed deny outside/expired). `config_validator` checks slow_control channel warn/alarm thresholds (low ≤ high). `scan_controller.execute_plan(plan, gate)` new slot; slow_control feeds per-point WARN/ALARM status; `_move_action` and `_acquire_core` ensure derived bounds match execution.
+
+- 2026-07-12 — **0f0157f (feat):** D0 design-system tokens (quiet-nominal, type, render). `style.py`/`panel_kit.py`/`status_widgets.py`/`qml_theme.py` updated with new palette and constants (SIM_PURPLE, ERROR_ORANGE). Type scale enhancements for compact/expanded rendering modes.
+
+- 2026-07-12 — **7cf18ed (refactor):** D1 Planner reference and cosmetic restyle. PlannerPanel cosmetic updates for consistency with design system. No functional change.
+
+- 2026-07-12 — **4498040+eafff38 (feat):** Design-system law 5 arm-latch widget. NEW `gui/arm_latch.py`: `ArmLatch` two-step gesture well (hold-3s or press-twice, ~10s auto-disarm, instant-stop abort separate). Pure view: no hardware I/O, no controller refs, renders envelope summary. Signals: arm_started, armed, disarmed, execute_requested. `PlannerPanel.execute_plan_requested(plan, gate)` signal; `ScanCoordinator.execute_plan` slot. QSettings key 'planner/arm_latch' (persist armed state). 30s envelope freshness window in tct_gui.
+
+- 2026-07-12 — **9fe849a+0d21c1c (refactor):** Stage-view theme tokens + motor panel wiring. `stage_view.py` tokens-only (no inline hex). Motor panel wiring updates for law-5 compliance.
+
+- 2026-07-12 — **76f86ef+1479554 (test):** Migration-invalidated tests updated. Test suite updated post-migration; all previously-passing tests restored.
+
 - 2026-07-04 — Initial bookkeep created from source inspection (main, tct_gui,
   state_machine, scan_controller, device_manager, base device, hdf5_writer,
   SCAN_DATA_FORMAT.md). Some sections marked TODO for deepening.

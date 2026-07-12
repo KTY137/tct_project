@@ -34,7 +34,9 @@ project's config file already uses. Every writer that rewrites devices.yaml
 """
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -287,7 +289,31 @@ def update_yaml_file(path: str | Path, updates: Mapping[str, Any]) -> None:
     """Read *path*, apply :func:`merge_yaml_text`, write it back. Raises on
     any I/O or read error -- callers that want the historical "best effort,
     silently do nothing on failure" behaviour should catch around this call
-    (matching what the former yaml.safe_load/dump call sites did)."""
+    (matching what the former yaml.safe_load/dump call sites did).
+
+    The write is atomic: the full merged text is computed in memory first,
+    written to a temporary file in the *same* directory, flushed + fsync'd,
+    then :func:`os.replace`'d over the target. A crash mid-write can therefore
+    never truncate ``configs/devices.yaml`` (it holds soft limits and HV
+    ranges) -- the original stays intact until the atomic rename lands."""
     p = Path(path)
     text = p.read_text(encoding="utf-8")
-    p.write_text(merge_yaml_text(text, updates), encoding="utf-8")
+    new_text = merge_yaml_text(text, updates)
+    # NamedTemporaryFile in the target's directory so os.replace is a same-
+    # filesystem atomic rename (a temp on another volume would not be).
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(new_text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_name, p)
+    except BaseException:
+        # Leave the original file untouched; clean up the temp on any failure.
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise

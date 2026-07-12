@@ -147,7 +147,7 @@ def _planner_huge_estimate_workload():
         panel._recompute_estimate()   # dispatches off-thread: 500k > threshold
 
     def is_done(panel):
-        return panel._chip_points.text() not in ("Estimating...", "—", "")
+        return panel._tile_points.value() not in ("…", "—", "")
 
     def teardown(panel):
         panel.shutdown()
@@ -193,7 +193,7 @@ def _planner_sync_boundary_workload():
         panel._recompute_estimate()
 
     def is_done(panel):
-        return panel._chip_points.text() not in ("Estimating...", "—", "")
+        return panel._tile_points.value() not in ("…", "—", "")
 
     def teardown(panel):
         panel.shutdown()

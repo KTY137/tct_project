@@ -153,6 +153,23 @@ def test_set_points_batch_load_from_mapping_replaces_state():
     assert (5.0, 5.0) not in view.points()
 
 
+def test_set_points_mapping_branch_counts_rounding_collisions():
+    """The mapping branch of set_points() must count a duplicate exactly
+    like the iterable branch: two distinct raw (x, y) keys that collide
+    only AFTER the 6-decimal rounding (storage-layer dedup) still increment
+    the one honest _n_duplicates counter — never silently absorbed."""
+    _app()
+    view = ScanMapView()
+    mapping = {
+        (1e-7, 0.0): _result(1e-7, 0.0, charge=1.0),
+        (4e-7, 0.0): _result(4e-7, 0.0, charge=2.0),   # rounds to the same (0.0, 0.0) cell
+    }
+    view.set_points(mapping)
+
+    assert view.point_count() == 1
+    assert view.duplicate_count() == 1
+
+
 def test_set_points_accepts_plain_dict_values():
     _app()
     view = ScanMapView()
@@ -385,6 +402,122 @@ def test_unfreeze_levels_resumes_live_autoscale():
     # Autoscale keeps tracking further new points once unfrozen.
     view.update_point(_result(3.0, 0.0, charge=200.0))
     assert tuple(view.image_view().imageItem.getLevels()) == pytest.approx((10.0, 200.0))
+
+
+# --------------------------------------------------------------------------- #
+# Data truth (design system §4): NaN honesty, viridis, colorbar unit, counts  #
+# --------------------------------------------------------------------------- #
+
+def test_unsampled_cells_stay_nan_in_displayed_image():
+    """The NaN→vmin bug fix: the image handed to the ImageItem keeps its
+    NaNs (pyqtgraph renders them alpha-0/transparent), so an unsampled cell
+    can never wear the coldest data colour."""
+    _app()
+    view = ScanMapView()
+    if view.image_view() is None:
+        pytest.skip("pyqtgraph not installed")
+    # 2 of 4 cells in a 2x2 grid sampled.
+    view.update_point(_result(0.0, 0.0, charge=10.0))
+    view.update_point(_result(1.0, 1.0, charge=20.0))
+
+    displayed = view.image_view().imageItem.image
+    assert displayed is not None
+    assert int(np.count_nonzero(np.isnan(displayed))) == 2
+    # Levels still come from sampled cells only.
+    assert tuple(view.image_view().imageItem.getLevels()) == pytest.approx((10.0, 20.0))
+
+
+def test_unsampled_cells_render_transparent_not_vmin_color():
+    _app()
+    view = ScanMapView()
+    if view.image_view() is None:
+        pytest.skip("pyqtgraph not installed")
+    view.update_point(_result(0.0, 0.0, charge=10.0))
+    view.update_point(_result(1.0, 1.0, charge=20.0))
+
+    item = view.image_view().imageItem
+    item.render()
+    rgba = item.qimage
+    assert rgba is not None
+    # Grid rows map x -> image columns after ImageItem's axis handling; scan
+    # both diagonal-off cells for a fully transparent pixel and both
+    # diagonal-on cells for opaque data ink.
+    alphas = {(x, y): rgba.pixelColor(x, y).alpha()
+              for x in (0, 1) for y in (0, 1)}
+    assert sorted(alphas.values()) == [0, 0, 255, 255]
+
+
+def test_colorbar_unit_bound_to_selected_quantity():
+    _app()
+    view = ScanMapView()
+    if view.image_view() is None:
+        pytest.skip("pyqtgraph not installed")
+    view.update_point(_result(0.0, 0.0, charge=1.0))
+
+    assert view._hist_axis.labelUnits == "pC"
+    view.set_quantity("dut_amplitude_V")
+    assert view._hist_axis.labelUnits == "V"
+    view.set_quantity("drift_time_s")
+    assert view._hist_axis.labelUnits == "s"
+
+
+def test_viridis_colormap_applied():
+    _app()
+    view = ScanMapView()
+    if view.image_view() is None:
+        pytest.skip("pyqtgraph not installed")
+    import pyqtgraph as pg
+    expected = pg.colormap.get("viridis").getLookupTable(nPts=16)
+    actual = view.image_view().ui.histogram.gradient.colorMap().getLookupTable(nPts=16)
+    assert np.array_equal(expected, actual)
+
+
+def test_missing_and_duplicate_counts_surfaced():
+    _app()
+    view = ScanMapView()
+    if view.image_view() is None:
+        pytest.skip("pyqtgraph not installed")
+    # 3 of 4 cells sampled; one cell revisited (last-write-wins, but the
+    # revisit is COUNTED, never silently absorbed — §4).
+    view.update_point(_result(0.0, 0.0, charge=1.0))
+    view.update_point(_result(1.0, 1.0, charge=2.0))
+    view.update_point(_result(1.0, 0.0, charge=3.0))
+    view.update_point(_result(1.0, 1.0, charge=9.0))
+
+    assert view.duplicate_count() == 1
+    assert "3/4 sampled" in view._chip_points.text()
+    subtitle = view._figure_card._subtitle_label.text()
+    assert "1 unsampled" in subtitle
+    assert "1 duplicate" in subtitle
+
+    # Batch load: duplicates counted across the incoming iterable too.
+    view.set_points([
+        _result(0.0, 0.0, charge=1.0),
+        _result(0.0, 0.0, charge=5.0),
+        _result(1.0, 1.0, charge=2.0),
+    ])
+    assert view.duplicate_count() == 1
+    # clear() re-arms the counter.
+    view.clear()
+    assert view.duplicate_count() == 0
+
+
+def test_empty_view_shows_placeholder_page_with_toolbar_live():
+    _app()
+    view = ScanMapView()
+    if view.image_view() is None:
+        pytest.skip("pyqtgraph not installed")
+    assert not view.is_showing_map()
+    assert view._stack.currentWidget() is view._empty_state
+    # Toolbar lives outside the stack — never hidden by the placeholder.
+    assert not view._combo_qty.isHidden()
+    assert not view._btn_freeze.isHidden()
+
+    view.update_point(_result(0.0, 0.0, charge=1.0))
+    assert view.is_showing_map()
+
+    view.clear()
+    assert not view.is_showing_map()
 
 
 def test_freeze_toggled_before_any_data_captures_on_first_arrival():

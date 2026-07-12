@@ -1,22 +1,24 @@
 """
-Bias supply control panel.
+Bias supply control panel — the HV safety dashboard (cockpit design §6).
 
 Provides:
+  - Hero trio tiles: Voltage · measured (polarity sign from readback,
+    setpoint in the caption), Current (compliance headroom in the caption)
+    and HV STATE (OFF / RAMPING / SETTLED / TRIPPED — derived from readback
+    + in-flight commands; inferred states say so, law 7)
   - Compliance setting (with red warning if too high)
-  - Voltage setpoint + ramp controls
-  - Live voltage / current readout with compliance indicator
-  - Quick-off safety button
-  - IV scan (bias sweep while recording current) — runs in a QThread
+  - Voltage setpoint + ramp controls, quick-off safety button
+  - Standalone sweeps (advanced, collapsed): IV scan + CCE-vs-V — QThread
 """
 from __future__ import annotations
 
 import time
 from typing import Callable
 
-from PySide6.QtCore import QTimer, Qt, Signal, QThread, QObject, QSettings
+from PySide6.QtCore import QTimer, Signal, QThread, QObject, QSettings
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QGroupBox, QLabel, QDoubleSpinBox, QSpinBox,
+    QLabel, QDoubleSpinBox, QSpinBox,
     QPushButton, QProgressBar, QMessageBox,
 )
 
@@ -29,9 +31,9 @@ except ImportError:
 
 from devices.bias_supply_base import BiasSupplyBase
 from controller.scan_controller import VoltageScanConfig
-from gui.panel_kit import Card
+from gui.panel_kit import Card, CheckableCard, MetricGrid, MetricTile, section_header
 from gui.status_bus import notify
-from gui.style import PLOT_BG, WARN_RED, axis_color, set_chip_state
+from gui.style import PLOT_BG, WARN_RED, axis_color
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 
 
@@ -187,6 +189,13 @@ class BiasPanel(QWidget):
         self._io_busy = False
         self._last_polarity: str | None = None
         self._pol_supported = False
+        # Presentation-only HV-state bookkeeping (design system §6): the
+        # supply exposes NO output-on/ramp-state readback today, so the HV
+        # STATE tile derives OFF/RAMPING/SETTLED/TRIPPED from setpoint +
+        # measured + in-flight commands and *says so* in its caption (law 7).
+        self._hv_ramping = False       # a ramp command is in flight
+        self._hv_scan_stepping = False # an IV / bias+waveform scan drives HV
+        self._vscan_last_point_t = float("-inf")   # last vscan point (monotonic)
         # Theme mode for the bias axis-rail accent (gui.style.axis_color) —
         # bias reads amber everywhere.  Read once from the same QSettings key
         # main.py/tct_gui.py use; see refresh_theme() for why this isn't
@@ -215,20 +224,33 @@ class BiasPanel(QWidget):
         root = QVBoxLayout(self)
 
         # ── Status strip ───────────────────────────────────────────────
-        # Connection / output-state chips (gui.style.statusChip).  Compliance
-        # gets its own chip further down in the Live Readout box, next to the
-        # reading it summarises.
+        # Connection chip only — output/compliance state moved into the hero
+        # trio tiles below (design system §6: the bias panel is a safety
+        # dashboard, its primary display is Voltage · Current · HV STATE).
         status_row = QHBoxLayout()
         status_row.setSpacing(8)
-        self._chip_conn = StatusChip("Disconnected", "neutral")
-        self._chip_output = StatusChip("HV UNKNOWN", "neutral")
-        for chip in (self._chip_conn, self._chip_output):
-            status_row.addWidget(chip)
+        self._chip_conn = StatusChip("Disconnected", "disconnected")
+        status_row.addWidget(self._chip_conn)
         status_row.addStretch(1)
         root.addLayout(status_row)
 
+        # ── Hero trio: Voltage · measured / Current / HV STATE ─────────
+        # (design system §6, Paul's hardware-truth map).  Polarity sign comes
+        # from the READBACK; the setpoint lives in the caption, labelled
+        # apart (law 7 "measured vs setpoint labeled apart").
+        hero = MetricGrid(columns=3)
+        self._tile_v: MetricTile = hero.add_tile(
+            MetricTile("Voltage · measured", "—", min_width=130))
+        self._tile_i: MetricTile = hero.add_tile(
+            MetricTile("Current", "—", min_width=130))
+        self._tile_hv: MetricTile = hero.add_tile(
+            MetricTile("HV state", "—", min_width=130))
+        for tile in (self._tile_v, self._tile_i, self._tile_hv):
+            tile.set_stale(True, "not connected")
+        root.addWidget(hero)
+
         # ── Safety / compliance ────────────────────────────────────────
-        safe_box = Card("⚠ Compliance (current limit)")
+        safe_box = Card("Compliance (current limit)")
         safe_form = QFormLayout()
 
         comp_uA = max(0.001, float(getattr(self._supply, "compliance_A", 100e-6)) * 1e6)
@@ -245,13 +267,16 @@ class BiasPanel(QWidget):
         self._spin_comp.valueChanged.connect(self._on_compliance_changed)
         self._lbl_comp_warn = QLabel("")
         self._lbl_comp_warn.setStyleSheet(f"color: {WARN_RED}; font-weight: bold;")
-        self._chip_comp_limit = StatusChip("Limit OK", "good")
+        # Quiet-nominal (law 1): a sane configured limit is grey, not a
+        # persistent green "LIMIT OK" light; only a dangerously high limit
+        # shouts.  A real compliance TRIP is a crit alarm on the hero tiles.
+        self._chip_comp_limit = StatusChip("Limit ok", "neutral")
 
         safe_form.addRow("Compliance:", self._spin_comp)
         safe_form.addRow("Limit state:", self._chip_comp_limit)
         safe_form.addRow(self._lbl_comp_warn)
 
-        self._btn_set_comp = QPushButton("Apply Compliance")
+        self._btn_set_comp = QPushButton("Apply compliance")
         set_button_icon(self._btn_set_comp, "mdi.check")
         self._btn_set_comp.clicked.connect(self._apply_compliance)
         safe_form.addRow(self._btn_set_comp)
@@ -260,11 +285,11 @@ class BiasPanel(QWidget):
 
         # ── Voltage control ────────────────────────────────────────────
         # Bias-axis rail (gui.style.axis_color("bias", ...)) marks this as
-        # the panel's primary bias-axis control; the Live-Readout voltage
-        # label and the two plots below echo the same amber (_restyle_bias_axis).
+        # the panel's primary bias-axis control; the hero voltage tile and
+        # the two sweep plots echo the same amber (_restyle_bias_axis).
         # Card.set_rail() replaces the old "#biasRail" objectName + inline
         # QSS border — same amber accent, scoped to this Card via panel_kit.
-        volt_box = Card("Bias Voltage")
+        volt_box = Card("Bias voltage")
         self._volt_box = volt_box
         volt_form = QFormLayout()
 
@@ -293,7 +318,7 @@ class BiasPanel(QWidget):
         volt_form.addRow("Step delay:", self._spin_delay)
 
         btn_row = QHBoxLayout()
-        self._btn_apply = QPushButton("▶ Ramp to Voltage")
+        self._btn_apply = QPushButton("▶ Ramp to voltage")
         set_button_icon(self._btn_apply, "mdi.trending-up")
         self._btn_apply.clicked.connect(self._apply_voltage)
         self._btn_off = QPushButton("⏹ Output OFF (0 V)")
@@ -309,31 +334,17 @@ class BiasPanel(QWidget):
         volt_box.add_layout(volt_form)
         root.addWidget(volt_box)
 
-        # ── Live readout ───────────────────────────────────────────────
-        read_box = Card("Live Readout")
-        read_form = QFormLayout()
-
-        self._lbl_v = QLabel("— V")
-        self._lbl_i = QLabel("— A")
-        self._lbl_comp_status = StatusChip("—", "neutral")
-        self._lbl_comp_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        read_form.addRow("Voltage:", self._lbl_v)
-        read_form.addRow("Current:", self._lbl_i)
-        read_form.addRow("Compliance:", self._lbl_comp_status)
-        read_box.add_layout(read_form)
-        root.addWidget(read_box)
-
         # ── Polarity ───────────────────────────────────────────────────
         # Read-only indicator (polled off-thread) + a DANGEROUS switch button
         # that only appears when the supply reports the channel reversible.
+        # (The live V/I readout itself lives in the hero trio tiles above.)
         pol_box = Card("Polarity")
         pol_form = QFormLayout()
         self._lbl_polarity = QLabel("—")
         self._lbl_polarity.setStyleSheet("font-weight: 700; font-size: 16px;")
         self._lbl_polarity.setToolTip("Current HV output polarity (read-only).")
         pol_form.addRow("Current polarity:", self._lbl_polarity)
-        self._btn_polarity = QPushButton("⇄ Switch Polarity")
+        self._btn_polarity = QPushButton("⇄ Switch polarity")
         self._btn_polarity.setObjectName("dangerBtn")
         self._btn_polarity.setToolTip(
             "Reverse HV polarity (throws an HV relay).\n"
@@ -345,11 +356,23 @@ class BiasPanel(QWidget):
         pol_box.add_layout(pol_form)
         root.addWidget(pol_box)
 
-        # ── IV scan ────────────────────────────────────────────────────
-        iv_box = QGroupBox("IV Scan")
-        iv_box.setCheckable(True)
-        iv_box.setChecked(False)
-        iv_form = QFormLayout(iv_box)
+        # ── Standalone sweeps (advanced) ───────────────────────────────
+        # IV scan + CCE-vs-V fold into ONE collapsed card (design system §7):
+        # both are advanced, standalone procedures, not everyday controls.
+        # CheckableCard has no built-in collapse, so the header checkbox is
+        # additionally wired to hide/show the body (nearest kit primitive —
+        # gap reported); every control inside stays fully reachable.
+        sweeps_card = CheckableCard(
+            "Standalone sweeps (advanced)", "IV curve · CCE vs bias",
+            checked=False)
+        self._sweeps_card = sweeps_card
+        sweeps_body = sweeps_card.body.parentWidget()
+        sweeps_card.toggled.connect(sweeps_body.setVisible)
+        sweeps_body.setVisible(False)
+
+        sweeps_card.add_widget(section_header(
+            "IV scan", "bias sweep · record current"))
+        iv_form = QFormLayout()
 
         self._spin_iv_start = QDoubleSpinBox()
         self._spin_iv_start.setRange(-vlim, vlim)
@@ -380,28 +403,16 @@ class BiasPanel(QWidget):
         self._iv_progress.setValue(0)
         iv_form.addRow(self._iv_progress)
 
-        self._btn_iv = QPushButton("▶ Run IV Scan")
+        self._btn_iv = QPushButton("▶ Run IV scan")
         self._btn_iv.clicked.connect(self._run_iv_scan)
         iv_form.addRow(self._btn_iv)
 
-        if _HAS_PG:
-            self._iv_plot = pg.PlotWidget(title="IV Curve", background=PLOT_BG)
-            self._iv_plot.showGrid(x=True, y=True, alpha=0.25)
-            self._iv_plot.setLabel("left",   "Current", units="A")
-            self._iv_plot.setLabel("bottom", "Voltage", units="V")
-            self._iv_plot.setMaximumHeight(160)
-            self._iv_curve = self._iv_plot.plot(
-                pen=pg.mkPen(axis_color("bias", self._theme_mode), width=2)
-            )
-            iv_form.addRow(self._iv_plot)
-
-        root.addWidget(iv_box)
+        sweeps_card.add_layout(iv_form)
 
         # ── Bias + waveform scan (requires ScanController) ─────────────
-        vscan_box = QGroupBox("Bias + Waveform Scan (CCE vs. Voltage)")
-        vscan_box.setCheckable(True)
-        vscan_box.setChecked(False)
-        vscan_form = QFormLayout(vscan_box)
+        sweeps_card.add_widget(section_header(
+            "CCE vs voltage", "bias + waveform scan"))
+        vscan_form = QFormLayout()
 
         self._spin_vs_start = self._make_dspin(-vlim, vlim, 0.0, " V")
         self._spin_vs_stop  = self._make_dspin(-vlim, vlim, -300.0, " V")
@@ -417,25 +428,56 @@ class BiasPanel(QWidget):
         vscan_form.addRow("Hold (s):",  self._spin_vs_hold)
         vscan_form.addRow("Averages:",  self._spin_vs_nav)
 
-        self._btn_vscan = QPushButton("▶ Start Bias+Waveform Scan")
+        self._btn_vscan = QPushButton("▶ Start bias + waveform scan")
         self._btn_vscan.clicked.connect(self._emit_vscan)
         vscan_form.addRow(self._btn_vscan)
 
-        if _HAS_PG:
-            self._vscan_plot = pg.PlotWidget(title="Charge vs. Bias", background=PLOT_BG)
-            self._vscan_plot.showGrid(x=True, y=True, alpha=0.25)
-            self._vscan_plot.setLabel("left",   "Charge", units="pC")
-            self._vscan_plot.setLabel("bottom", "Bias", units="V")
-            self._vscan_plot.setMaximumHeight(160)
-            self._vscan_curve = self._vscan_plot.plot(
-                pen=pg.mkPen(axis_color("bias", self._theme_mode), width=2),
-                symbol="o", symbolSize=4,
-            )
-            vscan_form.addRow(self._vscan_plot)
+        sweeps_card.add_layout(vscan_form)
+        root.addWidget(sweeps_card)
 
-        root.addWidget(vscan_box)
+        # The two sweep plots are built LAZILY on first expand: a pyqtgraph
+        # PlotWidget constructed inside an explicitly-hidden body and then
+        # torn down without ever being polished is a teardown access-
+        # violation on Windows (reproduced headless) — and nobody pays for
+        # plots they never open.  The forms keep the row slots; the curves
+        # stay None until _ensure_sweep_plots() runs.
+        self._iv_form = iv_form
+        self._vscan_form = vscan_form
+        self._iv_plot = None
+        self._iv_curve = None
+        self._vscan_plot = None
+        self._vscan_curve = None
+        sweeps_card.toggled.connect(self._ensure_sweep_plots)
+
         self._on_compliance_changed(self._spin_comp.value())
         self._restyle_bias_axis()
+
+    def _ensure_sweep_plots(self, checked: bool) -> None:
+        """Build the IV / charge-vs-bias plots the first time the advanced
+        sweeps card is expanded (see the comment at the call site)."""
+        if not checked or not _HAS_PG or self._iv_plot is not None:
+            return
+        color = axis_color("bias", self._theme_mode)
+        self._iv_plot = pg.PlotWidget(title="IV Curve", background=PLOT_BG)
+        self._iv_plot.showGrid(x=True, y=True, alpha=0.25)
+        self._iv_plot.setLabel("left",   "Current", units="A")
+        self._iv_plot.setLabel("bottom", "Voltage", units="V")
+        self._iv_plot.setMaximumHeight(160)
+        self._iv_curve = self._iv_plot.plot(pen=pg.mkPen(color, width=2))
+        self._iv_form.addRow(self._iv_plot)
+        if self._iv_v:
+            self._iv_curve.setData(self._iv_v, self._iv_i)
+
+        self._vscan_plot = pg.PlotWidget(title="Charge vs. Bias", background=PLOT_BG)
+        self._vscan_plot.showGrid(x=True, y=True, alpha=0.25)
+        self._vscan_plot.setLabel("left",   "Charge", units="pC")
+        self._vscan_plot.setLabel("bottom", "Bias", units="V")
+        self._vscan_plot.setMaximumHeight(160)
+        self._vscan_curve = self._vscan_plot.plot(
+            pen=pg.mkPen(color, width=2), symbol="o", symbolSize=4)
+        self._vscan_form.addRow(self._vscan_plot)
+        if self._vscan_v:
+            self._vscan_curve.setData(self._vscan_v, self._vscan_q)
 
     # ------------------------------------------------------------------ #
     # Bias-axis styling (gui.style.axis_color) — re-run by refresh_theme() #
@@ -443,13 +485,14 @@ class BiasPanel(QWidget):
 
     def _restyle_bias_axis(self) -> None:
         """Tint the bias-axis accents (gui.style.axis_color): the voltage
-        card's rail, the live-voltage readout, and the IV/Vscan plot curves.
-        Bias reads amber in both themes, everywhere in this panel."""
+        card's rail and the IV/Vscan plot curves.  Bias reads amber in both
+        themes, everywhere in this panel.  (The hero tiles resolve their own
+        ink through the shared QSS tokens — nothing to re-tint there.)"""
         color = axis_color("bias", self._theme_mode)
         self._volt_box.set_rail("bias", self._theme_mode)
-        self._lbl_v.setStyleSheet(f"color: {color}; font-weight: 600;")
-        if _HAS_PG:
+        if _HAS_PG and self._iv_curve is not None:
             self._iv_curve.setPen(pg.mkPen(color, width=2))
+        if _HAS_PG and self._vscan_curve is not None:
             self._vscan_curve.setPen(pg.mkPen(color, width=2))
 
     def refresh_theme(self, mode: str | None = None) -> None:
@@ -479,7 +522,8 @@ class BiasPanel(QWidget):
                 f"⚠ Compliance > {self._COMPLIANCE_WARN_A*1e3:.0f} mA — risk of sensor damage!"
             )
         else:
-            self._chip_comp_limit.set_status("Limit OK", "good")
+            # Quiet nominal (law 1): a sane limit is not an event.
+            self._chip_comp_limit.set_status("Limit ok", "neutral")
             self._lbl_comp_warn.setText("")
 
     def _apply_compliance(self) -> None:
@@ -505,7 +549,8 @@ class BiasPanel(QWidget):
         )
         if started:   # not already busy with another supply call
             set_button_busy(self._btn_apply, True, "Ramping...")
-            self._chip_output.set_status("HV RAMPING", "busy")
+            self._hv_ramping = True
+            self._set_hv_tile("RAMPING", "armed", "ramp command in flight")
 
     def _emergency_off(self) -> None:
         started = self._run_supply_call(
@@ -514,47 +559,102 @@ class BiasPanel(QWidget):
         )
         if started:
             set_button_busy(self._btn_off, True, "Turning off...")
-            self._chip_output.set_status("HV OFF...", "busy")
+            self._hv_ramping = True
+            self._set_hv_tile("RAMPING ↓", "armed", "ramping to 0 V")
+
+    # ------------------------------------------------------------------ #
+    # Hero tiles (design system §6 — Voltage · Current · HV STATE)        #
+    # ------------------------------------------------------------------ #
+
+    def _set_hv_tile(self, value: str, state: str, caption: str = "") -> None:
+        self._tile_hv.set_stale(False)
+        self._tile_hv.set_value(value)
+        self._tile_hv.set_state(state)
+        self._tile_hv.set_caption(caption)
+
+    def _derive_hv_state(self, r, setpoint_V: float) -> tuple[str, str, str]:
+        """OFF / RAMPING / SETTLED / TRIPPED, derived from what the driver
+        can actually tell us today (readback + setpoint + in-flight
+        commands).  There is NO output-on/ramp-state readback on this supply
+        yet, so inferred states say so in their caption (law 7) — the driver
+        backlog for the real bits is Paul's (design system §6)."""
+        v = float(r.voltage_V)
+        if getattr(r, "compliant", False):
+            return "TRIPPED", "crit", "compliance limit hit — output current-limited"
+        scan_live = (self._hv_scan_stepping
+                     or (time.monotonic() - self._vscan_last_point_t) < 5.0)
+        if self._hv_ramping or scan_live:
+            arrow = "↑" if abs(setpoint_V) > abs(v) else "↓"
+            why = ("sweep stepping the bias" if scan_live
+                   else "ramp command in flight")
+            return f"RAMPING {arrow}", "armed", why
+        if abs(v) < 1.0 and abs(setpoint_V) < 1.0:
+            return "OFF", "normal", "inferred — output-on state not readable"
+        if abs(v - setpoint_V) <= max(2.0, 0.02 * abs(setpoint_V)):
+            # Mary migration review: energized-at-setpoint is live-dangerous
+            # (law 1) — above 10 V it must carry the armed accent, never read
+            # as visually benign. Below that, treat as effectively off/noise.
+            if abs(v) > 10.0:
+                return "SETTLED", "armed", "live at setpoint — inferred"
+            return "SETTLED", "normal", "at setpoint — inferred from readback"
+        if abs(v) > 1.0 and abs(setpoint_V) < 1.0:
+            # An actor this panel doesn't hear about (e.g. the plan executor)
+            # can energize the output behind it — a live |V| contradicting a
+            # zero setpoint must never read as safe.
+            return "LIVE?", "warn", "measured voltage with no commanded setpoint"
+        return "MOVING?", "warn", "measured differs from setpoint"
 
     def set_reading(self, r) -> None:
         if r is None:
-            self._lbl_v.setText("— V")
-            self._lbl_i.setText("— A")
-            self._lbl_comp_status.setText("—")
-            set_chip_state(self._lbl_comp_status, "neutral")
-            self._chip_conn.setText("Disconnected")
-            set_chip_state(self._chip_conn, "neutral")
-            self._chip_output.set_status("HV UNKNOWN", "neutral")
+            for tile in (self._tile_v, self._tile_i, self._tile_hv):
+                tile.set_state("normal")
+                tile.set_value("—")
+                tile.set_stale(True, "not connected")
+            self._chip_conn.set_status("Disconnected", "disconnected")
             return
         try:
-            self._lbl_v.setText(f"{r.voltage_V:.2f} V")
+            sp = float(getattr(self._supply, "setpoint_V", 0.0) or 0.0)
+            # Voltage · measured — polarity sign straight from the readback;
+            # the setpoint is caption-only, labelled apart (law 7).
+            self._tile_v.set_stale(False)
+            self._tile_v.set_value(f"{r.voltage_V:+.2f} V")
+            cap = f"setpoint {sp:+.1f} V"
+            if self._pol_supported:
+                sym = self._POL_SYMBOLS.get(self._last_polarity)
+                cap += f" · polarity {sym}" if sym else " · polarity unknown"
+            self._tile_v.set_caption(cap)
+
+            # Current — compliance headroom in the caption; a real trip is a
+            # crit alarm state, not text.
             i_uA = r.current_A * 1e6
-            self._lbl_i.setText(f"{i_uA:.3f} µA")
-            if r.compliant:
-                self._lbl_comp_status.setText("⚠ COMPLIANCE HIT")
-                set_chip_state(self._lbl_comp_status, "crit")
+            limit_uA = float(self._spin_comp.value())
+            self._tile_i.set_stale(False)
+            self._tile_i.set_value(f"{i_uA:.3f} µA")
+            if limit_uA > 0:
+                pct = abs(i_uA) / limit_uA * 100.0
+                self._tile_i.set_caption(f"{pct:.0f}% of {limit_uA:g} µA compliance")
             else:
-                self._lbl_comp_status.setText("OK")
-                set_chip_state(self._lbl_comp_status, "good")
+                pct = 0.0
+                self._tile_i.set_caption("compliance limit not set")
+            if getattr(r, "compliant", False):
+                self._tile_i.set_state("crit")
+            elif pct >= 80.0:
+                self._tile_i.set_state("warn")
+            else:
+                self._tile_i.set_state("normal")
+
+            self._set_hv_tile(*self._derive_hv_state(r, sp))
         except Exception:
             pass
         # Connection chip: a live reading only ever arrives once the poller
         # observes supply.connected (see _ReadoutPoller._poll) — reading the
         # flag directly here is the same cheap, no-I/O check other panels
         # already do on the GUI thread (e.g. MotorPanel._test_connection).
+        # Quiet nominal: connected is grey, not a persistent green light.
         connected = bool(getattr(self._supply, "connected", False))
-        self._chip_conn.setText("Connected" if connected else "Disconnected")
-        set_chip_state(self._chip_conn, "good" if connected else "neutral")
-        # Stale-OFF guard: the Output chip is last-command bookkeeping, but an
-        # actor this panel doesn't hear about (e.g. the plan executor ramping
-        # HV) can energize the output behind it.  A live |V| that contradicts
-        # a displayed OFF/UNKNOWN must never read as safe — warn instead.
-        try:
-            if abs(r.voltage_V) > 1.0 and self._chip_output.text() in (
-                    "HV OFF", "HV UNKNOWN"):
-                self._chip_output.set_status("HV LIVE?", "warn")
-        except Exception:
-            pass
+        self._chip_conn.set_status(
+            "Connected" if connected else "Disconnected",
+            "neutral" if connected else "disconnected")
 
     def _emit_vscan(self) -> None:
         cfg = VoltageScanConfig(
@@ -572,11 +672,14 @@ class BiasPanel(QWidget):
         """Called by ScanController for each voltage step."""
         self._vscan_v.append(voltage_V)
         self._vscan_q.append(charge_pC)
-        if _HAS_PG:
+        if _HAS_PG and self._vscan_curve is not None:
             self._vscan_curve.setData(self._vscan_v, self._vscan_q)
         # The scan controller (not this panel) drives the ramp during a
-        # bias+waveform scan; a point arriving means the output is live.
-        self._chip_output.set_status("HV ON", "armed")
+        # bias+waveform scan; a point arriving means the output is live and
+        # being stepped.  Timestamp (not a latch) so the HV tile falls back
+        # to the inferred readback state a few seconds after the last point.
+        self._vscan_last_point_t = time.monotonic()
+        self._set_hv_tile("RAMPING", "armed", "bias + waveform scan stepping the bias")
 
     @staticmethod
     def _make_dspin(lo: float, hi: float, val: float, suffix: str = "") -> QDoubleSpinBox:
@@ -609,7 +712,8 @@ class BiasPanel(QWidget):
         self._iv_progress.setMaximum(len(voltages))
         self._iv_progress.setValue(0)
         self._btn_iv.setEnabled(False)
-        self._chip_output.set_status("IV scan", "busy")
+        self._hv_scan_stepping = True
+        self._set_hv_tile("RAMPING", "armed", "IV sweep stepping the bias")
 
         self._iv_worker = _IVWorker(
             supply=self._supply,
@@ -629,7 +733,7 @@ class BiasPanel(QWidget):
         self._iv_worker.finished.connect(lambda: self._btn_iv.setEnabled(True))
         self._iv_worker.finished.connect(self._on_iv_finished_chip)
         self._iv_worker.error.connect(
-            lambda msg: self._lbl_v.setText(f"IV Error: {msg}")
+            lambda msg: notify(f"IV scan error: {msg}", "error")
         )
         # Clean up thread object when done
         self._iv_thread.finished.connect(self._iv_thread.deleteLater)
@@ -639,18 +743,18 @@ class BiasPanel(QWidget):
     def _on_iv_point(self, v: float, i: float) -> None:
         self._iv_v.append(v)
         self._iv_i.append(i)
-        if _HAS_PG:
+        if _HAS_PG and self._iv_curve is not None:
             self._iv_curve.setData(self._iv_v, self._iv_i)
 
     def _on_iv_finished_chip(self) -> None:
-        """Best-effort output-chip refresh once an IV scan stops.
+        """Best-effort HV-tile refresh once an IV scan stops.
 
         _IVWorker ramps the output on but never explicitly switches it off
         (see _IVWorker.run), so it is still on at the last swept setpoint
-        whether the sweep completed or stopped on a compliance trip.
+        whether the sweep completed or stopped on a compliance trip — the
+        next readout poll re-derives SETTLED/TRIPPED from the readback.
         """
-        if self._iv_v:   # at least one point was taken -> ramp_to() ran
-            self._chip_output.set_status("HV ON", "armed")
+        self._hv_scan_stepping = False
 
     def _run_supply_call(self, fn: Callable[[], None], on_done) -> bool:
         if self._op_thread is not None and self._op_thread.isRunning():
@@ -747,21 +851,24 @@ class BiasPanel(QWidget):
 
     def _on_apply_voltage_done(self, err: str) -> None:
         set_button_busy(self._btn_apply, False)
+        self._hv_ramping = False
         if err:
-            self._lbl_v.setText(f"Error: {err}")
-            self._chip_output.set_status("HV ERROR", "crit")
+            notify(f"Bias ramp failed: {err}", "error")
+            self._set_hv_tile("ERROR", "crit", err)
         else:
-            # ramp_to() always leaves the output on (see BiasSupplyBase.ramp_to).
-            self._chip_output.set_status("HV ON", "armed")
+            # ramp_to() always leaves the output on (see BiasSupplyBase.ramp_to);
+            # the next readout poll re-derives SETTLED from the readback.
             flash_button(self._btn_apply, "good", "Ramped")
 
     def _on_emergency_off_done(self, err: str) -> None:
         set_button_busy(self._btn_off, False)
+        self._hv_ramping = False
         if err:
-            self._lbl_v.setText(f"Error: {err}")
-            self._chip_output.set_status("HV ERROR", "crit")
+            notify(f"Output OFF failed: {err}", "error")
+            self._set_hv_tile("ERROR", "crit", err)
         else:
-            self._chip_output.set_status("HV OFF", "good")
+            self._set_hv_tile("OFF", "normal",
+                              "inferred — output-on state not readable")
             flash_button(self._btn_off, "good", "Off")
 
     def shutdown(self) -> None:

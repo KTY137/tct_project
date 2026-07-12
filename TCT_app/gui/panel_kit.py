@@ -27,14 +27,14 @@ from collections.abc import Iterable
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLayout, QLabel,
-    QPushButton, QVBoxLayout, QWidget,
+    QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLayout,
+    QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget,
 )
 
-from gui.status_widgets import ReadoutCell
+from gui.status_widgets import ReadoutCell, StatusLamp
 from gui.style import (
-    FONT_LG, PLOT_BG, SPACE_MD, SPACE_SM, axis_color, glow_color, palette,
-    repolish,
+    FONT_BODY_PX, FONT_LG, PLOT_BG, SPACE_MD, SPACE_SM, SPACE_XS,
+    WEIGHT_BODY, axis_color, palette, repolish,
 )
 
 __all__ = [
@@ -50,6 +50,8 @@ __all__ = [
     "MetricGrid",
     "ActionBar",
     "CheckableCard",
+    "CollapsibleCard",
+    "SegmentedControl",
     "EmptyState",
 ]
 
@@ -359,14 +361,36 @@ class FigureCard(Card):
 class MetricTile(ReadoutCell):
     """A single tokenized label/value tile — the ``MetricGrid`` unit cell,
     built on the ``ReadoutCell``/``readout_cell`` idiom
-    (cockpit_style_overhaul.md §2). ``state`` is one of
-    ``{"normal", "warn", "armed"}`` and drives the value colour through the
-    same ``QLabel#readoutCellValue[state=...]`` QSS hook
-    ``ReadoutCell.set_state()`` already exposes (``gui/style.py``); "armed"
-    additionally gets a static emphasis border from the fixed
-    ``gui.style.GLOW`` set — a plain coloured border, never a
-    ``QGraphicsEffect`` (rule 3 applies everywhere, not only the hot path).
+    (cockpit_style_overhaul.md §2; behaviours below are the cockpit v5 D0
+    pass, docs/design/cockpit_design_system.md §3-4).
+
+    ``state`` is one of ``{"normal", "good", "warn", "crit", "armed", "sim"}``
+    (the canonical spec semantic set, plus "normal"/quiet-nominal) and drives
+    the value INK ONLY through ``ReadoutCell.set_state()``'s
+    ``QLabel#readoutCellValue[state=...]`` QSS hook — cockpit v5 dropped the
+    previous "armed" full-frame emphasis border: law 1 says state should read
+    through value colour, not an added accent side-bar/border (the frame
+    itself stays the same quiet card in every state). A small
+    :class:`~gui.status_widgets.StatusLamp` ("LED-in-label") sits ahead of
+    the title text instead, giving a second, at-a-glance state cue that
+    still does not touch the frame's border/background.
+
+    :meth:`set_stale` implements law 4 ("staleness is designed"): a stale
+    tile desaturates its ink (a QSS ``stale`` property the value/title/
+    caption/frame all key off — see ``gui/style.py``) and shows a caption
+    explaining why (never a raw ``--``). Fit/ellipsize (never bleed into a
+    neighbour) is inherited from ``ReadoutCell`` itself, which this class
+    does not override.
     """
+
+    _VALID_STATES = {"normal", "good", "warn", "crit", "armed", "sim"}
+    # LED-in-label colour per tile state — reuses StatusLamp's own state
+    # language (gui.status_widgets.normalize_state already treats these as
+    # its canonical names, so no extra translation table is needed).
+    _LED_STATE = {
+        "normal": "neutral", "good": "good", "warn": "warn",
+        "crit": "crit", "armed": "armed", "sim": "simulated",
+    }
 
     def __init__(
         self,
@@ -375,21 +399,98 @@ class MetricTile(ReadoutCell):
         state: str = "normal",
         *,
         min_width: int = 110,
+        caption: str = "",
+        compact: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(label, value, parent=parent, min_width=min_width)
+        # Compact variant (spec §3: primary values 24-28 px, "compact
+        # 17-20 px") — drives the QSS ``[compact="true"]`` size rule on the
+        # value label (gui/style.py FONT_VALUE_COMPACT_PX) instead of an
+        # inline font-size, so state/stale ink rules still cascade normally.
+        self._compact = bool(compact)
+        if self._compact:
+            self._value.setProperty("compact", "true")
+            repolish(self._value)
+        self._led = StatusLamp("neutral")
+        self._led.setFixedSize(6, 6)
+        self._install_led()
+        self._caption = QLabel(caption)
+        self._caption.setObjectName("metricTileCaption")
+        self._caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._caption.setVisible(bool(caption))
+        self.layout().addWidget(self._caption)
+        self._stale = False
         self.set_state(state)
+        if caption:
+            self.set_caption(caption)
+
+    def _install_led(self) -> None:
+        """Re-parent the (already-built, by ``ReadoutCell.__init__``) title
+        label into a [led][title] head row — the "LED-in-label" look —
+        without touching ``ReadoutCell`` itself (every OTHER ``ReadoutCell``
+        consumer, e.g. motor/calibration readouts, keeps its plain title;
+        this is a ``MetricTile``-only augmentation).
+
+        Layout note (bug fix, batch A): the title label inherits
+        ``QSizePolicy.Ignored`` horizontally from ``ReadoutCell`` (the
+        anti-overflow rule — its full-text size hint must never inflate the
+        tile). An Ignored-policy widget between two stretches is allocated
+        ZERO width, which silently blanked every MetricTile title app-wide.
+        Give the title the row's leftover width via a stretch factor instead
+        (Ignored + stretch fills, exactly like the value label fills the
+        VBox) and let its own centred text alignment do the centring; the
+        LED reads as a status dot anchored at the row's left edge."""
+        outer = self.layout()
+        outer.removeWidget(self._title)
+        head = QWidget()
+        head_lay = QHBoxLayout(head)
+        head_lay.setContentsMargins(0, 0, 0, 0)
+        head_lay.setSpacing(SPACE_XS)
+        head_lay.addWidget(self._led, 0, Qt.AlignmentFlag.AlignVCenter)
+        head_lay.addWidget(self._title, 1)
+        outer.insertWidget(0, head)
 
     def set_state(self, state: str | None) -> None:
         key = str(state or "normal").strip().lower()
-        if key not in {"normal", "warn", "armed"}:
+        if key not in self._VALID_STATES:
             key = "normal"
         super().set_state(key)
-        if key == "armed":
-            self.setStyleSheet(
-                f"#readoutCell {{ border: 1px solid {glow_color('armed')}; }}")
-        else:
-            self.setStyleSheet("")
+        self._led.set_state(self._LED_STATE.get(key, "neutral"))
+
+    def set_caption(self, text: str) -> None:
+        """Set/replace the small body caption under the value (law 3:
+        sentence-case prose, never uppercased here)."""
+        self._caption.setText(text or "")
+        self._caption.setVisible(bool(text))
+        self._caption.setProperty("stale", "true" if self._stale else "")
+        repolish(self._caption)
+
+    def set_stale(self, stale: bool, caption: str | None = None) -> None:
+        """Law 4: a tile with nothing current to say goes stale (dim +
+        desaturate, via the QSS ``stale`` property — never a raw ``--``) and
+        should carry a *caption* explaining why (e.g. "not connected", "no
+        run", "value aged 12s"). Both are independent: passing only
+        ``stale`` re-applies the last caption's stale styling; passing a
+        *caption* while already stale/live just updates the text."""
+        self._stale = bool(stale)
+        flag = "true" if self._stale else ""
+        self.setProperty("stale", flag)
+        repolish(self)
+        self._value.setProperty("stale", flag)
+        repolish(self._value)
+        self._title.setProperty("stale", flag)
+        repolish(self._title)
+        self._caption.setProperty("stale", flag)
+        repolish(self._caption)
+        if caption is not None:
+            self.set_caption(caption)
+
+    def is_stale(self) -> bool:
+        return self._stale
+
+    def is_compact(self) -> bool:
+        return self._compact
 
 
 class MetricGrid(QWidget):
@@ -405,10 +506,12 @@ class MetricGrid(QWidget):
         tiles: Iterable[MetricTile | tuple] | None = None,
         *,
         columns: int = 4,
+        compact: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._columns = max(1, int(columns))
+        self._compact = bool(compact)
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setSpacing(SPACE_SM)
@@ -418,11 +521,12 @@ class MetricGrid(QWidget):
 
     def add_tile(self, tile: MetricTile | tuple) -> MetricTile:
         """Append *tile* (a built ``MetricTile``, or a ``(label, value)``/
-        ``(label, value, state)`` tuple) to the next grid cell."""
+        ``(label, value, state)`` tuple) to the next grid cell. Tuple-built
+        tiles inherit this grid's ``compact`` mode (see ``MetricTile``)."""
         if not isinstance(tile, MetricTile):
             label, value, *rest = tile
             state = rest[0] if rest else "normal"
-            tile = MetricTile(label, value, state)
+            tile = MetricTile(label, value, state, compact=self._compact)
         idx = len(self._tiles)
         row, col = divmod(idx, self._columns)
         self._grid.addWidget(tile, row, col)
@@ -438,16 +542,21 @@ class MetricGrid(QWidget):
 # --------------------------------------------------------------------------- #
 
 class ActionBar(QWidget):
-    """A styled row of primary/secondary/danger action buttons
-    (cockpit_style_overhaul.md §2). This class owns *layout* only — the
-    colour comes entirely from the existing button ``state`` property
-    variants in ``gui/style.py`` (``primary``/``secondary``/``danger``),
-    which this class assigns; it never defines its own button QSS. Danger
-    sits alone on the right, separated from the primary/secondary cluster by
-    a stretch, and gets both the ``danger`` state variant (byte-identical to
-    ``#dangerBtn``) and the ``dangerBtn`` objectName so existing
-    ``#dangerBtn``-keyed lookups/tests keep finding it — one danger visual
-    language app-wide (rule 2).
+    """A styled row of primary/secondary/motion/danger action buttons
+    (cockpit_style_overhaul.md §2; command classes per
+    docs/design/cockpit_design_system.md law 2). This class owns *layout*
+    only — the colour comes entirely from the existing button ``state``
+    property variants in ``gui/style.py``
+    (``primary``/``secondary``/``ghost``/``motion``/``danger``), which this
+    class assigns; it never defines its own button QSS. Danger sits alone on
+    the right, separated from the rest by a stretch, and gets both the
+    ``danger`` state variant (byte-identical to ``#dangerBtn``) and the
+    ``dangerBtn`` objectName so existing ``#dangerBtn``-keyed lookups/tests
+    keep finding it — one danger visual language app-wide (rule 2). *motion*
+    (law 2: "Motion commands are amber-gated") sits in the left/primary
+    cluster, after *primary* — a motion command (stage move, homing, ...) is
+    call-out-worthy but not as extreme as danger, so it does not join danger
+    on the right.
 
     *secondary* accepts a single button or an iterable of buttons. Callers
     still wire ``clicked``/feedback themselves — e.g.
@@ -461,6 +570,7 @@ class ActionBar(QWidget):
         secondary: QPushButton | Iterable[QPushButton] | None = None,
         danger: QPushButton | None = None,
         *,
+        motion: QPushButton | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -472,6 +582,7 @@ class ActionBar(QWidget):
             [secondary] if isinstance(secondary, QPushButton)
             else list(secondary or ()))
         self.primary = primary
+        self.motion = motion
         self.danger = danger
 
         for btn in self.secondary:
@@ -480,13 +591,16 @@ class ActionBar(QWidget):
         if primary is not None:
             primary.setProperty("state", "primary")
             row.addWidget(primary)
+        if motion is not None:
+            motion.setProperty("state", "motion")
+            row.addWidget(motion)
         row.addStretch(1)
         if danger is not None:
             danger.setProperty("state", "danger")
             danger.setObjectName("dangerBtn")
             row.addWidget(danger)
 
-        for btn in (*self.secondary, primary, danger):
+        for btn in (*self.secondary, primary, motion, danger):
             if btn is not None:
                 repolish(btn)
 
@@ -538,6 +652,130 @@ class CheckableCard(Card):
 
 
 # --------------------------------------------------------------------------- #
+# CollapsibleCard — a Card whose header discloses/hides its body (cockpit v5) #
+# --------------------------------------------------------------------------- #
+
+class CollapsibleCard(Card):
+    """A :class:`Card` with a disclosure toggle in the header that shows or
+    hides the body — the design-system §7 "collapsed by default" recipe
+    (Scan Viewer's Z-focus card, Bias's "Standalone sweeps (advanced)").
+
+    Unlike :class:`CheckableCard` (whose checkbox *disables* the body — an
+    enable/off semantic), collapsing only hides detail: whatever summary the
+    caller puts in the header (a status chip, a primary action via
+    ``add_header_widget``) stays live and reachable while collapsed, so the
+    card still says what it knows and offers its main verb at a glance.
+
+    Pure layout/visibility — no timers, no animation (law 8: nothing
+    decorative moves; expansion is an instant relayout).
+    """
+
+    expansion_changed = Signal(bool)
+
+    def __init__(
+        self,
+        title: str,
+        subtitle: str | None = None,
+        *,
+        expanded: bool = False,
+        margins: tuple[int, int, int, int] = (SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD),
+        spacing: int = SPACE_SM,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(title, subtitle, margins=margins, spacing=spacing, parent=parent)
+        self._toggle = QToolButton()
+        self._toggle.setObjectName("collapseToggle")
+        self._toggle.setCheckable(True)
+        self._toggle.setChecked(bool(expanded))
+        self._toggle.setToolTip(f"Show/hide {title} details")
+        self._toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        self.add_header_widget(self._toggle, before_title=True)
+        self._body_widget = self.body.parentWidget()
+        self._toggle.toggled.connect(self._on_toggled)
+        if self._body_widget is not None:
+            self._body_widget.setVisible(bool(expanded))
+
+    def _on_toggled(self, expanded: bool) -> None:
+        self._toggle.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow)
+        if self._body_widget is not None:
+            self._body_widget.setVisible(expanded)
+        self.expansion_changed.emit(expanded)
+
+    def is_expanded(self) -> bool:
+        return self._toggle.isChecked()
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._toggle.setChecked(bool(expanded))
+
+
+# --------------------------------------------------------------------------- #
+# SegmentedControl — exclusive mode switcher on the shared #segmented QSS     #
+# --------------------------------------------------------------------------- #
+
+class SegmentedControl(QFrame):
+    """An exclusive row of mode buttons styled by the pre-existing
+    ``QFrame#segmented`` / ``QPushButton#segBtn`` QSS hooks (``gui/style.py``
+    — the jog-step-preset look ``gui/motor_panel.py``/``gui/stage_view.py``
+    already hand-roll), generalised for the design-system §7 "segmented
+    modes" recipe (Analysis 2D-map/CCE modes, Scope Live/Single/Avg).
+
+    *segments* is an iterable of ``(key, label)`` pairs (or bare label
+    strings, in which case the label is its own key). Emits
+    ``selection_changed(key)`` and exposes ``current_key()`` /
+    ``set_current(key)``. Layout + the shared QSS only — no bespoke painting,
+    no new colours.
+    """
+
+    selection_changed = Signal(str)
+
+    def __init__(
+        self,
+        segments: Iterable[str | tuple[str, str]],
+        *,
+        current: str | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("segmented")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(3, 3, 3, 3)
+        lay.setSpacing(2)
+        self._group = QButtonGroup(self)
+        self._group.setExclusive(True)
+        self._buttons: dict[str, QPushButton] = {}
+        for seg in segments:
+            key, label = (seg, seg) if isinstance(seg, str) else seg
+            btn = QPushButton(label)
+            btn.setObjectName("segBtn")
+            btn.setCheckable(True)
+            btn.toggled.connect(
+                lambda on, _key=key: on and self.selection_changed.emit(_key))
+            self._group.addButton(btn)
+            self._buttons[str(key)] = btn
+            lay.addWidget(btn)
+        if self._buttons:
+            start = str(current) if current in self._buttons else next(iter(self._buttons))
+            self._buttons[start].setChecked(True)
+
+    def current_key(self) -> str | None:
+        for key, btn in self._buttons.items():
+            if btn.isChecked():
+                return key
+        return None
+
+    def set_current(self, key: str) -> None:
+        btn = self._buttons.get(str(key))
+        if btn is not None:
+            btn.setChecked(True)
+
+    def button(self, key: str) -> QPushButton | None:
+        return self._buttons.get(str(key))
+
+
+# --------------------------------------------------------------------------- #
 # EmptyState — centred icon/label/hint placeholder (cockpit kit)              #
 # --------------------------------------------------------------------------- #
 
@@ -553,6 +791,18 @@ class EmptyState(QWidget):
     (never a raw hex); call :meth:`refresh_theme` after a live theme switch
     to re-tint it (the same "re-resolve cached colour" idiom every
     axis-rail/instance-styled widget already follows).
+
+    Cockpit v5 D0 (docs/design/cockpit_design_system.md §2's "EmptyState
+    error variant" / §6 "Failed connects are designed error states ... not
+    message boxes"): pass ``variant="error"`` for a failed-connect/failed-
+    load surface — the icon and title tint to the danger token instead of
+    the neutral/muted default. *reason* is a second, quiet sentence-case
+    line ("WHY" — e.g. the driver's actual exception text), distinct from
+    *hint* (a generic caption shown regardless of variant, e.g. "connect a
+    device to begin"). *retry_slot* reserves a place for a caller-supplied
+    widget (typically a "Retry" QPushButton) — this class only lays it out
+    and never wires the click itself: retrying a failed connect is a
+    controller/device-manager call, out of a pure-view widget's remit.
     """
 
     def __init__(
@@ -561,12 +811,16 @@ class EmptyState(QWidget):
         label: str,
         hint: str | None = None,
         *,
+        variant: str = "default",
+        reason: str | None = None,
+        retry_slot: QWidget | None = None,
         theme_mode: str = "light",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._icon_name = icon
         self._theme_mode = theme_mode
+        self._variant = "error" if str(variant).lower() == "error" else "default"
 
         lay = QVBoxLayout(self)
         lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -578,7 +832,6 @@ class EmptyState(QWidget):
 
         self._label = QLabel(label)
         self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._label.setStyleSheet(f"font-size: {FONT_LG}px; font-weight: 600;")
         lay.addWidget(self._label)
 
         self._hint: QLabel | None = None
@@ -589,14 +842,45 @@ class EmptyState(QWidget):
             self._hint.setWordWrap(True)
             lay.addWidget(self._hint)
 
+        self._reason: QLabel | None = None
+        if reason:
+            self._reason = QLabel(reason)
+            self._reason.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._reason.setWordWrap(True)
+            lay.addWidget(self._reason)
+
+        self.retry_slot = retry_slot
+        if retry_slot is not None:
+            lay.addWidget(retry_slot, 0, Qt.AlignmentFlag.AlignCenter)
+
         self._apply_icon()
+        self._apply_variant_ink()
+
+    def _apply_variant_ink(self) -> None:
+        """Tint the title (and reason, if present) from the current theme's
+        palette — error variant uses the danger token for the title (the
+        ONE emphasised line; the reason stays quiet/muted body prose, law 3:
+        "Explanations: sentence-case sans", never a second red line)."""
+        p = palette(self._theme_mode)
+        title_color = p["crit"] if self._variant == "error" else p["text"]
+        self._label.setStyleSheet(
+            f"font-size: {FONT_LG}px; font-weight: 600; color: {title_color};")
+        if self._reason is not None:
+            self._reason.setStyleSheet(
+                f"color: {p['muted']}; font-size: {FONT_BODY_PX}px; "
+                f"font-weight: {WEIGHT_BODY};")
+
+    def set_reason(self, text: str) -> None:
+        if self._reason is not None:
+            self._reason.setText(text)
 
     def _apply_icon(self) -> None:
         if not self._icon_name:
             return
         try:
             import qtawesome as qta
-            color = palette(self._theme_mode)["muted"]
+            p = palette(self._theme_mode)
+            color = p["crit"] if self._variant == "error" else p["muted"]
             self._icon_label.setPixmap(qta.icon(self._icon_name, color=color).pixmap(40, 40))
         except Exception:
             pass
@@ -612,3 +896,4 @@ class EmptyState(QWidget):
         if mode:
             self._theme_mode = str(mode)
         self._apply_icon()
+        self._apply_variant_ink()

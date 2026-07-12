@@ -138,6 +138,43 @@ def test_update_yaml_file_round_trip(tmp_path):
     assert yaml.safe_load(text)["oscilloscope"]["trigger_source"] == "CH3"
 
 
+def test_update_yaml_file_atomic_path_preserves_content_and_comments(tmp_path):
+    """The atomic write path (temp file + os.replace) must yield a file that is
+    byte-identical to computing merge_yaml_text in memory -- comments and all."""
+    p = tmp_path / "devices.yaml"
+    p.write_text(_WAVEGEN_DOC, encoding="utf-8")
+    update_yaml_file(p, {"oscilloscope": {"trigger_source": "CH3"}})
+    on_disk = p.read_text(encoding="utf-8")
+    assert on_disk == merge_yaml_text(_WAVEGEN_DOC, {"oscilloscope": {"trigger_source": "CH3"}})
+    assert "# level_low_V: 0.0" in on_disk
+
+
+def test_update_yaml_file_failed_write_leaves_original_untouched(tmp_path, monkeypatch):
+    """A crash during the atomic replace must leave the ORIGINAL file intact
+    (soft limits / HV ranges live here) and must not leak a temp file."""
+    import controller.yaml_persist as yp
+
+    p = tmp_path / "devices.yaml"
+    p.write_text(_WAVEGEN_DOC, encoding="utf-8")
+
+    def boom(*_a, **_k):
+        raise OSError("simulated crash during replace")
+
+    monkeypatch.setattr(yp.os, "replace", boom)
+    try:
+        update_yaml_file(p, {"oscilloscope": {"trigger_source": "CH9"}})
+    except OSError:
+        pass
+    else:  # pragma: no cover - the monkeypatched replace must raise
+        raise AssertionError("expected the simulated write failure to propagate")
+
+    # Original content is byte-for-byte intact.
+    assert p.read_text(encoding="utf-8") == _WAVEGEN_DOC
+    # No stray temp files left behind in the directory.
+    leftovers = [q.name for q in tmp_path.iterdir() if q.name != "devices.yaml"]
+    assert leftovers == [], f"temp file(s) leaked: {leftovers}"
+
+
 def test_no_trailing_newline_preserved():
     doc = _WAVEGEN_DOC.rstrip("\n")
     new_text = merge_yaml_text(doc, {"oscilloscope": {"trigger_source": "CH4"}})

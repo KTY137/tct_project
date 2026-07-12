@@ -36,12 +36,16 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSpinBox,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from devices.camera_blackfly import BlackflyCamera, FrameMeta
-from gui.panel_kit import Card, panel_header, readout_cell
+from gui.panel_kit import (
+    ActionBar, Card, EmptyState, MetricGrid, MetricTile, panel_header,
+    readout_cell,
+)
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
 from gui.style import DARK, LIGHT, PLOT_BG, SPACE_MD, SPACE_SM, WARN_AMBER, WARN_RED
 
@@ -126,6 +130,11 @@ class _CameraWorker(QObject):
     def stop(self) -> None:
         self._timer.stop()
 
+    def poll_once(self) -> None:
+        """One single grab (the panel's "Single" command) — exactly one pass
+        of the existing poll path, without (re)starting the live timer."""
+        self._poll()
+
     def _poll(self) -> None:
         cam = self._get_camera()
         if cam is None or not getattr(cam, "connected", False):
@@ -168,7 +177,9 @@ class CameraPanel(QWidget):
     """Live camera view with full acquisition controls and beam diagnostics."""
 
     _HIST_BINS = 256   # histogram resolution
-    _worker_stop_requested = Signal()   # GUI → worker: stop the poll timer
+    _worker_stop_requested = Signal()    # GUI → worker: stop the poll timer
+    _worker_start_requested = Signal()   # GUI → worker: (re)start the poll timer
+    _worker_single_requested = Signal()  # GUI → worker: grab exactly one frame
 
     def __init__(
         self,
@@ -202,6 +213,8 @@ class CameraPanel(QWidget):
         self._cam_worker.moveToThread(self._cam_thread)
         self._cam_thread.started.connect(self._cam_worker.start)
         self._worker_stop_requested.connect(self._cam_worker.stop)
+        self._worker_start_requested.connect(self._cam_worker.start)
+        self._worker_single_requested.connect(self._cam_worker.poll_once)
         self._cam_thread.finished.connect(self._cam_worker.deleteLater)
         self._cam_thread.finished.connect(self._cam_thread.deleteLater)
         self._cam_worker.frame_ready.connect(self._on_frame)
@@ -250,14 +263,55 @@ class CameraPanel(QWidget):
         # same "dark instrument screen in both themes" idiom the plot canvas
         # uses everywhere else — see gui/style.py).  Hot-path widget: no
         # QGraphicsEffect/shadow/glow, ever — static border + surface only.
+        # Designed empty states (design system §7 "Camera"): a stack swaps
+        # between not-connected (error variant, §6 "failed connects are
+        # designed error states"), not-streaming, and the live image.
         view_card = Card()
         view_card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
-        self._img_label = QLabel("No image")
+        self._img_label = QLabel("")
         self._img_label.setAlignment(Qt.AlignCenter)
         self._img_label.setMinimumSize(480, 320)
         self._img_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._img_label.setStyleSheet(f"background: {PLOT_BG};")
-        view_card.add_widget(self._img_label)
+        self._empty_offline = EmptyState(
+            "mdi.camera-off", "Camera not connected",
+            "Connect the camera from the top bar; streaming resumes on its own.",
+            variant="error", theme_mode=self._theme_mode,
+        )
+        self._empty_stopped = EmptyState(
+            "mdi.camera", "Not streaming",
+            "Press Live for a continuous stream or Single for one frame.",
+            theme_mode=self._theme_mode,
+        )
+        self._view_stack = QStackedWidget()
+        self._view_stack.addWidget(self._empty_offline)   # index 0
+        self._view_stack.addWidget(self._empty_stopped)   # index 1
+        self._view_stack.addWidget(self._img_label)       # index 2
+        self._view_stack.setCurrentWidget(self._empty_offline)
+        view_card.add_widget(self._view_stack)
+
+        # Live / Single / Stop — the acquisition commands this panel never
+        # had (the stream used to start silently with the worker thread and
+        # was unstoppable from the UI).  They drive the EXISTING worker
+        # QTimer via queued signals; no new acquisition path.
+        self._btn_live = QPushButton("Live")
+        set_button_icon(self._btn_live, "mdi.play")
+        self._btn_live.setCheckable(True)
+        self._btn_live.setChecked(True)   # streaming auto-starts (unchanged)
+        self._btn_live.setToolTip("Continuously grab frames (worker-thread poll)")
+        self._btn_live.toggled.connect(self._on_live_toggled)
+        self._btn_single = QPushButton("Single")
+        set_button_icon(self._btn_single, "mdi.camera")
+        self._btn_single.setToolTip("Stop the stream and grab exactly one frame")
+        self._btn_single.clicked.connect(self._on_single_clicked)
+        self._btn_stop = QPushButton("Stop")
+        set_button_icon(self._btn_stop, "mdi.stop")
+        self._btn_stop.setToolTip("Stop grabbing frames (keeps the last image)")
+        self._btn_stop.clicked.connect(self._on_stop_clicked)
+        view_card.add_widget(ActionBar(
+            primary=self._btn_live,
+            secondary=[self._btn_single, self._btn_stop],
+        ))
         left.addWidget(view_card, stretch=3)
 
         # Histogram — hot-path plot: dark canvas via the PLOT_BG token only,
@@ -278,28 +332,28 @@ class CameraPanel(QWidget):
         hist_card.add_widget(self._hist_plot)
         left.addWidget(hist_card)
 
-        # Beam stats — instrument-style readout cells (title + monospace
-        # value), replacing the old hand-rolled QLabel boxes.
-        stats_card = Card("Beam Statistics")
-        stats_lay = QHBoxLayout()
-        self._ro_cx    = readout_cell("Cx", min_width=64)
-        self._ro_cy    = readout_cell("Cy", min_width=64)
-        self._ro_sx    = readout_cell("σx", min_width=64)
-        self._ro_sy    = readout_cell("σy", min_width=64)
-        self._ro_peak  = readout_cell("Peak", min_width=64)
-        self._ro_mean  = readout_cell("Mean", min_width=64)
-        self._ro_std   = readout_cell("Std", min_width=64)
-        for ro in (self._ro_cx, self._ro_cy, self._ro_sx, self._ro_sy,
-                   self._ro_peak, self._ro_mean, self._ro_std):
-            stats_lay.addWidget(ro)
-        stats_lay.addStretch(1)
-        stats_card.add_layout(stats_lay)
+        # Beam stats — MetricTiles (design system §7: "beam stats as tiles",
+        # px units on the values); stale-with-caption until the first frame
+        # (law 4: never an unexplained bare dash).
+        stats_card = Card("Beam statistics")
+        stats_grid = MetricGrid(columns=7)
+        self._ro_cx    = stats_grid.add_tile(MetricTile("Cx", "—", min_width=72))
+        self._ro_cy    = stats_grid.add_tile(MetricTile("Cy", "—", min_width=72))
+        self._ro_sx    = stats_grid.add_tile(MetricTile("σx", "—", min_width=72))
+        self._ro_sy    = stats_grid.add_tile(MetricTile("σy", "—", min_width=72))
+        self._ro_peak  = stats_grid.add_tile(MetricTile("Peak", "—", min_width=72))
+        self._ro_mean  = stats_grid.add_tile(MetricTile("Mean", "—", min_width=72))
+        self._ro_std   = stats_grid.add_tile(MetricTile("Std", "—", min_width=72))
+        for tile in stats_grid.tiles():
+            tile.set_stale(True, "no frame yet")
+        self._stats_tiles = stats_grid.tiles()
+        stats_card.add_widget(stats_grid)
         left.addWidget(stats_card)
 
         # Frame metadata — same readout-cell treatment; Temp is a hand-built
         # look-alike so its tri-state good/warn/crit colour swap has a hook
         # ReadoutCell itself doesn't expose (see _build_temp_readout()).
-        meta_card = Card("Frame Info")
+        meta_card = Card("Frame info")
         meta_lay = QHBoxLayout()
         self._ro_frame_id = readout_cell("Frame", min_width=64)
         self._ro_ts       = readout_cell("T (ms)", min_width=64)
@@ -315,7 +369,7 @@ class CameraPanel(QWidget):
         left.addWidget(meta_card)
 
         # Action buttons
-        actions_card = Card("View & Capture")
+        actions_card = Card("View & capture")
         btn_row = QHBoxLayout()
         self._chk_crosshair = QCheckBox("Crosshair")
         self._chk_crosshair.setChecked(True)
@@ -327,7 +381,7 @@ class CameraPanel(QWidget):
         self._chk_overlay.toggled.connect(lambda v: setattr(self, "_show_overlay", v))
         btn_row.addWidget(self._chk_overlay)
 
-        self._btn_save = QPushButton("Save Frame…")
+        self._btn_save = QPushButton("Save frame…")
         set_button_icon(self._btn_save, "mdi.content-save")
         self._btn_save.clicked.connect(self._save_frame)
         btn_row.addWidget(self._btn_save)
@@ -427,7 +481,7 @@ class CameraPanel(QWidget):
         right.addWidget(acq_card)
 
         # ── Image processing ──────────────────────────────────────────
-        img_card = Card("Image Processing")
+        img_card = Card("Image processing")
         img_form = QFormLayout()
 
         self._chk_gamma = QCheckBox("Enable")
@@ -462,7 +516,7 @@ class CameraPanel(QWidget):
         # hook (gui/style.py) instead of a hand-rolled "color: #aaa" — it
         # repaints on a live theme switch automatically via the app-wide
         # stylesheet, so this label needs no entry in refresh_theme().
-        info_card = Card("Camera Info")
+        info_card = Card("Camera info")
         self._lbl_info = QLabel("–")
         self._lbl_info.setObjectName("cardSubtitle")
         self._lbl_info.setWordWrap(True)
@@ -515,9 +569,13 @@ class CameraPanel(QWidget):
     def _restyle_theme_tokens(self) -> None:
         """Re-resolve the histogram bar's accent colour, baked as a
         pyqtgraph brush at construction time (a theme switch does not
-        otherwise touch it)."""
+        otherwise touch it), plus the two EmptyState surfaces' icon/ink."""
         if hasattr(self, "_hist_bar"):
             self._hist_bar.setOpts(brush=self._hist_brush())
+        for empty in (getattr(self, "_empty_offline", None),
+                      getattr(self, "_empty_stopped", None)):
+            if empty is not None:
+                empty.refresh_theme(self._theme_mode)
 
     def refresh_theme(self, mode: str | None = None) -> None:
         """Re-resolve theme-token colours after a light/dark switch (same
@@ -543,6 +601,10 @@ class CameraPanel(QWidget):
         arrive as arguments."""
         self._last_frame = frame
         self._last_meta  = meta
+        self._view_stack.setCurrentWidget(self._img_label)
+        for tile in self._stats_tiles:
+            if tile.is_stale():
+                tile.set_stale(False, "")
         self._display(frame, meta)
         self._update_histogram(frame)
         self._update_stats(meta, temp, fps)
@@ -551,9 +613,47 @@ class CameraPanel(QWidget):
     @Slot()
     def _on_offline(self) -> None:
         """Worker reports the camera is not connected — the same neutral chips
-        the old _refresh painted on its not-connected branch."""
-        self._chip_camera.set_status("Camera offline", "neutral")
+        the old _refresh painted on its not-connected branch, plus the
+        designed not-connected surface when there is no last frame to keep."""
+        self._chip_camera.set_status("Camera offline", "disconnected")
         self._chip_fps.set_status("FPS --", "neutral")
+        if self._last_frame is None:
+            self._view_stack.setCurrentWidget(self._empty_offline)
+
+    # ── Live / Single / Stop (existing worker QTimer, exposed honestly) ──
+
+    def _on_live_toggled(self, checked: bool) -> None:
+        if checked:
+            self._worker_start_requested.emit()
+            self._chip_camera.set_status("Camera starting…", "busy")
+        else:
+            self._worker_stop_requested.emit()
+            self._on_stream_stopped()
+
+    def _on_single_clicked(self) -> None:
+        # Single = stop the stream (if running), then exactly one grab.
+        if self._btn_live.isChecked():
+            self._btn_live.setChecked(False)   # emits the stop via toggled
+        self._worker_single_requested.emit()
+
+    def _on_stop_clicked(self) -> None:
+        if self._btn_live.isChecked():
+            self._btn_live.setChecked(False)   # emits the stop via toggled
+        else:
+            self._worker_stop_requested.emit() # idempotent explicit stop
+            self._on_stream_stopped()
+
+    def _on_stream_stopped(self) -> None:
+        """Honest stopped state: the last frame (if any) is kept on screen;
+        with none yet, the designed not-streaming placeholder shows."""
+        connected = bool(getattr(self._camera, "connected", False))
+        self._chip_camera.set_status(
+            "Stream stopped" if connected else "Camera offline",
+            "neutral" if connected else "disconnected")
+        self._chip_fps.set_status("FPS --", "neutral")
+        if self._last_frame is None:
+            self._view_stack.setCurrentWidget(
+                self._empty_stopped if connected else self._empty_offline)
 
     def _update_status_chips(self, frame: np.ndarray, meta: FrameMeta) -> None:
         self._chip_camera.set_status("Camera live", "busy")

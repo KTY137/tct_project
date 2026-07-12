@@ -17,12 +17,15 @@ Built entirely on the cockpit kit (``gui/panel_kit.py``) and the shared
 * **Run monitor** — a ``MetricGrid`` (progress, ETA, current point, elapsed).
 * **Run control** — an ``ActionBar`` with Pause/Resume + a loud ``dangerBtn``
   Abort (rule 2), both disabled unless a run is active.
-* **Z-focus** — a ``CheckableCard`` holding the focus-scan form (lifted from
-  ``gui/scan_panel.py``'s proven ``on_z_focus_point``/``on_z_focus_done``
-  logic, adapted to the kit) plus its own live Z-vs-amplitude curve.
-* **EmptyState** until the first run starts; once a run has painted the map,
-  the map stays on screen (with a "finished" status chip) even after the run
-  ends, so "Open in Analysis" has something to hand off.
+* **Z-focus** — a ``CollapsibleCard`` (collapsed by default, design system
+  §7) holding the focus-scan form (lifted from ``gui/scan_panel.py``'s proven
+  ``on_z_focus_point``/``on_z_focus_done`` logic) plus its live curve; the
+  header keeps a Best-Z summary chip and the "Find focus" verb reachable
+  while collapsed.
+* **Empty placeholder** lives inside ``ScanMapView`` (so the map toolbar
+  stays visible pre-run); once a run has painted the map, the map stays on
+  screen — with a FINISHED/ABORTED banner carrying a first-class "Open in
+  Analysis" — even after the run ends.
 
 No hardware I/O in the constructor; thread-free (only consumes signals a
 caller feeds into its slots — see ``docs/research/scan_viewer_design_review.md``
@@ -34,20 +37,23 @@ from __future__ import annotations
 import time
 
 import pyqtgraph as pg
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox, QDoubleSpinBox, QFormLayout, QFrame, QHBoxLayout, QLabel,
-    QPushButton, QSpinBox, QStackedWidget, QVBoxLayout, QWidget,
+    QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from controller.scan_controller import ScanResult, ZFocusScanConfig
 from gui.panel_kit import (
-    ActionBar, CheckableCard, EmptyState, FigureCard, MetricGrid, panel_header,
+    ActionBar, CollapsibleCard, FigureCard, MetricGrid, panel_header,
 )
 from gui.motion import flash_readout
 from gui.scan_map_view import ScanMapView
 from gui.status_widgets import StatusChip, set_button_icon
-from gui.style import PLOT_OVERLAY, SPACE_SM, axis_color, repolish
+from gui.style import (
+    FONT_BODY_PX, PLOT_OVERLAY, SPACE_SM, WEIGHT_BODY, axis_color, palette,
+    repolish,
+)
 
 
 class ScanViewerPanel(QWidget):
@@ -90,6 +96,7 @@ class ScanViewerPanel(QWidget):
         super().__init__(parent)
         self._theme_mode = "light"
         self._run_active = False
+        self._abort_pending = False
         self._last_run_path: str | None = None
         self._start_time: float | None = None
         self._zf_z_data: list[float] = []
@@ -106,34 +113,36 @@ class ScanViewerPanel(QWidget):
         root.setSpacing(SPACE_SM)
 
         self._chip_run = StatusChip("No run", "neutral", min_width=140)
-        self._btn_open_analysis = QPushButton("Open in Analysis")
-        set_button_icon(self._btn_open_analysis, "mdi.chart-box-outline")
-        self._btn_open_analysis.setEnabled(False)
-        self._btn_open_analysis.clicked.connect(self._emit_open_in_analysis)
         root.addWidget(panel_header(
             "TCT Control", "Scan Viewer",
-            trailing=[self._chip_run, self._btn_open_analysis],
+            trailing=[self._chip_run],
             theme_mode=self._theme_mode,
         ))
 
-        # ── Live map / EmptyState swap ───────────────────────────────
-        self._stack = QStackedWidget()
-        self._empty_state = EmptyState(
-            "fa5s.map", "No run in progress",
-            "Configure and start a routine in the Scan Planner.",
-            theme_mode=self._theme_mode,
+        # ── Live map (the hero) ───────────────────────────────────────
+        # The empty placeholder now lives INSIDE ScanMapView, so its
+        # quantity/freeze/export toolbar stays visible even before the first
+        # run (design system §7) — no panel-level stacked swap anymore.
+        self._map_view = ScanMapView(
+            empty_label="No run in progress",
+            empty_hint="Configure and start a routine in the Scan Planner.",
         )
-        self._map_view = ScanMapView()
-        self._stack.addWidget(self._empty_state)   # index 0
-        self._stack.addWidget(self._map_view)       # index 1
-        root.addWidget(self._stack, 1)
+        root.addWidget(self._map_view, 1)
+
+        # ── Finished banner — terminal state as design (§5) ──────────
+        root.addWidget(self._build_finished_banner())
 
         # ── Run monitor ───────────────────────────────────────────────
-        self._metrics = MetricGrid(columns=4)
+        # Compact tiles: a position triple / h-scale ETA never fits the
+        # 26 px hero face 4-across. Stale-captioned per law 4 until a run
+        # actually feeds them.
+        self._metrics = MetricGrid(columns=4, compact=True)
         self._metric_progress = self._metrics.add_tile(("Progress", "0/0"))
         self._metric_eta = self._metrics.add_tile(("ETA", "--"))
         self._metric_point = self._metrics.add_tile(("Point", "x=-- y=-- z=--"))
         self._metric_elapsed = self._metrics.add_tile(("Elapsed", "--"))
+        for tile in self._metrics.tiles():
+            tile.set_stale(True, "no run yet")
         root.addWidget(self._metrics)
 
         # ── Run control ───────────────────────────────────────────────
@@ -154,12 +163,50 @@ class ScanViewerPanel(QWidget):
         # ── Z-focus live assist ──────────────────────────────────────
         root.addWidget(self._build_z_focus_card())
 
-    def _build_z_focus_card(self) -> CheckableCard:
-        card = CheckableCard(
-            "Z-Focus (Focal-Point Calibration)",
-            "live assist — not a Planner routine",
-            checked=True,
+    def _build_finished_banner(self) -> QFrame:
+        """The FINISHED terminal state as a designed banner (design system
+        §5: "FINISHED (good; banner + first-class 'Open in Analysis' + map
+        retained stale)"). Hidden until a run ends; also carries the ABORTED
+        variant (neutral-critical text, fail-safe caption) — the panel knows
+        locally whether its own Abort was pressed before the finish arrived."""
+        banner = QFrame()
+        banner.setObjectName("cardPane")
+        banner.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        row = QHBoxLayout(banner)
+        row.setContentsMargins(SPACE_SM + 4, SPACE_SM, SPACE_SM + 4, SPACE_SM)
+        row.setSpacing(SPACE_SM)
+        self._chip_finished = StatusChip("Finished", "good")
+        row.addWidget(self._chip_finished)
+        p = palette(self._theme_mode)
+        self._lbl_finished = QLabel("Scan finished — map retained.")
+        self._lbl_finished.setObjectName("finishedBannerText")
+        self._lbl_finished.setStyleSheet(
+            f"#finishedBannerText {{ color: {p['muted']}; "
+            f"font-size: {FONT_BODY_PX}px; font-weight: {WEIGHT_BODY}; }}")
+        row.addWidget(self._lbl_finished, 1)
+        self._btn_open_analysis = QPushButton("Open in Analysis")
+        set_button_icon(self._btn_open_analysis, "mdi.chart-box-outline")
+        self._btn_open_analysis.setProperty("state", "primary")
+        repolish(self._btn_open_analysis)
+        self._btn_open_analysis.setEnabled(False)
+        self._btn_open_analysis.clicked.connect(self._emit_open_in_analysis)
+        row.addWidget(self._btn_open_analysis)
+        banner.setVisible(False)
+        self._finished_banner = banner
+        return banner
+
+    def _build_z_focus_card(self) -> CollapsibleCard:
+        # Collapsed by default (design system §7): the header keeps a live
+        # summary chip + the primary "Find focus" verb reachable at all
+        # times; the form/curve expand on demand.
+        card = CollapsibleCard(
+            "Z focus",
+            "focal-point assist — not a planner routine",
+            expanded=False,
         )
+        self._zf_card = card
+        self._chip_best_z = StatusChip("No focus result", "neutral")
+        card.add_header_widget(self._chip_best_z)
 
         self._zf_mode = QComboBox()
         self._zf_mode.addItem("Edge scan — sharpness (recommended)", "edge_scan")
@@ -239,12 +286,14 @@ class ScanViewerPanel(QWidget):
         self._zf_figure.plot.addItem(self._zf_marker)
         card.add_widget(self._zf_figure)
 
-        self._btn_zf_start = QPushButton("Find Focus")
+        # "Find focus" lives in the HEADER (not the collapsible body) so the
+        # card's primary verb stays one click away while collapsed.
+        self._btn_zf_start = QPushButton("Find focus")
         set_button_icon(self._btn_zf_start, "mdi.crosshairs-gps")
         self._btn_zf_start.setProperty("state", "primary")
         repolish(self._btn_zf_start)
         self._btn_zf_start.clicked.connect(self._emit_z_focus)
-        card.add_widget(self._btn_zf_start)
+        card.add_header_widget(self._btn_zf_start)
 
         return card
 
@@ -263,30 +312,55 @@ class ScanViewerPanel(QWidget):
 
     def on_scan_started(self) -> None:
         self._run_active = True
+        self._abort_pending = False
         # Invalidate the previous run's handoff path — without this, a run
         # that never publishes a fresh path (e.g. aborted before the writer
         # opened) would re-offer the *prior* run's file on finish.
         self._last_run_path = None
         self._start_time = time.monotonic()
         self._map_view.clear()
+        self._map_view.set_empty_state_text(
+            "Run starting", "Waiting for the first point.")
         self._btn_pause.setEnabled(True)
         self._btn_pause.setChecked(False)
         self._btn_pause.setText("Pause")
         self._btn_abort.setEnabled(True)
         self._btn_open_analysis.setEnabled(False)
+        self._finished_banner.setVisible(False)
         self._chip_run.set_status("Running", "busy")
         self._metric_progress.set_value("0/0")
+        self._metric_progress.set_stale(False, "")
         self._metric_eta.set_value("--")
+        self._metric_eta.set_stale(True, "estimating")
         self._metric_point.set_value("x=-- y=-- z=--")
+        self._metric_point.set_stale(True, "no point yet")
         self._metric_elapsed.set_value("0 s")
-        self._show_map()
+        self._metric_elapsed.set_stale(False, "")
 
     def on_scan_finished(self) -> None:
         self._run_active = False
         self._btn_pause.setEnabled(False)
         self._btn_pause.setChecked(False)
         self._btn_abort.setEnabled(False)
-        self._chip_run.set_status("Finished", "good")
+        # Terminal states differ (design system §5): FINISHED reads good;
+        # an abort the user requested from THIS panel reads as the neutral-
+        # critical ABORTED variant with a fail-safe caption. (A trip/FAULT
+        # variant needs an error signal the coordinator does not carry yet.)
+        if self._abort_pending:
+            self._chip_run.set_status("Aborted", "warn")
+            self._chip_finished.set_status("Aborted", "warn")
+            self._lbl_finished.setText(
+                "Scan aborted — hardware left safe, partial map retained.")
+        else:
+            self._chip_run.set_status("Finished", "good")
+            self._chip_finished.set_status("Finished", "good")
+            self._lbl_finished.setText("Scan finished — map retained.")
+        self._abort_pending = False
+        self._finished_banner.setVisible(True)
+        # Law 4: the tiles stop updating now — say so instead of freezing
+        # silently. Values stay readable (final numbers), ink goes stale.
+        for tile in self._metrics.tiles():
+            tile.set_stale(True, "final — run ended")
         if self._last_run_path:
             self._btn_open_analysis.setEnabled(True)
 
@@ -294,11 +368,15 @@ class ScanViewerPanel(QWidget):
         self._map_view.update_point(result)
         p = result.point
         self._metric_point.set_value(f"x={p.x_mm:.3f} y={p.y_mm:.3f} z={p.z_mm:.3f}")
-        self._show_map()
+        if self._run_active:
+            self._metric_point.set_stale(False, "")
 
     def on_progress(self, done: int, total: int) -> None:
         self._metric_progress.set_value(f"{done}/{total}")
-        self._metric_eta.set_value(self._compute_eta(done, total))
+        eta = self._compute_eta(done, total)
+        self._metric_eta.set_value(eta)
+        if eta != "--":
+            self._metric_eta.set_stale(False, "")
         self._metric_elapsed.set_value(self._format_duration(self._elapsed_s()))
         flash_readout(self._metric_progress, "accent", timeout_ms=450)
 
@@ -307,6 +385,8 @@ class ScanViewerPanel(QWidget):
 
     def set_current_position(self, x_mm: float, y_mm: float, z_mm: float) -> None:
         self._metric_point.set_value(f"x={x_mm:.3f} y={y_mm:.3f} z={z_mm:.3f}")
+        if self._run_active:
+            self._metric_point.set_stale(False, "")
 
     def set_last_run_path(self, path: str | None) -> None:
         """Learn the just-written run's HDF5 path (see class docstring)."""
@@ -327,6 +407,10 @@ class ScanViewerPanel(QWidget):
         mode = self._zf_mode.currentData()
         mode_label = "edge scan" if mode == "edge_scan" else "amplitude"
         self._lbl_best_z.setText(f"Best Z: {best_z_mm:.3f} mm  ({mode_label})")
+        # Header chip: the collapsed card's live summary (§7 "header chip").
+        self._chip_best_z.set_status(
+            f"Best Z {best_z_mm:.3f} mm", "neutral",
+            f"from {mode_label} — Apply to Planner stages it, never moves the motor")
         self._zf_marker.setValue(best_z_mm)
         self._zf_marker.setVisible(True)
         self._last_best_z = float(best_z_mm)
@@ -346,12 +430,9 @@ class ScanViewerPanel(QWidget):
             self.pause_requested.emit(paused)
 
     def _on_abort_clicked(self) -> None:
+        self._abort_pending = True
         self._chip_run.set_status("Aborting", "warn")
         self.abort_requested.emit()
-
-    def _show_map(self) -> None:
-        if self._stack.currentIndex() != 1:
-            self._stack.setCurrentIndex(1)
 
     def _elapsed_s(self) -> float:
         if self._start_time is None:
@@ -403,6 +484,7 @@ class ScanViewerPanel(QWidget):
         self._zf_curve.setData([], [])
         self._zf_marker.setVisible(False)
         self._lbl_best_z.setText("Best Z: --")
+        self._chip_best_z.set_status("Focus scan running", "busy")
         self._last_best_z = None
         self._btn_apply_best_z.setEnabled(False)
         mode = self._zf_mode.currentData()
@@ -439,6 +521,10 @@ class ScanViewerPanel(QWidget):
         if mode:
             self._theme_mode = str(mode)
         self._map_view.refresh_theme(self._theme_mode)
-        self._empty_state.refresh_theme(self._theme_mode)
+        # Banner prose colour is baked at construction — re-resolve it.
+        p = palette(self._theme_mode)
+        self._lbl_finished.setStyleSheet(
+            f"#finishedBannerText {{ color: {p['muted']}; "
+            f"font-size: {FONT_BODY_PX}px; font-weight: {WEIGHT_BODY}; }}")
         self._zf_curve.setPen(pg.mkPen(axis_color("z", self._theme_mode), width=2))
         self._zf_marker.setPen(pg.mkPen(PLOT_OVERLAY, width=2))

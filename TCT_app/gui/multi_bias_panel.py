@@ -103,15 +103,18 @@ class MultiBiasPanel(QWidget):
         if total == 0:
             self._chip_channels.set_status("No channels", "neutral")
         elif connected == 0:
-            self._chip_channels.set_status(f"0/{total} connected", "neutral")
+            self._chip_channels.set_status(f"0/{total} connected", "disconnected")
         elif connected == total:
-            self._chip_channels.set_status(f"{connected}/{total} connected", "good")
+            # Quiet nominal (law 1): all-connected is routine, not a green light.
+            self._chip_channels.set_status(f"{connected}/{total} connected", "neutral")
         else:
             self._chip_channels.set_status(f"{connected}/{total} connected", "warn")
         for idx, ch in enumerate(self._channels):
             label = f"CH{getattr(ch, 'channel', '?')}"
+            # "connected", not "LIVE" — a serial link up is NOT an energized
+            # output (law 7); HV state lives on the per-channel hero tile.
             if getattr(ch, "connected", False):
-                label += " LIVE"
+                label += " · connected"
             self._tabs.setTabText(idx, label)
 
     # ------------------------------------------------------------------ #

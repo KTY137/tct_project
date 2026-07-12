@@ -31,6 +31,8 @@ from typing import Callable
 
 import numpy as np
 
+from controller.danger_gate import DangerAction, DangerGate
+
 
 # --------------------------------------------------------------------------- #
 # Sub-pixel phase correlation (numpy only)                                     #
@@ -173,14 +175,40 @@ class RepeatabilityTester:
 
     *motor* must implement ``get_position``, ``move_to``, ``move_relative``;
     *camera* must implement ``get_frame() -> np.ndarray`` and be connected.
+
+    Stage motion is dangerous (CLAUDE.md hardware-safety rule 2), so this tester
+    is fail-closed: it will not command a single move without an explicit
+    operator confirmation obtained through an injected
+    :class:`~controller.danger_gate.DangerGate`.  A single confirmation covers
+    the whole run — carrying the real cycle count, axes and excursion — mirroring
+    the plan executor's one-confirm-per-run stance in ``scan_controller``.  If no
+    gate is supplied (*gate* is ``None``) the tester REFUSES to move: it raises
+    rather than silently running ungated.
     """
 
-    def __init__(self, motor, camera, logger: logging.Logger | None = None) -> None:
+    def __init__(self, motor, camera, logger: logging.Logger | None = None,
+                 *, gate: DangerGate | None = None) -> None:
         self._motor = motor
         self._camera = camera
         self.logger = logger or logging.getLogger(__name__)
+        self._gate = gate
 
     # -- helpers ----------------------------------------------------------- #
+
+    def _confirm_motion(self, action: DangerAction) -> bool:
+        """Obtain the ONE operator confirmation that authorises this tester to
+        move the stage.
+
+        Fail-closed: with no gate injected the tester must never drive the
+        stage, so a missing gate is a hard refusal (``RuntimeError``), not a
+        silent no-op.  A gate that *denies* is a clean user abort and returns
+        ``False`` (never raises) so callers can surface it gracefully.
+        """
+        if self._gate is None:
+            raise RuntimeError(
+                "RepeatabilityTester has no DangerGate — refusing to move the "
+                "stage without operator confirmation.")
+        return bool(self._gate.confirm(action))
 
     def _grab(self, settle_s: float) -> np.ndarray:
         if settle_s > 0:
@@ -193,6 +221,17 @@ class RepeatabilityTester:
         pixel shift.  Returns to the start position afterwards."""
         axis = axis.lower()
         d = {"x": (dist_mm, 0, 0), "y": (0, dist_mm, 0), "z": (0, 0, dist_mm)}[axis]
+        # Fail-closed: this commands a real stage move, so confirm BEFORE any
+        # motion (grabbing the reference frame does not move the stage).
+        action = DangerAction(
+            kind="move",
+            summary=(f"Repeatability calibration: move the stage {dist_mm:g} mm "
+                     f"on {axis.upper()} and back."),
+            detail={"axis": axis.upper(), "dist_mm": dist_mm},
+        )
+        if not self._confirm_motion(action):
+            raise RuntimeError(
+                "Repeatability calibration not confirmed — no motion performed.")
         ref = self._grab(settle_s)
         self._motor.move_relative(*d)
         moved = self._grab(settle_s)
@@ -224,12 +263,32 @@ class RepeatabilityTester:
         if not getattr(self._camera, "connected", False):
             raise RuntimeError("Camera is not connected — cannot measure repeatability.")
 
-        target = self._motor.get_position()
+        target = self._motor.get_position()  # read-only, commands no motion
+        target_user = (target.x_mm, target.y_mm, target.z_mm)
+
+        # ONE confirmation covers the whole run (not one per cycle — a per-cycle
+        # dialog would be unusable).  It carries the real numbers the operator
+        # needs: cycle count, the axes exercised, and the max excursion.  This
+        # happens BEFORE any move; the reference-frame grab below does not move.
+        action = DangerAction(
+            kind="move",
+            summary=(f"Repeatability test: {n} return-to-target cycles on "
+                     f"X/Y, max excursion {approach_mm:g} mm from the current "
+                     f"point."),
+            detail={"n_cycles": n, "axes": ["X", "Y"],
+                    "excursion_mm": approach_mm, "target_user": target_user},
+        )
+        if not self._confirm_motion(action):
+            self.logger.info(
+                "Repeatability run not confirmed — no motion performed.")
+            return RepeatabilityResult(px_per_mm=px_per_mm,
+                                       target_user=target_user)
+
         ref = self._grab(settle_s)
         dirs = [(approach_mm, 0, 0), (0, approach_mm, 0),
                 (-approach_mm, 0, 0), (0, -approach_mm, 0)]
         result = RepeatabilityResult(px_per_mm=px_per_mm,
-                                     target_user=(target.x_mm, target.y_mm, target.z_mm))
+                                     target_user=target_user)
 
         for i in range(n):
             if should_stop and should_stop():

@@ -11,6 +11,15 @@ Two complementary views, switchable at runtime:
 Both expose ``set_position(x, y, z)``, ``set_limits(limits)`` and
 ``set_scan_region(...)`` so the owning panel can drive them from its position
 poller.  ``StageView`` wraps both behind a 2D/3D toggle.
+
+Frame contract (docs/ARCHITECTURE.md "Motor frame contract"): every coordinate
+handed to these views — position, limits envelope, scan region — must live in
+ONE frame, the motor's USER frame (what ``get_position()`` returns; envelope =
+``motor.limits_user_frame()``, never raw machine-frame ``motor.limits``).  The
+owning panel re-pushes ``set_limits`` whenever the origin shifts (home / Zero
+Here → ``MotorPanel.origin_changed``), so the envelope shifts with the marker
+instead of the marker teleporting inside a stale machine-frame envelope.  The
+plot origin ``(0, 0)`` marker is by definition the user-frame origin.
 """
 from __future__ import annotations
 

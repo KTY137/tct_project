@@ -102,18 +102,21 @@ def test_existing_palette_keys_untouched():
 
 
 def test_v5_palette_values_match_polish_artifact():
-    assert DARK["bg"] == "#131316"
-    assert DARK["panel"] == "#1d1d21"
-    assert DARK["accent"] == "#41c8f0"
-    assert DARK["good"] == "#30d158"
-    assert DARK["warn"] == "#ffa01e"
-    assert DARK["crit"] == "#ff4f47"
+    # Ratified design-system v4 tokens (docs/design/cockpit_design_system.md
+    # section 2, sourced verbatim from tct_cockpit_design_v4_final.html). If a
+    # future artifact refresh changes these, update spec + here together.
+    assert DARK["bg"] == "#0A0D13"
+    assert DARK["panel"] == "#121824"
+    assert DARK["accent"] == "#5AA9FF"
+    assert DARK["good"] == "#3DD68C"
+    assert DARK["warn"] == "#FFB84D"
+    assert DARK["crit"] == "#FF5A61"
 
-    assert LIGHT["bg"] == "#eef0f4"
-    assert LIGHT["accent"] == "#0e7fa6"
-    assert LIGHT["good"] == "#1e9e46"
-    assert LIGHT["warn"] == "#c77000"
-    assert LIGHT["crit"] == "#d93a32"
+    assert LIGHT["bg"] == "#E9EDF4"
+    assert LIGHT["accent"] == "#2A6FE0"
+    assert LIGHT["good"] == "#128A63"
+    assert LIGHT["warn"] == "#B26F00"
+    assert LIGHT["crit"] == "#DE434B"
 
 
 def test_plot_grid_overlay_tokens_present_both_themes_and_fixed():
@@ -290,7 +293,9 @@ def test_metric_tile_state_changes_restyle_value_and_border():
 
     tile.set_state("armed")
     assert tile.state() == "armed"
-    assert glow_color("armed") in tile.styleSheet()
+    # Design law 1 (D0): state reads through value ink only — the old armed
+    # full-frame emphasis border was removed; no stylesheet for ANY state.
+    assert tile.styleSheet() == ""
 
     tile.set_state("normal")
     assert tile.state() == "normal"
@@ -320,6 +325,100 @@ def test_metric_grid_constructs_both_themes():
     _grab_both_themes(
         lambda: MetricGrid([("A", "1"), ("B", "2", "armed")], columns=2),
         has_refresh=False)
+
+
+def test_metric_tile_title_gets_real_width_next_to_led():
+    """Regression (batch A): the LED head row used to sandwich the
+    Ignored-size-policy title label between two stretches — a zero-width
+    allocation that silently blanked every MetricTile title app-wide. The
+    title must end up with real width (and its text intact) once the tile
+    has geometry."""
+    _app()
+    tile = MetricTile("Progress", "0/0")
+    tile.resize(160, 70)
+    tile.show()
+    QApplication.instance().processEvents()
+    try:
+        assert tile._title.width() > 40
+        assert tile._title.text() == "PROGRESS"
+    finally:
+        tile.hide()
+
+
+def test_metric_tile_compact_variant_sets_qss_property():
+    _app()
+    tile = MetricTile("Point", "x=1 y=2 z=3", compact=True)
+    assert tile.is_compact()
+    assert tile._value.property("compact") == "true"
+    # Non-compact tiles carry no property (full 24-28 px hero face).
+    plain = MetricTile("Points", "128")
+    assert not plain.is_compact()
+    assert not plain._value.property("compact")
+
+
+def test_metric_grid_compact_propagates_to_tuple_tiles():
+    _app()
+    grid = MetricGrid([("A", "1"), ("B", "2")], columns=2, compact=True)
+    assert all(t.is_compact() for t in grid.tiles())
+
+
+def test_compact_value_qss_rule_present():
+    from gui.style import FONT_VALUE_COMPACT_PX, build_qss
+    for mode in ("light", "dark"):
+        qss = build_qss(palette(mode))
+        assert 'QLabel#readoutCellValue[compact="true"]' in qss
+        assert f"{FONT_VALUE_COMPACT_PX}px" in qss
+
+
+# --------------------------------------------------------------------------- #
+# CollapsibleCard / SegmentedControl (batch A kit additions)                   #
+# --------------------------------------------------------------------------- #
+
+def test_collapsible_card_collapsed_by_default_header_stays_live():
+    from gui.panel_kit import CollapsibleCard
+    _app()
+    card = CollapsibleCard("Z focus", "assist")
+    assert not card.is_expanded()
+    assert card.body.parentWidget().isHidden()
+    # Header widgets (chip/action) stay reachable while collapsed.
+    btn = QPushButton("Find focus")
+    card.add_header_widget(btn)
+    assert btn.parent() is not None
+
+    seen = []
+    card.expansion_changed.connect(seen.append)
+    card.set_expanded(True)
+    assert card.is_expanded()
+    assert not card.body.parentWidget().isHidden()
+    assert seen == [True]
+
+
+def test_collapsible_card_constructs_both_themes():
+    from gui.panel_kit import CollapsibleCard
+    _grab_both_themes(lambda: CollapsibleCard("T", expanded=True), has_refresh=False)
+
+
+def test_segmented_control_exclusive_selection_and_signal():
+    from gui.panel_kit import SegmentedControl
+    _app()
+    seg = SegmentedControl([("map", "2D map"), ("cce", "CCE vs bias")], current="map")
+    assert seg.current_key() == "map"
+    seen = []
+    seg.selection_changed.connect(seen.append)
+    seg.set_current("cce")
+    assert seg.current_key() == "cce"
+    assert seen == ["cce"]
+    # Exclusive: exactly one checked at a time.
+    assert not seg.button("map").isChecked()
+    assert seg.button("cce").isChecked()
+    # Uses the shared #segmented / #segBtn QSS hooks — no bespoke styling.
+    assert seg.objectName() == "segmented"
+    assert seg.button("map").objectName() == "segBtn"
+
+
+def test_segmented_control_constructs_both_themes():
+    from gui.panel_kit import SegmentedControl
+    _grab_both_themes(lambda: SegmentedControl(["A", "B"]), has_refresh=False)
 
 
 # --------------------------------------------------------------------------- #

@@ -56,6 +56,7 @@ Organization: **one section per module**, signals listed in definition order. Fo
 | `ScanCoordinator.warn_dialog` | `(str, str)` — (title, message) | `scan_coordinator.py:118` | ? (status-bus warning) |
 | `ScanCoordinator.error_dialog` | `(str, str)` — (title, message) | `scan_coordinator.py:119` | ? (status-bus error) |
 | `ScanCoordinator.status_message` | `(str)` | `scan_coordinator.py:120` | ? (status bar) |
+| `ScanCoordinator.execute_plan(plan, gate)` | `(object, object)` — (ScanPlan, DangerGate) — slot | `scan_coordinator.py:TBD` | Called by `PlannerPanel.execute_plan_requested` via `tct_gui.py:TBD` (arm-latch workflow, 2026-07-12) |
 
 ---
 
@@ -136,6 +137,7 @@ Organization: **one section per module**, signals listed in definition order. Fo
 | `_PollWorker.position_updated` | `(float, float, float)` | `motor_panel.py:54` | ? (to parent MotorPanel) |
 | `_CommandWorker.done` | `(str)` — "" on success, else the error message | `motor_panel.py:96` | ? (to parent MotorPanel) |
 | `MotorPanel.set_as_scan_start` | `(float, float, float)` | `motor_panel.py:119` | `PlannerPanel.set_position_from_motor()`, `tct_gui.py:TBD` |
+| `MotorPanel.origin_changed` | `()` — emitted after home/zero completes successfully | `motor_panel.py:124` | `TCTMainWindow._refresh_plan_limits()`, `tct_gui.py:472` (re-push user-frame planner limits after offset change) |
 | `MotorPanel._poll_stop_requested` | `()` | `motor_panel.py:120` | ? |
 
 ---
@@ -148,6 +150,7 @@ Organization: **one section per module**, signals listed in definition order. Fo
 | `PlannerPanel.start_plan_requested` | `(object)` | `planner_panel.py:358` | `TCTMainWindow._start_plan_from_planner()`, `tct_gui.py:349` |
 | `PlannerPanel.arm_hv_requested` | `()` | `planner_panel.py:359` | `TCTMainWindow._on_arm_hv_requested()`, `tct_gui.py:348` |
 | `PlannerPanel.abort_requested` | `()` | `planner_panel.py:360` | `ScanController.abort()`, `tct_gui.py:350` |
+| `PlannerPanel.execute_plan_requested` | `(object, object)` — (plan, gate) | `planner_panel.py:TBD` | `ScanCoordinator.execute_plan()` (arm-latch workflow, 2026-07-12) |
 | `PlannerPanel.set_position_from_motor(x_mm, y_mm, z_mm)` | `(float, float, float)` — slot | `planner_panel.py:TBD` | Called from `MotorPanel.set_as_scan_start` via `tct_gui.py:TBD` |
 
 ---
@@ -222,6 +225,33 @@ Organization: **one section per module**, signals listed in definition order. Fo
 | Signal | Signature | Defined at | Connected to |
 |--------|-----------|-----------|--------------|
 | `CheckableCard.toggled` | `(bool)` — checked state | `panel_kit.py:507` | ? (internal; forwards header checkbox toggled state to parent) |
+
+---
+
+## gui/qml_theme.py
+
+| Signal | Signature | Defined at | Connected to |
+|--------|-----------|-----------|--------------|
+| `Theme.changed` | `(str, str)` — (key, value) — NOTIFY signal for QML binding | `qml_theme.py:TBD` | QML bindings in Shell.qml; fires on `refresh_theme(mode)` call from tct_gui |
+
+---
+
+## gui/qml_shell.py
+
+| Signal | Signature | Defined at | Connected to |
+|--------|-----------|-----------|--------------|
+| `_ShellBridge.changed` | `(dict)` — shell state dict (tab index, device names, app state) | `qml_shell.py:TBD` | QML Shell.qml `onChanged` handler (tab shelf / rail readouts) |
+
+---
+
+## QML Context Properties
+
+These are objects exposed to QML via `QQmlContext.setContextProperty()` in `tct_gui.py` (visible to all QML/QQuickWidget files; not traditional Qt signals but are bindable via property getters/NOTIFY).
+
+| Property | Type | Defined at | Exposed by | Notes |
+|---|---|---|---|---|
+| `'runState'` | `RunStateViewModel` (QObject) | `gui/run_state_viewmodel.py` | `tct_gui.py` _build_central() | Read-only run-state facade: step index/total, run-state enum, pause/resume/abort affordances. Fed by `_light_timer` (1 Hz) + coordinator signals. NOTIFY via `changed` signal for QML binding. |
+| `'Theme'` | `Theme` (QML singleton) | `gui/qml_theme.py` | `qml_theme.py` static registration | Token design system from `style.py`. `changed` signal (key, value) NOTIFY on theme toggle. |
 
 ---
 

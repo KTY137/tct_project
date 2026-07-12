@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 from devices.motor_base import MotorStageBase
 from gui.panel_kit import Card, panel_header
 from gui.stage_view import StageView
-from gui.style import axis_color
+from gui.style import axis_color, palette, repolish
 from gui.status_widgets import StatusChip, flash_button
 from PySide6.QtCore import QObject
 
@@ -148,6 +148,13 @@ class MotorPanel(QWidget):
         self._last_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._build_ui()
 
+        # Frame contract (docs/ARCHITECTURE.md "Motor frame contract"): the
+        # stage view's travel envelope must live in the SAME user frame the
+        # position marker does.  Home / Zero Here shift that frame, so re-pull
+        # the envelope on every origin change — the same trigger tct_gui uses
+        # to rebuild the planner's PlanLimits.
+        self.origin_changed.connect(self._refresh_stage_limits)
+
         # Position polling runs in a separate thread so serial I/O never
         # blocks the GUI (especially important for Marlin M114 queries).
         #
@@ -203,11 +210,11 @@ class MotorPanel(QWidget):
 
         root.addWidget(panel_header("TCT Control — Motion", "Motor Stage"))
 
-        # ── Position display ─────────────────────────────────────────
+        # ── Position display — the panel's hero readout ───────────────
         # A dark "instrument screen" readout (same visual language as the
-        # plot canvas) instead of three plain labels, so the current
-        # position reads as the panel's live display at a glance.
-        pos_box = Card("Position")
+        # plot canvas); the subtitle names the FRAME the numbers live in
+        # (user frame — Home/Zero-Here shift the display offset, law 7).
+        pos_box = Card("Position", "user frame · mm")
         pos_v = pos_box.body
         pos_v.setSpacing(10)
 
@@ -239,14 +246,21 @@ class MotorPanel(QWidget):
         status_row.setSpacing(6)
         self._chip_homed = StatusChip("Not homed", "neutral")
         self._chip_motion = StatusChip("Idle", "neutral")
-        self._chip_limits = StatusChip("Limits --", "neutral")
+        self._chip_limits = StatusChip("Soft limits --", "neutral")
+        # Law 7 honesty: hardware limit-SWITCH state is not read back by the
+        # driver (GRBL $ parse backlog is Paul's) — say "unknown", always.
+        self._chip_switches = StatusChip("Switches unknown", "unknown")
+        self._chip_switches.setToolTip(
+            "Hardware limit-switch state is not read back by the driver — "
+            "the chips left of this one track SOFT limits only.")
         self._chip_last = StatusChip("Last --", "neutral")
-        for chip in (self._chip_homed, self._chip_motion, self._chip_limits, self._chip_last):
+        for chip in (self._chip_homed, self._chip_motion, self._chip_limits,
+                     self._chip_switches, self._chip_last):
             status_row.addWidget(chip)
         status_row.addStretch(1)
         pos_v.addLayout(status_row)
 
-        btn_test = QPushButton("Test Connection")
+        btn_test = QPushButton("Test connection")
         _apply_icon(btn_test, "fa5s.plug")
         btn_test.setToolTip("Send a firmware-identity G-code (M115 / $I) and show the reply — "
                             "confirms the serial link without moving the stage")
@@ -295,7 +309,7 @@ class MotorPanel(QWidget):
         btn_x_neg = QPushButton("X−")
         for b in (btn_y_pos, btn_y_neg, btn_x_pos, btn_x_neg):
             b.setObjectName("jogBtn")
-            b.setMinimumSize(56, 56)
+            b.setMinimumSize(48, 48)   # compact cluster (design system §7)
         _apply_icon(btn_y_pos, "fa5s.arrow-up")
         _apply_icon(btn_y_neg, "fa5s.arrow-down")
         _apply_icon(btn_x_neg, "fa5s.arrow-left")
@@ -309,9 +323,11 @@ class MotorPanel(QWidget):
         center_decor = QLabel()
         center_decor.setAlignment(Qt.AlignCenter)
         center_decor.setEnabled(False)
-        center_icon = _icon("fa5s.crosshairs", color="#8a97a8")
+        center_icon = _icon("fa5s.crosshairs",
+                            color=palette(self._theme_mode)["faint"])
         if center_icon is not None:
             center_decor.setPixmap(center_icon.pixmap(16, 16))
+        self._jog_center_decor = center_decor   # re-tinted by refresh_theme()
         cross.addWidget(center_decor, 1, 1)
         cross.addWidget(btn_x_pos, 1, 2)
         cross.addWidget(btn_y_neg, 2, 1)
@@ -341,7 +357,7 @@ class MotorPanel(QWidget):
         btn_z_neg = QPushButton("Z−")
         for b in (btn_z_pos, btn_z_neg):
             b.setObjectName("jogBtn")
-            b.setMinimumSize(56, 56)
+            b.setMinimumSize(48, 48)
         _apply_icon(btn_z_pos, "fa5s.arrow-up")
         _apply_icon(btn_z_neg, "fa5s.arrow-down")
         btn_z_pos.setToolTip("Jog +Z by the selected step")
@@ -422,7 +438,7 @@ class MotorPanel(QWidget):
         root.addWidget(jog_box)
 
         # ── Absolute move ─────────────────────────────────────────────
-        abs_box = Card("Absolute Move")
+        abs_box = Card("Absolute move")
         abs_layout = QGridLayout()
         abs_layout.setHorizontalSpacing(10)
         abs_layout.setVerticalSpacing(6)
@@ -442,7 +458,11 @@ class MotorPanel(QWidget):
             abs_layout.addWidget(spin, 1, col)
             self._abs_captions[axis_key] = cap
         self._restyle_abs_move_captions()
-        btn_move = QPushButton("Move To")
+        btn_move = QPushButton("Move to")
+        # Law 2: an absolute move is a MOTION-class command (amber), never
+        # red — red stays reserved for HV/trips/STOP.
+        btn_move.setProperty("state", "motion")
+        repolish(btn_move)
         _apply_icon(btn_move, "fa5s.location-arrow")
         btn_move.clicked.connect(self._move_abs)
         abs_layout.addWidget(btn_move, 2, 0, 1, 3)
@@ -461,14 +481,14 @@ class MotorPanel(QWidget):
 
         secondary_row = QHBoxLayout()
         secondary_row.setSpacing(8)
-        self._btn_home = QPushButton("Home All")
+        self._btn_home = QPushButton("Home all")
         _apply_icon(self._btn_home, "fa5s.home")
         self._btn_home.clicked.connect(self._home)
         btn_center = QPushButton("Center")
         _apply_icon(btn_center, "fa5s.crosshairs")
         btn_center.setToolTip("Move to the centre of the soft-limit envelope")
         btn_center.clicked.connect(self._move_center)
-        btn_zero = QPushButton("Zero Here")
+        btn_zero = QPushButton("Zero here")
         _apply_icon(btn_zero, "fa5s.dot-circle")
         btn_zero.setToolTip("Declare the current position as (0, 0, 0) without moving "
                             "(software display offset — does not touch GRBL's G54/G92)")
@@ -490,14 +510,14 @@ class MotorPanel(QWidget):
         root.addWidget(actions_box)
 
         # ── Scan-integration helpers ──────────────────────────────────
-        helper_box = Card("Scan Integration")
+        helper_box = Card("Scan integration")
         helper_layout = QHBoxLayout()
         helper_layout.setSpacing(8)
-        btn_use_pos = QPushButton("Use Current Pos in Abs. Move")
+        btn_use_pos = QPushButton("Use current position")
         _apply_icon(btn_use_pos, "fa5s.clipboard-list")
-        btn_use_pos.setToolTip("Copy current stage position into the Absolute Move spinboxes")
+        btn_use_pos.setToolTip("Copy current stage position into the Absolute-move spinboxes")
         btn_use_pos.clicked.connect(self._use_current_pos)
-        self._btn_set_start = QPushButton("Set as Scan Start")
+        self._btn_set_start = QPushButton("Set as scan start")
         _apply_icon(self._btn_set_start, "fa5s.thumbtack")
         self._btn_set_start.setToolTip("Copy current X/Y/Z into the Scan panel start position")
         self._btn_set_start.clicked.connect(self._emit_set_as_start)
@@ -516,8 +536,12 @@ class MotorPanel(QWidget):
         stage_card.setAttribute(Qt.WA_StyledBackground, True)
         stage_card_v = QVBoxLayout(stage_card)
         stage_card_v.setContentsMargins(12, 12, 12, 12)
+        # USER-frame limits, not raw ``motor.limits`` (MACHINE frame for
+        # GRBL): the marker is driven from get_position() (user frame), so an
+        # envelope drawn in the machine frame teleports the marker relative to
+        # it the moment Zero Here shifts the display offset.
         self._stage_view = StageView(
-            getattr(self._motor, "limits", None),
+            self._limits_user_frame(),
             theme_mode=self._theme_mode,
         )
         stage_card_v.addWidget(self._stage_view)
@@ -564,6 +588,13 @@ class MotorPanel(QWidget):
         z_cap = getattr(self, "_z_cluster_caption", None)
         if z_cap is not None:
             z_cap.setStyleSheet(f"#clusterCaption {{ color: {axis_color('z', self._theme_mode)}; }}")
+        # The decorative centre crosshair is faint-token tinted (baked as a
+        # pixmap, so it needs the same explicit re-resolve).
+        decor = getattr(self, "_jog_center_decor", None)
+        if decor is not None:
+            icon = _icon("fa5s.crosshairs", color=palette(self._theme_mode)["faint"])
+            if icon is not None:
+                decor.setPixmap(icon.pixmap(16, 16))
 
     def _restyle_abs_move_captions(self) -> None:
         """Tint the Absolute-Move X/Y/Z eyebrow captions with the same
@@ -681,12 +712,46 @@ class MotorPanel(QWidget):
             self._chip_last.set_status("Last error", "crit", err)
             self._show_error(err)
         else:
-            self._chip_last.set_status("Last done", "good")
+            # Quiet nominal: a completed op is routine, not a green light.
+            self._chip_last.set_status("Last done", "neutral")
             # Home/Zero Here shifted the driver's user/machine offset — tell any
             # consumer holding user-frame stage limits (the Scan Planner) to
             # re-read them so its soft-limit gate tracks the new origin.
             if kind in ("home", "zero"):
                 self.origin_changed.emit()
+
+    # ------------------------------------------------------------------ #
+    # Coordinate-frame plumbing (docs/ARCHITECTURE.md "Motor frame contract")
+    # ------------------------------------------------------------------ #
+
+    def _limits_user_frame(self):
+        """Soft limits in the motor's USER frame — the frame ``get_position()``
+        returns and ``move_to()`` accepts, i.e. the ONLY frame this panel may
+        draw or compare positions against.  Pure attribute arithmetic in every
+        backend (no device I/O), so it is safe on the GUI thread.  Falls back
+        to raw ``limits`` for a hot-swapped backend without the helper (for
+        which the two frames are identical by definition) — same fallback as
+        tct_gui._plan_limits."""
+        try:
+            return self._motor.limits_user_frame()
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "motor.limits_user_frame() failed", exc_info=True)
+            return getattr(self._motor, "limits", None)
+
+    def _refresh_stage_limits(self) -> None:
+        """Redraw the stage view's travel envelope after the origin moved.
+
+        Home / Zero Here shift the driver's user/machine display offset, so an
+        envelope drawn once at construction time stays in the OLD frame while
+        the position marker (poller → user frame) jumps to the new origin: the
+        marker visually teleports even though the stage never moved (bench
+        bug, 2026-07-11 — same frame-mixing family as the planner PlanLimits
+        fix in 2f91e00).  Re-pulling ``limits_user_frame()`` shifts the
+        envelope by exactly the same offset, so the marker's RELATIVE position
+        inside it is preserved.  Wired to ``origin_changed`` in __init__.
+        """
+        self._stage_view.set_limits(self._limits_user_frame())
 
     def _set_busy(self, busy: bool) -> None:
         for w in self._motion_widgets:
@@ -713,9 +778,11 @@ class MotorPanel(QWidget):
 
     def _on_position_updated(self, x: float, y: float, z: float) -> None:
         self._last_pos = (x, y, z)
-        self._lbl_x.setText(f"X: {x:.4f} mm")
-        self._lbl_y.setText(f"Y: {y:.4f} mm")
-        self._lbl_z.setText(f"Z: {z:.4f} mm")
+        # The axis letter already sits in the caption row above each value —
+        # the value itself is a pure signed quantity (law 3).
+        self._lbl_x.setText(f"{x:+.4f} mm")
+        self._lbl_y.setText(f"{y:+.4f} mm")
+        self._lbl_z.setText(f"{z:+.4f} mm")
         self._stage_view.set_position(x, y, z)
         self._refresh_status_chips(x, y, z)
 
@@ -735,17 +802,21 @@ class MotorPanel(QWidget):
         connected = bool(getattr(self._motor, "connected", False))
         homed = bool(getattr(self._motor, "homed", False))
         if not connected:
-            self._chip_homed.set_status("Offline", "neutral")
-            self._chip_limits.set_status("Limits --", "neutral")
+            self._chip_homed.set_status("Offline", "disconnected")
+            self._chip_limits.set_status("Soft limits --", "neutral")
             return
         if homed:
-            self._chip_homed.set_status("Homed", "good")
+            # Quiet nominal (law 1): homed is routine, not a green light.
+            self._chip_homed.set_status("Homed", "neutral")
         else:
             self._chip_homed.set_status("Not homed", "warn")
 
-        lim = getattr(self._motor, "limits", None)
+        # x/y/z here come from the poller = USER frame, so compare against the
+        # limits in that same frame.  Raw ``motor.limits`` (machine frame for
+        # GRBL) flagged a false "soft-limit error" right after Zero Here.
+        lim = self._limits_user_frame()
         if lim is None:
-            self._chip_limits.set_status("Limits --", "neutral")
+            self._chip_limits.set_status("Soft limits --", "neutral")
             return
         margin_mm = 0.5
         near: list[str] = []
@@ -755,14 +826,16 @@ class MotorPanel(QWidget):
             if lo is None or hi is None:
                 continue
             if value < float(lo) or value > float(hi):
-                self._chip_limits.set_status(f"{axis} limit error", "crit")
+                self._chip_limits.set_status(f"{axis} soft-limit error", "crit")
                 return
             if min(abs(value - float(lo)), abs(float(hi) - value)) <= margin_mm:
                 near.append(axis)
         if near:
-            self._chip_limits.set_status("Near " + "/".join(near) + " limit", "warn")
+            self._chip_limits.set_status(
+                "Near " + "/".join(near) + " soft limit", "warn")
         else:
-            self._chip_limits.set_status("Limits OK", "good")
+            # Quiet nominal — inside the envelope is the normal state.
+            self._chip_limits.set_status("Soft limits ok", "neutral")
 
     def _update_position(self) -> None:
         """Legacy stub — polling now handled by _PositionPoller in a QThread."""
@@ -856,3 +929,6 @@ class MotorPanel(QWidget):
     def set_motor(self, motor: MotorStageBase) -> None:
         """Hot-swap the motor backend at runtime."""
         self._motor = motor
+        # New backend ⇒ new envelope (and possibly a new frame) — redraw so
+        # the stage view never keeps showing the previous device's limits.
+        self._refresh_stage_limits()

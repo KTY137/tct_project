@@ -185,3 +185,209 @@ def test_open_file_dialog_cancel_does_not_call_load_run(monkeypatch):
     panel._open_file()
 
     assert calls == []
+
+
+# --------------------------------------------------------------------------- #
+# Cockpit v5 batch A: recent-runs empty state + segmented modes (§7)          #
+# --------------------------------------------------------------------------- #
+
+def test_empty_state_lists_recent_runs_newest_first(tmp_path):
+    import os
+
+    _app()
+    runs = tmp_path / "runs"
+    old = _write_tiny_run(runs / "run_00001")
+    new = _write_tiny_run(runs / "run_00002")
+    os.utime(old, (1_000_000_000, 1_000_000_000))
+    os.utime(new, (2_000_000_000, 2_000_000_000))
+
+    panel = AnalysisPanel(runs_dir=runs)
+    # Starts on the empty (recent-runs) page.
+    assert panel._stack.currentIndex() == 0
+    texts = [panel._list_recent.item(i).text()
+             for i in range(panel._list_recent.count())]
+    assert len(texts) == 2
+    assert "run_00002" in texts[0]     # newest first
+    assert "run_00001" in texts[1]
+
+
+def test_empty_runs_dir_shows_honest_hint(tmp_path):
+    _app()
+    panel = AnalysisPanel(runs_dir=tmp_path / "no_such_dir")
+    assert panel._list_recent.count() == 0
+    assert "No run files found" in panel._lbl_recent_hint.text()
+
+
+def test_recent_run_click_loads_and_swaps_to_loaded_page(tmp_path):
+    _app()
+    runs = tmp_path / "runs"
+    _write_tiny_run(runs / "run_00001")
+    panel = AnalysisPanel(runs_dir=runs)
+
+    item = panel._list_recent.item(0)
+    panel._on_recent_clicked(item)
+
+    assert panel._chip_file.text() == "File loaded"
+    assert panel._stack.currentIndex() == 1     # loaded page
+    assert "dut_charge_pC" in panel._data
+
+
+def test_failed_load_stays_on_recent_runs_page(tmp_path):
+    _app()
+    panel = AnalysisPanel(runs_dir=tmp_path)
+    ok = panel.load_run(str(tmp_path / "missing.h5"))
+    assert ok is False
+    assert panel._stack.currentIndex() == 0
+
+
+def test_segmented_modes_switch_between_map_and_cce(tmp_path):
+    _app()
+    h5_path = _write_tiny_run(tmp_path / "run_00003")
+    panel = AnalysisPanel(runs_dir=tmp_path)
+    assert panel.load_run(h5_path) is True
+
+    assert panel._segmented.current_key() == "map"
+    assert panel._modes.currentIndex() == 0
+    panel._segmented.set_current("cce")
+    assert panel._modes.currentIndex() == 1
+    panel._segmented.set_current("map")
+    assert panel._modes.currentIndex() == 0
+
+
+def test_map_mode_uses_shared_scan_map_view_with_data(tmp_path):
+    from gui.scan_map_view import ScanMapView
+
+    _app()
+    h5_path = _write_tiny_run(tmp_path / "run_00004")
+    panel = AnalysisPanel(runs_dir=tmp_path)
+    assert panel.load_run(h5_path) is True
+
+    assert isinstance(panel._map_view, ScanMapView)
+    assert panel._map_view.point_count() == 4
+    assert panel._map_view.is_showing_map()
+    assert "4 arrays" in panel._chip_dataset.text() or panel._chip_dataset.text()
+    assert panel._chip_map.text().startswith("Map ")
+    # Info line carries range + missing count.
+    assert "missing" in panel._lbl_map_info.text()
+
+
+# --------------------------------------------------------------------------- #
+# CCE V_dep marker sign convention (D3-gate finding 2)                        #
+# --------------------------------------------------------------------------- #
+
+def test_cce_vdep_line_matches_negative_bias_data_sign(monkeypatch):
+    """estimate_depletion_voltage() only ever returns a positive magnitude
+    (|V|); _plot_cce must re-apply the sign convention read from the data
+    itself so the marker lands on the same side / within the range of a
+    negative-bias dataset, instead of guessing positive."""
+    _app()
+    panel = AnalysisPanel()
+    panel._data = {
+        "bias_V": np.array([0.0, -20.0, -40.0, -60.0, -80.0, -100.0]),
+        "dut_charge_pC": np.array([-0.1, -0.6, -0.95, -0.99, -1.0, -1.0]),
+    }
+
+    warned = []
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QMessageBox.warning",
+        staticmethod(lambda *a, **k: warned.append(a)),
+    )
+
+    panel._plot_cce()
+
+    assert warned == []   # no "no bias data" popup
+    assert panel._vdep_line.isVisible()
+    v_dep = panel._vdep_line.value()
+    # Correct side (negative, matching the data's sign) and within range.
+    assert v_dep < 0
+    assert -100.0 <= v_dep <= 0.0
+    assert "V_dep estimate:" in panel._lbl_vdep.text()
+    assert "(|V| convention)" in panel._lbl_vdep.text()
+
+
+def test_cce_vdep_line_positive_bias_stays_positive(monkeypatch):
+    _app()
+    panel = AnalysisPanel()
+    panel._data = {
+        "bias_V": np.array([0.0, 20.0, 40.0, 60.0, 80.0, 100.0]),
+        "dut_charge_pC": np.array([0.1, 0.6, 0.95, 0.99, 1.0, 1.0]),
+    }
+    monkeypatch.setattr("PySide6.QtWidgets.QMessageBox.warning", staticmethod(lambda *a, **k: None))
+
+    panel._plot_cce()
+
+    v_dep = panel._vdep_line.value()
+    assert v_dep > 0
+    assert 0.0 <= v_dep <= 100.0
+
+
+# --------------------------------------------------------------------------- #
+# Real voltage_scan group (D3-gate finding 3)                                 #
+# --------------------------------------------------------------------------- #
+
+def _write_voltage_scan_run(run_dir) -> str:
+    """Write a real IV-scan HDF5 via HDF5Writer.save_voltage_point — same
+    writer path as test_data_writer.py — with no XY/analysis data at all,
+    i.e. exactly what a voltage-scan-only run produces on disk."""
+    writer = HDF5Writer(run_dir, save_options=SaveOptions())
+    writer.open()
+    for v, q, i in [(0.0, -0.1, 1e-9), (-20.0, -0.6, 2e-9), (-40.0, -0.95, 3e-9),
+                    (-60.0, -0.99, 4e-9), (-80.0, -1.0, 5e-9), (-100.0, -1.0, 6e-9)]:
+        writer.save_voltage_point(v, q, i)
+    writer.close()
+    return str(writer.path)
+
+
+def test_load_run_reads_voltage_scan_group(tmp_path):
+    _app()
+    h5_path = _write_voltage_scan_run(tmp_path / "run_00006")
+    panel = AnalysisPanel()
+
+    assert panel.load_run(h5_path) is True
+
+    assert panel._voltage_scan.get("voltage_V") is not None
+    assert list(panel._voltage_scan["charge_pC"]) == pytest.approx(
+        [-0.1, -0.6, -0.95, -0.99, -1.0, -1.0])
+    # Legacy points/analysis reads untouched (empty for a pure voltage scan).
+    assert panel._data == {}
+
+
+def test_plot_cce_renders_from_real_voltage_scan_group_no_warning(tmp_path, monkeypatch):
+    """AnalysisPanel._load_h5 must read the real 'voltage_scan/{voltage_V,
+    charge_pC,current_A}' group and _plot_cce must render from it — no
+    'no bias data' warning dialog."""
+    _app()
+    h5_path = _write_voltage_scan_run(tmp_path / "run_00007")
+    panel = AnalysisPanel()
+
+    warned = []
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QMessageBox.warning",
+        staticmethod(lambda *a, **k: warned.append(a)),
+    )
+
+    assert panel.load_run(h5_path) is True
+    panel._plot_cce()
+
+    assert warned == []
+    xdata, ydata = panel._cce_curve_cce.getData()
+    assert xdata is not None and len(xdata) == 6
+    assert np.allclose(sorted(xdata), [-100.0, -80.0, -60.0, -40.0, -20.0, 0.0])
+    assert panel._vdep_line.isVisible()
+    assert panel._vdep_line.value() < 0   # negative-bias convention from the data
+
+
+def test_theme_switch_smoke_both_themes(tmp_path):
+    from gui.style import apply_theme
+
+    app = _app()
+    apply_theme(app, "light")
+    h5_path = _write_tiny_run(tmp_path / "run_00005")
+    panel = AnalysisPanel(runs_dir=tmp_path)
+    panel.load_run(h5_path)
+    apply_theme(app, "dark")
+    panel.refresh_theme("dark")
+    assert not panel.grab().isNull()
+    apply_theme(app, "light")
+    panel.refresh_theme("light")
+    assert not panel.grab().isNull()

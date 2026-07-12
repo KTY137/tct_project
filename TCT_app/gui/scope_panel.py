@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from PySide6.QtCore import QObject, QSettings, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QLabel, QPushButton, QCheckBox, QSlider, QLineEdit,
     QComboBox, QDoubleSpinBox, QDialog, QDialogButtonBox, QMessageBox,
     QSplitter, QScrollArea, QFrame, QSizePolicy,
@@ -45,10 +45,10 @@ except ImportError:
 from controller.yaml_persist import update_yaml_file
 from devices.oscilloscope import Oscilloscope
 from analysis.waveform_analysis import analyse_waveform
-from gui.panel_kit import Card, panel_header
+from gui.panel_kit import Card, CheckableCard, panel_header
 from gui.scope_measurements import MeasurementPanel
 from gui.status_bus import notify
-from gui.status_widgets import StatusChip, StatusLamp
+from gui.status_widgets import ReadoutCell, StatusChip, StatusLamp
 from gui.style import DARK, LIGHT, SPACE_MD, SPACE_SM, WARN_AMBER, axis_color
 
 logger = logging.getLogger(__name__)
@@ -248,8 +248,11 @@ class _ChannelCard(QFrame):
         self.setObjectName("channelCard")
         self.setFrameShape(QFrame.StyledPanel)
         r, g, b = state.color
+        # Calmer card weight (design v5): a 3 px rail like every other
+        # axis-railed control, not a heavier 4 px stripe.  The rgb() is the
+        # channel's DATA colour (trace ink), not chrome — allowed.
         self.setStyleSheet(
-            f"#channelCard {{ border-left: 4px solid rgb({r},{g},{b}); "
+            f"#channelCard {{ border-left: 3px solid rgb({r},{g},{b}); "
             f"border-radius: 6px; }}"
         )
         lay = QGridLayout(self)
@@ -260,8 +263,10 @@ class _ChannelCard(QFrame):
         swatch = QLabel()
         swatch.setFixedSize(12, 12)
         swatch.setStyleSheet(f"background: rgb({r},{g},{b}); border-radius: 6px;")
-        self._lamp = StatusLamp("good" if state.enabled else "neutral")
-        title = QLabel(f"<b>CH{state.number}</b>")
+        # Quiet nominal: an enabled channel is routine configuration, not a
+        # green light — the lamp only distinguishes on (neutral) from off.
+        self._lamp = StatusLamp("neutral" if state.enabled else "disconnected")
+        title = QLabel(f"CH{state.number}")
         title.setToolTip(state.label)
         self._role_chip = StatusChip(state.role if state.role != "—" else "No role",
                                      "info" if state.role != "—" else "neutral")
@@ -297,7 +302,7 @@ class _ChannelCard(QFrame):
 
     def _on_toggle(self, checked: bool) -> None:
         self._state.enabled = bool(checked)
-        self._lamp.set_state("good" if checked else "neutral")
+        self._lamp.set_state("neutral" if checked else "disconnected")
         self.toggled.emit(self._state.number, bool(checked))
         self.changed.emit()
 
@@ -516,8 +521,15 @@ class ScopePanel(QWidget):
         # the GUI.  The timers live in the worker thread; a QTimer can only be
         # started/stopped from its own thread, so we drive them via queued
         # signals connected to timer.start/stop (the standard PySide6 pattern).
+        # Parented to the long-lived QApplication, NOT this panel — the same
+        # fix/idiom as gui/camera_panel.py / gui/motor_panel.py: a QThread
+        # destroyed as a child of a dying widget while (or shortly after)
+        # running is the MotorPanel hard-crash class; here it also surfaced
+        # as an interpreter-exit access violation once several ScopePanels
+        # had been built/discarded in one process (headless suite).  The
+        # thread self-deletes on ``finished`` instead.
         self._reader = _ScopeReader(scope)
-        self._reader_thread = QThread(self)
+        self._reader_thread: QThread | None = QThread(QApplication.instance())
         self._reader.moveToThread(self._reader_thread)
         # Cross-thread timer control (queued to the worker thread):
         self._acquire_requested.connect(self._reader._once_timer.start)
@@ -541,6 +553,7 @@ class ScopePanel(QWidget):
         self._reader.avg_done.connect(self._on_avg_done)
         self._reader.chan_config_done.connect(self._on_chan_config_done)
         self._reader_thread.finished.connect(self._reader.deleteLater)
+        self._reader_thread.finished.connect(self._reader_thread.deleteLater)
         self._reader_thread.start()
         self._sync_reader_channels()
 
@@ -567,7 +580,7 @@ class ScopePanel(QWidget):
 
     def _build_plot(self) -> QWidget:
         if not _HAS_PG:
-            card = Card("Live Trace")
+            card = Card("Live trace")
             card.add_widget(QLabel("(install pyqtgraph for live waveforms)"))
             return card
         self._plot = pg.PlotWidget()
@@ -640,7 +653,7 @@ class ScopePanel(QWidget):
         self._cur_t1, self._cur_t2 = _pair(90, (0, 200, 255))   # Δt (time)
         self._cur_v1, self._cur_v2 = _pair(0, (255, 200, 0))    # ΔV (volts)
 
-        card = Card("Live Trace", "amplitude (V) vs. time (s) · channel cards set colour + role")
+        card = Card("Live trace", "amplitude (V) vs. time (s) · channel cards set colour + role")
         card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
         card.add_widget(self._plot)
         return card
@@ -696,9 +709,19 @@ class ScopePanel(QWidget):
         # DUT analysis stats
         v.addWidget(self._build_stats_box())
 
-        # Automatic measurements (bench-scope "Measure" menu)
+        # Automatic measurements (bench-scope "Measure" menu) — collapsed by
+        # default (design system §7); the checkbox hides/shows the body
+        # (CheckableCard has no built-in collapse — kit gap reported).
         self._meas_panel = MeasurementPanel()
-        v.addWidget(self._meas_panel)
+        meas_card = CheckableCard("Measurements",
+                                  "scope-style automatic measurements",
+                                  checked=False)
+        meas_body = meas_card.body.parentWidget()
+        meas_card.toggled.connect(meas_body.setVisible)
+        meas_body.setVisible(False)
+        meas_card.add_widget(self._meas_panel)
+        self._meas_card = meas_card
+        v.addWidget(meas_card)
 
         # Cursor readout
         self._lbl_cursor = QLabel("Cursor: off")
@@ -721,15 +744,43 @@ class ScopePanel(QWidget):
         return scroll
 
     def _build_stats_box(self) -> Card:
-        stats_card = Card("DUT Analysis", "amplitude · charge · timing")
+        stats_card = Card("DUT analysis", "amplitude · charge · timing")
+
+        # The four headline quantities as instrument tiles (design system §7
+        # "Scope: 4 tiles — Amplitude/Rise/Charge/Drift time"), all straight
+        # from analyse_waveform (analysis/ owns the formulas).  ReadoutCell,
+        # NOT MetricTile, deliberately: with MetricTiles in this card,
+        # repeated ScopePanel construct/teardown cycles in one process
+        # reproducibly access-violate during gc (headless suite,
+        # tests/test_oscilloscope_channel_count.py + batch-B combo) even
+        # after the trigger-dialog/thread teardown fixes in shutdown();
+        # the ReadoutCell variant is stable.  Open kit gap — reported for a
+        # dedicated hunt.  Staleness is one shared caption under the grid
+        # (law 4: the empty state is still explained).
+        tile_grid = QGridLayout()
+        tile_grid.setSpacing(SPACE_SM)
+        self._tile_amp = ReadoutCell("Amplitude", "—", min_width=120)
+        self._tile_rise = ReadoutCell("Rise time", "—", min_width=120)
+        self._tile_chg = ReadoutCell("Charge", "—", min_width=120)
+        self._tile_drift = ReadoutCell("Drift time", "—", min_width=120)
+        self._stat_tiles = [self._tile_amp, self._tile_rise,
+                            self._tile_chg, self._tile_drift]
+        for i, tile in enumerate(self._stat_tiles):
+            tile_grid.addWidget(tile, i // 2, i % 2)
+        stats_card.add_layout(tile_grid)
+        self._lbl_stats_stale = QLabel("No DUT waveform yet — values appear "
+                                       "after the first acquisition.")
+        self._lbl_stats_stale.setObjectName("cardSubtitle")
+        self._lbl_stats_stale.setWordWrap(True)
+        stats_card.add_widget(self._lbl_stats_stale)
+
         grid = QGridLayout()
         grid.setColumnStretch(1, 1)
         grid.setVerticalSpacing(3)
 
-        # Single column (label left, value right): fits the narrow side column
-        # without clipping.  Amplitude/charge/RMS read the theme accent; the
-        # three time-domain quantities read the "delay" axis-rail colour
-        # (gui.style.axis_color) — see _restyle_theme_tokens().
+        # Secondary quantities stay as quiet rows (every existing readout
+        # remains reachable): baseline RMS reads the theme accent, CFD time
+        # the "delay" axis colour — see _restyle_theme_tokens().
         def _stat(row: int, label: str) -> QLabel:
             grid.addWidget(QLabel(label), row, 0)
             lbl = QLabel("—")
@@ -737,12 +788,8 @@ class ScopePanel(QWidget):
             grid.addWidget(lbl, row, 1)
             return lbl
 
-        self._lbl_amp      = _stat(0, "Amplitude")
-        self._lbl_chg      = _stat(1, "Charge")
-        self._lbl_rms      = _stat(2, "Baseline RMS")
-        self._lbl_drift    = _stat(3, "Drift time")
-        self._lbl_rise     = _stat(4, "Rise time")
-        self._lbl_cfd      = _stat(5, "CFD time")
+        self._lbl_rms      = _stat(0, "Baseline RMS")
+        self._lbl_cfd      = _stat(1, "CFD time")
 
         # Marker visibility toggles
         marker_row = QHBoxLayout()
@@ -758,24 +805,39 @@ class ScopePanel(QWidget):
             self._chk_trailing.toggled.connect(self._line_trailing.setVisible)
             self._chk_cfd.toggled.connect(self._line_cfd.setVisible)
             self._chk_intwin.toggled.connect(self._int_region.setVisible)
-        grid.addLayout(marker_row, 6, 0, 1, 2)
+        grid.addLayout(marker_row, 2, 0, 1, 2)
         stats_card.add_layout(grid)
         return stats_card
 
     def _build_acquire_row(self) -> QHBoxLayout:
         ctrl = QHBoxLayout()
-        self._btn_single = QPushButton("Single")
-        ico = _icon("mdi.camera")
-        if ico is not None:
-            self._btn_single.setIcon(ico)
-        self._btn_single.clicked.connect(self._acquire_requested)
+        # ONE acquisition command bar (design system §7): Live | Single as a
+        # segmented control, with the scope-side averaging selector beside
+        # them — the same segmented QSS hooks MotorPanel's step presets use.
+        seg = QFrame()
+        seg.setObjectName("segmented")
+        seg.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        seg_lay = QHBoxLayout(seg)
+        seg_lay.setContentsMargins(3, 3, 3, 3)
+        seg_lay.setSpacing(2)
 
         self._btn_live = QPushButton("Live")
+        self._btn_live.setObjectName("segBtn")
         ico = _icon("mdi.play")
         if ico is not None:
             self._btn_live.setIcon(ico)
         self._btn_live.setCheckable(True)
         self._btn_live.toggled.connect(self._toggle_live)
+
+        self._btn_single = QPushButton("Single")
+        self._btn_single.setObjectName("segBtn")
+        ico = _icon("mdi.camera")
+        if ico is not None:
+            self._btn_single.setIcon(ico)
+        self._btn_single.clicked.connect(self._acquire_requested)
+
+        seg_lay.addWidget(self._btn_live)
+        seg_lay.addWidget(self._btn_single)
 
         self._cursor_mode = QComboBox()
         self._cursor_mode.addItems(["Cursor Off", "Track", "Δt (time)", "ΔV (volts)"])
@@ -812,7 +874,7 @@ class ScopePanel(QWidget):
         btn_visa.setToolTip("List VISA resource strings (find the scope's USB address)")
         btn_visa.clicked.connect(self._list_visa)
 
-        for b in (self._btn_single, self._btn_live, self._avg_combo,
+        for b in (seg, self._avg_combo,
                   self._cursor_mode, btn_export, btn_test, btn_visa):
             ctrl.addWidget(b)
         ctrl.addStretch(1)
@@ -823,24 +885,33 @@ class ScopePanel(QWidget):
     # ------------------------------------------------------------------ #
 
     def _refresh_status_chips(self) -> None:
+        # Law 7: these chips only claim what the panel truthfully knows.
+        # There is NO instrument acquisition-state readback wired yet
+        # (driver backlog, design system §6), so the "live" chip describes
+        # OUR poll loop, and trigger/avg describe last-commanded config.
         connected = bool(getattr(self._scope, "connected", False))
         self._chip_scope_conn.set_status(
             "Scope connected" if connected else "Scope offline",
-            "good" if connected else "neutral",
+            "neutral" if connected else "disconnected",
         )
         live = bool(getattr(self, "_btn_live", None) and self._btn_live.isChecked())
-        self._chip_scope_live.set_status("Live on" if live else "Live off",
-                                         "busy" if live else "neutral")
+        self._chip_scope_live.set_status(
+            "Polling" if live else "Poll off",
+            "busy" if live else "neutral",
+            "This panel's live-view poll loop — not the instrument's own "
+            "RUN/STOP state (not read back).")
         src = getattr(self._scope, "trig_source", "EXT")
         lvl = float(getattr(self._scope, "trig_level_V", 0.0))
-        self._chip_scope_trigger.set_status(f"Trig {src} {lvl:g} V", "info")
+        self._chip_scope_trigger.set_status(
+            f"Trig {src} {lvl:g} V", "info",
+            "Last commanded/configured trigger — not read back live.")
         avg = int(getattr(self._scope, "n_averages", 1) or 1)
         self._chip_scope_avg.set_status("Avg off" if avg <= 1 else f"Avg x{avg}",
                                         "neutral" if avg <= 1 else "info")
         enabled = len(self._enabled_channels())
         total = len(self._channels)
         self._chip_scope_channels.set_status(f"{enabled}/{total} channels",
-                                             "good" if enabled else "warn")
+                                             "neutral" if enabled else "warn")
 
     def _enabled_channels(self) -> frozenset[int]:
         return frozenset(n for n, st in self._channels.items() if st.enabled)
@@ -1078,7 +1149,7 @@ class ScopePanel(QWidget):
     # ------------------------------------------------------------------ #
 
     def _build_scale_box(self) -> Card:
-        box = Card("Display / Scale")
+        box = Card("Display & scale")
         g = QGridLayout()
 
         self._tdiv_slider = QSlider(Qt.Horizontal)
@@ -1143,7 +1214,7 @@ class ScopePanel(QWidget):
         left set on a bare BNC cable, silently multiplying every reading.
         A sibling card of "Display / Scale" (not nested inside it) so the
         safety warning below has room to read clearly."""
-        box = Card("Channel Setup", "probe · coupling · bandwidth")
+        box = Card("Channel setup", "probe · coupling · bandwidth")
         form = QFormLayout()
 
         self._probe_combo = QComboBox()
@@ -1344,8 +1415,10 @@ class ScopePanel(QWidget):
         dut = self._dut_channel()
         dut_data = results.get(dut) if dut is not None else None
         if dut_data is None or not len(dut_data[1]):
-            for lbl in (self._lbl_amp, self._lbl_chg, self._lbl_rms,
-                        self._lbl_drift, self._lbl_rise, self._lbl_cfd):
+            for tile in self._stat_tiles:
+                tile.set_value("—")
+            self._lbl_stats_stale.setVisible(True)
+            for lbl in (self._lbl_rms, self._lbl_cfd):
                 lbl.setText("—")
             self._meas_panel.update_values(None, None)
             return
@@ -1353,13 +1426,16 @@ class ScopePanel(QWidget):
         t2, v2 = dut_data
         self._meas_panel.update_values(t2, v2)
         result = analyse_waveform(t2, v2, **self._analysis_kwargs)
-        self._lbl_amp.setText(f"{result.amplitude_V * 1000:.2f} mV")
-        self._lbl_chg.setText(f"{result.charge_pC:.3f} pC")
+        self._lbl_stats_stale.setVisible(False)
+        self._tile_amp.set_value(f"{result.amplitude_V * 1000:.2f} mV")
+        self._tile_chg.set_value(f"{result.charge_pC:.3f} pC")
         self._lbl_rms.setText(f"{result.baseline_rms_V * 1000:.3f} mV")
-        self._lbl_drift.setText(f"{result.drift_time_s * 1e9:.2f} ns"
-                                if result.drift_time_s is not None else "—")
-        self._lbl_rise.setText(f"{result.rise_time_s * 1e9:.2f} ns"
-                               if result.rise_time_s is not None else "—")
+        self._tile_drift.set_value(f"{result.drift_time_s * 1e9:.2f} ns"
+                                   if result.drift_time_s is not None
+                                   else "no edge")
+        self._tile_rise.set_value(f"{result.rise_time_s * 1e9:.2f} ns"
+                                  if result.rise_time_s is not None
+                                  else "no edge")
         self._lbl_cfd.setText(f"{result.cfd_time_s * 1e9:.2f} ns"
                               if result.cfd_time_s is not None else "—")
 
@@ -1454,25 +1530,23 @@ class ScopePanel(QWidget):
 
     def _restyle_theme_tokens(self) -> None:
         """Re-resolve theme-token colours baked as per-instance QLabel
-        styles: the DUT Analysis stat readouts (amplitude/charge/RMS read
-        the theme accent, the three time-domain quantities read the "delay"
-        axis-rail colour — a TCT drift/rise/CFD time genuinely is a delay
-        measurement), the cursor readout, the per-channel-card live readout,
-        the (possibly open) trigger dialog's status caption, and the
-        probe-attenuation safety warning. Everything else in this panel
-        repaints automatically via the app-wide stylesheet
-        ``gui.style.apply_theme()`` reapplies."""
+        styles: the two secondary DUT stat rows (baseline RMS reads the
+        theme accent; CFD time reads the "delay" axis-rail colour — a TCT
+        CFD time genuinely is a delay measurement), the cursor readout, the
+        per-channel-card live readout, the (possibly open) trigger dialog's
+        status caption, and the probe-attenuation safety warning.  The four
+        headline ReadoutCell tiles resolve their ink through the shared QSS
+        tokens; everything else repaints automatically via the app-wide
+        stylesheet ``gui.style.apply_theme()`` reapplies."""
         p = DARK if self._theme_mode == "dark" else LIGHT
         accent = p["accent"]
         delay = axis_color("delay", self._theme_mode)
-        for lbl in (getattr(self, "_lbl_amp", None), getattr(self, "_lbl_chg", None),
-                    getattr(self, "_lbl_rms", None)):
-            if lbl is not None:
-                lbl.setStyleSheet(f"font-weight: 700; color: {accent};")
-        for lbl in (getattr(self, "_lbl_drift", None), getattr(self, "_lbl_rise", None),
-                    getattr(self, "_lbl_cfd", None)):
-            if lbl is not None:
-                lbl.setStyleSheet(f"font-weight: 700; color: {delay};")
+        lbl_rms = getattr(self, "_lbl_rms", None)
+        if lbl_rms is not None:
+            lbl_rms.setStyleSheet(f"font-weight: 700; color: {accent};")
+        lbl_cfd = getattr(self, "_lbl_cfd", None)
+        if lbl_cfd is not None:
+            lbl_cfd.setStyleSheet(f"font-weight: 700; color: {delay};")
         cursor = getattr(self, "_lbl_cursor", None)
         if cursor is not None:
             cursor.setStyleSheet(f"color: {p['muted']};")
@@ -1502,14 +1576,52 @@ class ScopePanel(QWidget):
         self._restyle_theme_tokens()
 
     def shutdown(self) -> None:
-        """Stop the acquisition thread — call before discarding the panel."""
+        """Stop the acquisition thread — call before discarding the panel.
+
+        Bounded wait; idempotent.  The thread is parented to QApplication and
+        self-``deleteLater``s on ``finished`` (see __init__), so a VISA read
+        still in flight past the bound finishes and cleans itself up rather
+        than being destroyed as a child of this soon-deleted widget."""
+        thread = self._reader_thread
+        self._reader_thread = None
         try:
             self._sync_timer.stop()
             self._live_stop_requested.emit()
-            self._reader_thread.quit()
-            self._reader_thread.wait(2000)
+            if thread is not None:
+                thread.quit()
+                thread.wait(2000)
         except Exception:
             pass
+        # Detach the cursor SignalProxy from the plot scene NOW, while both
+        # are alive.  The proxy is an unparented QObject only referenced from
+        # Python; leaving it connected lets a later garbage-collection pass
+        # destroy scene and proxy in arbitrary order — and a proxy torn down
+        # after its scene dereferences freed memory (access violation in
+        # gc.collect(), reproduced headless once enough panels had lived in
+        # one process).
+        proxy = getattr(self, "_cursor_proxy", None)
+        if proxy is not None:
+            try:
+                proxy.disconnect()
+            except Exception:
+                pass
+            self._cursor_proxy = None
+        # Retire the modeless trigger dialog deterministically.  It is
+        # panel-parented AND Python-cycled back to the panel (its apply
+        # callback is a bound method), so leaving it to a later gc pass lets
+        # Python collect the wrappers in arbitrary order while Qt's C++
+        # parent-cascade delete runs — the other half of the same headless
+        # access violation.  Unparent first so its deletion is its own,
+        # queued, orderly deleteLater instead of a cascade side effect.
+        dlg = self._trigger_dialog
+        self._trigger_dialog = None
+        if dlg is not None:
+            try:
+                dlg.close()
+                dlg.setParent(None)
+                dlg.deleteLater()
+            except Exception:
+                pass
 
     def closeEvent(self, event) -> None:
         self.shutdown()

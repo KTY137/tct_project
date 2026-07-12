@@ -47,8 +47,8 @@ import csv
 
 import numpy as np
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QToolButton,
-    QVBoxLayout, QWidget,
+    QComboBox, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QStackedWidget,
+    QToolButton, QVBoxLayout, QWidget,
 )
 
 try:
@@ -59,7 +59,7 @@ except ImportError:  # pragma: no cover - exercised only without pyqtgraph insta
     _HAS_PG = False
 
 from analysis.scan_grid import ScanGridResult, grid_extent, points_to_grid
-from gui.panel_kit import FigureCard
+from gui.panel_kit import EmptyState, FigureCard
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
 from gui.style import PLOT_BG, PLOT_FG, SPACE_SM
 
@@ -75,6 +75,20 @@ QUANTITIES: list[str] = [
     "rise_time_s",
     "cfd_time_s",
 ]
+
+# Physical unit per map quantity — bound to the colorbar axis label on every
+# quantity switch (design system §4: "Colorbar always, with unit bound to the
+# selected quantity"). ``dut_charge_norm`` is a dimensionless ratio.
+QUANTITY_UNITS: dict[str, str] = {
+    "dut_charge_pC": "pC",
+    "dut_charge_norm": "",
+    "dut_amplitude_V": "V",
+    "ref_amplitude_V": "V",
+    "baseline_rms_V": "V",
+    "drift_time_s": "s",
+    "rise_time_s": "s",
+    "cfd_time_s": "s",
+}
 
 
 def _extract_values(entry) -> dict[str, float]:
@@ -98,8 +112,16 @@ class ScanMapView(QWidget):
     + cursor readout, built once and embedded wherever a live or batch scan
     map is shown."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        empty_label: str = "No scan data",
+        empty_hint: str = "Points appear here as they are acquired.",
+    ) -> None:
         super().__init__(parent)
+        self._empty_label_text = empty_label
+        self._empty_hint_text = empty_hint
         self._points: dict[tuple[float, float], dict[str, float]] = {}
         self._grid_result: ScanGridResult | None = None
         self._pos: tuple[float, float] = (0.0, 0.0)
@@ -113,6 +135,13 @@ class ScanMapView(QWidget):
         # rather than replaying a stale one.
         self._freeze_levels = False
         self._frozen_range: tuple[float, float] | None = None
+        # Revisited-cell counter (design system §4: "Missing/duplicate counts
+        # surfaced"). This widget stores points in a dict keyed by rounded
+        # (x, y) — a revisit overwrites silently at the storage layer, so the
+        # duplicate count must be tallied HERE, on arrival, before the
+        # dedup; analysis.scan_grid's own n_duplicate_points can never see
+        # them through this widget.
+        self._n_duplicates = 0
         self._build_ui()
 
     # ------------------------------------------------------------------ #
@@ -124,6 +153,10 @@ class ScanMapView(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(SPACE_SM)
 
+        # Map toolbar — deliberately OUTSIDE the empty/map stack below, so
+        # quantity/freeze/export stay visible (if inert) even before the
+        # first point arrives (design system §7: "map toolbar visible even
+        # in empty state").
         toolbar = QHBoxLayout()
         toolbar.addWidget(QLabel("Quantity:"))
         self._combo_qty = QComboBox()
@@ -168,6 +201,12 @@ class ScanMapView(QWidget):
             self._plot_item.setLabel("left", "Y", units="mm")
             self._image_view = pg.ImageView(view=self._plot_item)
             self._image_view.setMinimumHeight(240)
+            # Viridis for all single-signed maps (design system §4 —
+            # Jonathan's ruling; replaces pyqtgraph's default greyscale).
+            self._image_view.setColorMap(pg.colormap.get("viridis"))
+            # Colorbar unit binding: the histogram's axis IS the colorbar
+            # scale; _redraw re-labels it with the selected quantity + unit.
+            self._hist_axis = self._image_view.ui.histogram.axis
             # Disable ROI rotation — only axis-aligned resize makes sense on
             # a stage-position map (same guard as analysis_panel).
             _roi = self._image_view.roi
@@ -179,11 +218,24 @@ class ScanMapView(QWidget):
                 self._plot_item.scene().sigMouseMoved, rateLimit=30,
                 slot=self._on_mouse_moved)
 
-            self._figure_card = FigureCard("2D Scan Map", figure=self._image_view)
+            self._figure_card = FigureCard("2D scan map", "no data",
+                                           figure=self._image_view)
             self._figure_card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
-            root.addWidget(self._figure_card, 1)
+
+            # Empty/map swap lives INSIDE this widget (below the toolbar) so
+            # embedders never need their own stacked placeholder around it.
+            self._empty_state = EmptyState(
+                "fa5s.map", self._empty_label_text, self._empty_hint_text,
+                theme_mode=self._theme_mode,
+            )
+            self._stack = QStackedWidget()
+            self._stack.addWidget(self._empty_state)   # index 0
+            self._stack.addWidget(self._figure_card)   # index 1
+            root.addWidget(self._stack, 1)
         else:  # pragma: no cover - exercised only without pyqtgraph installed
             self._figure_card = None
+            self._empty_state = None
+            self._stack = None
             root.addWidget(QLabel(
                 "pyqtgraph not installed — cannot display map.\n"
                 "Run:  pip install pyqtgraph"
@@ -204,6 +256,8 @@ class ScanMapView(QWidget):
         re-render — the incremental streaming path."""
         x = round(float(result.point.x_mm), 6)
         y = round(float(result.point.y_mm), 6)
+        if (x, y) in self._points:
+            self._n_duplicates += 1
         self._points[(x, y)] = _extract_values(result)
         self._redraw()
 
@@ -216,17 +270,26 @@ class ScanMapView(QWidget):
         objects (each point's position read from ``result.point``).
         """
         self._points.clear()
+        self._n_duplicates = 0
         if hasattr(mapping_or_iterable, "items"):
             for key, entry in mapping_or_iterable.items():
                 x, y = key
-                self._points[(round(float(x), 6), round(float(y), 6))] = _extract_values(entry)
+                rounded_key = (round(float(x), 6), round(float(y), 6))
+                # Two distinct raw keys can collide once rounded (same honest
+                # counter as the iterable branch below) — never silently
+                # absorbed (design system §4).
+                if rounded_key in self._points:
+                    self._n_duplicates += 1
+                self._points[rounded_key] = _extract_values(entry)
         else:
             for entry in mapping_or_iterable:
                 point = getattr(entry, "point", None)
                 if point is None:
                     continue
-                x, y = float(point.x_mm), float(point.y_mm)
-                self._points[(round(x, 6), round(y, 6))] = _extract_values(entry)
+                key = (round(float(point.x_mm), 6), round(float(point.y_mm), 6))
+                if key in self._points:
+                    self._n_duplicates += 1
+                self._points[key] = _extract_values(entry)
         self._redraw()
 
     def set_quantity(self, qty: str) -> None:
@@ -241,10 +304,17 @@ class ScanMapView(QWidget):
     def clear(self) -> None:
         """Remove all accumulated points and reset the map."""
         self._points.clear()
+        self._n_duplicates = 0
         self._redraw()
 
     def point_count(self) -> int:
         return len(self._points)
+
+    def duplicate_count(self) -> int:
+        """How many arriving points revisited an already-sampled (rounded)
+        cell since the last ``clear()``/``set_points()`` reset — surfaced,
+        never silently absorbed (design system §4)."""
+        return self._n_duplicates
 
     def points(self) -> dict[tuple[float, float], dict[str, float]]:
         """A shallow copy of the accumulated ``(x_mm, y_mm) -> {quantity:
@@ -264,6 +334,21 @@ class ScanMapView(QWidget):
         the currently selected quantity), or ``None`` before any data."""
         return self._grid_result
 
+    def set_empty_state_text(self, label: str, hint: str | None = None) -> None:
+        """Customise the built-in empty placeholder (shown until the first
+        point arrives) — e.g. the Scan Viewer points it at the Planner."""
+        self._empty_label_text = label
+        if hint is not None:
+            self._empty_hint_text = hint
+        if self._empty_state is not None:
+            self._empty_state.set_label(label)
+            if hint is not None:
+                self._empty_state.set_hint(hint)
+
+    def is_showing_map(self) -> bool:
+        """True once the map page (vs the empty placeholder) is current."""
+        return bool(self._stack is not None and self._stack.currentIndex() == 1)
+
     def refresh_theme(self, mode: str | None = None) -> None:
         """Re-resolve the cached canvas/axis pens after a light/dark switch.
 
@@ -275,6 +360,8 @@ class ScanMapView(QWidget):
         """
         if mode:
             self._theme_mode = str(mode)
+        if self._empty_state is not None:
+            self._empty_state.refresh_theme(self._theme_mode)
         if not _HAS_PG:
             return
         self._image_view.ui.graphicsView.setBackground(PLOT_BG)
@@ -300,8 +387,14 @@ class ScanMapView(QWidget):
             # freeze still checked) captures a fresh range instead.
             self._frozen_range = None
             self._chip_points.set_status("No data", "neutral")
+            self._figure_card.set_subtitle("no data")
             self._lbl_cursor.setText("x: -- mm   y: -- mm   value: --")
+            if self._stack is not None:
+                self._stack.setCurrentIndex(0)
             return
+
+        if self._stack is not None:
+            self._stack.setCurrentIndex(1)
 
         xs = [k[0] for k in self._points]
         ys = [k[1] for k in self._points]
@@ -328,24 +421,37 @@ class ScanMapView(QWidget):
                 vmin, vmax = float(np.nanmin(grid)), float(np.nanmax(grid))
             if vmin == vmax:
                 vmax = vmin + 1e-9
-            display = np.nan_to_num(grid, nan=vmin)
-            self._image_view.setImage(
-                display, autoRange=True, autoLevels=False, levels=(vmin, vmax),
-                pos=self._pos, scale=self._scale,
-            )
         else:
-            display = np.nan_to_num(grid)
-            self._image_view.setImage(
-                display, autoRange=True, autoLevels=True,
-                pos=self._pos, scale=self._scale,
-            )
+            # Points exist but every value is NaN (e.g. all per-point
+            # analyses failed) — arbitrary finite levels; every cell renders
+            # transparent below, which is the honest picture.
+            vmin, vmax = 0.0, 1.0
+        # NaN honesty (design system §4: "Unsampled cells are never
+        # data-colored" — the NaN→vmin bug fix): the grid goes to the
+        # ImageItem with its NaNs INTACT. pyqtgraph maps non-finite pixels
+        # to alpha 0, so unsampled/invalid cells show the dark instrument
+        # canvas through the map — visually distinct from every colormap
+        # entry — instead of silently wearing the coldest data colour.
+        self._image_view.setImage(
+            grid, autoRange=True, autoLevels=False, levels=(vmin, vmax),
+            pos=self._pos, scale=self._scale,
+        )
 
+        # Colorbar unit bound to the selected quantity (§4).
+        self._hist_axis.setLabel(qty, units=QUANTITY_UNITS.get(qty, ""))
+
+        # Missing/duplicate counts surfaced (§4), quiet-nominal chip (law 1:
+        # a complete map is routine, not a green light).
         n_total = int(grid.size)
         n_filled = n_total - result.n_missing
-        status = "good" if result.n_missing == 0 else "busy"
+        n_dup = self._n_duplicates + result.n_duplicate_points
         self._chip_points.set_status(
-            f"{n_filled}/{n_total} pts", status,
-            f"{result.n_missing} cells not yet sampled")
+            f"{n_filled}/{n_total} sampled", "neutral",
+            f"{result.n_missing} cells not yet sampled · "
+            f"{n_dup} duplicate points (last one wins) · "
+            f"{result.n_nan_values} invalid values")
+        self._figure_card.set_subtitle(
+            f"{result.n_missing} unsampled · {n_dup} duplicate")
         self._update_cursor_readout()
 
     def _on_freeze_toggled(self, checked: bool) -> None:
@@ -362,27 +468,27 @@ class ScanMapView(QWidget):
         if not _HAS_PG or self._image_view is None:
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Map as PNG", "", "PNG (*.png)")
+            self, "Export map as PNG", "", "PNG (*.png)")
         if not path:
             return
         try:
             self._write_png(path)
             flash_button(self._btn_export_png, "good")
         except Exception as exc:
-            QMessageBox.warning(self, "Export Error", str(exc))
+            QMessageBox.warning(self, "Export error", str(exc))
 
     def _on_export_csv_clicked(self) -> None:
         if not self._points:
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Map as CSV", "", "CSV (*.csv)")
+            self, "Export map as CSV", "", "CSV (*.csv)")
         if not path:
             return
         try:
             self._write_csv(path)
             flash_button(self._btn_export_csv, "good")
         except Exception as exc:
-            QMessageBox.warning(self, "Export Error", str(exc))
+            QMessageBox.warning(self, "Export error", str(exc))
 
     def _write_png(self, path: str) -> None:
         """Write the current map image to *path* as PNG via pyqtgraph's

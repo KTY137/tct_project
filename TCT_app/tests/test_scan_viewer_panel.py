@@ -60,17 +60,33 @@ def test_construct_headless_no_hardware():
 def test_initial_state_shows_empty_state_and_disabled_run_control():
     _app()
     panel = ScanViewerPanel()
-    assert panel._stack.currentWidget() is panel._empty_state
+    # Empty placeholder now lives INSIDE ScanMapView (map toolbar stays
+    # visible pre-run, design system §7) — no panel-level stack anymore.
+    assert not panel._map_view.is_showing_map()
     assert not panel._btn_pause.isEnabled()
     assert not panel._btn_abort.isEnabled()
     assert not panel._btn_open_analysis.isEnabled()
+    assert panel._finished_banner.isHidden()
+
+
+def test_map_toolbar_reachable_in_empty_state():
+    """Design system §7: quantity/freeze/export stay present before any run."""
+    _app()
+    panel = ScanViewerPanel()
+    assert not panel._map_view.is_showing_map()
+    # The toolbar widgets are OUTSIDE the internal empty/map stack: not
+    # hidden by the placeholder page.
+    assert not panel._map_view._combo_qty.isHidden()
+    assert not panel._map_view._btn_freeze.isHidden()
+    assert not panel._map_view._btn_export_png.isHidden()
+    assert not panel._map_view._btn_export_csv.isHidden()
 
 
 # --------------------------------------------------------------------------- #
 # Simulated run: started -> points -> progress -> finished                    #
 # --------------------------------------------------------------------------- #
 
-def test_scan_started_enables_run_control_and_swaps_to_map():
+def test_scan_started_enables_run_control_and_arms_tiles():
     _app()
     panel = ScanViewerPanel()
     panel.on_scan_started()
@@ -78,8 +94,13 @@ def test_scan_started_enables_run_control_and_swaps_to_map():
     assert panel._btn_pause.isEnabled()
     assert panel._btn_abort.isEnabled()
     assert not panel._btn_open_analysis.isEnabled()
-    assert panel._stack.currentWidget() is panel._map_view
+    assert panel._finished_banner.isHidden()
     assert panel._chip_run.text() == "Running"
+    # Law 4: progress/elapsed go live at start; ETA/point stay honestly
+    # stale (captioned) until they have something real to say.
+    assert not panel._metric_progress.is_stale()
+    assert panel._metric_eta.is_stale()
+    assert panel._metric_point.is_stale()
 
 
 def test_point_done_fills_map_and_updates_point_metric():
@@ -97,7 +118,7 @@ def test_point_done_before_scan_started_still_swaps_to_map():
     _app()
     panel = ScanViewerPanel()
     panel.on_point_done(_result(0.0, 0.0, charge=1.0))
-    assert panel._stack.currentWidget() is panel._map_view
+    assert panel._map_view.is_showing_map()
 
 
 def test_progress_updates_progress_and_eta_and_elapsed_tiles():
@@ -129,9 +150,34 @@ def test_scan_finished_disables_run_control_and_keeps_map():
     assert not panel._btn_pause.isEnabled()
     assert not panel._btn_abort.isEnabled()
     assert panel._chip_run.text() == "Finished"
-    # Map is NOT cleared / swapped back to EmptyState after finish.
-    assert panel._stack.currentWidget() is panel._map_view
+    # Map is NOT cleared / swapped back to the empty placeholder after
+    # finish — retained (stale-captioned tiles) for the Analysis handoff.
+    assert panel._map_view.is_showing_map()
     assert panel._map_view.point_count() == 1
+    # Terminal state as design (§5): banner shown, tiles honestly final.
+    assert not panel._finished_banner.isHidden()
+    assert panel._chip_finished.text() == "Finished"
+    assert panel._metric_progress.is_stale()
+
+
+def test_abort_finish_shows_aborted_banner_variant():
+    _app()
+    panel = ScanViewerPanel()
+    panel.on_scan_started()
+    panel.on_point_done(_result(0.0, 0.0, charge=1.0))
+    panel._btn_abort.click()
+    panel.on_scan_finished()
+    assert not panel._finished_banner.isHidden()
+    assert panel._chip_finished.text() == "Aborted"
+    assert panel._chip_run.text() == "Aborted"
+    # Partial data stays on screen (fail-safe caption, not a wiped map).
+    assert panel._map_view.point_count() == 1
+
+    # The abort flag is per-run: the next run that finishes cleanly reads
+    # Finished again.
+    panel.on_scan_started()
+    panel.on_scan_finished()
+    assert panel._chip_finished.text() == "Finished"
 
 
 def test_new_run_clears_previous_map():
@@ -301,16 +347,32 @@ def test_z_focus_mode_switch_toggles_edge_and_amp_frames():
     assert not panel._zf_amp_frame.isHidden()
 
 
-def test_z_focus_card_disables_body_when_unchecked():
+def test_z_focus_card_collapsed_by_default_with_header_controls():
+    """Design system §7: Z-focus collapsed by default — the body (form +
+    curve) hidden, while the header chip and the "Find focus" verb stay
+    reachable; expanding discloses the form."""
     _app()
     panel = ScanViewerPanel()
+    card = panel._zf_card
+    assert not card.is_expanded()
+    body = card.body.parentWidget()
+    assert body.isHidden()
+    # Header summary chip + primary verb stay live while collapsed.
+    assert not panel._btn_zf_start.isHidden()
     assert panel._btn_zf_start.isEnabled()
-    zf_card = panel._btn_zf_start.parent()
-    while zf_card is not None and not hasattr(zf_card, "set_checked"):
-        zf_card = zf_card.parent()
-    assert zf_card is not None
-    zf_card.set_checked(False)
-    assert not panel._btn_zf_start.isEnabled()
+    assert panel._chip_best_z.text() == "No focus result"
+
+    card.set_expanded(True)
+    assert not body.isHidden()
+    card.set_expanded(False)
+    assert body.isHidden()
+
+
+def test_z_focus_done_updates_header_chip():
+    _app()
+    panel = ScanViewerPanel()
+    panel.on_z_focus_done(0.42)
+    assert "0.420" in panel._chip_best_z.text()
 
 
 # --------------------------------------------------------------------------- #
@@ -405,7 +467,8 @@ def test_full_simulated_run_sequence():
     assert panel._metric_progress.value() == "3/3"
     assert panel._chip_run.text() == "Finished"
     assert panel._btn_open_analysis.isEnabled()
-    assert panel._stack.currentWidget() is panel._map_view
+    assert panel._map_view.is_showing_map()
+    assert not panel._finished_banner.isHidden()
 
 
 # --------------------------------------------------------------------------- #

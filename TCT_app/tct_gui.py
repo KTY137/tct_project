@@ -8,9 +8,10 @@ device interfaces so hardware swaps need no UI code changes.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 
-from PySide6.QtCore import Qt, Slot, Signal, QObject, QThread, QTimer, QSettings
+from PySide6.QtCore import Qt, Slot, Signal, QObject, QThread, QTimer, QSettings, QUrl
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QTabWidget, QApplication, QStyle,
@@ -48,6 +49,32 @@ from gui.scan_coordinator import ScanCoordinator
 from controller.scan_plan_validator import PlanLimits
 
 logger = logging.getLogger(__name__)
+
+
+# Readiness-ladder steps for the QML rail's "State" chip tooltip (cockpit
+# design system §5/§6: "say WHY Start is disabled" — Abel's run-lifecycle map).
+# Presentation only: reads AppState's own `.name` string, never introduces a
+# new AppState member (the D2 task brief's explicit constraint). Mirrors the
+# phrasing already established by gui/planner_panel.py's narrower recipe-level
+# `_latch_readiness` ("say WHY it is unavailable"), just for the device-level
+# ladder instead of the plan-level one.
+_READINESS_LADDER = ("CONNECTED", "HOMED", "CONFIGURED", "READY")
+_READINESS_ORDER = ("DISCONNECTED",) + _READINESS_LADDER
+
+
+def _readiness_caption(state_name: str) -> str:
+    """Render the readiness ladder as a short caption, e.g. for a CONNECTED
+    state: "connected ✓ · homed · configured · ready" (the first bare —
+    unchecked — step is the thing blocking Start). Returns "" once a run is
+    live or just finished (RUNNING/PAUSED/FINISHED/ABORTED/ERROR) — the ladder
+    answers "why can't I start", which isn't the relevant question there."""
+    if state_name not in _READINESS_ORDER:
+        return ""
+    idx = _READINESS_ORDER.index(state_name)
+    parts = []
+    for i, step in enumerate(_READINESS_LADDER, start=1):
+        parts.append(f"{step.lower()} ✓" if i <= idx else step.lower())
+    return " · ".join(parts)
 
 
 def _scrollable(widget: QWidget) -> QScrollArea:
@@ -169,6 +196,13 @@ class TCTMainWindow(QMainWindow):
         # ── Core objects ──────────────────────────────────────────────
         self._sm      = StateMachine()
         self._devices = DeviceManager(config_path)
+        # Last connect_all() per-device failures (short device key -> error
+        # string), read-only cache for the QML rail's device-dot "fault"
+        # state (§6: disconnected-and-attempted != never-attempted). Replaced
+        # wholesale on every connect attempt (a device missing from the new
+        # dict is no longer at fault) and cleared on an explicit disconnect —
+        # see _on_connect_done / _on_disconnect_done.
+        self._connect_faults: dict[str, str] = {}
         # The ScanController allocates a fresh per-run HDF5Writer itself
         # (_begin_run); no writer is created here.
         self._scanner = ScanController(self._devices, self._sm)
@@ -197,8 +231,12 @@ class TCTMainWindow(QMainWindow):
 
         Called once at startup and again by ``_reload_config`` after the config
         is saved, so every ``devices.yaml`` change applies without restarting
-        the process.  ``setCentralWidget`` deletes the previous panels, so
-        ``_teardown_panels`` must stop their threads first."""
+        the process.  ``setCentralWidget`` does NOT delete the previous
+        central widget it replaces (confirmed empirically — Qt only detaches
+        it from the layout, leaving it alive as a hidden orphan otherwise), so
+        ``_teardown_panels`` must both stop every panel's threads/timers AND
+        explicitly ``deleteLater()`` the outgoing central widget itself before
+        this method builds and installs the next one."""
         # ── GUI panels ────────────────────────────────────────────────
         self._motor_panel     = MotorPanel(self._devices.motor)
         self._intensity_panel = IntensityPanel(self._devices.intensity_monitor)
@@ -216,13 +254,17 @@ class TCTMainWindow(QMainWindow):
             influx_writer=self._devices.influx,
         )
         self._analysis_panel  = AnalysisPanel()
-        self._calib_panel     = CalibrationPanel(self._devices)
-        # Scan-routine planner (Recipe Tree) + its danger-confirm gate.  The
-        # gate lives here (parented to the window) because the plan executor
-        # calls gate.confirm() from the scan worker thread; teardown must
-        # shutdown() it so a pending confirm can never block app exit.
-        self._planner_panel   = PlannerPanel(parent=self)
+        # Danger-confirm gate.  The gate lives here (parented to the window)
+        # because the plan executor calls gate.confirm() from the scan worker
+        # thread; teardown must shutdown() it so a pending confirm can never
+        # block app exit.  Constructed BEFORE the calibration panel because the
+        # panel now requires the SAME gate instance (repeatability motion is
+        # danger-gated — Abel, controller/repeatability.py) and refuses motion
+        # without it.
         self._danger_gate     = QtDangerGate(parent=self)
+        self._calib_panel     = CalibrationPanel(self._devices, gate=self._danger_gate)
+        # Scan-routine planner (Recipe Tree) — shares the gate above.
+        self._planner_panel   = PlannerPanel(parent=self)
 
         # ── Layout ────────────────────────────────────────────────────
         central = QWidget()
@@ -305,7 +347,6 @@ class TCTMainWindow(QMainWindow):
         strip_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         strip_scroll.setFixedHeight(54)
         strip_scroll.setWidget(ribbon)
-        outer.addWidget(strip_scroll)
 
         # Main tabs — detachable (double-click / ⧉ to pop into a window).  Each
         # page is wrapped in a QScrollArea so panels scroll instead of cropping.
@@ -325,7 +366,72 @@ class TCTMainWindow(QMainWindow):
         self._tabs.addTab(_scrollable(self._monitor_panel), "Monitor")
         self._tabs.addTab(_scrollable(self._analysis_panel), "Analysis")
 
-        outer.addWidget(self._tabs)
+        # ── QML chrome shell (opt-in: TCT_QML_SHELL=1) ────────────────────
+        # DEFAULT (flag unset) is the classic QWidget shell, byte-for-byte
+        # unchanged: the ribbon strip + toolbar are shown and no QQuickWidget
+        # is built. When set, the QML rail + pill shelf REPLACE the ribbon
+        # strip AND the classic toolbar (hidden, not removed — the toolbar's
+        # non-duplicated affordances (Device Manager / Settings / Show Log /
+        # Show Device Debug / the app-state readout) are re-exposed as a
+        # compact rail cluster routed to the SAME existing handlers, so there
+        # is exactly one visible Connect/Disconnect/Devices/Settings/Log/Debug
+        # surface, never two — see gui/qml_shell.py / gui/qml/Shell.qml). The
+        # classic ribbon strip and toolbar widgets stay alive (hidden,
+        # parented to `central`) so they remain the cached-state source the
+        # QML rail mirrors, and the DetachableTabWidget stays the tab/detach
+        # engine (its native tab bar is hidden by build_qml_chrome).
+        self._qml_chrome = None
+        self._shell_bridge = None
+        self._scope_vm = None
+        # Read-only run/scan-state facade for the QML Scan Viewer. Built AND fed
+        # in BOTH modes (the poll + coordinator feeds below are mode-agnostic);
+        # registered as the "runState" QML context property only in QML mode.
+        # Holds no ScanController/StateMachine/coordinator reference — the
+        # read/command boundary is structural (docs/design/run_state_facade.md).
+        from gui.run_state_viewmodel import RunStateViewModel
+        self._run_vm = RunStateViewModel()
+        if os.environ.get("TCT_QML_SHELL") == "1":
+            from gui.qml_shell import build_qml_chrome
+            from gui.scope_viewmodel import ScopeViewModel
+            scope_vm = ScopeViewModel()
+            chrome, bridge = build_qml_chrome(
+                self, self._tabs,
+                state_provider=self._collect_shell_state,
+                scope_vm=scope_vm,
+                run_vm=self._run_vm,
+                on_connect=self._connect_all,
+                on_disconnect=self._disconnect_all,
+                on_toggle_theme=self._toggle_theme_from_qml,
+                on_open_devices=self._open_device_manager,
+                on_open_settings=self._open_settings,
+                on_toggle_log=self._toggle_log_from_qml,
+                on_toggle_debug=self._toggle_debug_from_qml,
+                theme_mode=getattr(self, "_theme_mode", "light"),
+            )
+            if chrome is not None:
+                self._qml_chrome = chrome
+                self._shell_bridge = bridge
+                self._scope_vm = scope_vm
+                strip_scroll.setParent(central)   # keep chips alive; not shown
+                strip_scroll.hide()
+                self._toolbar.setVisible(False)
+                outer.addWidget(chrome)
+                outer.addWidget(self._tabs)
+            else:
+                # Fail safe (Rule 5 spirit): Shell.qml failed to load —
+                # build_qml_chrome already released everything it constructed
+                # and touched neither the toolbar nor the native tab bar.
+                # Stay fully classic and operable rather than run with a
+                # half-built/missing chrome.
+                notify("QML chrome failed to load — using the classic shell. "
+                       "See the log for the QML error.", "error")
+                self._toolbar.setVisible(True)
+                outer.addWidget(strip_scroll)
+                outer.addWidget(self._tabs)
+        else:
+            self._toolbar.setVisible(True)
+            outer.addWidget(strip_scroll)
+            outer.addWidget(self._tabs)
 
         # Status bar
         self._status = QStatusBar()
@@ -354,6 +460,16 @@ class TCTMainWindow(QMainWindow):
         coord.progress.connect(self._scan_viewer.on_progress)
         coord.scan_started.connect(self._scan_viewer.on_scan_started)
         coord.scan_finished.connect(self._scan_viewer.on_scan_finished)
+        # Coordinator → run-state facade (read-only mirror for the QML Scan
+        # Viewer; the SAME already-marshaled GUI-thread signals feed it in
+        # parallel with the classic panel — see run_state_facade.md §3 path 2).
+        # These connections die with the coordinator (reassigned on soft-reload),
+        # the same lifetime as the ScanViewerPanel connections above.
+        coord.scan_started.connect(self._run_vm.on_scan_started)
+        coord.progress.connect(self._run_vm.on_progress)
+        coord.point_done.connect(self._run_vm.on_point_done)
+        coord.scan_finished.connect(self._run_vm.on_scan_finished)
+        coord.error_dialog.connect(self._run_vm.on_error)
         # Publish the finished run's HDF5 path AFTER on_scan_finished has cleared
         # the viewer's run-active flag, so set_last_run_path can enable "Open in
         # Analysis" (order matters — see _publish_last_run_path).
@@ -390,10 +506,23 @@ class TCTMainWindow(QMainWindow):
         # Scan Viewer → Analysis handoff: open the just-finished run's HDF5 file.
         self._scan_viewer.open_in_analysis_requested.connect(self._open_in_analysis)
 
-        # Planner panel → coordinator.
+        # Planner panel → coordinator. arm_hv_requested/start_plan_requested are
+        # the legacy dialog-confirm fallback (arm-latch flag off);
+        # execute_plan_requested is the two-step-latch path (design law 5),
+        # carrying the ArmedEnvelopeGate the panel built over the rendered
+        # envelope. The panel derives that envelope via the controller's
+        # read-only arm_envelope_for (real bias-channel resolution).
         self._planner_panel.arm_hv_requested.connect(coord.arm_hv)
         self._planner_panel.start_plan_requested.connect(coord.start_plan)
+        self._planner_panel.execute_plan_requested.connect(coord.execute_plan)
         self._planner_panel.abort_requested.connect(coord.abort)
+        # Mary milestone review: give the gate an INDEPENDENT freshness bound
+        # (~3x the GUI's 10 s arm latch) so the controller boundary rejects a
+        # stale arm even if a future edit path missed disarm — defense in
+        # depth; the 10 s latch stays the primary UX timer.
+        self._planner_panel.set_envelope_provider(
+            lambda plan: self._scanner.arm_envelope_for(plan, timeout_s=30.0)
+        )
 
         # Bias panel → coordinator (voltage scan also starts from the bias panel).
         self._bias_panel.vscan_requested.connect(coord.start_voltage_scan)
@@ -440,6 +569,17 @@ class TCTMainWindow(QMainWindow):
         self._light_timer.setInterval(1000)
         self._light_timer.timeout.connect(self._refresh_lights)
         self._light_timer.timeout.connect(self._sync_app_state)
+        # BOTH modes: mirror machine state + run metadata into the read-only
+        # run-state facade on the SAME shared 1 Hz tick (no new QTimer, no new
+        # thread; single-timer law). Guarded feeder — safe after teardown drops
+        # _run_vm. See run_state_facade.md §3 path 1.
+        self._light_timer.timeout.connect(self._feed_run_state)
+        # QML mode only: the shell bridge polls the SAME cached state at the
+        # SAME cadence — one shared 1 Hz timer instead of a second QTimer
+        # doing duplicate work (slice 2a coffee-retro item; _ShellBridge owns
+        # no timer of its own — see gui/qml_shell.py).
+        if self._shell_bridge is not None:
+            self._light_timer.timeout.connect(self._shell_bridge.pull)
         self._light_timer.start()
         self._refresh_lights()
 
@@ -613,6 +753,10 @@ class TCTMainWindow(QMainWindow):
         tb.setMovable(False)
         tb.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)  # icon + label
         self.addToolBar(tb)
+        # Kept as an attribute so the QML branch of _build_central can hide it
+        # (QML mode replaces it with a rail cluster routed to the SAME actions
+        # below — see _collect_shell_state / gui/qml_shell.py).
+        self._toolbar = tb
         tb.addAction(self._act_connect)
         tb.addAction(self._act_disconnect)
         tb.addSeparator()
@@ -637,6 +781,11 @@ class TCTMainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             apply_theme(app, self._theme_mode)
+        # Keep the QML chrome (if built) in lockstep with the QSS theme: swap the
+        # Theme singleton's active palette so its bound QML properties repaint.
+        if getattr(self, "_qml_chrome", None) is not None:
+            from gui.qml_theme import set_theme_mode
+            set_theme_mode(self._theme_mode)
         # apply_theme() repaints every QSS hook globally, but axis_color()-based
         # instance styles (motor axis rails, bias amber, plot pens) are baked at
         # construction — panels expose refresh_theme() to re-resolve them live.
@@ -744,6 +893,112 @@ class TCTMainWindow(QMainWindow):
             self._chip_laser.set_status("Laser unknown", "warn")
             set_pulse(self._chip_laser, True, kind="laser")
 
+    def _collect_shell_state(self) -> dict:
+        """Snapshot the cached ribbon state for the QML rail (QML-mode only).
+
+        Pure reads of already-cached values — device connection flags and the
+        classic status chips (which the existing pollers keep current) — plus
+        the scope panel's Live-button state. No hardware I/O: this is the same
+        cached state the classic ribbon shows, mirrored into the QML view.
+        """
+        dot_map = {"connected": "on", "simulated": "sim", "disconnected": "off"}
+        # Display name -> connect_all() short key, so a cached per-device
+        # failure (self._connect_faults) can be matched against named_devices()
+        # (read-only reuse of DeviceManager's own lookup table — same purpose
+        # its docstring names: "connect_all() short key" <-> display name).
+        short_key = DeviceManager._DISPLAY_TO_SHORT
+        faults = self._connect_faults
+        devices: list[list[str]] = []
+        for disp, dev in self._devices.named_devices().items():
+            state = device_state(dev)
+            if state == "disconnected" and short_key.get(disp) in faults:
+                devices.append([disp, "fault"])
+            else:
+                devices.append([disp, dot_map.get(state, "off")])
+
+        def _chip(chip) -> list[str]:
+            return [chip.text(), str(chip.property("state") or "neutral")]
+
+        scope = getattr(self._devices, "scope", None)
+        sc_conn = bool(getattr(scope, "connected", False))
+        sc_sim = bool(getattr(scope, "simulation", False))
+        live_btn = getattr(getattr(self, "_scope_panel", None), "_btn_live", None)
+        acquiring = bool(live_btn is not None and live_btn.isChecked())
+        if not (sc_conn or sc_sim):
+            sc_status = "Scope offline"
+        elif acquiring:
+            sc_status = "Scope live"
+        else:
+            sc_status = "Scope sim" if sc_sim else "Scope ready"
+
+        return {
+            "devices": devices,
+            "hv": _chip(self._chip_bias_v),
+            "motion": _chip(self._chip_motion),
+            "scan": _chip(self._chip_scan),
+            "laser": _chip(self._chip_laser),
+            # The toolbar's app-state readout (self._lbl_state) — distinct from
+            # the "Scan" chip above — re-exposed on the rail since the classic
+            # toolbar is hidden in QML mode (see _build_central's QML branch).
+            "app": _chip(self._lbl_state),
+            # Readiness ladder for the "State" chip's tooltip (design system
+            # §5/§6) — "" once RUNNING/PAUSED/terminal (see _readiness_caption).
+            "app_readiness": _readiness_caption(self._sm.state.name),
+            "scope": {
+                "connected": sc_conn, "simulated": sc_sim,
+                "acquiring": acquiring, "status": sc_status,
+            },
+            # Dock visibility — drives the rail's Log/Debug button highlight so
+            # a QML click and the View-menu checkbox never disagree.
+            "log_visible": bool(self._log_dock.isVisible()),
+            "debug_visible": bool(self._device_debug_dock.isVisible()),
+        }
+
+    def _feed_run_state(self) -> None:
+        """Mirror machine state + run metadata into the run-state facade.
+
+        Runs on the shared 1 Hz ``_light_timer`` (GUI thread), in BOTH shells.
+        Pure reads: ``sm.state`` is an atomic enum-reference read (the same
+        cross-thread read the rail's app chip already tolerates — worst case one
+        tick stale), and ``current_scan_type``/``last_run_path`` are the
+        controller's thread-safe accessors. ``scan_type`` is ADVISORY: it reads
+        ``None`` for a sub-second window at run start, so ``running``/``active``
+        key off ``sm.state`` (above) — not this. Wholly guarded so a routine,
+        no-I/O poll step can never crash the process from a Qt-invoked slot."""
+        vm = getattr(self, "_run_vm", None)
+        if vm is None:
+            return
+        try:
+            sm = getattr(self, "_sm", None)
+            scanner = getattr(self, "_scanner", None)
+            state = getattr(sm, "state", None) if sm is not None else None
+            stype = getattr(scanner, "current_scan_type", None) if scanner is not None else None
+            rpath = getattr(scanner, "last_run_path", None) if scanner is not None else None
+            vm.update(
+                state=state,
+                scan_type=stype or "",
+                run_path=str(rpath) if rpath else "",
+            )
+        except Exception:
+            logger.debug("run-state facade poll feed failed", exc_info=True)
+
+    def _toggle_theme_from_qml(self) -> None:
+        """QML rail theme button → flip the same checkable View-menu action so
+        the classic ``_toggle_theme`` path (QSS + panel refresh + QML sync)
+        runs unchanged."""
+        self._act_dark.setChecked(not self._act_dark.isChecked())
+
+    def _toggle_log_from_qml(self) -> None:
+        """QML rail Log button → flip the same checkable ``_act_log`` action
+        (toggled → ``self._log_dock.setVisible``), so the toolbar/menu and the
+        QML rail can never fall out of sync."""
+        self._act_log.setChecked(not self._act_log.isChecked())
+
+    def _toggle_debug_from_qml(self) -> None:
+        """QML rail Debug button → flip the same checkable ``_act_device_debug``
+        action, mirroring ``_toggle_log_from_qml`` above."""
+        self._act_device_debug.setChecked(not self._act_device_debug.isChecked())
+
     @Slot(str)
     def _on_device_lost(self, name: str) -> None:
         """A liveness probe found a dead link — surface it loudly.
@@ -847,6 +1102,72 @@ class TCTMainWindow(QMainWindow):
     def _teardown_panels(self) -> None:
         """Stop every panel-owned thread/timer before the panels are discarded
         (child-widget deletion does not fire closeEvent)."""
+        # Detach the QML shell bridge from the shared light timer (QML mode
+        # only) so a tick can't reach into discarded widgets after a
+        # soft-reload / on close. The bridge owns no timer of its own (slice
+        # 2a — see gui/qml_shell.py); it only rides `_light_timer.timeout`,
+        # stopped a few lines below, so this disconnect is the only bridge-
+        # specific teardown needed and is safe to repeat (idempotent).
+        bridge = getattr(self, "_shell_bridge", None)
+        if bridge is not None:
+            light_timer = getattr(self, "_light_timer", None)
+            if light_timer is not None:
+                try:
+                    light_timer.timeout.disconnect(bridge.pull)
+                except (TypeError, RuntimeError):
+                    pass
+            self._shell_bridge = None
+        # Explicitly release the QML chrome's engine/scene-graph resources
+        # BEFORE ``_build_central`` (a soft config reload) constructs a new
+        # QQuickWidget. A QQuickWidget owns its own QQmlEngine; clearing its
+        # source releases the root object graph and engine-owned resources
+        # synchronously (Qt's own recommended teardown for a QQuickWidget
+        # about to be discarded) instead of leaving that to whatever/whenever
+        # discards the widget itself.
+        chrome = getattr(self, "_qml_chrome", None)
+        if chrome is not None:
+            try:
+                chrome.setSource(QUrl())
+            except Exception:
+                pass
+            self._qml_chrome = None
+        self._scope_vm = None
+        # Drop the run-state facade here too (poll feed is a guarded shared-timer
+        # slot stopped a few lines below; coordinator connections die with the
+        # coordinator on rebuild). See run_state_facade.md §5 step 3.
+        self._run_vm = None
+        # The OLD central widget (built by the PREVIOUS ``_build_central()``
+        # call, holding the chrome released above) is not deleted by a later
+        # ``setCentralWidget()`` call — confirmed empirically: Qt only detaches
+        # the widget it replaces from the layout, leaving it alive as a
+        # hidden, still-parented child of this window forever unless something
+        # explicitly deletes it. In QML mode that silently accumulates live
+        # QQuickWidgets (each with its own QQmlEngine/RHI resources) across
+        # repeated soft reloads. Schedule the whole old subtree for deletion
+        # now, before ``_build_central`` constructs the next one.
+        #
+        # Deliberately a plain, UNFORCED ``deleteLater()`` — do not "help" it
+        # along with an immediate/forced delete. Two forcing alternatives were
+        # tried and rejected: a raw ``shiboken6.delete()`` and forcing
+        # ``QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)``
+        # through synchronously. Both crashed the real, fully populated app
+        # (reproduced with the live ``TCTMainWindow``, its threads and every
+        # panel — not just the QML chrome in isolation); only the natural,
+        # deferred ``deleteLater()`` proved stable. A soft reload is only ever
+        # re-triggered by another user click — another real event-loop turn —
+        # so Qt's normal idle processing reclaims this cycle's deferred
+        # deletion well before the next reload can start.
+        # ``getattr``-guarded (not a direct ``self.centralWidget()`` call): a
+        # lightweight test stub for this method's panel-iteration loop (see
+        # tests/test_camera_panel_worker.py::
+        # test_teardown_panels_shuts_down_camera_and_laser) passes a bare
+        # ``SimpleNamespace`` as ``self``, with no real ``QMainWindow``
+        # underneath — matching the same "provide only what you use" idiom
+        # this method already applies to every other panel/thread attribute.
+        get_central = getattr(self, "centralWidget", None)
+        old_central = get_central() if callable(get_central) else None
+        if old_central is not None:
+            old_central.deleteLater()
         # Re-dock any floating panels so their windows don't orphan on rebuild.
         if hasattr(self, "_tabs"):
             self._tabs.redock_all()
@@ -1000,6 +1321,10 @@ class TCTMainWindow(QMainWindow):
             self._status.showMessage("Connect failed")
             return
         failed = {k: v for k, v in (results or {}).items() if v != "ok"}
+        # Cache for the QML rail's device-dot "fault" state (see
+        # _collect_shell_state). Whole-dict replace: a device absent from
+        # `failed` this time is no longer at fault, even if it was before.
+        self._connect_faults = dict(failed)
         if failed:
             detail = "\n".join(f"  {k}: {v}" for k, v in failed.items())
             QMessageBox.warning(self, "Connection Warning",
@@ -1035,6 +1360,9 @@ class TCTMainWindow(QMainWindow):
         self._act_connect.setEnabled(True)
         self._act_disconnect.setEnabled(False)
         self._status.showMessage("Disconnected")
+        # An explicit, user-requested disconnect is not a "fault" — clear the
+        # rail's device-dot fault cache so the dots read plain disconnected.
+        self._connect_faults = {}
         self._refresh_lights()
         self._refresh_bias_strip(None)
         self._bias_panel.set_reading(None)

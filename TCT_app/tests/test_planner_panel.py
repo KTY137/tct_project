@@ -17,7 +17,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QByteArray, QCoreApplication, QMimeData
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 
 from controller.danger_gate import DangerAction
 from controller.plan_estimate import PlanEstimate, estimate_plan
@@ -125,6 +125,39 @@ def test_panel_constructs_light_and_dark_theme():
         panel.shutdown()
 
 
+def test_empty_plan_shows_empty_state_row_and_survives_theme_switch():
+    """Design system §7/§9 D1 "Empty recipe state": a routine with no blocks
+    gets a designed EmptyState row (never a silent blank tree), and it
+    rebuilds cleanly across a live light/dark theme switch."""
+    _app()
+    from gui.panel_kit import EmptyState
+
+    panel = PlannerPanel()
+    try:
+        panel.set_plan(ScanPlan(name="empty_routine", root=[]))
+        # topLevelItem(0) is the decorative Preflight row (always present);
+        # an empty plan adds exactly one more decorative row after it.
+        assert panel._tree.topLevelItemCount() == 2
+        widget = panel._tree.itemWidget(panel._tree.topLevelItem(1), 0)
+        assert isinstance(widget, EmptyState)
+
+        panel.refresh_theme("dark")
+        assert panel._tree.topLevelItemCount() == 2
+        widget = panel._tree.itemWidget(panel._tree.topLevelItem(1), 0)
+        assert isinstance(widget, EmptyState)
+        panel.refresh_theme("light")
+
+        # Adding a real block clears the placeholder again (Preflight + the
+        # one loop row, no EmptyState widget left behind).
+        loop = LoopBlock(axis=Axis.STAGE_X, start=0.0, stop=1.0, step=0.1)
+        panel.set_plan(ScanPlan(name="one_block", root=[loop]))
+        assert panel._tree.topLevelItemCount() == 2
+        widget = panel._tree.itemWidget(panel._tree.topLevelItem(1), 0)
+        assert not isinstance(widget, EmptyState)
+    finally:
+        panel.shutdown()
+
+
 def test_default_template_validates_clean_under_default_limits():
     _app()
     panel = PlannerPanel()
@@ -167,11 +200,12 @@ def test_large_estimate_runs_off_gui_thread(monkeypatch):
         elapsed = time.perf_counter() - t0
 
         assert elapsed < 0.2
-        assert panel._chip_points.text() == "Estimating..."
+        assert panel._tile_points.value() == "…"
+        assert panel._tile_points.is_stale()
         assert started.wait(1.0)
 
         release.set()
-        assert _pump_until(lambda: panel._chip_points.text() == "42")
+        assert _pump_until(lambda: panel._tile_points.value() == "42")
     finally:
         release.set()
         panel.shutdown()
@@ -288,6 +322,135 @@ def test_rapid_estimate_edits_coalesce_latest_wins(monkeypatch):
         panel.shutdown()
 
 
+def test_safe_estimate_routes_large_plan_off_gui_thread(monkeypatch):
+    """_safe_estimate() must NEVER run a full estimate_plan() leaf walk inline
+    on the GUI thread for a large plan (the founding three-layer-law breach).
+    It hands the plan to the existing off-thread worker (latest-wins coalescing)
+    and returns the stale-but-marked cached value; the fresh estimate lands on
+    the GUI thread only via the worker's queued ``done`` signal."""
+    _app()
+    import gui.planner_panel as planner_module
+
+    call_threads: list = []
+
+    def recording_estimate(_plan):
+        call_threads.append(threading.current_thread())
+        return PlanEstimate(
+            total_points=7, total_leaf_visits=3, est_runtime_s=0.0,
+            est_data_bytes=0, stage_travel_mm={"x": 0.0, "y": 0.0, "z": 0.0},
+            hv_range_V=(0.0, 0.0),
+        )
+
+    panel = PlannerPanel()
+    try:
+        # Patch AFTER construction so the constructor's real (fast) estimate is
+        # not recorded; then gate every plan as "large".
+        monkeypatch.setattr(planner_module, "estimate_plan", recording_estimate)
+        panel._estimate_async_threshold = 0
+        panel._last_estimate = None
+        panel._last_estimate_key = None
+
+        result = panel._safe_estimate()
+
+        # No synchronous GUI-thread leaf walk, and the stale value (None) returns
+        # immediately.
+        assert call_threads == [], "estimate_plan ran synchronously on the GUI thread"
+        assert result is None
+
+        # The worker delivers the fresh estimate OFF the GUI thread.
+        assert _pump_until(lambda: len(call_threads) == 1)
+        assert call_threads[0] is not threading.main_thread()
+        assert _pump_until(lambda: panel._tile_points.value() == "7")
+    finally:
+        panel.shutdown()
+
+
+def test_safe_estimate_small_plan_still_runs_inline(monkeypatch):
+    """The small-plan fast path is unchanged: below the async threshold the
+    leaf walk is cheap, so _safe_estimate() computes it inline on the GUI thread
+    and caches the result (no round-trip)."""
+    _app()
+    import gui.planner_panel as planner_module
+
+    call_threads: list = []
+
+    def recording_estimate(_plan):
+        call_threads.append(threading.current_thread())
+        return PlanEstimate(
+            total_points=5, total_leaf_visits=2, est_runtime_s=0.0,
+            est_data_bytes=0, stage_travel_mm={"x": 0.0, "y": 0.0, "z": 0.0},
+            hv_range_V=(0.0, 0.0),
+        )
+
+    panel = PlannerPanel()
+    try:
+        monkeypatch.setattr(planner_module, "estimate_plan", recording_estimate)
+        panel._estimate_async_threshold = 10_000_000   # every plan is "small"
+        panel._last_estimate = None
+        panel._last_estimate_key = None
+
+        result = panel._safe_estimate()
+
+        assert len(call_threads) == 1
+        assert call_threads[0] is threading.main_thread()
+        assert result is not None and result.total_points == 5
+    finally:
+        panel.shutdown()
+
+
+def test_drag_preview_large_candidate_skips_synchronous_estimate(monkeypatch):
+    """The drag-drop delta preview must not run a full estimate_plan() leaf walk
+    on the GUI thread for a large candidate.  Above the async threshold the
+    candidate preview is a cheap point-count-only upper bound (total_points /
+    total_leaf_visits are structural products, no leaf walk), and the chip
+    honestly omits the runtime delta rather than blocking to compute one."""
+    _app()
+    import gui.planner_panel as planner_module
+
+    call_threads: list = []
+
+    def recording_estimate(plan):
+        # Should never be reached synchronously on the preview path: the base
+        # estimate is a cache hit and the large candidate is point-count-only.
+        call_threads.append(threading.current_thread())
+        raise AssertionError("estimate_plan ran on the GUI thread for a large candidate")
+
+    panel = PlannerPanel()
+    try:
+        # Independently compute the expected candidate point count with the real
+        # estimator BEFORE patching (the panel appends the new block into x_loop).
+        before = panel._plan.to_dict()
+        expected_plan = ScanPlan.from_dict(before)
+        expected_x = _find_loop_in_plan(expected_plan, Axis.STAGE_X)
+        new_block = ActionBlock(action=ActionType.WAIT, params={"seconds": 1.0})
+        expected_x.children.append(ScanBlock.from_dict(new_block.to_dict()))
+        expected_points = estimate_plan(expected_plan).total_points
+
+        monkeypatch.setattr(planner_module, "estimate_plan", recording_estimate)
+        panel._estimate_async_threshold = 0   # gate the candidate as "large"
+
+        x_loop = _find_loop_in_plan(panel._plan, Axis.STAGE_X)
+        x_item = panel._item_for_block(x_loop)
+        mime = _mime_for({"op": "new", "block": new_block.to_dict()})
+        assert panel._preview_drag(mime, x_item, "on") is not None
+
+        panel._on_preview_debounce_timeout()
+
+        # No synchronous estimate_plan anywhere on the preview path.
+        assert call_threads == []
+        text = panel._chip_delta_preview.text()
+        assert panel._chip_delta_preview.isVisibleTo(panel)
+        assert f"{expected_points:,}" in text
+        assert "pts" in text
+        # Point-count-only preview: the runtime-delta segment is dropped.
+        assert "·" not in text
+        # The preview never mutated the real plan / undo stack.
+        assert panel._plan.to_dict() == before
+        assert panel._undo_stack == []
+    finally:
+        panel.shutdown()
+
+
 def test_spinbox_edit_updates_plan_and_invalidates_armed():
     _app()
     panel = PlannerPanel()
@@ -366,6 +529,57 @@ def test_dry_run_sets_ok_flag_and_arm_requires_confirmation_signal():
         assert panel._hv_armed is False
         panel.set_hv_armed(True)
         assert panel._hv_armed is True
+    finally:
+        panel.shutdown()
+
+
+def test_arm_confirmation_uses_live_plan_bias_range_not_stale_estimate(monkeypatch):
+    """Regression (Mary review NIT): the Arm HV confirmation text must always
+    match the plan being armed, even for a plan above
+    ``_estimate_async_threshold`` whose cached ``_safe_estimate()`` result is
+    stale (a fresh one is still in flight off-thread) or ``None``.  Seed a
+    stale cached estimate carrying an obviously-wrong pre-edit bias range,
+    edit the live plan's bias loop, and confirm the dialog text reflects the
+    POST-edit range -- computed synchronously from the plan's own bias loops,
+    never from the cache -- BEFORE any worker result could land (no
+    ``processEvents()`` runs between the edit and the arm click)."""
+    _app()
+    import gui.planner_panel as planner_module
+
+    captured: dict[str, str] = {}
+
+    def fake_warning(parent, title, text, *args, **kwargs):
+        captured["text"] = text
+        return QMessageBox.StandardButton.No
+
+    panel = PlannerPanel()
+    try:
+        panel._estimate_async_threshold = 0   # gate every plan as "large"
+
+        # Stale cache: as if computed before the edit below, and deliberately
+        # wrong so the test fails loudly if the dialog ever reads it.
+        panel._last_estimate = PlanEstimate(
+            total_points=1, total_leaf_visits=1, est_runtime_s=0.0,
+            est_data_bytes=0, stage_travel_mm={"x": 0.0, "y": 0.0, "z": 0.0},
+            hv_range_V=(-999.0, -999.0),
+        )
+        panel._last_estimate_key = "stale-key-not-matching-current-plan"
+
+        # Edit the live plan's bias loop to a distinctive post-edit range.
+        bias_loop = _bias_loop(panel._plan)
+        bias_loop.values = None
+        bias_loop.start = 12.0
+        bias_loop.stop = 34.0
+        bias_loop.step = 1.0
+
+        monkeypatch.setattr(planner_module.QMessageBox, "warning", fake_warning)
+
+        panel._on_arm_clicked()
+
+        assert "text" in captured, "QMessageBox.warning was never called"
+        assert "34" in captured["text"]
+        assert "12" in captured["text"]
+        assert "-999" not in captured["text"]
     finally:
         panel.shutdown()
 

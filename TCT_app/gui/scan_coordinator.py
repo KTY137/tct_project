@@ -329,6 +329,30 @@ class ScanCoordinator(QObject):
             self.hv_armed.emit(False)
             self.error_dialog.emit("Plan refused", str(exc))
 
+    @Slot(object, object)
+    def execute_plan(self, plan, gate) -> None:
+        """Two-step-latch Execute path (design law 5): HV was authorized ONCE by
+        the panel's arm latch over the full ArmedEnvelope, so arm HV and start
+        the plan gated by the caller-supplied ``ArmedEnvelopeGate`` (which
+        auto-approves every live danger provably inside the armed envelope and
+        fail-closes anything outside it). Mirrors :meth:`start_plan`'s refuse-
+        before-any-state-change discipline; a refusal un-arms so the panel's
+        latch stays in step (``hv_armed(False)`` re-locks it)."""
+        if not self._sm.can(AppState.RUNNING):
+            self._scanner.arm_hv(False)
+            self.hv_armed.emit(False)
+            self.warn_dialog.emit(
+                "Not ready", "Cannot start a plan in the current state.")
+            return
+        try:
+            self._scanner.arm_hv(True)
+            self._scanner.start_plan(plan, self._plan_limits(), gate)
+            self._plan_run_active = True
+            self.scan_started.emit()
+        except Exception as exc:
+            self.hv_armed.emit(False)
+            self.error_dialog.emit("Plan refused", str(exc))
+
     @Slot()
     def resume(self) -> None:
         """Resume a paused run (used by the manual-step dialog's Resume)."""
