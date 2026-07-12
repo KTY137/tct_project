@@ -591,6 +591,11 @@ class BiasPanel(QWidget):
         if abs(v) < 1.0 and abs(setpoint_V) < 1.0:
             return "OFF", "normal", "inferred — output-on state not readable"
         if abs(v - setpoint_V) <= max(2.0, 0.02 * abs(setpoint_V)):
+            # Mary migration review: energized-at-setpoint is live-dangerous
+            # (law 1) — above 10 V it must carry the armed accent, never read
+            # as visually benign. Below that, treat as effectively off/noise.
+            if abs(v) > 10.0:
+                return "SETTLED", "armed", "live at setpoint — inferred"
             return "SETTLED", "normal", "at setpoint — inferred from readback"
         if abs(v) > 1.0 and abs(setpoint_V) < 1.0:
             # An actor this panel doesn't hear about (e.g. the plan executor)
