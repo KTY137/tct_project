@@ -1,6 +1,6 @@
 # Bench Verification Checklist
 
-**Last updated:** 2026-07-08  
+**Last updated:** 2026-07-12  
 **For use in:** next lab session  
 **Safety notes:**
 - HV items below (§ iseg) require explicit user authorization before proceeding.
@@ -168,10 +168,18 @@
 **What to check:**
 - **User must confirm:** proceed with HV tests?
 - If authorized:
-  - Enable HV output on the primary channel (via `TCT_app` GUI → Bias panel → Output).
+  - Enable HV output on the primary channel (`TCT_app` GUI → Bias panel →
+    **Ramp to voltage**, a small test value; the panel has no separate
+    "Output" toggle — ramping is how output turns on). Disable via
+    **Output OFF (0 V)**.
   - Query the channel status word: `:READ:CHAN:STAT? (@<ch>)` (replace `<ch>` with the channel number, e.g., 1).
   - Examine bit 3 of the returned value: it should be **1** if output is ON, **0** if OFF.
   - Disable HV output and repeat the query: bit 3 should now be **0**.
+  - Note: this exercises the manual Bias-panel path directly, independent of
+    the Planner's two-step arm-latch (§6a). A Planner-run's HV is authorized
+    once via its armed envelope (Validate → Dry run → Arm → Execute); this
+    manual **Ramp to voltage** action has no confirmation dialog of its own
+    today (only **Switch polarity** does, per-action).
 
 **Expected result:**
 - Bit 3 of `:READ:CHAN:STAT? (@ch)` accurately reflects output ON/OFF state.
@@ -240,24 +248,35 @@
 
 **What to check:**
 - In the GUI, open Planner panel and construct a simple XY-raster plan (e.g., 3×3 grid, 1 mm spacing).
-- Click "Start Plan" and observe the Scan Viewer tab.
+- Click **Validate** (informational — lists limit/HV/point-budget issues; unlocks nothing by itself).
+- Click **Dry run** — required: walks the recipe without hardware. A pass shows "✓ Dry run" and unlocks the Arm control (the two-step arm-latch, `gui/arm_latch.py`, design law 5); until it passes, the latch reads "Dry run the recipe first — arming unlocks once the walk passes."
+- Review the envelope text rendered over the latch (bias channels, HV V-range called out in red, ramp shape, motion bounds) — the full `ArmedEnvelope` the run will be authorized against.
+- **Arm**: hold the Arm control ~3 s, or press it twice in quick succession (keyboard: Enter/Space twice works identically — glove-reliable per design law 5). It shows "✓ Armed · Ns · click to disarm" counting down from 10 s; a single click disarms early.
+- While armed, click **Execute** (starts the run — replaces the older single "Start Plan" click) and observe the Scan Viewer tab.
 - During the run, verify the following cockpit elements are live and updating:
   - **Live map:** 2D heatmap surface is drawn as points arrive and updates in real time.
   - **Progress chip:** shows "Point N of Total" (e.g., "5 of 9").
   - **ETA chip:** displays estimated time remaining for the scan.
   - **Elapsed-time chip:** counts up as the scan runs.
   - **Pause button:** is enabled and clickable; click it, observe the scan pauses and button changes to "Resume".
-  - **Abort button:** is enabled (red/danger styling) and clickable; test abort on a later run (dangerous action, requires confirmation).
+  - **Abort button:** is enabled (red/danger styling) and clickable; test abort on a later run — it is an instant one-tap stop by design (law 5), no second confirmation.
   - **Z-focus card:** (if enabled in plan) shows live Z position vs. amplitude curve as the scan sweeps Z.
 - After the run completes: **Finished chip** appears (green state), map is frozen.
 
 **Expected result:**
 - All cockpit elements respond in real time; no stalls or frozen readouts.
-- Pause/resume works; abort stops the scan immediately (with confirmation gate).
+- HV energization for the run is authorized **once**, by the armed envelope
+  (`ArmedEnvelopeGate`) built from the Arm gesture above — the executor
+  re-validates every live HV/motion action against that envelope; there is no
+  further per-step HV confirmation while the plan runs (contrast the manual
+  Bias-panel path in §5a, which is separate and per-action).
+- Pause/resume works; Abort stops the scan immediately (one tap, no latch).
 - "Finished" state is reached cleanly.
 
 **Closes:**
-- Functional verification of Scan Viewer cockpit design (S2b+S2c).
+- Functional verification of Scan Viewer cockpit design (S2b+S2c) and the
+  two-step arm-latch (design-system law 5, `gui/arm_latch.py` +
+  `gui/planner_panel.py`, commits 4498040+eafff38).
 - Related commit: 8312f41, 46ff681, 48396c0, 884afe8.
 
 ---

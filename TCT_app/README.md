@@ -31,6 +31,12 @@ so it runs with no hardware attached. Switch each device's `backend` /
 `simulation` flags in **Settings…** (or edit `configs/devices.yaml`) to talk to
 real instruments.
 
+`run.ps1` boots the classic PySide6-widgets shell by default. Pass **`-Qml`**
+(or set `TCT_QML_SHELL=1` before launching `main.py` directly) to boot the
+opt-in QML-hybrid cockpit chrome instead — rail + tab shelf + status strip
+rendered in QML, panels/plots unchanged. This has been ratified to become the
+default, with a `-Classic` fallback flag; that flip has not landed yet.
+
 ## Architecture
 
 Three layers, GUI never touches hardware directly:
@@ -58,12 +64,16 @@ devices/                    hardware drivers behind abstract base classes
 
 gui/                        one panel per instrument + shared widgets
   motor_panel / scope_panel / camera_panel / laser_panel / scan_viewer_panel /
-  planner_panel / bias_panel / monitor_panel / analysis_panel / calibration_panel
+  planner_panel / monitor_panel / analysis_panel / calibration_panel
+  multi_bias_panel.py       MultiBiasPanel — one bias_panel.BiasPanel tab per
+                            HV channel (+ ALL OUTPUTS OFF)
   device_panel.py           Device Manager window (per-device connect/status)
   settings_window.py        Settings editor (Quick form + full YAML), VISA picker
   detachable_tabs.py        tear-off tabs (double-click / ⧉ → own window)
   style.py                  light/dark themes; dark plot canvas
   scan_map_view.py          shared 2-D scan-map widget (live map + PNG/CSV export)
+  qml_shell.py / qml/       opt-in QML cockpit chrome (rail + pill tab shelf +
+                            status strip); TCT_QML_SHELL=1 / run.ps1 -Qml
 
 data/hdf5_writer.py         HDF5 run writer (see SCAN_DATA_FORMAT.md)
 analysis/                   waveform_analysis.py, charge_calibration.py
@@ -84,6 +94,9 @@ panels talk only to the base interfaces.
   own window (multi-monitor); close it to re-dock.
 - **Dark mode** (View → Dark mode) and **layout persistence** (window size, active
   tab, theme and detached panels are restored on next launch).
+- **Theme editor** (View → Theme…) — preset browser (built-in + saved user
+  presets), color/typography/corner-radius controls, and a glass↔opaque
+  material slider; the safety palette (danger/armed/sim/error) is locked.
 - **Live settings** — saving in Settings soft-reloads the whole config without
   restarting the process.
 - **Oscilloscope panel** — scope-style **t/div, V/div, offset sliders + manual

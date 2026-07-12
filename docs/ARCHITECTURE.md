@@ -340,7 +340,18 @@ no FastFrame support), driven by the default `oscilloscope.py` VISA backend
 Panels: `motor_panel`, `bias_panel`, `multi_bias_panel`, `scope_panel`,
 `laser_panel`, `intensity_panel`, `camera_panel`,
 `monitor_panel`, `analysis_panel`, `calibration_panel`, `device_panel`
-(`DeviceManagerWindow`, `device_state`), `settings_window` (owns a `_VisaRescanWorker` scan + a `_ScanReaper` GUI-thread-affine strong owner of the old background scan worker for deadlock-safe teardown — see VISA-scan deadlock postmortem in `docs/DECISIONS.md`), `planner_panel`
+(`DeviceManagerWindow`, `device_state`), `settings_window` (owns a `_VisaRescanWorker` scan + a `_ScanReaper` GUI-thread-affine strong owner of the old background scan worker for deadlock-safe teardown — see VISA-scan deadlock postmortem in `docs/DECISIONS.md`), `theme_editor.py` (`ThemeEditorDialog`, View → Theme… —
+non-modal preset browser: `Cockpit Dark`/`Lab Light` built-ins + user presets
+persisted as QSettings JSON under `theme/presets`; Colors/Typography/Radius
+cards plus a Material card whose glass-amount slider live-previews
+`style.set_glass_amount()`; all state lives in `style.py`'s override layer
+(`apply_theme_overrides`/`set_glass_amount`/`apply_typography`/
+`apply_radius_scale`, persisted via `save_theme_customization`/
+`load_theme_customization`); Apply emits `applyRequested(mode)`, routed by
+`tct_gui._on_theme_editor_apply` through the same repaint path as the
+dark-mode toggle; safety palette — danger/armed/sim/error — renders
+**locked**, read-only, no color-dialog path (`style.sanitize_overrides` also
+strips those keys from any loaded preset JSON, laws 1/2/6)), `planner_panel`
 (Recipe-Tree QTreeWidget, editable loop rows, live estimate, validate/dry-run/
 arm/start latch chain; v2: drag-drop palette, movable nodes, right-click ops,
 20-deep undo; G4: gained `set_focus_z(z_mm)` slot that writes selected STAGE_Z loop's start spinbox, staging-only, wired from ScanViewerPanel's "Use Focus Z" button; 2026-07-11: off-thread estimate via persistent `_EstimateWorker` (QObject on dedicated QThread), streaming `estimate_plan` calls), `scan_viewer_panel` (S2b+S2c+G4: live scan monitor & cockpit —
@@ -374,7 +385,16 @@ scope-cyan accent, tokens for UI states, spacing/radius/type scales, axis-rail
 palette, `axis_color()` helper, `statusChip`/`statusPill`/`eyebrow` objectName
 hooks), `qt_danger_gate.py` (`QtDangerGate`: worker→GUI confirm bridge, timeout
 fail-closed), `liveness.py` (`LivenessMonitor` — background device-liveness
-sweep, owned by `TCTMainWindow`, see Big picture and Entry point).
+sweep, owned by `TCTMainWindow`, see Big picture and Entry point), `motion.py`
+(visual-motion helpers for cockpit chrome: `ActivityRing` — QFrame, tiny
+QSS-painted activity ring, e.g. `tct_gui`'s shell status-strip `_ring_scan`
+toggled active on `AppState.RUNNING`; `PulseController`/`set_pulse(widget,
+active, kind=...)` — semantic pulse, `kind` "laser"/"hv"/"scan" today, driving
+`tct_gui.py`'s laser/bias-HV/scan status chips and `laser_panel.py`'s output
+chip; `flash_property`/`flash_readout` — temporary property flash restored by
+a child `QTimer`, used by `scan_viewer_panel.py`; only flips dynamic
+properties QSS already paints, no `QGraphicsEffect`, every timer parented to
+its widget — law 8).
 Long-running work never runs on the main thread; log records cross threads via
 the `_LogBridge` signal.
 
