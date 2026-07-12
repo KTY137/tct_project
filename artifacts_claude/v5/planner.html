@@ -1,0 +1,476 @@
+<title>v5 · Scan Planner</title>
+<style>
+/* ============================================================
+   TCT Cockpit v5 — shared artifact tokens & components
+   Source of truth: TCT_app/gui/style.py (v4 tokens) + council v5
+   (Noah chrome, Paul state ladder, Jonathan data rules, Abel grammar)
+   ============================================================ */
+
+:root {
+  /* page frame (theme-aware) */
+  --pg-bg: #f2f4f8;
+  --pg-panel: #ffffff;
+  --pg-text: #131a28;
+  --pg-muted: #525d72;
+  --pg-hairline: #d9dfea;
+  --pg-accent: #2f7fd6;
+
+  /* cockpit dark tokens — the mockup world (style.py DARK) */
+  --bg: #0a0d13;
+  --panel: #121824;
+  --chrome: #171e2f;          /* _blend(#192134,#121824,.74) */
+  --strip: #0f1520;           /* _blend(#0c1019,#121824,.55) */
+  --well: #0e1420;
+  --sunk: #0c1019;
+  --hairline: #222b3e;
+  --hairline-strong: #334159;
+  --edge: rgba(255,255,255,0.10);
+  --text: #e9edf5;
+  --muted: #98a1b5;
+  --faint: #5b657a;
+  --accent: #5aa9ff;
+  --armed: #ffb84d;
+  --danger: #ff5a61;
+  --sim: #41d8e4;
+  --error: #ff8a1f;
+  --plot-bg: #0a0b0d;
+  --plot-fg: #c7cfda;
+  --well-shade: #06080c;      /* wellShade = blend(#000, PLOT_BG, .35) */
+
+  --sans: -apple-system, "SF Pro Display", "Segoe UI Variable Display",
+          "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+
+  --r-s: 8px; --r-m: 12px; --r-l: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --pg-bg: #0d1017; --pg-panel: #151a24; --pg-text: #e9edf5;
+    --pg-muted: #98a1b5; --pg-hairline: #232c40; --pg-accent: #5aa9ff;
+  }
+}
+:root[data-theme="dark"] {
+  --pg-bg: #0d1017; --pg-panel: #151a24; --pg-text: #e9edf5;
+  --pg-muted: #98a1b5; --pg-hairline: #232c40; --pg-accent: #5aa9ff;
+}
+:root[data-theme="light"] {
+  --pg-bg: #f2f4f8; --pg-panel: #ffffff; --pg-text: #131a28;
+  --pg-muted: #525d72; --pg-hairline: #d9dfea; --pg-accent: #2f7fd6;
+}
+
+/* ---------- page frame ---------- */
+body {
+  background: var(--pg-bg); color: var(--pg-text);
+  font-family: var(--sans); line-height: 1.55;
+  margin: 0; padding: 0 20px 96px;
+}
+main { max-width: 1160px; margin: 0 auto; }
+h1, h2, h3 { text-wrap: balance; line-height: 1.2; }
+h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin: 40px 0 6px; }
+h2 { font-size: 1.25rem; font-weight: 650; margin: 44px 0 12px; }
+h3 { font-size: 1rem; font-weight: 650; margin: 26px 0 8px; }
+p  { max-width: 72ch; }
+.lede { color: var(--pg-muted); font-size: 1.05rem; max-width: 70ch; margin-top: 0; }
+.eyebrow {
+  font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--pg-muted); margin: 40px 0 4px;
+}
+a { color: var(--pg-accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--pg-accent); outline-offset: 2px; }
+
+.meta-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; }
+.meta-chip {
+  font-family: var(--mono); font-size: 0.72rem; padding: 3px 10px;
+  border: 1px solid var(--pg-hairline); border-radius: 999px;
+  color: var(--pg-muted); background: transparent;
+}
+
+/* prose tables */
+table.spec { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+table.spec th, table.spec td {
+  text-align: left; padding: 8px 12px;
+  border-bottom: 1px solid var(--pg-hairline); vertical-align: top;
+}
+table.spec th { font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pg-muted); }
+table.spec td.mono, .mono { font-family: var(--mono); }
+.table-scroll { overflow-x: auto; }
+
+/* decision list */
+ol.decisions { padding-left: 0; counter-reset: dec; list-style: none; max-width: 76ch; }
+ol.decisions > li {
+  counter-increment: dec; position: relative; padding: 10px 0 10px 44px;
+  border-bottom: 1px solid var(--pg-hairline);
+}
+ol.decisions > li::before {
+  content: counter(dec); position: absolute; left: 0; top: 12px;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--pg-accent); color: #fff; font-weight: 700;
+  font-size: 0.8rem; display: flex; align-items: center; justify-content: center;
+}
+ol.decisions b { font-weight: 650; }
+
+/* law checklist */
+ul.laws { list-style: none; padding: 0; max-width: 76ch; }
+ul.laws li { padding: 5px 0 5px 26px; position: relative; font-size: 0.92rem; }
+ul.laws li::before { content: "✓"; position: absolute; left: 2px; color: var(--pg-accent); font-weight: 700; }
+
+/* ---------- the mockup stage ---------- */
+.stage-wrap { overflow-x: auto; margin: 18px 0 8px; border-radius: var(--r-l); }
+.stage {
+  min-width: 1100px; background: var(--bg); border-radius: var(--r-l);
+  border: 1px solid var(--pg-hairline);
+  padding: 0; overflow: hidden; color: var(--text);
+  font-size: 13px;
+}
+.stage * { box-sizing: border-box; }
+.caption { font-size: 0.82rem; color: var(--pg-muted); margin: 6px 4px 0; }
+
+/* ---------- shell chrome (Noah §1: menu 24 + band 48 + strip 64) ---------- */
+.menurow {
+  height: 24px; background: var(--bg); display: flex; align-items: center;
+  gap: 18px; padding: 0 14px; color: var(--faint); font-size: 11.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.band {
+  height: 48px; background: var(--chrome);
+  border-bottom: 1px solid var(--hairline-strong);
+  box-shadow: inset 0 1px 0 var(--edge);
+  display: flex; align-items: center; gap: 10px; padding: 0 12px;
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: 0.02em; }
+.brand .mark {
+  width: 22px; height: 22px; border-radius: 7px; background: var(--accent);
+  color: #06121f; display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 12px;
+}
+.pills { display: flex; gap: 4px; margin: 0 auto; }
+.pill {
+  padding: 6px 14px; border-radius: 999px; color: var(--muted);
+  border: 1px solid transparent; white-space: nowrap;
+}
+.pill.hov { background: rgba(255,255,255,0.055); color: var(--text); border-color: var(--hairline); }
+.pill.on {
+  background: var(--panel); color: var(--text);
+  border-color: var(--hairline-strong); box-shadow: inset 0 1px 0 var(--edge);
+}
+.bandbtn {
+  padding: 6px 12px; border-radius: var(--r-s); border: 1px solid var(--hairline-strong);
+  color: var(--text); background: transparent; white-space: nowrap;
+}
+.bandbtn.quiet { color: var(--muted); border-color: var(--hairline); }
+.sim-ribbon {
+  height: 26px; display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: #062125;
+  background: repeating-linear-gradient(135deg, var(--sim) 0 14px, #33bcc8 14px 28px);
+}
+.runstrip {
+  height: 64px; background: var(--strip); border-bottom: 1px solid var(--hairline);
+  display: flex; align-items: center; gap: 10px; padding: 0 12px;
+}
+.dotrow { display: flex; align-items: center; gap: 10px; padding: 0 10px; }
+
+/* ---------- metric tiles ---------- */
+.tile {
+  min-width: 132px; padding: 7px 12px 8px; border-radius: var(--r-m);
+  background: var(--panel); border: 1px solid var(--hairline);
+  box-shadow: inset 0 1px 0 var(--edge);
+}
+.tile .k {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--faint);
+}
+.tile .v {
+  font-family: var(--mono); font-size: 19px; font-weight: 600;
+  color: var(--text); font-variant-numeric: tabular-nums; margin-top: 1px;
+}
+.tile .v small { font-size: 11px; color: var(--muted); font-weight: 500; }
+.tile .c { font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+.tile.accent .v { color: var(--accent); }
+.tile.armed  .v { color: var(--armed); }
+.tile.danger .v { color: var(--danger); }
+.tile.dim .v { color: var(--faint); }
+
+/* ---------- chips & state dots (Paul §1 ladder) ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.07em;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--hairline-strong); color: var(--muted);
+  white-space: nowrap;
+}
+.chip.warn   { border-color: var(--armed); color: var(--armed); }
+.chip.danger { border-color: var(--danger); color: var(--danger); }
+.chip.danger-fill { background: var(--danger); border-color: var(--danger); color: #2a0508; font-weight: 700; }
+.chip.simc {
+  border-color: var(--sim); color: #062125; font-weight: 700;
+  background: repeating-linear-gradient(135deg, var(--sim) 0 8px, #33bcc8 8px 16px);
+}
+.chip.unknown { border-style: dashed; color: var(--faint); }
+
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.offline { background: var(--faint); opacity: 0.5; }
+.dot.idle    { background: var(--muted); }
+.dot.active  { background: var(--accent); }
+.dot.motion  { background: var(--armed); }
+.dot.hv      { background: var(--danger); }
+.dot.simd    { background: transparent; border: 2px solid var(--sim); width: 7px; height: 7px; }
+.dot.unknown { background: transparent; border: 2px dashed var(--faint); width: 7px; height: 7px; }
+.dev { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); }
+
+/* ---------- cards / panel surfaces ---------- */
+.panelbody { padding: 14px; display: flex; gap: 12px; background: var(--bg); }
+.card {
+  background: var(--panel); border: 1px solid var(--hairline);
+  border-radius: var(--r-m); box-shadow: inset 0 1px 0 var(--edge);
+}
+.card > .hd {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--chrome);
+  border-radius: var(--r-m) var(--r-m) 0 0;
+  font-size: 12px; font-weight: 650; color: var(--text);
+}
+.card > .hd .sub { margin-left: auto; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+.card > .bd { padding: 12px; }
+
+/* instrument well (Noah §4) */
+.well-fig {
+  background: var(--plot-bg); border: 1px solid var(--hairline-strong);
+  border-radius: 10px; padding: 3px; position: relative;
+}
+.well-fig .shade { height: 3px; background: var(--well-shade); border-radius: 8px 8px 0 0; }
+.plot {
+  background: var(--plot-bg); color: var(--plot-fg); border-radius: 8px;
+  position: relative; overflow: hidden; font-family: var(--mono); font-size: 10px;
+}
+.plot .axis { position: absolute; color: #5f6875; }
+
+/* empty state (Noah §3 StateStack) */
+.empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; color: var(--faint); text-align: center; padding: 30px 10px;
+}
+.empty .ico { font-size: 26px; opacity: 0.75; }
+.empty .t1 { color: var(--muted); font-weight: 650; font-size: 13px; }
+.empty .t2 { font-size: 11.5px; max-width: 34ch; }
+
+/* ---------- FormSheet grammar (Noah §2) ---------- */
+.sheet { max-width: 560px; }
+.srow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--hairline);
+}
+.srow:last-child { border-bottom: none; }
+.srow:hover { background: rgba(255,255,255,0.03); }
+.srow .lbl { color: var(--text); font-size: 12.5px; }
+.srow .spacer { flex: 1; }
+.srow .val {
+  font-family: var(--mono); font-size: 12.5px; color: var(--text);
+  background: var(--sunk); border: 1px solid var(--hairline);
+  border-radius: var(--r-s); padding: 5px 10px; text-align: right;
+  min-width: 86px; font-variant-numeric: tabular-nums;
+}
+.srow .unit { font-family: var(--mono); font-size: 11px; color: var(--faint); min-width: 30px; }
+
+/* ---------- buttons (command classes) ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 7px 16px; border-radius: var(--r-s);
+  border: 1px solid var(--hairline-strong); color: var(--text);
+  background: transparent; font-size: 12.5px; font-weight: 550; white-space: nowrap;
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 700; }
+.btn.amber { border-color: var(--armed); color: var(--armed); }
+.btn.amber-fill { background: var(--armed); border-color: var(--armed); color: #2a1802; font-weight: 700; }
+.btn.red-out { border-color: var(--danger); color: var(--danger); }
+.btn.red-fill { background: var(--danger); border-color: var(--danger); color: #2a0508; font-weight: 700; }
+.btn.ghost { border-color: var(--hairline); color: var(--faint); }
+.btn.quiet { border-color: var(--hairline); color: var(--muted); }
+
+/* ---------- recipe rows (Abel §1) ---------- */
+.rrow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px 6px 0; border-bottom: 1px solid var(--hairline);
+  background: var(--panel);
+}
+.rrow .spine { width: 3px; align-self: stretch; border-radius: 2px; background: var(--hairline-strong); flex: none; }
+.rrow.motion .spine { background: var(--armed); }
+.rrow.hv .spine { background: var(--danger); }
+.rrow .name { font-weight: 600; font-size: 12.5px; }
+.rrow.motion .name { color: var(--armed); }
+.rrow.hv .name { color: var(--danger); }
+.rrow .args { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.rrow .eyeb { font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+.rrow .qty {
+  margin-left: auto; font-family: var(--mono); font-size: 10.5px;
+  color: var(--muted); background: var(--sunk); border: 1px solid var(--hairline);
+  border-radius: 6px; padding: 1px 8px; font-variant-numeric: tabular-nums;
+}
+.rrow .glyph { font-size: 11px; }
+.rrow.motion .glyph { color: var(--armed); }
+.rrow.hv .glyph { color: var(--danger); }
+.indent1 { margin-left: 18px; } .indent2 { margin-left: 36px; } .indent3 { margin-left: 54px; }
+
+/* ---------- annotation callouts ---------- */
+.callout {
+  position: absolute; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--pg-accent); color: #fff; font-weight: 700; font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid rgba(255,255,255,0.85); box-shadow: 0 1px 6px rgba(0,0,0,0.4);
+  z-index: 5;
+}
+
+/* before/after strip */
+.ba { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+.ba .cell { border: 1px solid var(--pg-hairline); border-radius: var(--r-m); padding: 12px; background: var(--pg-panel); }
+.ba .cell h4 { margin: 0 0 8px; font-size: 0.78rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pg-muted); }
+@media (max-width: 760px) { .ba { grid-template-columns: 1fr; } }
+
+@media (prefers-reduced-motion: no-preference) {
+  .pulse { animation: pulse 2.4s ease-in-out 1; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+}
+
+</style>
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Panel 2/11</p>
+  <h1>Scan Planner</h1>
+  <p class="lede">
+    The 3-column Mac shape stays — it was already half-built. v5 fixes the
+    language inside it: one accent per recipe row keyed to command class, the
+    pill zoo dies, and the per-row CONFIRM badge is replaced by the thing that
+    actually protects the run — the armed envelope.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">owner: Abel (grammar) · Noah (chrome)</span>
+    <span class="meta-chip">ratified: envelope once-per-run · latch untouched</span>
+    <span class="meta-chip">fixes live law-2 violation (red MOVE STAGE)</span>
+  </div>
+
+  <h2>The mockup</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:118px; left:236px">1</div>
+    <div class="callout" style="top:196px; left:236px">2</div>
+    <div class="callout" style="top:64px; right:352px">3</div>
+    <div class="callout" style="top:210px; right:14px">4</div>
+    <div class="callout" style="bottom:96px; right:14px">5</div>
+
+    <div class="panelbody">
+      <!-- palette -->
+      <div class="card" style="width:196px; flex:none">
+        <div class="hd">Add blocks</div>
+        <div class="bd" style="display:flex; flex-direction:column; gap:6px; font-size:12px">
+          <span class="chip" style="justify-content:flex-start">Loop · Bias</span>
+          <span class="chip" style="justify-content:flex-start">Loop · Stage X</span>
+          <span class="chip" style="justify-content:flex-start">Loop · Stage Y</span>
+          <span class="chip" style="justify-content:flex-start">Loop · Stage Z</span>
+          <span class="chip" style="justify-content:flex-start">Acquire waveform</span>
+          <span class="chip" style="justify-content:flex-start">Save point</span>
+          <span class="chip" style="justify-content:flex-start">Wait · Pause</span>
+          <span class="chip" style="justify-content:flex-start">Read slow control</span>
+          <span style="font-size:10.5px; color:var(--faint); margin-top:6px">drag into the recipe or double-click to append</span>
+        </div>
+      </div>
+
+      <!-- recipe tree -->
+      <div class="card" style="flex:1; display:flex; flex-direction:column">
+        <div class="hd">Recipe <span class="sub">edge-TCT · CCE(V) map</span>
+        </div>
+        <div style="display:flex; flex-direction:column">
+          <div class="rrow"><span class="spine"></span><span class="name" style="color:var(--muted)">Preflight</span><span class="eyeb">interlocks · laser safe · stage homed</span><span class="qty">gate</span></div>
+          <div class="rrow"><span class="spine"></span><span class="name">Loop · Bias</span><span class="args">0.0 → −300.0 V</span><span class="eyeb">step −50.0</span><span class="qty">7 steps</span></div>
+          <div class="rrow hv indent1"><span class="spine"></span><span class="glyph">⚡</span><span class="name">Ramp HV</span><span class="args">to setpoint · 5 V steps · 100 ms</span><span class="qty">envelope</span></div>
+          <div class="rrow indent1"><span class="spine"></span><span class="name" style="color:var(--muted)">Check leakage</span><span class="args">abort + ramp down if I &gt; 2 µA</span><span class="qty">guard</span></div>
+          <div class="rrow indent1"><span class="spine"></span><span class="name">Loop · Stage X</span><span class="args">−1.000 → 1.000 mm</span><span class="eyeb">step 0.100</span><span class="qty">21 pts</span></div>
+          <div class="rrow indent2"><span class="spine"></span><span class="name">Loop · Stage Y</span><span class="args">−1.000 → 1.000 mm</span><span class="eyeb">step 0.100 · snake</span><span class="qty">21 pts</span></div>
+          <div class="rrow motion indent3"><span class="spine"></span><span class="glyph">▲</span><span class="name">Move stage</span><span class="args">→ (x, y, z)</span><span class="qty">envelope</span></div>
+          <div class="rrow indent3"><span class="spine"></span><span class="name" style="color:var(--muted)">Settle</span><span class="args">50 ms</span><span class="qty"></span></div>
+          <div class="rrow indent3"><span class="spine"></span><span class="name" style="color:var(--muted)">Acquire waveform</span><span class="args">64 avg</span><span class="qty"></span></div>
+          <div class="rrow indent3" style="border-bottom:none"><span class="spine"></span><span class="name" style="color:var(--muted)">Save point</span><span class="args">→ HDF5</span><span class="qty"></span></div>
+        </div>
+        <div style="margin-top:auto; display:flex; gap:10px; padding:8px 12px; border-top:1px solid var(--hairline); font-size:10.5px; color:var(--faint)">
+          <span><span class="dot motion" style="width:7px;height:7px"></span> motion</span>
+          <span><span class="dot hv" style="width:7px;height:7px"></span> HV</span>
+          <span>grey = nominal, disappears into the recipe</span>
+          <span style="margin-left:auto" class="mono">motor 12.400 · 3.100 · use current · use focus z</span>
+        </div>
+      </div>
+
+      <!-- aside -->
+      <div style="width:300px; flex:none; display:flex; flex-direction:column; gap:10px">
+        <div class="card">
+          <div class="hd">Before you run</div>
+          <div class="bd" style="display:grid; grid-template-columns:1fr 1fr; gap:8px">
+            <div class="tile" style="min-width:0"><div class="k">Points</div><div class="v">3 087</div></div>
+            <div class="tile" style="min-width:0"><div class="k">Runtime</div><div class="v">1.1 <small>h</small></div></div>
+            <div class="tile" style="min-width:0"><div class="k">Data</div><div class="v">24 <small>MB</small></div></div>
+            <div class="tile" style="min-width:0"><div class="k">Travel</div><div class="v">320 <small>mm</small></div></div>
+            <div class="tile armed" style="grid-column:1/3; min-width:0"><div class="k">HV range</div><div class="v">−300 … 0 <small>V</small></div><div class="c">7 plateaus · ch0</div></div>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px">
+          <span class="btn quiet" style="flex:1">Validate</span>
+          <span class="btn primary" style="flex:1">Dry run</span>
+        </div>
+        <div class="card" style="border-color:var(--armed)">
+          <div class="bd" style="display:flex; flex-direction:column; gap:8px">
+            <span class="btn amber" style="width:100%">⚡ Arm — hold 3 s</span>
+            <div style="font-size:10.5px; color:var(--muted); line-height:1.45">
+              Arming approves the <b>full envelope once</b>: HV −300…0 V ·
+              travel X/Y ±1 mm · 3 087 points. The executor re-validates every
+              step against it — no per-step confirmations.
+            </div>
+          </div>
+        </div>
+        <span class="btn red-out" style="width:100%">■ Abort</span>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> Ramp HV: the only red spine — HV class (correct today, kept) ·
+    <b>2</b> Move stage: amber spine + glyph — was RED with a red CONFIRM pill in the live audit (law-2 violation) ·
+    <b>3</b> quantities are quiet right-aligned mono chips, never colored — engraving, not status ·
+    <b>4</b> the envelope card replaces every per-row confirm: "envelope" tags on hazard rows are read-only glyph+text, not buttons ·
+    <b>5</b> Abort is outline-red while nothing runs; it fills only when a run is live.
+  </p>
+
+  <h2>Decisions</h2>
+  <ol class="decisions">
+    <li><b>One accent per row.</b> Nominal rows (loops, settle, acquire, save) are
+      grey and quiet; motion rows amber; HV rows red. The audit's rainbow
+      (amber/cyan/pink pills per row + red confirm slabs) collapses into a
+      readable hazard map of the recipe.</li>
+    <li><b>CONFIRM pill is dead.</b> A per-row confirm contradicts the ratified
+      once-per-run envelope. Hazard rows carry a read-only glyph meaning
+      "enumerated in the armed envelope" — every affordance lives in the aside.</li>
+    <li><b>Behaviors become eyebrows.</b> snake, settle-time, step width move into
+      tiny mono eyebrows inside the row — the qty chip holds exactly one number.</li>
+    <li><b>Latch flow untouched.</b> Validate → Dry run (unlocks arming) →
+      hold-3-s Arm over the full envelope text → armed ~10 s → Execute. This is
+      ratified safety flow; v5 only re-materializes it.</li>
+    <li><b>Clipping bug fixed structurally.</b> The recipe header no longer
+      overlaps the first row (the live audit shows PREFLIGHT half-cut) — the
+      header is a card .hd, rows start below it.</li>
+  </ol>
+
+  <h2>What changes vs. today</h2>
+  <div class="table-scroll"><table class="spec">
+    <tr><th>Today (audit)</th><th>v5</th></tr>
+    <tr><td>MOVE STAGE row red + red "A CONFIRM" pill</td><td>amber spine + read-only envelope glyph</td></tr>
+    <tr><td>7 STEPS / 21 PTS / SNAKE colored pill zoo</td><td>one quiet mono qty chip + eyebrow behaviors</td></tr>
+    <tr><td>Palette entries tinted per lane (cyan/pink/purple)</td><td>neutral chips; color enters only on hazard rows in the recipe</td></tr>
+    <tr><td>Header row overlaps first tree row</td><td>card header owns its band</td></tr>
+    <tr><td>ARM button + explainer split from readiness tiles</td><td>one armed-accent envelope card: tiles → dry-run → latch in one column rhythm</td></tr>
+    <tr><td>Abort filled dark slab</td><td>outline-red idle → filled-red live</td></tr>
+  </table></div>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>Red = HV rows + live abort only; motion = amber (law 2) — fixes the live violation.</li>
+    <li>Two-step arm latch + envelope text intact, one approval per run (law 5, ratified §11).</li>
+    <li>Numbers in mono, right-aligned, tabular (law 3).</li>
+    <li>Quiet nominal: a safe recipe reads as grey text until hazards enter (law 1).</li>
+    <li>No translucency anywhere in the tree — glass only on card headers (perf-honest).</li>
+  </ul>
+</main>

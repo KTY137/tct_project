@@ -1,0 +1,507 @@
+<title>v5 · Camera</title>
+<style>
+/* ============================================================
+   TCT Cockpit v5 — shared artifact tokens & components
+   Source of truth: TCT_app/gui/style.py (v4 tokens) + council v5
+   (Noah chrome, Paul state ladder, Jonathan data rules, Abel grammar)
+   ============================================================ */
+
+:root {
+  /* page frame (theme-aware) */
+  --pg-bg: #f2f4f8;
+  --pg-panel: #ffffff;
+  --pg-text: #131a28;
+  --pg-muted: #525d72;
+  --pg-hairline: #d9dfea;
+  --pg-accent: #2f7fd6;
+
+  /* cockpit dark tokens — the mockup world (style.py DARK) */
+  --bg: #0a0d13;
+  --panel: #121824;
+  --chrome: #171e2f;          /* _blend(#192134,#121824,.74) */
+  --strip: #0f1520;           /* _blend(#0c1019,#121824,.55) */
+  --well: #0e1420;
+  --sunk: #0c1019;
+  --hairline: #222b3e;
+  --hairline-strong: #334159;
+  --edge: rgba(255,255,255,0.10);
+  --text: #e9edf5;
+  --muted: #98a1b5;
+  --faint: #5b657a;
+  --accent: #5aa9ff;
+  --armed: #ffb84d;
+  --danger: #ff5a61;
+  --sim: #41d8e4;
+  --error: #ff8a1f;
+  --plot-bg: #0a0b0d;
+  --plot-fg: #c7cfda;
+  --well-shade: #06080c;      /* wellShade = blend(#000, PLOT_BG, .35) */
+
+  --sans: -apple-system, "SF Pro Display", "Segoe UI Variable Display",
+          "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+
+  --r-s: 8px; --r-m: 12px; --r-l: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --pg-bg: #0d1017; --pg-panel: #151a24; --pg-text: #e9edf5;
+    --pg-muted: #98a1b5; --pg-hairline: #232c40; --pg-accent: #5aa9ff;
+  }
+}
+:root[data-theme="dark"] {
+  --pg-bg: #0d1017; --pg-panel: #151a24; --pg-text: #e9edf5;
+  --pg-muted: #98a1b5; --pg-hairline: #232c40; --pg-accent: #5aa9ff;
+}
+:root[data-theme="light"] {
+  --pg-bg: #f2f4f8; --pg-panel: #ffffff; --pg-text: #131a28;
+  --pg-muted: #525d72; --pg-hairline: #d9dfea; --pg-accent: #2f7fd6;
+}
+
+/* ---------- page frame ---------- */
+body {
+  background: var(--pg-bg); color: var(--pg-text);
+  font-family: var(--sans); line-height: 1.55;
+  margin: 0; padding: 0 20px 96px;
+}
+main { max-width: 1160px; margin: 0 auto; }
+h1, h2, h3 { text-wrap: balance; line-height: 1.2; }
+h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin: 40px 0 6px; }
+h2 { font-size: 1.25rem; font-weight: 650; margin: 44px 0 12px; }
+h3 { font-size: 1rem; font-weight: 650; margin: 26px 0 8px; }
+p  { max-width: 72ch; }
+.lede { color: var(--pg-muted); font-size: 1.05rem; max-width: 70ch; margin-top: 0; }
+.eyebrow {
+  font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--pg-muted); margin: 40px 0 4px;
+}
+a { color: var(--pg-accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--pg-accent); outline-offset: 2px; }
+
+.meta-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; }
+.meta-chip {
+  font-family: var(--mono); font-size: 0.72rem; padding: 3px 10px;
+  border: 1px solid var(--pg-hairline); border-radius: 999px;
+  color: var(--pg-muted); background: transparent;
+}
+
+/* prose tables */
+table.spec { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+table.spec th, table.spec td {
+  text-align: left; padding: 8px 12px;
+  border-bottom: 1px solid var(--pg-hairline); vertical-align: top;
+}
+table.spec th { font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pg-muted); }
+table.spec td.mono, .mono { font-family: var(--mono); }
+.table-scroll { overflow-x: auto; }
+
+/* decision list */
+ol.decisions { padding-left: 0; counter-reset: dec; list-style: none; max-width: 76ch; }
+ol.decisions > li {
+  counter-increment: dec; position: relative; padding: 10px 0 10px 44px;
+  border-bottom: 1px solid var(--pg-hairline);
+}
+ol.decisions > li::before {
+  content: counter(dec); position: absolute; left: 0; top: 12px;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--pg-accent); color: #fff; font-weight: 700;
+  font-size: 0.8rem; display: flex; align-items: center; justify-content: center;
+}
+ol.decisions b { font-weight: 650; }
+
+/* law checklist */
+ul.laws { list-style: none; padding: 0; max-width: 76ch; }
+ul.laws li { padding: 5px 0 5px 26px; position: relative; font-size: 0.92rem; }
+ul.laws li::before { content: "✓"; position: absolute; left: 2px; color: var(--pg-accent); font-weight: 700; }
+
+/* ---------- the mockup stage ---------- */
+.stage-wrap { overflow-x: auto; margin: 18px 0 8px; border-radius: var(--r-l); }
+.stage {
+  min-width: 1100px; background: var(--bg); border-radius: var(--r-l);
+  border: 1px solid var(--pg-hairline);
+  padding: 0; overflow: hidden; color: var(--text);
+  font-size: 13px;
+}
+.stage * { box-sizing: border-box; }
+.caption { font-size: 0.82rem; color: var(--pg-muted); margin: 6px 4px 0; }
+
+/* ---------- shell chrome (Noah §1: menu 24 + band 48 + strip 64) ---------- */
+.menurow {
+  height: 24px; background: var(--bg); display: flex; align-items: center;
+  gap: 18px; padding: 0 14px; color: var(--faint); font-size: 11.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.band {
+  height: 48px; background: var(--chrome);
+  border-bottom: 1px solid var(--hairline-strong);
+  box-shadow: inset 0 1px 0 var(--edge);
+  display: flex; align-items: center; gap: 10px; padding: 0 12px;
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: 0.02em; }
+.brand .mark {
+  width: 22px; height: 22px; border-radius: 7px; background: var(--accent);
+  color: #06121f; display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 12px;
+}
+.pills { display: flex; gap: 4px; margin: 0 auto; }
+.pill {
+  padding: 6px 14px; border-radius: 999px; color: var(--muted);
+  border: 1px solid transparent; white-space: nowrap;
+}
+.pill.hov { background: rgba(255,255,255,0.055); color: var(--text); border-color: var(--hairline); }
+.pill.on {
+  background: var(--panel); color: var(--text);
+  border-color: var(--hairline-strong); box-shadow: inset 0 1px 0 var(--edge);
+}
+.bandbtn {
+  padding: 6px 12px; border-radius: var(--r-s); border: 1px solid var(--hairline-strong);
+  color: var(--text); background: transparent; white-space: nowrap;
+}
+.bandbtn.quiet { color: var(--muted); border-color: var(--hairline); }
+.sim-ribbon {
+  height: 26px; display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: #062125;
+  background: repeating-linear-gradient(135deg, var(--sim) 0 14px, #33bcc8 14px 28px);
+}
+.runstrip {
+  height: 64px; background: var(--strip); border-bottom: 1px solid var(--hairline);
+  display: flex; align-items: center; gap: 10px; padding: 0 12px;
+}
+.dotrow { display: flex; align-items: center; gap: 10px; padding: 0 10px; }
+
+/* ---------- metric tiles ---------- */
+.tile {
+  min-width: 132px; padding: 7px 12px 8px; border-radius: var(--r-m);
+  background: var(--panel); border: 1px solid var(--hairline);
+  box-shadow: inset 0 1px 0 var(--edge);
+}
+.tile .k {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--faint);
+}
+.tile .v {
+  font-family: var(--mono); font-size: 19px; font-weight: 600;
+  color: var(--text); font-variant-numeric: tabular-nums; margin-top: 1px;
+}
+.tile .v small { font-size: 11px; color: var(--muted); font-weight: 500; }
+.tile .c { font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+.tile.accent .v { color: var(--accent); }
+.tile.armed  .v { color: var(--armed); }
+.tile.danger .v { color: var(--danger); }
+.tile.dim .v { color: var(--faint); }
+
+/* ---------- chips & state dots (Paul §1 ladder) ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.07em;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--hairline-strong); color: var(--muted);
+  white-space: nowrap;
+}
+.chip.warn   { border-color: var(--armed); color: var(--armed); }
+.chip.danger { border-color: var(--danger); color: var(--danger); }
+.chip.danger-fill { background: var(--danger); border-color: var(--danger); color: #2a0508; font-weight: 700; }
+.chip.simc {
+  border-color: var(--sim); color: #062125; font-weight: 700;
+  background: repeating-linear-gradient(135deg, var(--sim) 0 8px, #33bcc8 8px 16px);
+}
+.chip.unknown { border-style: dashed; color: var(--faint); }
+
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.offline { background: var(--faint); opacity: 0.5; }
+.dot.idle    { background: var(--muted); }
+.dot.active  { background: var(--accent); }
+.dot.motion  { background: var(--armed); }
+.dot.hv      { background: var(--danger); }
+.dot.simd    { background: transparent; border: 2px solid var(--sim); width: 7px; height: 7px; }
+.dot.unknown { background: transparent; border: 2px dashed var(--faint); width: 7px; height: 7px; }
+.dev { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); }
+
+/* ---------- cards / panel surfaces ---------- */
+.panelbody { padding: 14px; display: flex; gap: 12px; background: var(--bg); }
+.card {
+  background: var(--panel); border: 1px solid var(--hairline);
+  border-radius: var(--r-m); box-shadow: inset 0 1px 0 var(--edge);
+}
+.card > .hd {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--chrome);
+  border-radius: var(--r-m) var(--r-m) 0 0;
+  font-size: 12px; font-weight: 650; color: var(--text);
+}
+.card > .hd .sub { margin-left: auto; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+.card > .bd { padding: 12px; }
+
+/* instrument well (Noah §4) */
+.well-fig {
+  background: var(--plot-bg); border: 1px solid var(--hairline-strong);
+  border-radius: 10px; padding: 3px; position: relative;
+}
+.well-fig .shade { height: 3px; background: var(--well-shade); border-radius: 8px 8px 0 0; }
+.plot {
+  background: var(--plot-bg); color: var(--plot-fg); border-radius: 8px;
+  position: relative; overflow: hidden; font-family: var(--mono); font-size: 10px;
+}
+.plot .axis { position: absolute; color: #5f6875; }
+
+/* empty state (Noah §3 StateStack) */
+.empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; color: var(--faint); text-align: center; padding: 30px 10px;
+}
+.empty .ico { font-size: 26px; opacity: 0.75; }
+.empty .t1 { color: var(--muted); font-weight: 650; font-size: 13px; }
+.empty .t2 { font-size: 11.5px; max-width: 34ch; }
+
+/* ---------- FormSheet grammar (Noah §2) ---------- */
+.sheet { max-width: 560px; }
+.srow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--hairline);
+}
+.srow:last-child { border-bottom: none; }
+.srow:hover { background: rgba(255,255,255,0.03); }
+.srow .lbl { color: var(--text); font-size: 12.5px; }
+.srow .spacer { flex: 1; }
+.srow .val {
+  font-family: var(--mono); font-size: 12.5px; color: var(--text);
+  background: var(--sunk); border: 1px solid var(--hairline);
+  border-radius: var(--r-s); padding: 5px 10px; text-align: right;
+  min-width: 86px; font-variant-numeric: tabular-nums;
+}
+.srow .unit { font-family: var(--mono); font-size: 11px; color: var(--faint); min-width: 30px; }
+
+/* ---------- buttons (command classes) ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 7px 16px; border-radius: var(--r-s);
+  border: 1px solid var(--hairline-strong); color: var(--text);
+  background: transparent; font-size: 12.5px; font-weight: 550; white-space: nowrap;
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 700; }
+.btn.amber { border-color: var(--armed); color: var(--armed); }
+.btn.amber-fill { background: var(--armed); border-color: var(--armed); color: #2a1802; font-weight: 700; }
+.btn.red-out { border-color: var(--danger); color: var(--danger); }
+.btn.red-fill { background: var(--danger); border-color: var(--danger); color: #2a0508; font-weight: 700; }
+.btn.ghost { border-color: var(--hairline); color: var(--faint); }
+.btn.quiet { border-color: var(--hairline); color: var(--muted); }
+
+/* ---------- recipe rows (Abel §1) ---------- */
+.rrow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px 6px 0; border-bottom: 1px solid var(--hairline);
+  background: var(--panel);
+}
+.rrow .spine { width: 3px; align-self: stretch; border-radius: 2px; background: var(--hairline-strong); flex: none; }
+.rrow.motion .spine { background: var(--armed); }
+.rrow.hv .spine { background: var(--danger); }
+.rrow .name { font-weight: 600; font-size: 12.5px; }
+.rrow.motion .name { color: var(--armed); }
+.rrow.hv .name { color: var(--danger); }
+.rrow .args { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.rrow .eyeb { font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+.rrow .qty {
+  margin-left: auto; font-family: var(--mono); font-size: 10.5px;
+  color: var(--muted); background: var(--sunk); border: 1px solid var(--hairline);
+  border-radius: 6px; padding: 1px 8px; font-variant-numeric: tabular-nums;
+}
+.rrow .glyph { font-size: 11px; }
+.rrow.motion .glyph { color: var(--armed); }
+.rrow.hv .glyph { color: var(--danger); }
+.indent1 { margin-left: 18px; } .indent2 { margin-left: 36px; } .indent3 { margin-left: 54px; }
+
+/* ---------- annotation callouts ---------- */
+.callout {
+  position: absolute; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--pg-accent); color: #fff; font-weight: 700; font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid rgba(255,255,255,0.85); box-shadow: 0 1px 6px rgba(0,0,0,0.4);
+  z-index: 5;
+}
+
+/* before/after strip */
+.ba { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+.ba .cell { border: 1px solid var(--pg-hairline); border-radius: var(--r-m); padding: 12px; background: var(--pg-panel); }
+.ba .cell h4 { margin: 0 0 8px; font-size: 0.78rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pg-muted); }
+@media (max-width: 760px) { .ba { grid-template-columns: 1fr; } }
+
+@media (prefers-reduced-motion: no-preference) {
+  .pulse { animation: pulse 2.4s ease-in-out 1; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+}
+
+</style>
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Panel 6/11</p>
+  <h1>Camera</h1>
+  <p class="lede">
+    A full-bleed camera well. Controls float on a glass rail <em>inside</em> the
+    well's margin; acquisition settings become a collapsible inspector sheet.
+    Offline is neutral and quiet — the audit's red "NOT CONNECTED" and the fake
+    flat histogram both die.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">owner: Noah · truth: Paul</span>
+    <span class="meta-chip">streaming = ACTIVE·benign (accent, never green)</span>
+    <span class="meta-chip">saturation promoted to first-class chip</span>
+  </div>
+
+  <h2>The mockup — streaming</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:70px; left:14px">1</div>
+    <div class="callout" style="top:70px; right:300px">2</div>
+    <div class="callout" style="bottom:120px; left:14px">3</div>
+    <div class="callout" style="top:150px; right:14px">4</div>
+    <div class="callout" style="bottom:64px; left:330px">5</div>
+
+    <div class="panelbody">
+      <!-- camera well -->
+      <div class="card" style="flex:1; display:flex; flex-direction:column">
+        <div class="hd">Camera
+          <span class="chip" style="margin-left:8px">ACTIVE · streaming</span>
+          <span class="chip warn">saturation 0.3%</span>
+          <span class="sub">blackfly · mono8 · 10.0 fps</span>
+        </div>
+        <div class="bd" style="flex:1; padding:8px">
+          <div class="well-fig" style="height:420px">
+            <div class="shade"></div>
+            <div class="plot" style="height:calc(100% - 3px)">
+              <!-- beam spot -->
+              <div style="position:absolute; inset:0;
+                background: radial-gradient(18% 14% at 52% 47%, rgba(233,237,245,.95) 0%, rgba(160,170,190,.55) 30%, rgba(70,78,95,.25) 55%, transparent 75%)"></div>
+              <!-- crosshair -->
+              <div style="position:absolute; left:0; top:47%; width:100%; height:1px; background:rgba(90,169,255,.35)"></div>
+              <div style="position:absolute; left:52%; top:0; width:1px; height:100%; background:rgba(90,169,255,.35)"></div>
+              <!-- beam overlay ellipse -->
+              <div style="position:absolute; left:44.5%; top:39%; width:15%; height:16%; border:1.5px solid var(--armed); border-radius:50%; opacity:.85"></div>
+              <!-- glass control rail INSIDE the well margin -->
+              <div style="position:absolute; left:10px; bottom:10px; display:flex; gap:8px; align-items:center;
+                          background:rgba(18,24,36,.92); border:1px solid var(--hairline-strong); border-radius:12px; padding:7px 10px">
+                <span class="btn primary" style="padding:5px 14px">▶ Live</span>
+                <span class="btn quiet" style="padding:5px 12px">Single</span>
+                <span class="btn quiet" style="padding:5px 12px">■ Stop</span>
+                <span style="width:1px; height:22px; background:var(--hairline)"></span>
+                <span class="chip">crosshair</span>
+                <span class="chip">beam overlay</span>
+                <span class="btn ghost" style="padding:5px 12px">Save frame</span>
+                <span class="btn ghost" style="padding:5px 12px">ROI</span>
+              </div>
+              <!-- stats HUD: opaque, corner -->
+              <div style="position:absolute; right:10px; top:10px; display:flex; flex-direction:column; gap:4px;
+                          background:rgba(18,24,36,.92); border:1px solid var(--hairline-strong); border-radius:10px; padding:8px 10px; font-family:var(--mono); font-size:10.5px">
+                <span>c<sub>x</sub> 6.24 · c<sub>y</sub> 4.81 mm</span>
+                <span>σ<sub>x</sub> 0.42 · σ<sub>y</sub> 0.45 mm</span>
+                <span>peak 214 · mean 38.2</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- histogram strip -->
+        <div style="padding:0 8px 8px">
+          <div class="well-fig" style="height:56px">
+            <div class="plot" style="height:100%">
+              <svg viewBox="0 0 600 50" preserveAspectRatio="none" style="position:absolute; inset:4% 3%; width:94%; height:88%">
+                <path d="M0,50 L20,48 C60,44 90,10 140,18 C200,28 260,42 380,46 C460,48 540,49 600,49 L600,50 Z" fill="rgba(90,169,255,.35)" stroke="#5aa9ff" stroke-width="1"/>
+              </svg>
+              <span class="axis" style="right:8px; top:4px">0 … 255</span>
+              <div style="position:absolute; right:3%; top:0; bottom:0; width:2px; background:var(--armed); opacity:.8"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- inspector sheet -->
+      <div style="width:280px; flex:none; display:flex; flex-direction:column; gap:10px">
+        <div class="card">
+          <div class="hd">Acquisition</div>
+          <div class="bd sheet" style="padding:0">
+            <div class="srow"><span class="lbl">Exposure</span><span class="spacer"></span><span class="val">5 000</span><span class="unit">µs</span></div>
+            <div class="srow"><span class="lbl">Auto exposure</span><span class="spacer"></span><span class="val">off</span></div>
+            <div class="srow"><span class="lbl">Gain</span><span class="spacer"></span><span class="val">0.00</span><span class="unit">dB</span></div>
+            <div class="srow"><span class="lbl">Frame rate</span><span class="spacer"></span><span class="val">10.0</span><span class="unit">fps</span></div>
+            <div class="srow"><span class="lbl">Pixel format</span><span class="spacer"></span><span class="val">mono8</span></div>
+            <div class="srow"><span class="lbl">Binning</span><span class="spacer"></span><span class="val">1</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="hd">▸ Image processing</div>
+        </div>
+        <div class="card">
+          <div class="hd">▸ Trigger</div>
+        </div>
+        <div class="card">
+          <div class="hd">Frame</div>
+          <div class="bd sheet" style="padding:0">
+            <div class="srow"><span class="lbl">Frame #</span><span class="spacer"></span><span class="val">1 482</span></div>
+            <div class="srow"><span class="lbl">Sensor temp</span><span class="spacer"></span><span class="val">41.2</span><span class="unit">°C</span></div>
+            <div class="srow"><span class="lbl">Background</span><span class="spacer"></span><span class="val">captured</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> the well is ~75% of the panel; the image is never resized by chrome ·
+    <b>2</b> saturation/clipping promoted from the log to a standing chip (amber at threshold) ·
+    <b>3</b> glass rail floats in the well margin — opaque backing, never over the beam ·
+    <b>4</b> inspector: FormSheet rows; Image-processing/Trigger collapse ·
+    <b>5</b> histogram is a slim strip under the well with a real clip marker — no fake flat line offline.
+  </p>
+
+  <h2>The offline state</h2>
+  <div class="stage-wrap"><div class="stage" style="min-width:1100px">
+    <div class="panelbody">
+      <div class="card" style="flex:1">
+        <div class="bd">
+          <div class="empty" style="padding:56px 10px">
+            <div class="ico">📷</div>
+            <div class="t1">Camera offline</div>
+            <div class="t2">Connect from the shell band — streaming resumes on its own.
+               Beam statistics appear with the first frame.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">Neutral, dimmed, one sentence (StateStack page 1). The audit's red
+     "CAMERA NOT CONNECTED", the seven "NO FRAME YET" capsules and the fake histogram
+     line all collapse into this.</p>
+
+  <h2>Decisions</h2>
+  <ol class="decisions">
+    <li><b>Full-bleed well.</b> Today four stacked cards (histogram, beam stats,
+      frame info, view&amp;capture) crush the image to ~40% height. v5: image ~75%,
+      histogram a strip, stats an opaque corner HUD, the rest inspector rows.</li>
+    <li><b>Offline is OFFLINE-rung neutral</b> — red implied danger where none
+      exists (law 2 violation, found live).</li>
+    <li><b>Streaming is ACTIVE·benign accent</b> — a camera is not motion (amber)
+      and success-green doesn't exist in this cockpit.</li>
+    <li><b>Saturation always visible.</b> Paul: clipping ruins measurements
+      silently — chip in the header, amber when above threshold, plus the
+      histogram clip marker.</li>
+    <li><b>Stats HUD opaque.</b> Same contrast-floor rule as the scan map — the
+      beam image is data; chips sit on solid plates in the margin.</li>
+  </ol>
+
+  <h2>What changes vs. today</h2>
+  <div class="table-scroll"><table class="spec">
+    <tr><th>Today (audit)</th><th>v5</th></tr>
+    <tr><td>Image ~40% height, 4 cards stacked below</td><td>image ~75%, strip histogram, corner HUD</td></tr>
+    <tr><td>Red offline banner + fake flat histogram</td><td>neutral StateStack empty state</td></tr>
+    <tr><td>7 "NO FRAME YET" capsules</td><td>stats appear with the first frame</td></tr>
+    <tr><td>Truncated frame-info tiles ("T (…", "GAI…")</td><td>Frame FormSheet, labels never truncate</td></tr>
+    <tr><td>SINGLE/STOP/LIVE as separate loose buttons</td><td>one glass rail: acquisition + overlays + capture</td></tr>
+    <tr><td>Right column of raw forms</td><td>FormSheet inspector, advanced sections collapsed</td></tr>
+  </table></div>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>No red without danger; offline is neutral (law 2, fixes live violation).</li>
+    <li>Streaming accent, never green (laws 1/6).</li>
+    <li>Image pixels opaque; HUD/rail on solid plates in margins (law 4/perf).</li>
+    <li>No fabricated data: histogram only draws real frames (law 8).</li>
+    <li>Hardware trigger config stays explicit in the inspector (law 7).</li>
+  </ul>
+</main>

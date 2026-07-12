@@ -1,0 +1,130 @@
+<!-- title: v5 · Calibration -->
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Panel 11/11</p>
+  <h1>Calibration</h1>
+  <p class="lede">
+    Two procedures, two cards, one sheet. The engraved caps-lock physics lecture
+    becomes a sentence-case sidebar; the active calibration is a status you can
+    read in one line; results arrive as a compact strip, not a paragraph.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">owner: Jonathan (method) · Noah (sheet)</span>
+    <span class="meta-chip">Codex move #9 ratified: two procedure cards</span>
+    <span class="meta-chip">green "SAVED" chip dies (law 1)</span>
+  </div>
+
+  <h2>The mockup</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:62px; left:14px">1</div>
+    <div class="callout" style="top:126px; left:430px">2</div>
+    <div class="callout" style="top:250px; right:14px">3</div>
+    <div class="callout" style="bottom:96px; left:430px">4</div>
+
+    <div class="panelbody" style="flex-direction:column">
+      <!-- active status line -->
+      <div style="display:flex; align-items:center; gap:8px">
+        <span style="font-weight:650">Charge calibration</span>
+        <span class="chip">active: none — raw ∫V·dt / 50 Ω reported as pC</span>
+        <span style="flex:1"></span>
+        <span class="chip">saved 14:36</span>
+      </div>
+
+      <div style="display:flex; gap:12px">
+        <!-- method card -->
+        <div class="card" style="flex:1">
+          <div class="hd">Method</div>
+          <div class="bd" style="display:flex; gap:16px">
+            <div class="sheet" style="flex:1; padding:0">
+              <div class="srow"><span class="lbl">Calibration method</span><span class="spacer"></span><span class="val">reference diode</span></div>
+              <div class="srow"><span class="lbl">Output units</span><span class="spacer"></span><span class="val">fC</span></div>
+              <div class="srow"><span class="lbl">Reference charge Q<sub>ref</sub></span><span class="spacer"></span><span class="val">4.21</span><span class="unit">fC</span></div>
+              <div class="srow" style="border-bottom:none; gap:8px">
+                <span class="btn primary">Apply &amp; save</span>
+                <span class="btn quiet">Run reference calibration…</span>
+              </div>
+            </div>
+            <div style="width:250px; flex:none; font-size:11px; color:var(--muted); line-height:1.5; padding-top:4px">
+              Converts the raw integrated signal (∫V·dt / 50 Ω) into a
+              calibrated charge. Pick a method, set parameters, apply — the
+              active method is stamped into every run's metadata.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- repeatability card -->
+      <div class="card">
+        <div class="hd">Stage repeatability <span class="chip" style="margin-left:8px">camera-based</span><span class="sub">idle</span></div>
+        <div class="bd" style="display:flex; gap:16px">
+          <div class="sheet" style="flex:1; padding:0">
+            <div class="srow"><span class="lbl">Repetitions</span><span class="spacer"></span><span class="val">20</span></div>
+            <div class="srow"><span class="lbl">Approach move</span><span class="spacer"></span><span class="val">5.0</span><span class="unit">mm</span></div>
+            <div class="srow"><span class="lbl">Settle per grab</span><span class="spacer"></span><span class="val">0.40</span><span class="unit">s</span></div>
+            <div class="srow"><span class="lbl">Self-calibrate px→mm first</span><span class="spacer"></span><span class="val">on · X · 1.00 mm</span></div>
+            <div class="srow" style="border-bottom:none; gap:8px">
+              <span class="btn amber">▶ Run repeatability test</span>
+              <span class="btn quiet">Stop</span>
+            </div>
+          </div>
+          <div style="width:250px; flex:none; display:flex; flex-direction:column; gap:8px">
+            <span style="font-size:11px; color:var(--muted); line-height:1.5">
+              Measures the mechanical repeatability the stepper cannot
+              self-report: returns to a target N times from both directions,
+              scores camera-image scatter by sub-pixel phase correlation.
+            </span>
+            <span class="chip unknown">requires: motor homed + camera connected</span>
+          </div>
+        </div>
+        <!-- result strip -->
+        <div style="border-top:1px solid var(--hairline); padding:8px 12px; display:flex; gap:10px; align-items:center">
+          <span class="eyeb" style="font-family:var(--mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted)">last result · 2026-07-11</span>
+          <span class="chip">σ<sub>x</sub> 1.8 µm</span>
+          <span class="chip">σ<sub>y</sub> 2.1 µm</span>
+          <span class="chip">worst 4.9 µm</span>
+          <span class="chip">20/20 grabs</span>
+          <span style="flex:1"></span>
+          <span class="btn ghost" style="padding:4px 12px">Details…</span>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> the active calibration is one honest status line — was a floating caps sentence + green SAVED chip ·
+    <b>2</b> physics explainer becomes a quiet sentence-case sidebar, not engraved caps prose ·
+    <b>3</b> preconditions render as an UNKNOWN-style chip until met — the run button stays disabled, no surprise failures ·
+    <b>4</b> results are a strip of mono chips with a date — staleness visible, paragraph dead.
+  </p>
+
+  <h2>Decisions</h2>
+  <ol class="decisions">
+    <li><b>Two cards, one rhythm.</b> Method (a settings pane that stamps run
+      metadata) and Repeatability (a procedure with a result). Nothing else —
+      the four show/hide method groups collapse into the method row's own
+      contextual rows.</li>
+    <li><b>Motion procedure is amber.</b> The repeatability test moves the stage —
+      it carries the motion class and an explicit precondition chip; it never
+      runs without homed + camera (and remains DangerGate-confirmed).</li>
+    <li><b>Results with a timestamp.</b> σ values as chips + date; a stale result
+      is visibly old rather than silently trusted (law 4).</li>
+    <li><b>De-capsing.</b> Body prose and labels go sentence case; caps-mono is
+      reserved for eyebrows and quantities (typography rule, all panels).</li>
+  </ol>
+
+  <h2>What changes vs. today</h2>
+  <div class="table-scroll"><table class="spec">
+    <tr><th>Today (audit)</th><th>v5</th></tr>
+    <tr><td>Full-width caps intro sentence + formula</td><td>status line + sidebar explainer</td></tr>
+    <tr><td>Green SAVED / METHOD NONE chips</td><td>quiet status line; saved time as plain chip</td></tr>
+    <tr><td>Giant caps explainer inside the form</td><td>sentence-case sidebar, 250 px</td></tr>
+    <tr><td>Full-width dropdown + fields</td><td>FormSheet rows, intrinsic widths</td></tr>
+    <tr><td>Empty progress strips + bottom third void</td><td>result strip appears with data; panel fits content</td></tr>
+  </table></div>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>No green on nominal; saved-state is quiet (law 1).</li>
+    <li>Stage-moving test = amber + precondition gate + confirmation (law 2, rule 2).</li>
+    <li>Active calibration always visible — runs are never silently calibrated (law 7).</li>
+    <li>Results timestamped; stale is visible (law 4).</li>
+  </ul>
+</main>

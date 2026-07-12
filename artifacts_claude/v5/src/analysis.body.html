@@ -1,0 +1,120 @@
+<!-- title: v5 · Analysis -->
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Panel 10/11</p>
+  <h1>Run Analysis</h1>
+  <p class="lede">
+    The Finder pattern, properly: recent runs live in a permanent source list
+    on the left, the loaded run previews as the hero on the right — both visible
+    at once, no more either/or stacking. Four grey status chips collapse into
+    one honest run-header line.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">owner: Jonathan</span>
+    <span class="meta-chip">source list + preview simultaneous (today: stacked pages)</span>
+    <span class="meta-chip">CCE mode must show fit quality + validity range</span>
+  </div>
+
+  <h2>The mockup — run loaded, map mode</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:66px; left:14px">1</div>
+    <div class="callout" style="top:64px; left:290px">2</div>
+    <div class="callout" style="top:120px; right:14px">3</div>
+    <div class="callout" style="bottom:130px; left:290px">4</div>
+
+    <div class="panelbody">
+      <!-- source list -->
+      <div class="card" style="width:260px; flex:none; display:flex; flex-direction:column">
+        <div class="hd">Recent runs</div>
+        <div class="bd" style="padding:6px; display:flex; flex-direction:column; gap:4px">
+          <div style="border:1px solid var(--accent); background:rgba(90,169,255,.08); border-radius:8px; padding:8px 10px">
+            <div class="mono" style="font-size:11.5px">run_00042</div>
+            <div style="font-size:10px; color:var(--muted)">edge-TCT · 2 401 pts · today 18:18</div>
+          </div>
+          <div style="border:1px solid transparent; border-radius:8px; padding:8px 10px">
+            <div class="mono" style="font-size:11.5px; color:var(--muted)">run_00041</div>
+            <div style="font-size:10px; color:var(--faint)">CCE(V) · 1 087 pts · today 15:02</div>
+          </div>
+          <div style="border:1px solid transparent; border-radius:8px; padding:8px 10px">
+            <div class="mono" style="font-size:11.5px; color:var(--muted)">run_00040</div>
+            <div style="font-size:10px; color:var(--faint)">focus map · 441 pts · yesterday</div>
+          </div>
+          <span style="flex:1"></span>
+          <span class="btn ghost" style="margin:6px">Browse HDF5…</span>
+        </div>
+      </div>
+
+      <!-- preview hero -->
+      <div style="flex:1; display:flex; flex-direction:column; gap:10px">
+        <div style="display:flex; align-items:center; gap:8px">
+          <span class="mono" style="font-weight:650">run_00042</span>
+          <span style="color:var(--muted); font-size:12px">edge-TCT · 2 401 pts · map: dut_charge · exported: no</span>
+          <span style="flex:1"></span>
+          <span class="chip" style="border-color:var(--hairline-strong); color:var(--text)">2D map</span>
+          <span class="chip">CCE vs bias</span>
+          <span class="btn ghost">Export…</span>
+        </div>
+        <div class="card" style="flex:1">
+          <div class="bd" style="padding:8px">
+            <div class="well-fig" style="height:330px">
+              <div class="shade"></div>
+              <div class="plot" style="height:calc(100% - 3px)">
+                <div style="position:absolute; inset:8% 14% 10% 7%;
+                  background: radial-gradient(55% 60% at 44% 50%, #fde725 0%, #7ad151 25%, #22a884 45%, #2a788e 63%, #414487 82%, #440154 100%); border-radius:2px"></div>
+                <div style="position:absolute; right:5.5%; top:8%; bottom:10%; width:14px; border:1px solid #2c3648;
+                  background:linear-gradient(180deg,#fde725,#7ad151,#22a884,#2a788e,#414487,#440154)"></div>
+                <span class="axis" style="right:2.2%; top:7%">5.9</span>
+                <span class="axis" style="right:2.2%; bottom:9%">0.0 fC</span>
+                <span class="axis" style="left:8px; top:6px">y/mm</span>
+                <span class="axis" style="right:16%; bottom:6px">x/mm</span>
+                <!-- point readout chip -->
+                <div style="position:absolute; left:34%; top:30%; background:#121824; border:1px solid var(--hairline-strong); border-radius:8px; padding:4px 9px; font-family:var(--mono); font-size:10px">
+                  x 0.40 · y 0.20 mm · 4.81 fC
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> source list is permanent — picking a run never hides the list ·
+    <b>2</b> ONE status line replaces the four grey chips (file/dataset/map/export were facets of one state) ·
+    <b>3</b> mode switch is a segmented pair, export sits with the run it exports ·
+    <b>4</b> hover readout is an opaque chip; the map reuses ScanMapView unchanged (viridis, NaN-honest, unit-bound colorbar).
+  </p>
+
+  <h2>CCE mode — the physics contract</h2>
+  <div class="stage-wrap"><div class="stage" style="min-width:1100px; padding:14px; display:flex; gap:12px; align-items:center">
+    <div class="tile" style="min-width:150px"><div class="k">Q<sub>ref</sub></div><div class="v">4.21 <small>fC</small></div></div>
+    <div class="tile" style="min-width:150px"><div class="k">V<sub>depletion</sub></div><div class="v">−142.3 <small>V</small></div><div class="c">from fit knee</div></div>
+    <div class="tile" style="min-width:190px"><div class="k">Fit quality</div><div class="v">χ²/ndf 1.21</div><div class="c">valid −300 … −20 V</div></div>
+    <div style="flex:1; font-size:11px; color:var(--muted); max-width:420px">
+      The calibration rule is non-negotiable: a depletion-voltage line never
+      appears without its fit quality and validity range beside it — an
+      operator must see when the fit is extrapolating.
+    </div>
+  </div></div>
+
+  <h2>Decisions</h2>
+  <ol class="decisions">
+    <li><b>Simultaneous list + preview.</b> Today a QStackedWidget shows either
+      recents or the loaded run. The Finder shape keeps both — switching runs
+      is one click, comparison is a glance.</li>
+    <li><b>One status line.</b> "run_00042 · 2 401 pts · map: dut_charge ·
+      exported: no" — the four chips were facets of one loaded-run state.</li>
+    <li><b>Empty state:</b> "Pick a run" with the recents list already focused —
+      no blank plot slab, no fake extent (map range derives from the run).</li>
+    <li><b>CCE fit honesty</b> surfaced as tiles, not buried in a tooltip.</li>
+    <li><b>Charge in fC</b> on the colorbar and readouts, consistent with every
+      other panel (storage stays pC).</li>
+  </ol>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>NaN cells stay hatched; no interpolation dressed as data (law 8).</li>
+    <li>Fit results carry quality + validity — calibration rule (law 7).</li>
+    <li>Viridis untouched, readout chips opaque (law 4).</li>
+    <li>Offline analysis never touches hardware — panel has no command classes at all.</li>
+  </ul>
+</main>

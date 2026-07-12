@@ -1,0 +1,131 @@
+<!-- title: v5 · Laser / Trigger -->
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Panel 7/11</p>
+  <h1>Laser &amp; Trigger</h1>
+  <p class="lede">
+    Two different kinds of truth, kept visibly apart: the manual laser head that
+    software genuinely cannot read (a permanent amber truth banner), and the
+    waveform generator it can (a compact command sheet). The audit's red
+    "OUTPUT STATE UNKNOWN" and green "LOAD 50 Ω" both dissolve into the state
+    taxonomy.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">owner: Paul (truth) · Noah (sheet)</span>
+    <span class="meta-chip">emission is UNKNOWN by construction — banner mandatory</span>
+    <span class="meta-chip">fixes 2 live law violations</span>
+  </div>
+
+  <h2>The mockup</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:58px; left:14px">1</div>
+    <div class="callout" style="top:116px; left:430px">2</div>
+    <div class="callout" style="top:210px; right:14px">3</div>
+    <div class="callout" style="bottom:210px; left:14px">4</div>
+    <div class="callout" style="bottom:96px; right:14px">5</div>
+
+    <div class="panelbody" style="flex-direction:column">
+      <!-- truth banner -->
+      <div style="display:flex; align-items:center; gap:10px; border:1px solid var(--armed);
+                  border-left:4px solid var(--armed); border-radius:10px; padding:9px 14px;
+                  background:rgba(255,184,77,.06)">
+        <span style="color:var(--armed); font-size:15px">▲</span>
+        <div style="font-size:12px; line-height:1.4">
+          <b style="color:var(--armed)">Manual laser — emission not readable by software.</b>
+          <span style="color:var(--muted)"> The PDL 800 head is hand-operated; verify emission at the head. Knob settings below are recorded into run metadata only.</span>
+        </div>
+        <span style="margin-left:auto" class="chip unknown">EMISSION ?</span>
+      </div>
+
+      <div style="display:flex; gap:12px">
+        <!-- wavegen command sheet -->
+        <div class="card" style="flex:1">
+          <div class="hd">Waveform generator <span class="chip" style="margin-left:8px">laser trigger</span>
+            <span class="chip unknown">OUTPUT ?</span>
+            <span class="sub">keysight · visa</span>
+          </div>
+          <div class="bd" style="display:flex; gap:16px">
+            <div class="sheet" style="flex:1; padding:0">
+              <div class="srow"><span class="lbl">Frequency</span><span class="spacer"></span><span class="val">1 000.00</span><span class="unit">Hz</span></div>
+              <div class="srow"><span class="lbl">Pulse width</span><span class="spacer"></span><span class="val">100</span><span class="unit">ns</span></div>
+              <div class="srow"><span class="lbl">Amplitude</span><span class="spacer"></span><span class="val">3.300</span><span class="unit">Vpp</span></div>
+              <div class="srow"><span class="lbl">Offset</span><span class="spacer"></span><span class="val">0.000</span><span class="unit">V</span></div>
+              <div class="srow"><span class="lbl">Output load</span><span class="spacer"></span><span class="val">50</span><span class="unit">Ω</span></div>
+              <div class="srow" style="border-bottom:none"><span class="lbl" style="color:var(--faint)">≙ duty 0.01 % @ 1 kHz</span><span class="spacer"></span></div>
+            </div>
+            <div style="width:230px; flex:none; display:flex; flex-direction:column; gap:8px; justify-content:center">
+              <span class="btn amber-fill">⏻ Output on</span>
+              <span class="btn quiet">Output off</span>
+              <span class="btn quiet">Apply settings</span>
+              <span style="font-size:10.5px; color:var(--faint); text-align:center">output drives the laser trigger — amber = arming the photon path</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- PDL record card -->
+        <div class="card" style="width:300px; flex:none">
+          <div class="hd">PDL 800 · knob record <span class="sub">metadata only</span></div>
+          <div class="bd sheet" style="padding:0">
+            <div class="srow"><span class="lbl">Tune</span><span class="spacer"></span><span class="val">7.2</span></div>
+            <div class="srow"><span class="lbl">Intensity</span><span class="spacer"></span><span class="val">63</span><span class="unit">%</span></div>
+            <div class="srow"><span class="lbl">Head</span><span class="spacer"></span><span class="val">660 nm</span></div>
+            <div class="srow" style="border-bottom:none"><span class="btn ghost" style="width:100%">Save to run metadata</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- trigger routing summary -->
+      <div class="card">
+        <div class="hd">Trigger routing</div>
+        <div class="bd" style="display:flex; align-items:center; gap:12px; font-size:12px; color:var(--muted)">
+          <span class="chip">wavegen OUT</span><span>→</span>
+          <span class="chip">laser head TRIG</span><span>→</span>
+          <span class="chip">scope CH1 (reference)</span>
+          <span style="flex:1"></span>
+          <span class="mono" style="font-size:11px; color:var(--faint)">rep rate 1 kHz · width 100 ns</span>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> the truth banner is permanent — amber, law-mandated, never dismissible ·
+    <b>2</b> EMISSION ? and OUTPUT ? use the dashed UNKNOWN rung — was a red chip in the audit ·
+    <b>3</b> Output-on is amber (arming the photon path), not red — red stays HV-only ·
+    <b>4</b> FormSheet kills the 1200-px frequency field; load is a plain mono value, not a green chip ·
+    <b>5</b> a routing card replaces the empty bottom half — where the trigger actually goes.
+  </p>
+
+  <h2>Decisions</h2>
+  <ol class="decisions">
+    <li><b>Two sheets, one banner.</b> Wavegen (readable, commandable) and PDL
+      record card (hand-knobs, metadata only) are separate surfaces so nobody
+      mistakes a record for a control (law 7).</li>
+    <li><b>UNKNOWN, not red.</b> Both live violations fixed by taxonomy: unknown
+      output/emission are dashed-neutral with "?", red stays reserved.</li>
+    <li><b>Amber output.</b> Enabling the wavegen output arms the photon path —
+      motion/armed class. The DangerGate confirmation on enable stays.</li>
+    <li><b>Duty-cycle sanity caption</b> stays under the sheet (physics guard
+      against pulse-width/frequency combinations that melt things).</li>
+    <li><b>Routing card.</b> New: one line showing wavegen → head → scope CH1 —
+      the mental model that today lives only in the operator's head.</li>
+  </ol>
+
+  <h2>What changes vs. today</h2>
+  <div class="table-scroll"><table class="spec">
+    <tr><th>Today (audit)</th><th>v5</th></tr>
+    <tr><td>"OUTPUT STATE UNKNOWN" red chip</td><td>OUTPUT ? — dashed UNKNOWN rung</td></tr>
+    <tr><td>"LOAD 50 Ω" green chip</td><td>plain mono sheet row (nominal config is quiet)</td></tr>
+    <tr><td>Full-width fields for every quantity</td><td>FormSheet, intrinsic widths, right-aligned</td></tr>
+    <tr><td>OUTPUT ON/OFF as two giant equal bars</td><td>amber primary + quiet secondary in a side column</td></tr>
+    <tr><td>Bottom half empty void</td><td>routing card; panel height fits content</td></tr>
+    <tr><td>TEST CONNECTION / LIST VISA in prime space</td><td>device utilities move to Settings/device manager</td></tr>
+  </table></div>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>UI never claims emission state it cannot read — banner + UNKNOWN chip (law 8).</li>
+    <li>Red nowhere on this panel; arming is amber (law 2).</li>
+    <li>Green removed from nominal config (laws 1/6).</li>
+    <li>Records vs controls visually distinct (law 7).</li>
+    <li>Output enable keeps explicit confirmation (rule 2).</li>
+  </ul>
+</main>
