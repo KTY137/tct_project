@@ -252,10 +252,14 @@ class TCTMainWindow(QMainWindow):
         # because the plan executor calls gate.confirm() from the scan worker
         # thread; teardown must shutdown() it so a pending confirm can never
         # block app exit.  ONE instance for the whole app — the plan executor,
-        # the calibration panel's motion, and every HV-energizing control in
-        # the bias panels all confirm through this same object.
+        # the calibration panel's motion, every HV-energizing control in the
+        # bias panels, and the motor panel's homing / absolute moves / Zero
+        # Here all confirm through this same object.
         self._danger_gate     = QtDangerGate(parent=self)
-        self._motor_panel     = MotorPanel(self._devices.motor)
+        # Home all, Move to, Center and Zero here are danger-gated (rule 2);
+        # jog stays bounded-and-ungated and STOP stays one-tap (law 5).
+        self._motor_panel     = MotorPanel(self._devices.motor,
+                                           gate=self._danger_gate)
         self._intensity_panel = IntensityPanel(self._devices.intensity_monitor)
         self._camera_panel    = CameraPanel(self._devices.camera)
         self._scope_panel     = ScopePanel(self._devices.scope, config_path=self._config_path,

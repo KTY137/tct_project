@@ -32,6 +32,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtWidgets import QApplication
 
+from controller.danger_gate import AutoConfirmGate
 from devices.motor_base import SoftwareLimits
 from devices.motor_grbl import GRBLMotorStage
 from gui.motor_panel import MotorPanel
@@ -88,6 +89,18 @@ def _sim_grbl() -> GRBLMotorStage:
     return motor
 
 
+def _panel(motor: GRBLMotorStage) -> MotorPanel:
+    """Motor panel wired to the headless confirmation gate.
+
+    Home and Zero Here are danger-gated (CLAUDE.md rule 2 — the gate itself is
+    pinned in tests/test_motor_danger_gate.py).  These tests exercise the FRAME
+    plumbing behind those actions, not the confirmation, so they auto-confirm;
+    ``AutoConfirmGate`` is simulation/test-only by construction.  A panel with
+    no gate would (correctly) REFUSE both ops.
+    """
+    return MotorPanel(motor, gate=AutoConfirmGate())
+
+
 def _run_panel_op(app: QApplication, panel: MotorPanel, op) -> None:
     """Drive one async panel motor op (home / Zero Here) through the REAL
     worker-thread path and wait for _on_task_done to run on the GUI thread."""
@@ -128,7 +141,7 @@ def test_zero_here_envelope_shifts_with_marker():
     app = _app()
     motor = _sim_grbl()
     motor.move_to(5.0, 5.0, 5.0)          # user frame; sim move is synchronous
-    panel = MotorPanel(motor)
+    panel = _panel(motor)
     try:
         top = panel._stage_view._v2d._top
         side = panel._stage_view._v2d._side
@@ -188,7 +201,7 @@ def test_marker_tracks_real_moves_after_zero_here():
     app = _app()
     motor = _sim_grbl()
     motor.move_to(5.0, 5.0, 5.0)
-    panel = MotorPanel(motor)
+    panel = _panel(motor)
     try:
         top = panel._stage_view._v2d._top
         side = panel._stage_view._v2d._side
@@ -212,7 +225,7 @@ def test_home_restores_default_frame_envelope():
     app = _app()
     motor = _sim_grbl()
     motor.move_to(5.0, 5.0, 5.0)
-    panel = MotorPanel(motor)
+    panel = _panel(motor)
     try:
         top = panel._stage_view._v2d._top
         _run_panel_op(app, panel, panel._zero_position)
@@ -236,7 +249,7 @@ def test_soft_limit_chip_uses_user_frame_after_zero_here():
     app = _app()
     motor = _sim_grbl()
     motor.move_to(5.0, 5.0, 5.0)
-    panel = MotorPanel(motor)
+    panel = _panel(motor)
     try:
         _run_panel_op(app, panel, panel._zero_position)
         assert _pump_until(
@@ -257,7 +270,7 @@ def test_theme_switch_after_zero_here_keeps_frame_and_tokens():
     app = _app()
     motor = _sim_grbl()
     motor.move_to(5.0, 5.0, 5.0)
-    panel = MotorPanel(motor)
+    panel = _panel(motor)
     try:
         top = panel._stage_view._v2d._top
         _run_panel_op(app, panel, panel._zero_position)

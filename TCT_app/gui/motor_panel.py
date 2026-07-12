@@ -1,18 +1,43 @@
-"""Motor control panel — works with any MotorStageBase implementation."""
+"""Motor control panel — works with any MotorStageBase implementation.
+
+Safety (CLAUDE.md hardware-safety rule 2): the *unbounded* and *frame-changing*
+controls here route through an injected
+:class:`~controller.danger_gate.DangerGate` before any driver call — Home all,
+absolute Move to, Center, and Zero here.  The main window injects the SAME
+``QtDangerGate`` the plan executor, the calibration panel and the bias panels
+use, so the app has one confirmation mechanism (and one audit surface) for
+dangerous actions.  ``gate is None`` REFUSES those actions and says so; an
+un-wired gate never degrades into "no confirmation needed".
+
+Two deliberate exceptions:
+
+* **Jog is NOT gated.**  A jog click is itself the explicit, deliberate act:
+  the step is bounded (a preset in the segmented control), soft-limit checked
+  by the driver, and a modal per jog would make the panel unusable and train
+  operators to click through dialogs — worse for safety than no dialog.  All
+  gated motion goes through :meth:`MotorPanel._confirm_motion`, so gating jog
+  later is a one-line change (call it from ``_jog``); the decision is Adam's,
+  pending a ruling from Kaya.
+* **STOP is NOT gated** (cockpit design law 5): an emergency stop can only make
+  the setup safer, so it stays ONE TAP.  Never put a confirmation in front of it.
+"""
 from __future__ import annotations
 
 import logging
+import math
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal, QSettings
 from PySide6.QtWidgets import (
     QApplication, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout,
-    QLabel, QDoubleSpinBox, QPushButton, QSizePolicy, QSplitter,
+    QLabel, QDoubleSpinBox, QMessageBox, QPushButton, QSizePolicy, QSplitter,
     QButtonGroup, QFrame,
 )
 
+from controller.danger_gate import DangerAction, DangerGate
 from devices.motor_base import MotorStageBase
 from gui.panel_kit import Card, panel_header
 from gui.stage_view import StageView
+from gui.status_bus import notify
 from gui.style import axis_color, palette, repolish
 from gui.status_widgets import StatusChip, flash_button
 from PySide6.QtCore import QObject
@@ -124,9 +149,18 @@ class MotorPanel(QWidget):
     origin_changed = Signal()
     _poll_stop_requested = Signal()
 
-    def __init__(self, motor: MotorStageBase, parent: QWidget | None = None) -> None:
+    def __init__(self, motor: MotorStageBase, parent: QWidget | None = None,
+                 *, gate: DangerGate | None = None) -> None:
         super().__init__(parent)
         self._motor = motor
+        # Confirmation gate for the unbounded / frame-changing actions in this
+        # panel (rule 2): Home all, absolute Move to, Center, Zero here.  The
+        # main window injects the same QtDangerGate the plan executor and the
+        # HV panels use; with no gate every gated action refuses (fail-safe)
+        # and says so, rather than silently commanding the stage unconfirmed —
+        # the same stance CalibrationPanel takes for gate-less motion.  Jog and
+        # STOP are ungated by design (see the module docstring).
+        self._gate = gate
         self._motion_widgets: list[QWidget] = []   # disabled while a move runs
         self._task_thread: QThread | None = None
         self._task: _MotorTask | None = None
@@ -144,7 +178,10 @@ class MotorPanel(QWidget):
         self._abs_captions: dict[str, QLabel] = {}
         # Last position seen from the poller — lets the connection/homed chip
         # refresh (below) repaint without needing a live poll of its own; see
-        # _refresh_connection_state().
+        # _refresh_connection_state().  It is also the "current position" the
+        # danger-gate payloads quote: a fresh get_position() there would be
+        # serial I/O on the GUI thread (and would race the poller for the
+        # port), which the confirm path must never do.
         self._last_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._build_ui()
 
@@ -642,6 +679,15 @@ class MotorPanel(QWidget):
         return 0.1   # exclusive group always has a checked button; fallback only
 
     def _jog(self, axis: str, direction: int) -> None:
+        """Jog one bounded step — deliberately NOT danger-gated.
+
+        The click IS the explicit act (CLAUDE.md rule 2): the travel is bounded
+        by the selected step preset and the driver soft-limit-checks it, so a
+        modal per jog would only train operators to click through dialogs.  If
+        that ruling changes, gating jog is one line: call ``_confirm_motion``
+        with a ``kind="move"`` action carrying (axis, step) before ``_run_async``
+        — every other motion path in this panel already goes through it.
+        """
         step = self._current_jog_step_mm() * direction
         self._run_async(lambda: self._motor.move_relative(
             dx_mm=step if axis == "x" else 0.0,
@@ -651,24 +697,177 @@ class MotorPanel(QWidget):
 
     def _move_abs(self) -> None:
         x, y, z = self._spin_x.value(), self._spin_y.value(), self._spin_z.value()
+        cx, cy, cz = self._last_pos
+        # Rule 2: an absolute move is unbounded (anywhere in the envelope, and
+        # a long travel from wherever the stage happens to be), so confirm it —
+        # with the REAL target, the current position and the travel distance in
+        # the payload, so the dialog can never describe a different move than
+        # the one about to run — BEFORE the driver is touched at all.
+        if not self._confirm_motion(DangerAction(
+            kind="move",
+            summary=(f"Move stage to X {x:+.4f}, Y {y:+.4f}, Z {z:+.4f} mm "
+                     f"(user frame) — from {cx:+.4f}, {cy:+.4f}, {cz:+.4f} mm, "
+                     f"{math.dist((cx, cy, cz), (x, y, z)):.4f} mm of travel"),
+            detail={
+                "motion": "absolute move",
+                "frame": "user",
+                "target_mm": {"x": x, "y": y, "z": z},
+                "current_mm": {"x": cx, "y": cy, "z": cz},
+                "delta_mm": {"x": x - cx, "y": y - cy, "z": z - cz},
+                "distance_mm": round(math.dist((cx, cy, cz), (x, y, z)), 4),
+            },
+        )):
+            notify(f"Move to ({x:g}, {y:g}, {z:g}) mm not confirmed — "
+                   "the stage was not commanded.", "warn")
+            return
         self._run_async(lambda: self._motor.move_to(x, y, z))
 
     def _move_center(self) -> None:
+        # Same class as an absolute move (an arbitrary long travel from the
+        # current position), so it is gated the same way — and the payload
+        # carries the centre coordinates the driver will actually command, not
+        # a vague "the centre".
+        cx, cy, cz = self._last_pos
+        target = self._center_target_user()
+        if target is None:
+            summary = ("Move stage to the centre of the soft-limit envelope — "
+                       "envelope UNKNOWN (the driver reports no limits)")
+            detail = {"motion": "centre", "frame": "user",
+                      "target_mm": "unknown (no soft limits reported)",
+                      "current_mm": {"x": cx, "y": cy, "z": cz}}
+        else:
+            tx, ty, tz = target
+            summary = (f"Move stage to the centre of the soft-limit envelope: "
+                       f"X {tx:+.4f}, Y {ty:+.4f} mm (Z stays at {tz:+.4f} mm) "
+                       f"— from {cx:+.4f}, {cy:+.4f}, {cz:+.4f} mm")
+            detail = {
+                "motion": "centre",
+                "frame": "user",
+                "target_mm": {"x": tx, "y": ty, "z": tz},
+                "current_mm": {"x": cx, "y": cy, "z": cz},
+                "distance_mm": round(math.dist((cx, cy, cz), (tx, ty, tz)), 4),
+                "note": "Z is left at its current height",
+            }
+        if not self._confirm_motion(DangerAction(
+                kind="move", summary=summary, detail=detail)):
+            notify("Centre move not confirmed — the stage was not commanded.",
+                   "warn")
+            return
         self._run_async(self._motor.move_to_center)
 
     def _home(self) -> None:
+        # Rule 2 names homing explicitly.  It is the most unbounded motion the
+        # panel can command (every axis drives to its limit switch at homing
+        # speed) and it resets the user frame afterwards, so it always asks.
+        cx, cy, cz = self._last_pos
+        if not self._confirm_motion(DangerAction(
+            kind="move",
+            summary=("Home ALL axes: X, Y and Z drive to their limit switches "
+                     f"at homing speed (from {cx:+.4f}, {cy:+.4f}, {cz:+.4f} mm) "
+                     "and the user-frame origin is reset afterwards."),
+            detail={
+                "motion": "home",
+                "axes": "X, Y, Z",
+                "current_mm": {"x": cx, "y": cy, "z": cz},
+                "effect": "the user-frame origin is reset by homing",
+                "hazard": "unbounded travel toward the limit switches",
+            },
+        )):
+            notify("Homing not confirmed — the stage was not commanded.", "warn")
+            return
         self._run_async(self._motor.home, kind="home")
 
     def _zero_position(self) -> None:
+        # NOT motion — and that is exactly why it is gated (Adam's ruling,
+        # 2026-07-12).  Zero Here redefines the user-frame origin that EVERY
+        # later soft-limit check is validated against, so a stray click here
+        # silently re-frames the safety envelope while the stage stands still
+        # (the bench bug class Kaya hit).  The confirmation must therefore say
+        # plainly what does and does not happen.
+        x, y, z = self._last_pos
+        if not self._confirm_motion(DangerAction(
+            kind="zero_here",
+            summary=(f"Zero here: redefine the user-frame ORIGIN to the current "
+                     f"position X {x:+.4f}, Y {y:+.4f}, Z {z:+.4f} mm — this "
+                     f"point becomes (0, 0, 0). The stage does NOT move, but "
+                     f"every later soft-limit check is validated against the "
+                     f"new origin."),
+            detail={
+                "moves_stage": False,
+                "frame": "user",
+                "new_origin_mm": {"x": x, "y": y, "z": z},
+                "effect": ("the user-frame origin moves to the current position; "
+                           "the soft-limit envelope shifts with it"),
+            },
+        )):
+            notify("Zero here not confirmed — the origin is unchanged.", "warn")
+            return
         self._run_async(self._motor.zero_position, kind="zero")
 
     def _emergency_stop(self) -> None:
+        # NOT danger-gated, deliberately (cockpit design law 5): a stop can only
+        # make the setup safer, so it stays ONE TAP.  Never put a confirmation
+        # in front of this.
+        #
         # Runs on the GUI thread on purpose: it must fire immediately and the
         # GRBL backend writes the real-time hold byte without taking any lock.
         try:
             self._motor.stop()
         except Exception:
             pass
+
+    # ------------------------------------------------------------------ #
+    # Danger gate (CLAUDE.md rule 2) — one mechanism for every gated action #
+    # ------------------------------------------------------------------ #
+
+    def _motion_busy(self) -> bool:
+        """True while an async motor op (move/home/zero) is still running."""
+        return self._task_thread is not None and self._task_thread.isRunning()
+
+    def _confirm_motion(self, action: DangerAction) -> bool:
+        """Ask the injected gate to confirm one dangerous *action*.
+
+        Called on the GUI thread, BEFORE any driver call: a refusal must leave
+        the stage untouched and the panel idle (no busy buttons, no "Moving..."
+        chip, no state lie).  ``confirm`` returning ``False`` is a normal user
+        decline, not an error.
+
+        With **no gate injected** the action is REFUSED and surfaced — the same
+        fail-safe fallback ``CalibrationPanel``/``BiasPanel`` use: an un-wired
+        confirmation path must never degrade into "no confirmation needed".
+        """
+        if self._motion_busy():
+            # Refuse before showing anything: a dialog for a move that
+            # ``_run_async`` would then drop is a dialog that lies.
+            notify("A motor operation is already running.", "warn")
+            return False
+        if self._gate is None:
+            QMessageBox.warning(
+                self, "Confirmation unavailable",
+                f"{action.summary}\n\n"
+                "This is a dangerous action and needs a confirmation gate, "
+                "which is not wired. Cannot proceed.")
+            return False
+        return bool(self._gate.confirm(action))
+
+    def _center_target_user(self) -> tuple[float, float, float] | None:
+        """The centre point ``move_to_center()`` will actually command, in the
+        USER frame — X/Y at the midpoint of the user-frame soft limits, Z left
+        where it is (both the base and the GRBL backend do exactly this).
+
+        Pure arithmetic on the cached position + limits: no device I/O, so it
+        is safe to call from the GUI thread on the confirm path.  ``None`` when
+        the backend reports no limits (the driver would not move either).
+        """
+        lim = self._limits_user_frame()
+        if lim is None:
+            return None
+        try:
+            cx = (float(lim.x_min) + float(lim.x_max)) / 2.0
+            cy = (float(lim.y_min) + float(lim.y_max)) / 2.0
+        except (AttributeError, TypeError, ValueError):
+            return None
+        return (cx, cy, self._last_pos[2])
 
     # ------------------------------------------------------------------ #
     # Async motor-operation runner (keeps the GUI responsive)             #
@@ -761,7 +960,6 @@ class MotorPanel(QWidget):
 
     def _test_connection(self) -> None:
         """Run the backend's firmware handshake and show the reply."""
-        from PySide6.QtWidgets import QMessageBox, QApplication
         if not self._motor.connected:
             QMessageBox.information(
                 self, "Test Connection",
@@ -923,7 +1121,6 @@ class MotorPanel(QWidget):
         return s
 
     def _show_error(self, msg: str) -> None:
-        from PySide6.QtWidgets import QMessageBox
         QMessageBox.warning(self, "Motor Error", msg)
 
     def set_motor(self, motor: MotorStageBase) -> None:
