@@ -247,6 +247,30 @@ class _ScanReaper(QObject):
 
     def track(self, thread: QThread, worker: _ScanWorker) -> None:
         self._pairs[thread] = worker
+        # CONNECTION ORDER IS LOAD-BEARING (Mary review, 2026-07-12).  Both
+        # slots ride ``thread.finished``; Qt fires them in connection order.
+        # The Direct-connection re-home MUST be connected BEFORE the queued
+        # ``_reap`` so that, during ``finished()`` (on the worker thread), the
+        # inline ``moveToThread`` re-homes the worker to the GUI thread BEFORE
+        # the ``_reap`` QMetaCallEvent is ever posted to the GUI queue.  Wire
+        # them the other way round and the GUI thread can dequeue ``_reap`` and
+        # ``deleteLater`` a still-worker-affine worker → DeferredDelete posts to
+        # the worker thread → ``~QObject`` off-GUI = the ABBA deadlock's second
+        # entry door, reopened.  Keeping both connects here (not split across
+        # ``_start``) makes the order impossible to break from a caller.
+        #
+        # ``moveToThread`` only re-parents affinity/timers (it does NOT
+        # disconnect, unlike ``~QObject``), so this worker-thread slot never
+        # grabs the connection-pool buckets the GUI thread's ``connectImpl``
+        # wants — no ABBA.  ``worker`` is captured directly so the slot touches
+        # no GUI-thread state.  Qt6/PySide6 keeps the finished-thread affinity
+        # after ``finished``, so the GUI thread cannot re-home from outside —
+        # this emission is the one legal moment.
+        gui_thread = QApplication.instance().thread()
+        thread.finished.connect(
+            lambda w=worker, gt=gui_thread: w.moveToThread(gt),
+            Qt.DirectConnection,
+        )
         # Queued so it always runs on THIS object's (GUI) thread, never on
         # the emitting worker thread — the whole point of the reaper.
         thread.finished.connect(self._reap, Qt.QueuedConnection)
@@ -407,25 +431,10 @@ class _VisaScanManager(QObject):
         # post a DeferredDelete to the WORKER thread's own event queue, which
         # ``QThreadPrivate::finish`` flushes on the worker thread right after
         # emitting ``finished`` — running ``~QObject`` off the GUI thread (the
-        # ABBA deadlock's second entry door; py-spy 2026-07-12).  The reaper
-        # deletes the worker GUI-side instead (see ``_ScanReaper._reap``).
-        #
-        # ``deleteLater`` only runs ``~QObject`` on the object's OWN thread, and
-        # (Qt6/PySide6) the worker's affinity stays its now-exited worker thread
-        # after ``finished`` — the GUI thread cannot re-home it from outside.
-        # The one legal moment is the ``finished`` emission, which still runs on
-        # the worker thread: this Direct-connection slot re-homes the worker to
-        # the GUI thread there.  ``moveToThread`` only re-parents timers/affinity
-        # (it does NOT disconnect, so unlike ``~QObject`` it never grabs the
-        # connection-pool mutex buckets the GUI thread's ``connectImpl`` wants)
-        # — no ABBA.  ``worker`` is captured directly (not looked up from the
-        # reaper's ``_pairs``) so this worker-thread slot touches no GUI-thread
-        # state.  ``_reap`` then ``deleteLater``s the now GUI-homed worker.
-        gui_thread = QApplication.instance().thread()
-        thread.finished.connect(
-            lambda w=worker, gt=gui_thread: w.moveToThread(gt),
-            Qt.DirectConnection,
-        )
+        # ABBA deadlock's second entry door; py-spy 2026-07-12).  The worker is
+        # re-homed to the GUI thread and deleted GUI-side by the reaper; the
+        # re-home + reap connections (and their load-bearing order) both live in
+        # ``_ScanReaper.track`` above, wired before this line ran.
         thread.finished.connect(self._on_thread_finished, Qt.QueuedConnection)
         thread.start()
 
