@@ -148,6 +148,13 @@ class MotorPanel(QWidget):
         self._last_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
         self._build_ui()
 
+        # Frame contract (docs/ARCHITECTURE.md "Motor frame contract"): the
+        # stage view's travel envelope must live in the SAME user frame the
+        # position marker does.  Home / Zero Here shift that frame, so re-pull
+        # the envelope on every origin change — the same trigger tct_gui uses
+        # to rebuild the planner's PlanLimits.
+        self.origin_changed.connect(self._refresh_stage_limits)
+
         # Position polling runs in a separate thread so serial I/O never
         # blocks the GUI (especially important for Marlin M114 queries).
         #
@@ -529,8 +536,12 @@ class MotorPanel(QWidget):
         stage_card.setAttribute(Qt.WA_StyledBackground, True)
         stage_card_v = QVBoxLayout(stage_card)
         stage_card_v.setContentsMargins(12, 12, 12, 12)
+        # USER-frame limits, not raw ``motor.limits`` (MACHINE frame for
+        # GRBL): the marker is driven from get_position() (user frame), so an
+        # envelope drawn in the machine frame teleports the marker relative to
+        # it the moment Zero Here shifts the display offset.
         self._stage_view = StageView(
-            getattr(self._motor, "limits", None),
+            self._limits_user_frame(),
             theme_mode=self._theme_mode,
         )
         stage_card_v.addWidget(self._stage_view)
@@ -709,6 +720,39 @@ class MotorPanel(QWidget):
             if kind in ("home", "zero"):
                 self.origin_changed.emit()
 
+    # ------------------------------------------------------------------ #
+    # Coordinate-frame plumbing (docs/ARCHITECTURE.md "Motor frame contract")
+    # ------------------------------------------------------------------ #
+
+    def _limits_user_frame(self):
+        """Soft limits in the motor's USER frame — the frame ``get_position()``
+        returns and ``move_to()`` accepts, i.e. the ONLY frame this panel may
+        draw or compare positions against.  Pure attribute arithmetic in every
+        backend (no device I/O), so it is safe on the GUI thread.  Falls back
+        to raw ``limits`` for a hot-swapped backend without the helper (for
+        which the two frames are identical by definition) — same fallback as
+        tct_gui._plan_limits."""
+        try:
+            return self._motor.limits_user_frame()
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "motor.limits_user_frame() failed", exc_info=True)
+            return getattr(self._motor, "limits", None)
+
+    def _refresh_stage_limits(self) -> None:
+        """Redraw the stage view's travel envelope after the origin moved.
+
+        Home / Zero Here shift the driver's user/machine display offset, so an
+        envelope drawn once at construction time stays in the OLD frame while
+        the position marker (poller → user frame) jumps to the new origin: the
+        marker visually teleports even though the stage never moved (bench
+        bug, 2026-07-11 — same frame-mixing family as the planner PlanLimits
+        fix in 2f91e00).  Re-pulling ``limits_user_frame()`` shifts the
+        envelope by exactly the same offset, so the marker's RELATIVE position
+        inside it is preserved.  Wired to ``origin_changed`` in __init__.
+        """
+        self._stage_view.set_limits(self._limits_user_frame())
+
     def _set_busy(self, busy: bool) -> None:
         for w in self._motion_widgets:
             w.setEnabled(not busy)
@@ -767,7 +811,10 @@ class MotorPanel(QWidget):
         else:
             self._chip_homed.set_status("Not homed", "warn")
 
-        lim = getattr(self._motor, "limits", None)
+        # x/y/z here come from the poller = USER frame, so compare against the
+        # limits in that same frame.  Raw ``motor.limits`` (machine frame for
+        # GRBL) flagged a false "soft-limit error" right after Zero Here.
+        lim = self._limits_user_frame()
         if lim is None:
             self._chip_limits.set_status("Soft limits --", "neutral")
             return
@@ -882,3 +929,6 @@ class MotorPanel(QWidget):
     def set_motor(self, motor: MotorStageBase) -> None:
         """Hot-swap the motor backend at runtime."""
         self._motor = motor
+        # New backend ⇒ new envelope (and possibly a new frame) — redraw so
+        # the stage view never keeps showing the previous device's limits.
+        self._refresh_stage_limits()
