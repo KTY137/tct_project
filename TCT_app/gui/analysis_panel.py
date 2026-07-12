@@ -63,6 +63,7 @@ class AnalysisPanel(QWidget):
         super().__init__(parent)
         self._runs_dir = Path(runs_dir)
         self._data: dict = {}          # loaded HDF5 data arrays
+        self._voltage_scan: dict = {}  # loaded 'voltage_scan/{voltage_V,charge_pC,current_A}'
         self._run_path: str = ""
         self._build_ui()
         self._refresh_recent_runs()
@@ -246,10 +247,15 @@ class AnalysisPanel(QWidget):
             )
             # Depletion-voltage estimate as an annotated line ON the curve
             # (§4), not just a text footnote.
+            # Label states the sign convention explicitly (§4): the marker
+            # sits at the SIGNED depletion voltage (same convention as the
+            # x-axis data — see _plot_cce), but estimate_depletion_voltage()
+            # itself only ever returns a magnitude, so the label spells out
+            # "(|V|)" to avoid implying the number itself is unsigned.
             self._vdep_line = pg.InfiniteLine(
                 angle=90, movable=False,
                 pen=pg.mkPen(PLOT_OVERLAY, width=1, style=Qt.PenStyle.DashLine),
-                label="V_dep ≈ {value:.1f} V",
+                label="V_dep ≈ {value:+.0f} V (|V|)",
                 labelOpts={"position": 0.9, "color": PLOT_OVERLAY},
             )
             self._vdep_line.setVisible(False)
@@ -368,8 +374,9 @@ class AnalysisPanel(QWidget):
             self._lbl_file.setText(Path(path).name)
             self._lbl_file.setToolTip(path)
             self._chip_file.set_status("File loaded", "good")
+            n_arrays = len(self._data) + len(self._voltage_scan)
             self._chip_dataset.set_status(
-                f"{len(self._data)} arrays", "good" if self._data else "warn"
+                f"{n_arrays} arrays", "good" if n_arrays else "warn"
             )
             self._replot_map()
             self._stack.setCurrentIndex(1)
@@ -380,6 +387,7 @@ class AnalysisPanel(QWidget):
 
     def _load_h5(self, path: str) -> None:
         self._data = {}
+        self._voltage_scan = {}
         with h5py.File(path, "r") as f:
             if "points" in f:
                 pts = f["points"]
@@ -389,6 +397,18 @@ class AnalysisPanel(QWidget):
                 ana = f["analysis"]
                 for key in ana:
                     self._data[key] = ana[key][:]
+            # Real voltage (IV) scan group (data/hdf5_writer.py
+            # ``save_voltage_point`` / SCAN_DATA_FORMAT.md: 'voltage_scan/
+            # {voltage_V, charge_pC, current_A}'). Kept in its own dict
+            # rather than merged into self._data: an XY-scan file's
+            # 'analysis/dut_charge_pC' (N points) and a voltage-scan file's
+            # 'voltage_scan/charge_pC' (K bias steps) can both be present
+            # and are different-length arrays — merging them would corrupt
+            # the 2D-map replot's length-mismatch guard.
+            if "voltage_scan" in f:
+                vs = f["voltage_scan"]
+                for key in vs:
+                    self._voltage_scan[key] = vs[key][:]
 
     # ------------------------------------------------------------------ #
     # 2D map                                                               #
@@ -455,21 +475,41 @@ class AnalysisPanel(QWidget):
     # CCE vs. bias                                                         #
     # ------------------------------------------------------------------ #
 
+    def _cce_source_arrays(self):
+        """Bias voltage / collected charge / leakage current arrays for the
+        CCE plot and its CSV export.
+
+        Prefers the real ``voltage_scan/{voltage_V,charge_pC,current_A}``
+        group (data/hdf5_writer.py ``save_voltage_point``,
+        SCAN_DATA_FORMAT.md) — the group every current voltage-scan run
+        actually writes — and falls back to the legacy flat ``bias_V`` /
+        ``dut_charge_pC`` / ``leakage_A`` keys for any older/hand-built file
+        that used that naming directly under ``points``/``analysis``.
+        """
+        voltages = self._voltage_scan.get("voltage_V")
+        if voltages is None:
+            voltages = self._data.get("bias_V")
+        charges = self._voltage_scan.get("charge_pC")
+        if charges is None:
+            charges = self._data.get("dut_charge_pC")
+        currents = self._voltage_scan.get("current_A")
+        if currents is None:
+            currents = self._data.get("leakage_A")
+        return voltages, charges, currents
+
     def _plot_cce(self) -> None:
-        if not _HAS_PG or not self._data:
+        if not _HAS_PG or (not self._data and not self._voltage_scan):
             return
 
-        # Try to find bias voltage — stored as "bias_V" or inferred from z-scan
-        voltages = self._data.get("bias_V")
-        charges  = self._data.get("dut_charge_pC")
-        currents = self._data.get("leakage_A")
+        voltages, charges, currents = self._cce_source_arrays()
 
         if voltages is None or charges is None:
             from PySide6.QtWidgets import QMessageBox
             self._chip_dataset.set_status("No bias data", "warn")
             QMessageBox.warning(
                 self, "No bias data",
-                "No 'bias_V' or 'dut_charge_pC' arrays found.\n"
+                "No 'voltage_scan/voltage_V' + 'voltage_scan/charge_pC' "
+                "(or legacy 'bias_V'/'dut_charge_pC') arrays found.\n"
                 "Load a file from a voltage scan."
             )
             return
@@ -494,20 +534,29 @@ class AnalysisPanel(QWidget):
         # as an annotated line on the curve (§4), plus the text footnote.
         try:
             from analysis.efield_analysis import estimate_depletion_voltage
-            v_dep = estimate_depletion_voltage(np.array(voltages), np.array(charges))
-            if v_dep is not None:
-                self._lbl_vdep.setText(f"V_dep estimate: {v_dep:.1f} V")
-                self._vdep_line.setValue(float(v_dep))
+            v_arr = np.asarray(voltages, dtype=float)
+            q_arr = np.asarray(charges, dtype=float)
+            v_dep_mag = estimate_depletion_voltage(v_arr, q_arr)
+            if v_dep_mag is not None:
+                # estimate_depletion_voltage() always returns a positive
+                # magnitude (|V|) — re-apply the bias sign convention read
+                # from the DATA itself (never guessed) so the marker lands
+                # on the same side / within the range of the plotted points.
+                finite_v = v_arr[np.isfinite(v_arr)]
+                negative_bias = finite_v.size > 0 and float(np.nanmedian(finite_v)) < 0
+                v_dep_signed = -v_dep_mag if negative_bias else v_dep_mag
+                self._lbl_vdep.setText(
+                    f"V_dep estimate: {v_dep_signed:+.1f} V (|V| convention)")
+                self._vdep_line.setValue(float(v_dep_signed))
                 self._vdep_line.setVisible(True)
-                self._chip_dataset.set_status(f"Vdep {v_dep:.1f} V", "info")
+                self._chip_dataset.set_status(f"Vdep {v_dep_signed:+.1f} V", "info")
         except Exception:
             pass
 
     def _export_cce_csv(self) -> None:
-        if not self._data:
+        if not self._data and not self._voltage_scan:
             return
-        voltages = self._data.get("bias_V")
-        charges  = self._data.get("dut_charge_pC")
+        voltages, charges, _ = self._cce_source_arrays()
         if voltages is None or charges is None:
             return
         path, _ = QFileDialog.getSaveFileName(self, "Export CCE", "", "CSV (*.csv)")

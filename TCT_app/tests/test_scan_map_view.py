@@ -153,6 +153,23 @@ def test_set_points_batch_load_from_mapping_replaces_state():
     assert (5.0, 5.0) not in view.points()
 
 
+def test_set_points_mapping_branch_counts_rounding_collisions():
+    """The mapping branch of set_points() must count a duplicate exactly
+    like the iterable branch: two distinct raw (x, y) keys that collide
+    only AFTER the 6-decimal rounding (storage-layer dedup) still increment
+    the one honest _n_duplicates counter — never silently absorbed."""
+    _app()
+    view = ScanMapView()
+    mapping = {
+        (1e-7, 0.0): _result(1e-7, 0.0, charge=1.0),
+        (4e-7, 0.0): _result(4e-7, 0.0, charge=2.0),   # rounds to the same (0.0, 0.0) cell
+    }
+    view.set_points(mapping)
+
+    assert view.point_count() == 1
+    assert view.duplicate_count() == 1
+
+
 def test_set_points_accepts_plain_dict_values():
     _app()
     view = ScanMapView()

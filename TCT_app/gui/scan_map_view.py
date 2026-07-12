@@ -274,7 +274,13 @@ class ScanMapView(QWidget):
         if hasattr(mapping_or_iterable, "items"):
             for key, entry in mapping_or_iterable.items():
                 x, y = key
-                self._points[(round(float(x), 6), round(float(y), 6))] = _extract_values(entry)
+                rounded_key = (round(float(x), 6), round(float(y), 6))
+                # Two distinct raw keys can collide once rounded (same honest
+                # counter as the iterable branch below) — never silently
+                # absorbed (design system §4).
+                if rounded_key in self._points:
+                    self._n_duplicates += 1
+                self._points[rounded_key] = _extract_values(entry)
         else:
             for entry in mapping_or_iterable:
                 point = getattr(entry, "point", None)
