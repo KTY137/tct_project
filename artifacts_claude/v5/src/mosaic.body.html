@@ -1,0 +1,122 @@
+<!-- title: v5 · Sensor Mosaic -->
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Feature · Sensor Mosaic</p>
+  <h1>Sensor Mosaic <span style="font-weight:400; color:var(--pg-muted)">— stitched high-res</span></h1>
+  <p class="lede">
+    Raster the stage under the camera, grab a frame per tile, stitch them with
+    the px→mm calibration we already trust from the repeatability test — one
+    high-resolution photograph of the whole sensor, with real millimeter axes.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">Kaya request 2026-07-12</span>
+    <span class="meta-chip">commands motion → amber class + DangerGate + Mary review</span>
+    <span class="meta-chip">reuses: move→settle→grab loop · px→mm cal · phase correlation</span>
+  </div>
+
+  <h2>The mockup — mosaic running</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:64px; left:14px">1</div>
+    <div class="callout" style="top:160px; right:14px">2</div>
+    <div class="callout" style="bottom:170px; right:14px">3</div>
+    <div class="callout" style="bottom:70px; left:380px">4</div>
+
+    <div class="panelbody">
+      <!-- mosaic canvas -->
+      <div class="card" style="flex:1; display:flex; flex-direction:column">
+        <div class="hd">Mosaic preview
+          <span class="chip warn" style="margin-left:8px">capturing · tile 14/24</span>
+          <span class="sub">4 × 6 tiles · 15 % overlap</span>
+        </div>
+        <div class="bd" style="flex:1; padding:8px">
+          <div class="well-fig" style="height:360px">
+            <div class="shade"></div>
+            <div class="plot" style="height:calc(100% - 3px)">
+              <!-- stitched tiles: done -->
+              <div style="position:absolute; left:6%; top:8%; width:66%; height:56%; border-radius:2px;
+                background:
+                  radial-gradient(30% 26% at 40% 44%, rgba(233,237,245,.5) 0%, rgba(120,130,150,.25) 45%, transparent 75%),
+                  repeating-linear-gradient(0deg, rgba(150,160,180,.14) 0 2px, transparent 2px 26px),
+                  repeating-linear-gradient(90deg, rgba(150,160,180,.14) 0 2px, transparent 2px 26px),
+                  #1a1e26"></div>
+              <!-- tile grid lines over stitched area -->
+              <div style="position:absolute; left:6%; top:8%; width:66%; height:56%;
+                background:
+                  repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), rgba(90,169,255,.25) calc(25% - 1px) 25%),
+                  repeating-linear-gradient(0deg, transparent 0 calc(33% - 1px), rgba(90,169,255,.25) calc(33% - 1px) 33%)"></div>
+              <!-- active tile -->
+              <div style="position:absolute; left:72%; top:41%; width:16.5%; height:18.6%;
+                          border:2px solid var(--armed); border-radius:2px"></div>
+              <!-- pending area hatch -->
+              <div style="position:absolute; left:6%; right:5.5%; top:64%; height:22%;
+                background:repeating-linear-gradient(45deg, rgba(91,101,122,.12) 0 8px, transparent 8px 16px)"></div>
+              <span class="axis" style="left:8px; top:6px">y/mm</span>
+              <span class="axis" style="right:10px; bottom:6px">x/mm · real stage axes</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- setup sheet -->
+      <div style="width:300px; flex:none; display:flex; flex-direction:column; gap:10px">
+        <div class="card">
+          <div class="hd">Grid</div>
+          <div class="bd sheet" style="padding:0">
+            <div class="srow"><span class="lbl">Area</span><span class="spacer"></span><span class="val">scan area</span></div>
+            <div class="srow"><span class="lbl">Tiles</span><span class="spacer"></span><span class="val">4 × 6</span><span class="unit">auto</span></div>
+            <div class="srow"><span class="lbl">Overlap</span><span class="spacer"></span><span class="val">15</span><span class="unit">%</span></div>
+            <div class="srow"><span class="lbl">Settle per tile</span><span class="spacer"></span><span class="val">0.40</span><span class="unit">s</span></div>
+            <div class="srow" style="border-bottom:none"><span class="lbl">Est. duration · size</span><span class="spacer"></span><span class="val">~2.4 min · 46 MPx</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="hd">Preconditions</div>
+          <div class="bd" style="display:flex; flex-direction:column; gap:6px">
+            <span class="chip">✓ motor homed</span>
+            <span class="chip">✓ camera streaming</span>
+            <span class="chip">✓ px→mm calibrated · 2026-07-11</span>
+          </div>
+        </div>
+        <span class="btn amber-fill" style="width:100%">▶ Capture mosaic</span>
+        <span class="btn red-out" style="width:100%">■ Stop</span>
+        <div class="card">
+          <div class="hd">Result</div>
+          <div class="bd" style="font-size:11px; color:var(--muted); line-height:1.5">
+            Stitched TIFF/PNG + positions sidecar; opens in the camera well
+            with mm axes; linked into the run folder if a scan follows.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> the mosaic assembles live, tile by tile — stitched, active (amber), pending (hatched) ·
+    <b>2</b> grid derives from FOV + overlap; duration/size estimated before arming ·
+    <b>3</b> preconditions gate the button exactly like the repeatability test ·
+    <b>4</b> axes are real stage millimeters — the mosaic is a measurement, not just a photo.
+  </p>
+
+  <h2>How it works</h2>
+  <ol class="decisions">
+    <li><b>It is a scan.</b> Same move→settle→grab loop as every routine; the
+      planner's <span class="mono">Capture photo</span> block is the same
+      primitive. v1 ships as a procedure in the Camera panel (like the
+      repeatability test); a planner-native mosaic routine follows free.</li>
+    <li><b>Stitching v1 = calibrated placement.</b> Tiles land at their known
+      stage positions via px→mm; overlaps linear-blend. v2 refines seams with
+      the sub-pixel phase correlation already shipped for repeatability.</li>
+    <li><b>Safety unchanged.</b> Motion = amber, DangerGate confirmation before
+      the raster, STOP always visible, envelope = the chosen area. Laser state
+      is irrelevant-but-recorded (illumination note in metadata).</li>
+    <li><b>Deliverable:</b> one TIFF/PNG + JSON sidecar (tile positions,
+      exposure, timestamp, px→mm cal id) — reproducible, citable in the
+      logbook, usable as a base layer under scan maps later.</li>
+  </ol>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>Raster start is DangerGate-confirmed; motion amber; STOP red while moving (laws 2/5, rule 2).</li>
+    <li>Preconditions honest — no capture without homed + calibrated (law 8).</li>
+    <li>Pending tiles hatched, never faked; seams from real data only (law 7).</li>
+    <li>Implementation stays with the crew (devices/motion) + Mary review — not a free-lane task.</li>
+  </ul>
+</main>

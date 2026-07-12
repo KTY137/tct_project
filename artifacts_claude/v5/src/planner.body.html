@@ -32,6 +32,8 @@
           <span class="chip" style="justify-content:flex-start">Loop · Stage Y</span>
           <span class="chip" style="justify-content:flex-start">Loop · Stage Z</span>
           <span class="chip" style="justify-content:flex-start">Acquire waveform</span>
+          <span class="chip" style="justify-content:flex-start; border-color:var(--accent); color:var(--accent)">Acquire measurements ★</span>
+          <span class="chip" style="justify-content:flex-start; border-color:var(--accent); color:var(--accent)">Capture photo ★</span>
           <span class="chip" style="justify-content:flex-start">Save point</span>
           <span class="chip" style="justify-content:flex-start">Wait · Pause</span>
           <span class="chip" style="justify-content:flex-start">Read slow control</span>
@@ -41,7 +43,7 @@
 
       <!-- recipe tree -->
       <div class="card" style="flex:1; display:flex; flex-direction:column">
-        <div class="hd">Recipe <span class="sub">edge-TCT · CCE(V) map</span>
+        <div class="hd">Recipe <span class="sub">scan-TCT · CCE(V) map</span>
         </div>
         <div style="display:flex; flex-direction:column">
           <div class="rrow"><span class="spine"></span><span class="name" style="color:var(--muted)">Preflight</span><span class="eyeb">interlocks · laser safe · stage homed</span><span class="qty">gate</span></div>
@@ -99,6 +101,58 @@
     <b>3</b> quantities are quiet right-aligned mono chips, never colored — engraving, not status ·
     <b>4</b> the envelope card replaces every per-row confirm: "envelope" tags on hazard rows are read-only glyph+text, not buttons ·
     <b>5</b> Abort is outline-red while nothing runs; it fills only when a run is live.
+  </p>
+
+  <h2>NEW · Routine blocks <span style="font-weight:400; color:var(--pg-muted)">(Kaya requests)</span></h2>
+  <div class="table-scroll"><table class="spec">
+    <tr><th>Block</th><th>What it does</th><th>Notes / truth</th></tr>
+    <tr><td class="mono">Capture photo</td>
+        <td>grabs a camera frame at the current point, stores it (path + position
+            + exposure) into the run's HDF5/sidecar</td>
+        <td>nominal row (no motion of its own); precondition: camera connected;
+            feeds the sensor-mosaic feature — a mosaic is just
+            <span class="mono">Loop X → Loop Y → Move → Settle → Capture photo</span></td></tr>
+    <tr><td class="mono">Acquire measurements</td>
+        <td>reads only the scope's computed quantities (amplitude, charge/area,
+            rise, timing) and <b>discards the waveform</b> — on VISA scopes via
+            SCPI <span class="mono">MEASUrement</span> queries instead of
+            <span class="mono">CURVE?</span></td>
+        <td>orders-of-magnitude smaller runs + faster points; the Before-you-run
+            DATA tile shows the saving live (24 MB → ~0.4 MB); HDF5 gets a
+            <span class="mono">measurements</span> table, no waveform group
+            (SCAN_DATA_FORMAT extension, Jonathan); exact SCPI per scope needs
+            the manual — TODO(manual needed) per rule 4</td></tr>
+  </table></div>
+
+  <h2>NEW · Scan Sequencer <span style="font-weight:400; color:var(--pg-muted)">(Kaya request)</span></h2>
+  <p>
+    A queue of saved routines that runs unattended — the overnight workflow.
+    Each queue entry is a saved recipe with its own preflight; between entries
+    the sequencer parks safe (beam off expectations documented, HV ramped to
+    the next routine's start or to 0 per policy).
+  </p>
+  <div class="stage-wrap"><div class="stage" style="min-width:1100px; padding:14px; display:flex; flex-direction:column; gap:8px">
+    <div style="display:flex; align-items:center; gap:8px">
+      <span style="font-weight:650">Sequence · night_run_03</span>
+      <span class="chip warn">running 2/4</span>
+      <span style="flex:1"></span>
+      <span class="btn quiet">＋ Add routine</span>
+      <span class="btn red-out">■ Abort sequence</span>
+    </div>
+    <div class="rrow"><span class="spine"></span><span class="name" style="color:var(--muted)">1 · cce_v_map.routine</span><span class="args">done · 3 087 pts · 1.1 h</span><span class="qty">✓ 14:02</span></div>
+    <div class="rrow motion"><span class="spine"></span><span class="glyph">▶</span><span class="name">2 · focus_scan_z.routine</span><span class="args">running · 214/441 pts</span><span class="qty">ETA 00:12</span></div>
+    <div class="rrow"><span class="spine"></span><span class="name" style="color:var(--muted)">3 · charge_map_fine.routine</span><span class="args">queued · HV −250 V · 9 216 pts</span><span class="qty">~3.2 h</span></div>
+    <div class="rrow" style="border-bottom:none"><span class="spine"></span><span class="name" style="color:var(--muted)">4 · iv_curve_end.routine</span><span class="args">queued · ramp to 0 V at end</span><span class="qty">~10 min</span></div>
+  </div></div>
+  <p class="caption" style="max-width:76ch">
+    <b>Open safety question for Kaya:</b> the ratified envelope is approved
+    once per <em>run</em>. For a sequence, either (a) arming approves ONE
+    combined envelope spanning every queued routine (max HV, total travel,
+    total points — one hold-3-s for the night), or (b) each routine re-arms
+    and the sequencer pauses at each boundary until you confirm. (a) is the
+    true unattended workflow; (b) is stricter. Abel recommends (a) with the
+    combined envelope text listing every routine by name — same
+    re-validation machinery, and Abort/kill remain one-tap throughout.
   </p>
 
   <h2>Decisions</h2>

@@ -28,7 +28,7 @@
         <div class="bd" style="padding:6px; display:flex; flex-direction:column; gap:4px">
           <div style="border:1px solid var(--accent); background:rgba(90,169,255,.08); border-radius:8px; padding:8px 10px">
             <div class="mono" style="font-size:11.5px">run_00042</div>
-            <div style="font-size:10px; color:var(--muted)">edge-TCT · 2 401 pts · today 18:18</div>
+            <div style="font-size:10px; color:var(--muted)">scan-TCT · 2 401 pts · today 18:18</div>
           </div>
           <div style="border:1px solid transparent; border-radius:8px; padding:8px 10px">
             <div class="mono" style="font-size:11.5px; color:var(--muted)">run_00041</div>
@@ -47,7 +47,7 @@
       <div style="flex:1; display:flex; flex-direction:column; gap:10px">
         <div style="display:flex; align-items:center; gap:8px">
           <span class="mono" style="font-weight:650">run_00042</span>
-          <span style="color:var(--muted); font-size:12px">edge-TCT · 2 401 pts · map: dut_charge · exported: no</span>
+          <span style="color:var(--muted); font-size:12px">scan-TCT · 2 401 pts · map: dut_charge · exported: no</span>
           <span style="flex:1"></span>
           <span class="chip" style="border-color:var(--hairline-strong); color:var(--text)">2D map</span>
           <span class="chip">CCE vs bias</span>
@@ -95,6 +95,68 @@
       operator must see when the fit is extrapolating.
     </div>
   </div></div>
+
+  <h2>NEW · The 1D slicer <span style="font-weight:400; color:var(--pg-muted)">(Kaya request)</span></h2>
+  <p>
+    Drag a cut line across the map and read the profile — charge vs. position
+    along either axis, the charge-vs-position profile across the sensor (scan-TCT linecut). NaN cells leave
+    honest gaps; an averaging width integrates ±N neighbouring rows to tame
+    noise.
+  </p>
+  <div class="stage-wrap"><div class="stage" style="min-width:1100px">
+    <div class="panelbody" style="flex-direction:column">
+      <div style="display:flex; gap:12px">
+        <div class="card" style="flex:1">
+          <div class="bd" style="padding:8px">
+            <div class="well-fig" style="height:230px">
+              <div class="shade"></div>
+              <div class="plot" style="height:calc(100% - 3px)">
+                <div style="position:absolute; inset:8% 14% 10% 7%;
+                  background: radial-gradient(55% 60% at 44% 50%, #fde725 0%, #7ad151 25%, #22a884 45%, #2a788e 63%, #414487 82%, #440154 100%); border-radius:2px"></div>
+                <!-- slice line -->
+                <div style="position:absolute; left:7%; right:14%; top:44%; height:0;
+                            border-top:1.5px solid #ffffff; opacity:.9"></div>
+                <div style="position:absolute; left:7%; right:14%; top:38%; height:12%;
+                            background:rgba(255,255,255,.07)"></div>
+                <span style="position:absolute; right:15%; top:34%; font-family:var(--mono); font-size:9.5px; color:#fff; opacity:.85">y = 0.20 mm · ±3 rows</span>
+                <span class="axis" style="left:8px; top:6px">y/mm</span>
+                <span class="axis" style="right:16%; bottom:6px">x/mm</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="flex:1">
+          <div class="hd">Profile <span class="chip" style="margin-left:8px">along X · y = 0.20 mm</span>
+            <span style="margin-left:auto" class="btn ghost" style="padding:4px 10px">Export CSV</span></div>
+          <div class="bd" style="padding:8px">
+            <div class="well-fig" style="height:180px">
+              <div class="plot" style="height:100%">
+                <svg viewBox="0 0 600 150" preserveAspectRatio="none" style="position:absolute; inset:8% 5% 16% 8%; width:87%; height:76%">
+                  <path d="M0,140 L40,138 L80,120 C120,60 160,20 240,16 C320,14 380,18 430,40 L470,90 L500,130 L560,140"
+                        fill="none" stroke="#5aa9ff" stroke-width="1.8"/>
+                </svg>
+                <span class="axis" style="left:8px; top:6px">fC</span>
+                <span class="axis" style="right:10px; bottom:6px">x/mm</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px">
+        <span class="chip" style="border-color:var(--hairline-strong); color:var(--text)">slice: X</span>
+        <span class="chip">slice: Y</span>
+        <span style="font-size:11px; color:var(--muted)">position</span>
+        <span class="val" style="border:1px solid var(--hairline); background:var(--sunk); border-radius:8px; padding:4px 10px; font-family:var(--mono); font-size:11.5px">0.200 mm</span>
+        <span style="font-size:11px; color:var(--muted)">avg width</span>
+        <span class="val" style="border:1px solid var(--hairline); background:var(--sunk); border-radius:8px; padding:4px 10px; font-family:var(--mono); font-size:11.5px">±3 rows</span>
+        <span style="flex:1"></span>
+        <span style="font-size:10.5px; color:var(--faint)">drag the line on the map or scrub the position field</span>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">The cut line + averaging band are the only overlays the map
+     carries — thin, opaque, draggable. Profile and map share the run's unit (fC)
+     and axis calibration; NaN gaps stay gaps.</p>
 
   <h2>Decisions</h2>
   <ol class="decisions">
