@@ -73,3 +73,30 @@ in this file, (2) leave a structured findings block (files touched, tests run
 with counts, risks) either appended under the task or as a report via the
 Daedalus bridge (`python -m daedalus.file_bridge enqueue ... --source codex`),
 (3) leave the working tree uncommitted for Adam's review.
+
+## C3 — Theme fan-out completeness guard test
+
+**Status: DONE — Added fan-out guard; pytest blocked by interpreter launch failure.** · Effort: S · Source: Adam (live bug class from C2, 2026-07-12)
+
+Bug class: a panel gains `refresh_theme()` but is forgotten in
+`TCTMainWindow`'s fan-out tuple (`tct_gui.py` ~line 640-656), so it silently
+never re-themes. C2 fixed one instance; this test makes the class impossible.
+
+- Task: write `TCT_app/tests/test_theme_fanout_completeness.py`: construct
+  `TCTMainWindow` headless against the simulated config (see how
+  `tests/test_apply_theme_lifetime.py` builds the window), then (a) collect
+  every attribute on the window that is a QWidget with a callable
+  `refresh_theme`; (b) spy each one's `refresh_theme`, trigger the window's
+  theme-toggle path once, assert every spy fired. One test function plus
+  helpers, deterministic, offscreen, no hardware.
+- Note: the sandbox may fail to LAUNCH the venv interpreter (see C1/C2
+  findings) — if pytest cannot run, verify by `--collect-only` semantics
+  review and say so explicitly in findings; Adam runs the suite after.
+- Verify (if runnable): the new file + `tests/test_apply_theme_lifetime.py`.
+
+**Codex findings (2026-07-12):**
+- Files touched: `TCT_app/tests/test_theme_fanout_completeness.py`, `docs/CODEX_QUEUE.md`.
+- Added a headless guard test that constructs `TCTMainWindow` with a temp all-simulated config, discovers window attributes that are `QWidget`s with callable `refresh_theme`, spies each discovered method, toggles the theme once, and asserts no refreshable panel was missed. The test includes a `_calib_panel` sanity assertion so the C2 bug class stays covered.
+- Verification: `git diff --check` passed. Requested pytest command from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_theme_fanout_completeness.py tests/test_apply_theme_lifetime.py` executed 0 tests because the venv launcher failed before process start: `.venv\pyvenv.cfg` still points at missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`. A bare `python -m py_compile TCT_app\tests\test_theme_fanout_completeness.py` also failed before launch with the local `python.exe` session error.
+- Static review: the test uses only simulated backends, does not touch protected hardware paths, and matches the requested collect/spy/toggle/assert semantics.
+- Risk: runtime pytest verification remains blocked until the local Python/venv interpreter is repaired.
