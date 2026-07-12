@@ -102,18 +102,21 @@ def test_existing_palette_keys_untouched():
 
 
 def test_v5_palette_values_match_polish_artifact():
-    assert DARK["bg"] == "#131316"
-    assert DARK["panel"] == "#1d1d21"
-    assert DARK["accent"] == "#41c8f0"
-    assert DARK["good"] == "#30d158"
-    assert DARK["warn"] == "#ffa01e"
-    assert DARK["crit"] == "#ff4f47"
+    # Ratified design-system v4 tokens (docs/design/cockpit_design_system.md
+    # section 2, sourced verbatim from tct_cockpit_design_v4_final.html). If a
+    # future artifact refresh changes these, update spec + here together.
+    assert DARK["bg"] == "#0A0D13"
+    assert DARK["panel"] == "#121824"
+    assert DARK["accent"] == "#5AA9FF"
+    assert DARK["good"] == "#3DD68C"
+    assert DARK["warn"] == "#FFB84D"
+    assert DARK["crit"] == "#FF5A61"
 
-    assert LIGHT["bg"] == "#eef0f4"
-    assert LIGHT["accent"] == "#0e7fa6"
-    assert LIGHT["good"] == "#1e9e46"
-    assert LIGHT["warn"] == "#c77000"
-    assert LIGHT["crit"] == "#d93a32"
+    assert LIGHT["bg"] == "#E9EDF4"
+    assert LIGHT["accent"] == "#2A6FE0"
+    assert LIGHT["good"] == "#128A63"
+    assert LIGHT["warn"] == "#B26F00"
+    assert LIGHT["crit"] == "#DE434B"
 
 
 def test_plot_grid_overlay_tokens_present_both_themes_and_fixed():
@@ -290,7 +293,9 @@ def test_metric_tile_state_changes_restyle_value_and_border():
 
     tile.set_state("armed")
     assert tile.state() == "armed"
-    assert glow_color("armed") in tile.styleSheet()
+    # Design law 1 (D0): state reads through value ink only — the old armed
+    # full-frame emphasis border was removed; no stylesheet for ANY state.
+    assert tile.styleSheet() == ""
 
     tile.set_state("normal")
     assert tile.state() == "normal"
