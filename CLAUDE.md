@@ -187,6 +187,35 @@ boundary-triggered standups over a tight clock).
   deliverable), and never restate the brief. Adam prunes history from
   handoffs — repo files are the shared memory, not transcripts.
 
+## Session hygiene — countering orchestrator decay (Kaya-approved 2026-07-12)
+
+Long sessions do not degrade the crew: subagents are stateless, start cold,
+and read from disk. They degrade **Adam**. Every context compaction is lossy,
+and Adam cannot measure his own decay from the inside — he always feels
+competent. These four rules replace that feeling with disk truth.
+
+1. **The beat ledger is the source of truth, not Adam's memory.**
+   `.claude/session_state.md` declares: HEAD, in-flight beats with their
+   **file locks**, landed commits, pending reviews, and the queue. Adam
+   updates it on every dispatch and every landing. A fresh session reads it
+   and is immediately as informed as the old one.
+2. **Verify before every commit.** Run `.claude/beat_status.ps1` — it
+   cross-references the dirty tree against the declared locks and names the
+   agent claiming each path. Stage explicit paths only; **never**
+   `git commit -am`; **never** stage a CLAIMED path. Committing a file another
+   beat is still writing is the one memory failure that destroys work.
+3. **Checkpoint on a rule, not on a feeling.** After the second compaction, or
+   at any phase gate with a clean tree, Adam proactively refreshes the ledger +
+   memory handoff and tells Kaya a session restart is due. Restarting is cheap
+   by construction (rule 1); waiting until the work "feels" worse is not a
+   strategy, because it never will.
+4. **Never claim what git cannot show.** No "X landed / tests pass / beat
+   finished" without having seen it in `git log` / the actual test output.
+   (Adam has confabulated an agent's death once already — the record was
+   corrected; the rule exists so it is not repeated.) At report boundaries,
+   Mamoru may be dispatched to audit Adam's claims against the repo — an
+   external checker is the only one that can catch a confident orchestrator.
+
 <!-- PROTECTED: edit only with Kaya's explicit per-change approval -->
 ## Hardware safety rules (non-negotiable)
 
