@@ -723,10 +723,13 @@ class ScanController:
 
         Same two guards the run loop applies between steps, at the park cadence:
 
-        * bias compliance / readability — :meth:`_check_compliance` (a trip sets
-          the abort event, ramps HV down and opens the output; 3 consecutive
-          unreadable reads raise ``DeviceError``, which propagates into the run
-          loop's ``except`` and fails the run safe);
+        * bias hardware fault / compliance / readability — :meth:`_check_compliance`
+          (a latched trip, an output the module dropped behind our back, or a
+          compliance trip sets the abort event, ramps HV down and opens the output;
+          3 consecutive unreadable reads raise ``DeviceError``, which propagates
+          into the run loop's ``except`` and fails the run safe).  A paused run is
+          the WORST place to miss a trip — it can sit at HV indefinitely — so the
+          watchdog inherits the hardware-fault guard from the shared helper;
         * the slow-control excursion policy — an ALARM while parked is a full
           fail-safe abort (ratified policy), a WARN is already held.
 
@@ -1096,6 +1099,18 @@ class ScanController:
                 time.sleep(cfg.hold_delay_s)
 
                 reading = bias.read()
+                # HARDWARE fault BEFORE compliance (the IV sweep evaluates its own
+                # BiasReading — it does not go through _check_compliance).  A
+                # latched trip / an output the module dropped behind our back is a
+                # fail-safe abort: without this the sweep kept stepping the
+                # setpoint and recording IV points into HDF5 with the HV OFF —
+                # and, because a trip collapses the current to ~0, the compliance
+                # test below saw nothing wrong.  See _bias_hw_fault.
+                if self._bias_fault_abort(
+                    bias, reading, context=f" at {reading.voltage_V:.1f} V"
+                ):
+                    break
+
                 # Compliance trip → abort immediately and ramp down
                 if reading.compliant:
                     logger.warning(
@@ -1475,17 +1490,121 @@ class ScanController:
         if has_bias_step:
             self._bias_failsafe(bias)
 
-    def _check_compliance(self, bias: BiasChannel, context: str = "") -> bool:
-        """Post-acquire bias compliance / readability guard (shared by both loops).
+    @staticmethod
+    def _status_word_hint(reading) -> str:
+        """`` (status word 0x00A1)`` when the raw word is known, else ``''``."""
+        word = getattr(reading, "status_word", None)
+        if isinstance(word, int) and not isinstance(word, bool):
+            return f" (status word 0x{word:04X})"
+        return ""
 
-        Extracted verbatim from the classic scan loop so :meth:`_run` and
-        :meth:`_run_plan` share ONE implementation.  Returns ``True`` when the
-        run must STOP after a compliance trip — the caller ``break``s; the abort
-        event is already set and the supply already ramped down.  Returns
-        ``False`` to continue.  Raises :class:`DeviceError` after 3 consecutive
-        unreadable reads (compliance protection is then unavailable, so the run
-        fails safe rather than cook a sensor blind).  A single failing read is
-        tolerated as a transient glitch; the counter resets on any good read.
+    @staticmethod
+    def _driver_believes_output_on(bias: BiasChannel) -> bool:
+        """What the DRIVER thinks the output state is — local flag, no hardware I/O.
+
+        Beware: ``BiasChannel.output_on`` is a *method* (an action that switches
+        HV on!), so it is always truthy — testing it would be both wrong and
+        dangerous.  The driver's per-channel belief is ``output_is_on_ch``, a
+        pure local-state read on every backend.
+
+        A backend that cannot answer gives us no belief to contradict, so this
+        reports ``False``: no belief, no fault claim, never a spurious abort.
+        """
+        try:
+            return bool(bias.driver.output_is_on_ch(bias.channel))
+        except Exception:
+            return False
+
+    def _bias_hw_fault(self, bias: BiasChannel, reading) -> str | None:
+        """Decode a HARDWARE fault out of a :class:`BiasReading` — else ``None``.
+
+        The iseg driver decodes the module's channel-status word into ``tripped``
+        / ``output_on_hw`` (raw word kept on ``status_word``); *reacting* to it is
+        the controller's job, and this is that half.  Two faults, both meaning
+        "the HV is not doing what was asked":
+
+        * ``tripped is True`` — the module latched a protective fault
+          (over-current trip, arc error, emergency off).  Safety rule 5: never
+          continue after a safety-critical hardware error.
+        * ``output_on_hw is False`` while the DRIVER still believes the channel
+          is ON — the output went away behind our back (trip, inhibit, front
+          panel).  Acquiring on would silently record UNBIASED data as if biased.
+
+        Why this must be checked *before* ``compliant`` (Mary, review of c269e93):
+        on a real current trip the module switches the channel off ITSELF, so the
+        measured current collapses to ~0 and ``compliant`` computes to False — no
+        compliance breach.  A compliance-only guard therefore sees a perfectly
+        healthy sensor and the scan keeps acquiring and writing points with the HV
+        OFF, recorded in HDF5 as if biased.  Physically worthless data, silently.
+
+        **Tri-state discipline — ``is True`` / ``is False``, never truthiness.**
+        Both flags are ``None`` = UNKNOWN whenever the backend cannot read a
+        status word (simulated supplies, Keithley/e4control, or a failed
+        ``:READ:CHAN:STAT?`` on the iseg itself).  ``if not reading.tripped``
+        would turn "I don't know" into a confident "not tripped" — exactly the
+        trap that hid the trip in the first place.  UNKNOWN is neither healthy nor
+        a fault: it must not be read as safe, and it must not abort a run either
+        (every non-status-reporting backend would become unusable).  It stays
+        UNKNOWN, and this returns ``None``.
+        """
+        if getattr(reading, "tripped", None) is True:
+            return ("Bias supply reports a LATCHED TRIP"
+                    f"{self._status_word_hint(reading)} — the HV is not doing "
+                    "what was asked")
+        if (getattr(reading, "output_on_hw", None) is False
+                and self._driver_believes_output_on(bias)):
+            return ("Bias output is OFF at the hardware while the driver believes "
+                    f"it is ON{self._status_word_hint(reading)} — the channel "
+                    "switched off behind the scan")
+        return None
+
+    def _bias_fault_abort(
+        self, bias: BiasChannel, reading, context: str = ""
+    ) -> bool:
+        """Abort + fail-safe if *reading* carries a hardware fault; else ``False``.
+
+        The single reaction point for :meth:`_bias_hw_fault`, shared by every loop
+        that evaluates a ``BiasReading``.  Sets the abort event (so the run's
+        terminal state resolves **ABORTED**, never FINISHED — same discipline as
+        the compliance-break path), surfaces the fault through ``on_error``, and
+        leaves HV safe (ramp to 0 V + output off).  Data already taken is kept and
+        the writer is still flushed/closed by ``_end_run``.
+        """
+        fault = self._bias_hw_fault(bias, reading)
+        if fault is None:
+            return False
+        logger.error("%s%s — aborting the run (fail-safe)", fault, context)
+        self._abort_event.set()
+        if self.on_error:
+            self.on_error(
+                f"{fault}{context}.\n"
+                "Scan ABORTED — bias ramped to 0 V and the output opened.\n"
+                "Data taken before the fault is preserved."
+            )
+        self._bias_failsafe(bias)
+        return True
+
+    def _check_compliance(self, bias: BiasChannel, context: str = "") -> bool:
+        """Post-acquire bias hardware-fault / compliance / readability guard.
+
+        Shared by every run loop (``_run``, ``_run_plan``, and the paused-run park
+        watchdog :meth:`_supervise_parked_run`), so all of them inherit all three
+        guards from ONE implementation.  Returns ``True`` when the run must STOP —
+        the caller ``break``s; the abort event is already set and the supply is
+        already ramped down.  Returns ``False`` to continue.
+
+        Order matters:
+
+        1. **Hardware fault** (:meth:`_bias_hw_fault`) — a latched trip, or an
+           output the hardware says is OFF while the driver believes it is ON.
+           Checked FIRST because a real trip opens the channel inside the module:
+           the current then falls to ~0 and the compliance test below sees nothing
+           wrong (see :meth:`_bias_hw_fault`).
+        2. **Compliance** — the DUT is drawing the compliance limit.
+        3. **Readability** — :class:`DeviceError` after 3 consecutive unreadable
+           reads (compliance protection is then unavailable, so the run fails safe
+           rather than cook a sensor blind).  A single failing read is tolerated as
+           a transient glitch; the counter resets on any good read.
         """
         if not bias.connected:
             return False
@@ -1502,6 +1621,8 @@ class ScanController:
                 ) from exc
             return False
         self._bias_read_failures = 0
+        if self._bias_fault_abort(bias, reading, context):
+            return True
         if not reading.compliant:
             return False
         logger.warning("Compliance hit during scan%s — aborting", context)
