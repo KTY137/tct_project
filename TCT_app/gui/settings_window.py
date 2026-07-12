@@ -148,14 +148,17 @@ class _ScanWorker(QObject):
     a dedicated QThread and reports back via a signal — never touches any
     widget itself (see ``_VisaScanManager``).
 
-    Deliberately does **not** manage its own Python lifetime: its strong
-    reference is held by the GUI-thread-affine ``_ScanReaper`` (below) and
-    dropped only on the GUI thread.  A worker whose Python refcount reaches
+    Deliberately does **not** manage its own Python lifetime *or* its own C++
+    destruction: its strong reference is held by the GUI-thread-affine
+    ``_ScanReaper`` (below), which both drops that reference and runs
+    ``~QObject`` on the GUI thread.  A worker whose Python refcount reaches
     zero on a *worker* thread — or that is left reachable only through a
     self-referential Qt connection cycle and later reclaimed by CPython's
     cyclic GC on some *other* worker thread — runs ``QObject::~QObject`` off
     the GUI thread, which is exactly the ABBA deadlock this module was
-    rewritten (2026-07-11) to prevent (see ``_ScanReaper``)."""
+    rewritten (2026-07-11) to prevent (see ``_ScanReaper``).  It equally has no
+    ``done -> deleteLater`` on its own loop: that too runs ``~QObject`` on the
+    worker thread (the second entry door, 2026-07-12 — see ``_ScanReaper``)."""
 
     done = Signal(list, str)   # (resources, error) — error is "" on success
 
@@ -198,17 +201,42 @@ class _ScanReaper(QObject):
     pytest-timeout's watchdog thread wedged.
 
     Fix: keep a *plain, reachable* strong reference (no cycle) to each worker
-    here and drop it — plus ``deleteLater`` the thread — ONLY from a slot
+    here and DESTROY it — plus ``deleteLater`` the thread — ONLY from a slot
     that runs on the GUI thread (``QThread.finished`` queued to this
-    GUI-thread-affine singleton).  The worker still self-deletes on its own
-    still-running event loop via ``done -> deleteLater`` (the canonical,
-    single-thread-owned deletion point); by the time ``finished`` lands the
-    worker's C++ object is already gone, so dropping our reference on the GUI
-    thread merely frees an already-invalidated Shiboken wrapper — no
-    cross-thread ``~QObject``, no connection mutex, no deadlock.  Being a
-    process-lifetime singleton (parented to the QApplication) it also keeps
-    the worker alive if its originating ``_VisaScanManager`` / dialog is torn
-    down mid-scan, replacing the old module-level ``set`` in that role too.
+    GUI-thread-affine singleton).
+
+    Second entry door (py-spy native dump, 2026-07-12): the worker must NOT be
+    deleted on its own worker loop either.  The original 4d887b4 fix kept a
+    ``done -> worker.deleteLater`` connection under the "single-thread-owned
+    deletion is safe" C++ idiom.  It is NOT safe for a PySide-wrapped QObject:
+    ``worker.deleteLater()`` posts a ``DeferredDelete`` to the *worker* thread's
+    own event queue, and ``QThreadPrivate::finish`` flushes that queue *on the
+    worker thread* right after emitting ``finished`` — so ``~QObject`` runs on
+    the worker thread, where it (a) re-enters Python via Shiboken (needs the
+    GIL) and (b) walks the connection pool to disconnect (locks address-hashed
+    mutex buckets).  That is the SAME ABBA pair against the GUI thread's
+    ``connectImpl`` (holding the GIL, wanting a connection-mutex bucket) as the
+    cyclic-GC path above — it re-froze the whole process at
+    ``SettingsWindow`` construction.  Rule (``docs/DECISIONS.md``): a
+    Python-wrapped QObject must be *destroyed* on the GUI thread, not merely
+    have its Python refs dropped there.
+
+    So the worker is deleted GUI-side in two steps (``moveToThread`` only ever
+    works from the thread that currently owns the object).  After ``finished``
+    the worker's affinity is STILL its now-exited worker thread — Qt6/PySide6
+    does not clear it — so the GUI thread cannot re-home it from outside.  The
+    one legal moment is the ``finished`` emission itself, which still runs on
+    the worker thread: a Direct-connection slot there re-homes the worker to
+    the GUI thread (``moveToThread`` only re-parents timers/affinity; unlike
+    ``~QObject`` it does NOT disconnect, so it never grabs the connection-pool
+    buckets the GUI thread's ``connectImpl`` wants — no ABBA).  ``_reap`` then
+    runs GUI-side (queued off the same ``finished``) and ``deleteLater``s the
+    now GUI-homed worker, so the GUI event loop flushes the ``DeferredDelete``
+    and runs ``~QObject`` GUI-side — no cross-thread ``~QObject``, no
+    worker-thread connection-mutex grab, no deadlock.  Being a process-lifetime
+    singleton (parented to the QApplication) it also keeps the worker alive if
+    its originating ``_VisaScanManager`` / dialog is torn down mid-scan,
+    replacing the old module-level ``set`` in that role too.
     """
 
     def __init__(self, parent: QObject | None = None) -> None:
@@ -227,10 +255,18 @@ class _ScanReaper(QObject):
         thread = self.sender()
         if thread is None:
             return
-        # Drop our strong ref on the GUI thread.  The worker already
-        # deleted its own C++ object on its own event loop
-        # (done -> deleteLater), so this frees an invalidated wrapper only.
-        self._pairs.pop(thread, None)
+        # Runs on the GUI thread (queued off ``thread.finished``).  DESTROY the
+        # worker here, GUI-side — never on its own worker loop.  ``~QObject`` on
+        # a PySide QObject needs the GIL (Shiboken) and locks connection-pool
+        # mutex buckets while disconnecting; doing that on a worker thread is
+        # the ABBA deadlock's second entry door (see class docstring).  The
+        # worker was re-homed to the GUI thread during the ``finished`` emission
+        # (the Direct-connection slot in ``_start``), so ``deleteLater`` posts
+        # its DeferredDelete to the GUI event loop and ``~QObject`` runs
+        # GUI-side.
+        worker = self._pairs.pop(thread, None)
+        if worker is not None:
+            worker.deleteLater()
         thread.deleteLater()
 
     def active_count(self) -> int:
@@ -367,14 +403,29 @@ class _VisaScanManager(QObject):
         # must never be run inline on the emitting (worker) thread.
         worker.done.connect(on_done, Qt.QueuedConnection)
         worker.done.connect(thread.quit, Qt.QueuedConnection)
-        # Canonical single-thread-owned deletion: deleteLater posts a
-        # DeferredDelete to the WORKER thread's own event queue (quit above is
-        # queued to the GUI thread — independent queues, connection order is
-        # irrelevant), and Qt flushes DeferredDelete when the thread's exec()
-        # returns, so ~QObject runs on the worker thread that exclusively owns
-        # it — never cross-thread.  The reaper then drops the now-invalidated
-        # Python wrapper on the GUI thread.
-        worker.done.connect(worker.deleteLater, Qt.QueuedConnection)
+        # Deliberately NO ``worker.done -> worker.deleteLater`` here: that would
+        # post a DeferredDelete to the WORKER thread's own event queue, which
+        # ``QThreadPrivate::finish`` flushes on the worker thread right after
+        # emitting ``finished`` — running ``~QObject`` off the GUI thread (the
+        # ABBA deadlock's second entry door; py-spy 2026-07-12).  The reaper
+        # deletes the worker GUI-side instead (see ``_ScanReaper._reap``).
+        #
+        # ``deleteLater`` only runs ``~QObject`` on the object's OWN thread, and
+        # (Qt6/PySide6) the worker's affinity stays its now-exited worker thread
+        # after ``finished`` — the GUI thread cannot re-home it from outside.
+        # The one legal moment is the ``finished`` emission, which still runs on
+        # the worker thread: this Direct-connection slot re-homes the worker to
+        # the GUI thread there.  ``moveToThread`` only re-parents timers/affinity
+        # (it does NOT disconnect, so unlike ``~QObject`` it never grabs the
+        # connection-pool mutex buckets the GUI thread's ``connectImpl`` wants)
+        # — no ABBA.  ``worker`` is captured directly (not looked up from the
+        # reaper's ``_pairs``) so this worker-thread slot touches no GUI-thread
+        # state.  ``_reap`` then ``deleteLater``s the now GUI-homed worker.
+        gui_thread = QApplication.instance().thread()
+        thread.finished.connect(
+            lambda w=worker, gt=gui_thread: w.moveToThread(gt),
+            Qt.DirectConnection,
+        )
         thread.finished.connect(self._on_thread_finished, Qt.QueuedConnection)
         thread.start()
 

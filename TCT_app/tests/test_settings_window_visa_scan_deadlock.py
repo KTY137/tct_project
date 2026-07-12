@@ -22,6 +22,13 @@ pin the two observable consequences of that fix:
 * ``test_scan_workers_stay_referenced_until_finished`` — while scans are in
   flight the reaper holds them (they survive an explicit ``gc.collect()``),
   and every one is retired once finished.
+* ``test_scan_worker_destroyed_on_gui_thread`` — the *second entry door*
+  (py-spy, 2026-07-12): the worker's C++ ``~QObject`` must run on the GUI
+  thread, never on its own (worker) loop.  A ``done -> worker.deleteLater``
+  would flush the DeferredDelete inside ``QThreadPrivate::finish`` on the
+  worker thread; the reaper instead re-homes the finished worker to the GUI
+  thread and deletes it there.  The test spies ``QObject.destroyed`` recording
+  ``QThread.currentThread()`` and asserts the wrapper stays valid until reap.
 * ``test_rescan_worker_replacement_stress`` (``@slow``) — 50 back-to-back
   worker-replacement cycles complete without a freeze and leave nothing
   leaked, exercising the exact overlap (a new scan thread starting while the
@@ -39,6 +46,8 @@ import time
 from pathlib import Path
 
 import pytest
+import shiboken6
+from PySide6.QtCore import Qt, QThread
 from PySide6.QtWidgets import QApplication, QInputDialog
 
 from gui.settings_window import SettingsWindow
@@ -110,6 +119,85 @@ def test_scan_workers_stay_referenced_until_finished(tmp_path, monkeypatch):
         release.set()
         assert _pump_until(app, lambda: reaper.active_count() == 0, timeout_s=6.0), \
             "finished scan workers/threads were not retired"
+    finally:
+        release.set()
+        win.close()
+
+
+def test_scan_worker_destroyed_on_gui_thread(tmp_path, monkeypatch):
+    """The worker's C++ ``~QObject`` must run on the GUI thread — the second
+    entry door of the ABBA deadlock (py-spy native dump, 2026-07-12).
+
+    Deleting a PySide-wrapped worker on its own loop (``done ->
+    worker.deleteLater``) flushes the DeferredDelete inside
+    ``QThreadPrivate::finish`` *on the worker thread*, running ``~QObject``
+    (Shiboken GIL re-entry + connection-pool mutex disconnect) off-GUI — the
+    same ABBA pair against the GUI thread's ``connectImpl`` as the cyclic-GC
+    path.  The fix re-homes the finished worker to the GUI thread in
+    ``_ScanReaper._reap`` and ``deleteLater``s it there.
+
+    We spy ``QObject.destroyed`` (fires synchronously inside ``~QObject``, on
+    the destroying thread) and record ``QThread.currentThread()``.  If the
+    worker were still deleted on its own loop the destroy would happen on the
+    worker thread; if a broken ``moveToThread`` left it stranded on the exited
+    worker thread the DeferredDelete would never flush and the object would
+    never be destroyed at all — both are caught here.
+    """
+    monkeypatch.setattr("devices.waveform_generator.list_visa_resources", lambda: [])
+    release = threading.Event()
+
+    def blocking_lan(timeout: float = 2.5):
+        release.wait(5.0)
+        return []
+
+    monkeypatch.setattr("devices.waveform_generator.discover_lan_instruments", blocking_lan)
+    monkeypatch.setattr(QInputDialog, "getText", staticmethod(lambda *a, **k: ("", False)))
+
+    app = _app()
+    gui_thread = app.thread()
+    gui_ptr = shiboken6.getCppPointer(gui_thread)
+    win = SettingsWindow(config_path=_write_cfg(tmp_path))
+    try:
+        mgr = win._visa_scan_mgr
+        reaper = mgr._reaper
+        # Drain + retire the automatic construction-time VISA scan first.
+        assert _pump_until(app, lambda: mgr.cache is not None)
+        assert _pump_until(app, lambda: reaper.active_count() == 0)
+
+        # One blocking LAN scan so we can grab the single in-flight worker.
+        win._scope_section._visa_addr._add_lan()
+        assert _pump_until(app, lambda: reaper.active_count() == 1)
+        (worker,) = list(reaper._pairs.values())
+
+        # DirectConnection: the slot must run inside ~QObject on its own
+        # (destroying) thread, un-requeued, so QThread.currentThread() is that
+        # thread.  Record the C++ pointer, not the wrapper — PySide can hand out
+        # a fresh QThread wrapper for the same C++ thread, so ``is`` is unsafe.
+        seen: dict[str, object] = {}
+        worker.destroyed.connect(
+            lambda *_: seen.setdefault(
+                "thread_ptr", shiboken6.getCppPointer(QThread.currentThread())
+            ),
+            Qt.DirectConnection,
+        )
+        # While the scan is in flight the C++ object is alive and NOT yet
+        # destroyed — the reaper holds it until its thread finishes.
+        assert shiboken6.isValid(worker)
+        assert "thread_ptr" not in seen
+
+        # Let the scan finish; reap (GUI thread) deletes the re-homed worker.
+        release.set()
+        assert _pump_until(app, lambda: reaper.active_count() == 0, timeout_s=6.0)
+        # The GUI event loop must actually flush the DeferredDelete — if this
+        # never trips, the worker was stranded on its exited worker thread.
+        assert _pump_until(app, lambda: "thread_ptr" in seen, timeout_s=6.0), \
+            "worker C++ object was never destroyed (stranded DeferredDelete?)"
+        assert not shiboken6.isValid(worker), \
+            "worker C++ object should be gone after reap + GUI event turn"
+        assert seen["thread_ptr"] == gui_ptr, (
+            "worker ~QObject ran on a worker thread, must run on the GUI thread "
+            f"(ran on {seen['thread_ptr']}, GUI is {gui_ptr})"
+        )
     finally:
         release.set()
         win.close()
