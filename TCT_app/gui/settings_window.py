@@ -285,9 +285,9 @@ class _ScanReaper(QObject):
         # mutex buckets while disconnecting; doing that on a worker thread is
         # the ABBA deadlock's second entry door (see class docstring).  The
         # worker was re-homed to the GUI thread during the ``finished`` emission
-        # (the Direct-connection slot in ``_start``), so ``deleteLater`` posts
-        # its DeferredDelete to the GUI event loop and ``~QObject`` runs
-        # GUI-side.
+        # (the Direct-connection slot in ``track``, wired before this queued
+        # ``_reap``), so ``deleteLater`` posts its DeferredDelete to the GUI
+        # event loop and ``~QObject`` runs GUI-side.
         worker = self._pairs.pop(thread, None)
         if worker is not None:
             worker.deleteLater()
