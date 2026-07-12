@@ -483,7 +483,13 @@ class TCTMainWindow(QMainWindow):
         self._planner_panel.start_plan_requested.connect(coord.start_plan)
         self._planner_panel.execute_plan_requested.connect(coord.execute_plan)
         self._planner_panel.abort_requested.connect(coord.abort)
-        self._planner_panel.set_envelope_provider(self._scanner.arm_envelope_for)
+        # Mary milestone review: give the gate an INDEPENDENT freshness bound
+        # (~3x the GUI's 10 s arm latch) so the controller boundary rejects a
+        # stale arm even if a future edit path missed disarm — defense in
+        # depth; the 10 s latch stays the primary UX timer.
+        self._planner_panel.set_envelope_provider(
+            lambda plan: self._scanner.arm_envelope_for(plan, timeout_s=30.0)
+        )
 
         # Bias panel → coordinator (voltage scan also starts from the bias panel).
         self._bias_panel.vscan_requested.connect(coord.start_voltage_scan)
