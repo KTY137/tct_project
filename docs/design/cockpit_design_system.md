@@ -169,7 +169,7 @@ last_run_path published) · pre-flight synchronous and fail-closed before
 RUNNING · no new threads/timers/locks — everything rides the 1 Hz cadence
 and existing marshaled signals.
 
-## 11. OPEN — needs Kaya's ratification
+## 11. RATIFIED by Kaya (2026-07-12)
 
 1. **Arm-envelope model**: one two-step latch authorizes a bounded,
    enumerated envelope (executor re-validates every live danger against it;
@@ -179,3 +179,8 @@ and existing marshaled signals.
 2. **Slow-control excursion policy**: temp/humidity/leakage excursions are
    currently recorded but never alarmed mid-run. Should WARN pause and
    ALARM abort? (Safety policy, not UI.)
+
+BOTH RATIFIED 2026-07-12: envelope model adopted (HV approved once per run,
+executor re-validates against the armed envelope); WARN = safe-hold pause
+(HV held, motion stopped, operator prompt), ALARM = fail-safe abort,
+UNAVAILABLE counts as WARN. Mary review mandatory on both implementations.

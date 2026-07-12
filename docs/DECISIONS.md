@@ -61,3 +61,21 @@ roadmap with gates, Abel's 8-rule modularity charter). Interactive reference:
 `artifacts_claude/tct_cockpit_design_v4_final.html`. All GUI work hard-follows
 this spec; violations do not merge. OPEN for Kaya: arm-envelope model
 (two-step latch) and slow-control excursion policy.
+
+## 2026-07-12 — Kaya ratifies the two open design-system items
+
+1. **Arm-envelope model RATIFIED**: one two-step latch (Arm: hold-3s or
+   press-twice → armed state w/ timeout → Execute) authorizes the FULL
+   enumerated envelope (channels, HV range, ramp shape, motion bounds) once
+   per run; the executor re-validates every live dangerous action against
+   the armed envelope and fail-closes anything outside it. No per-BiasStep
+   modals. HV is approved exactly once, explicitly, with the numbers shown.
+2. **Slow-control excursion policy RATIFIED**: WARN → safe-hold pause
+   (motion stopped, HV held, operator prompt w/ ack/resume/abort);
+   ALARM → full fail-safe abort (HV ramp-down, motion stop, writer flushed).
+   Sensor UNAVAILABLE/stale counts as WARN. Thresholds per channel in
+   devices.yaml (validated). Both items: Mary review mandatory before merge.
+
+Migration mode (Kaya, same day): implementation first, heavy verification
+batched at milestones; per-beat tests targeted-only, full suites at phase
+gates.
