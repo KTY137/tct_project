@@ -319,6 +319,8 @@ no FastFrame support), driven by the default `oscilloscope.py` VISA backend
 - `scope_viewmodel.py` — Read-only scope-status mirror for QML binding (rateText stubbed empty; TODO: drive from scope reader cadence).
 - `run_state_viewmodel.py` — Read-only run-state facade (2026-07-11 slice 1, commit 713eeae): `RunStateViewModel` exposes current step index, total steps, run-state enum, pause/resume/abort affordances via no-controller-refs `changed` notifier, fed by shared 1 Hz `_light_timer` + coordinator signals. Exposed to QML as `'runState'` context property (only notifies via `changed`, no direct signal binding). Built before `CalibrationPanel` in `_build_central()`. Teardown in viewmodel-release block ensures Qt lifecycle safety.
 - `qml/Shell.qml` — QML-hybrid chrome: rail (Devices/Settings/Log/Debug chips + app-state readout, icon buttons compress without Flickable) + pill tab shelf (syncs DetachableTabWidget index).
+- `qml/MetricTile.qml` — Reusable Theme-bound metric tile: title/value/unit/caption/accent/stale/compact modes; pure view, 3-layer law; consumed by ScanStatusStrip.
+- `qml/ScanStatusStrip.qml` — Flow of 5 metric tiles (State/Progress/ETA/Elapsed/Scan) bound to the runState context property; pure view, 3-layer law; surfaced as the third chrome strip in Shell.qml. Chrome height increased 96 → 204 px; `qml_shell.py` setFixedHeight(204).
 - **Invariants:** Classic DetachableTabWidget is the sole tab/detach engine—QML shelf is a *view*; pyqtgraph plots are NEVER inside QQuickWidget; style.py remains the single token source (Theme singleton mirrors it); soft-reload (production config reload) releases old QML engine before building new one.
 
 **Core panels & support (all on `panel_kit` Cards):**
@@ -614,6 +616,12 @@ Maintained by Kiroku; drift-checked by Mamoru on every change.
   to `lab_assets/`.
 - 2026-07-05 — Marked third-party and lab reference folders as local-only ignored
   material; documented the clean-root policy in `docs/REFERENCE_MATERIAL.md`.
+- 2026-07-12 — **7ac5304 (fix): VISA deadlock head #2 — worker.deleteLater on worker thread.** Extended `_ScanReaper` pattern: `_reap()` DirectConnection re-homes finished worker to GUI thread via `moveToThread(app.thread())` before `deleteLater()` to prevent `~QObject` (Shiboken GIL re-entry + connection-pool mutex) from running off worker thread. CONNECTION ORDER on thread.finished is load-bearing: DirectConnection re-home MUST be wired BEFORE queued _reap in track(). Invariant recorded: **panel worker teardown MUST remain blocking quit()+wait() on GUI thread** (parks GUI thread with GIL released, preventing ABBA); do NOT convert panel workers to async/non-waiting teardown without moving destruction GUI-side first.
+
+- 2026-07-12 — **a69af95 (fix): finished-slot ordering.** Confirmed DirectConnection re-home on thread.finished must precede the queued _reap slot; ordering enforced by connection sequence in track(). Mary review validated the dependency.
+
+- 2026-07-12 — **e45496d (feat): first QML cockpit panel — ScanStatusStrip.** NEW `gui/qml/MetricTile.qml` (Theme-bound reusable tile: title/value/unit/caption/accent/stale/compact) and `gui/qml/ScanStatusStrip.qml` (Flow of 5 tiles: State/Progress/ETA/Elapsed/Scan; bound to runState context property, pure view, 3-layer law). Integrated into Shell.qml as third chrome strip; chrome height 96 → 204 px, `qml_shell.py` setFixedHeight(204).
+
 - 2026-07-04 — Initial bookkeep created from source inspection (main, tct_gui,
   state_machine, scan_controller, device_manager, base device, hdf5_writer,
   SCAN_DATA_FORMAT.md). Some sections marked TODO for deepening.
