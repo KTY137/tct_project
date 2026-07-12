@@ -269,7 +269,7 @@ today, so per-panel redesign artifacts don't guess.
 
 ## D4 — State-color usage census (ground truth for wave W1 taxonomy sweep)
 
-**Status: OPEN** · Effort: M · Source: Adam, Feinschliff 2026-07-12 night
+**Status: DONE — Wrote state-color census for W1.** · Effort: M · Source: Adam, Feinschliff 2026-07-12 night
 
 Wave W1 will sweep every panel onto the ratified 9-rung hardware state
 ladder (docs/design/council_v5_paul.md §1). Before anyone edits, we need a
@@ -288,3 +288,9 @@ mechanical census of TODAY's state-color usage.
   rendered as a confident fill.
 - Table form, terse. No opinions beyond the rung mapping, no app-code edits.
 - No commit. Set D4 DONE with findings per Handback.
+
+**Codex findings (2026-07-12):**
+- Files touched: `docs/design/state_color_census.md`, `docs/CODEX_QUEUE.md`.
+- Created the D4 static census for `TCT_app/gui/`, with a ranked top section for green-on-nominal, non-HV/non-abort red, confident UNKNOWN fills, ACTIVE-HV amber carryover, and solid SIM dots, followed by terse per-file tables mapping current status/state color uses to the W1 ladder or command-class/not-state.
+- Verification: read `docs/design/council_v5_paul.md` section 1 and statically searched/inspected `TCT_app/gui/` Python + QML sources for status chips, lamps, pills, MetricTiles, button states, palette safety tokens, green/red/sim/error tokens, and inline status styling; `git diff --check` passed. No pytest was run because D4 is documentation-only and app code is read-only for this task.
+- Risk: census is source-level only; no runtime widget-tree introspection or rendered screenshot pass was performed.
