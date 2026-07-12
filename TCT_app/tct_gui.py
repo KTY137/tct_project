@@ -415,6 +415,16 @@ class TCTMainWindow(QMainWindow):
                 strip_scroll.setParent(central)   # keep chips alive; not shown
                 strip_scroll.hide()
                 self._toolbar.setVisible(False)
+                # Round-2 composition: the chrome is a full-bleed topbar
+                # (the v4 artifact's rail/shelf/strip run edge-to-edge, like
+                # a sticky header), not a floating card — so the QML shell
+                # drops the window's 12px picture-frame margins entirely.
+                # Content rhythm survives: every tab page's own root layout
+                # already carries its SPACE_MD gutter, so this also removes
+                # the double margin (12 window + 12 panel) the classic frame
+                # imposed. Classic mode below is untouched.
+                outer.setContentsMargins(0, 0, 0, 0)
+                outer.setSpacing(0)
                 outer.addWidget(chrome)
                 outer.addWidget(self._tabs)
             else:

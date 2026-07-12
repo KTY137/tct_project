@@ -33,9 +33,17 @@ from PySide6.QtWidgets import (
 
 from gui.status_widgets import ReadoutCell, StatusLamp
 from gui.style import (
-    FONT_BODY_PX, FONT_LG, PLOT_BG, SPACE_MD, SPACE_SM, SPACE_XS,
-    WEIGHT_BODY, axis_color, palette, repolish,
+    FONT_BODY_PX, FONT_LG, FONT_PANEL_TITLE_PX, PLOT_BG, SPACE_LG,
+    SPACE_SM, SPACE_XS, WEIGHT_BODY, WEIGHT_PANEL_TITLE, axis_color, palette,
+    repolish,
 )
+
+# Default Card body padding — the v4 artifact's own card padding (`.card`
+# 17px / `.pbody` 15px), and byte-identical to the QGroupBox QSS padding in
+# gui/style.py, so a Card and a QGroupBox sitting side by side share one
+# breathing rhythm (round-2 composition pass: "recipes, not boxes").
+# (left, top, right, bottom).
+CARD_MARGINS = (SPACE_LG + 1, SPACE_LG - 1, SPACE_LG + 1, SPACE_LG - 1)
 
 __all__ = [
     "Card",
@@ -85,12 +93,18 @@ def axis_rail_css(
 # Titles / headers                                                            #
 # --------------------------------------------------------------------------- #
 
-def eyebrow_title(eyebrow: str, title: str, *, title_px: int = 16) -> QWidget:
+def eyebrow_title(
+    eyebrow: str, title: str, *, title_px: int = FONT_PANEL_TITLE_PX,
+) -> QWidget:
     """Small-caps eyebrow caption stacked over a larger title.
 
     The ``TCT CONTROL · RECIPE`` / ``Scan Routine Planner`` idiom from the
     Planner panel's top bar (and the design-preview's ``.titlewrap``), as a
     reusable widget instead of a hand-built ``QVBoxLayout`` per panel.
+    Round-2 type pass: the default title now sits on the §3 panel-title role
+    (``FONT_PANEL_TITLE_PX``/``WEIGHT_PANEL_TITLE`` — 18px/650) instead of an
+    off-scale 16px/640, so every kit-built panel header matches the Planner's
+    reference header without each call site re-picking a size.
     """
     col = QWidget()
     lay = QVBoxLayout(col)
@@ -99,7 +113,8 @@ def eyebrow_title(eyebrow: str, title: str, *, title_px: int = 16) -> QWidget:
     cap = QLabel(eyebrow.upper())
     cap.setObjectName("eyebrow")
     head = QLabel(title)
-    head.setStyleSheet(f"font-size: {title_px}px; font-weight: 640;")
+    head.setStyleSheet(
+        f"font-size: {title_px}px; font-weight: {WEIGHT_PANEL_TITLE};")
     lay.addWidget(cap)
     lay.addWidget(head)
     return col
@@ -191,7 +206,7 @@ class Card(QFrame):
         title: str | None = None,
         subtitle: str | None = None,
         *,
-        margins: tuple[int, int, int, int] = (SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD),
+        margins: tuple[int, int, int, int] = CARD_MARGINS,
         spacing: int = SPACE_SM,
         parent: QWidget | None = None,
     ) -> None:
@@ -211,7 +226,9 @@ class Card(QFrame):
             header.setObjectName("cardHeader")
             header.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
             hlay = QHBoxLayout(header)
-            hlay.setContentsMargins(SPACE_MD, SPACE_SM + 2, SPACE_MD, SPACE_SM)
+            # Header inset matches the body's horizontal padding (artifact
+            # `.ptitle` 10/15) so title and content share one left edge.
+            hlay.setContentsMargins(SPACE_LG + 1, SPACE_SM + 2, SPACE_LG + 1, SPACE_SM)
             hlay.setSpacing(SPACE_SM)
             hdr_row = section_header(title, subtitle)
             hlay.addWidget(hdr_row)
@@ -342,7 +359,7 @@ class FigureCard(Card):
         subtitle: str | None = None,
         *,
         figure: QWidget | None = None,
-        margins: tuple[int, int, int, int] = (SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD),
+        margins: tuple[int, int, int, int] = CARD_MARGINS,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(title, subtitle, margins=margins, parent=parent)
@@ -626,7 +643,7 @@ class CheckableCard(Card):
         subtitle: str | None = None,
         *,
         checked: bool = True,
-        margins: tuple[int, int, int, int] = (SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD),
+        margins: tuple[int, int, int, int] = CARD_MARGINS,
         spacing: int = SPACE_SM,
         parent: QWidget | None = None,
     ) -> None:
@@ -678,7 +695,7 @@ class CollapsibleCard(Card):
         subtitle: str | None = None,
         *,
         expanded: bool = False,
-        margins: tuple[int, int, int, int] = (SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD),
+        margins: tuple[int, int, int, int] = CARD_MARGINS,
         spacing: int = SPACE_SM,
         parent: QWidget | None = None,
     ) -> None:

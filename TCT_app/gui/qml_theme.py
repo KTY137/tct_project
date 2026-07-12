@@ -37,8 +37,9 @@ from PySide6.QtGui import QColor
 from PySide6.QtQml import QmlElement, QmlSingleton
 
 from gui.style import (
-    FONT, RADIUS, SPACE, PLOT_BG, PLOT_FG, PLOT_GRID, PLOT_OVERLAY,
-    TRANSITION_MS, palette,
+    FONT, FONT_METRIC_LABEL_PX, FONT_UNIT_PX, FONT_VALUE_COMPACT_PX,
+    FONT_VALUE_PX, MONO_FAMILIES, RADIUS, SPACE, PLOT_BG, PLOT_FG, PLOT_GRID,
+    PLOT_OVERLAY, TRACKING_METRIC_LABEL_PX, TRANSITION_MS, palette,
 )
 
 # PySide6 declarative registration: the QML side does ``import Tct``.
@@ -58,6 +59,8 @@ TOKEN_MAP: dict[str, str] = {
     "sunk": "sunk",         # §2) surface-ladder additions — same hex as the
     "well": "well",         # matching gui/style.py LIGHT/DARK dict key.
     "field": "field",
+    "chrome": "chrome",     # round-2 material: frosted rail strip (solid
+    "strip": "strip",       # color-mix fallback) + recessed status-strip wash.
     "hairline": "hairline",
     "hairlineStrong": "hairline_strong",
     "border": "border",
@@ -156,6 +159,13 @@ class Theme(QObject):
 
     @Property(QColor, notify=changed)
     def field(self) -> QColor: return self._c("field")
+
+    # -- round-2 material tokens (see gui/style.py's LIGHT/DARK comments) - #
+    @Property(QColor, notify=changed)
+    def chrome(self) -> QColor: return self._c("chrome")
+
+    @Property(QColor, notify=changed)
+    def strip(self) -> QColor: return self._c("strip")
 
     @Property(QColor, notify=changed)
     def hairline(self) -> QColor: return self._c("hairline")
@@ -259,6 +269,40 @@ class Theme(QObject):
     @Property(int, constant=True)
     def fontDisplay(self) -> int: return FONT["display"]
 
+    # -- type-scale ROLES (cockpit_design_system.md §3 — same constants the
+    #    QSS side reads, so QML tiles and QWidget tiles render one scale) -- #
+    @Property(int, constant=True)
+    def fontMetricLabel(self) -> int: return FONT_METRIC_LABEL_PX
+
+    @Property(int, constant=True)
+    def fontValue(self) -> int: return FONT_VALUE_PX
+
+    @Property(int, constant=True)
+    def fontValueCompact(self) -> int: return FONT_VALUE_COMPACT_PX
+
+    @Property(int, constant=True)
+    def fontUnit(self) -> int: return FONT_UNIT_PX
+
+    @Property(int, constant=True)
+    def trackingMetricLabel(self) -> int: return TRACKING_METRIC_LABEL_PX
+
+    # Resolved monospace family for QML `font.family` (a single string —
+    # the QML font value type has no families-list property). Picks the
+    # first gui.style.MONO_FAMILIES entry the font database actually has;
+    # falls back to the first entry (Qt's own font matching then does the
+    # rest). Resolved lazily & cached: the font DB needs a QGuiApplication,
+    # which is guaranteed by the time any QML binding evaluates.
+    _mono_family: str | None = None
+
+    @Property(str, constant=True)
+    def monoFamily(self) -> str:
+        if Theme._mono_family is None:
+            from PySide6.QtGui import QFontDatabase
+            available = set(QFontDatabase.families())
+            Theme._mono_family = next(
+                (f for f in MONO_FAMILIES if f in available), MONO_FAMILIES[0])
+        return Theme._mono_family
+
     # -- spacing scale (px — constants) ---------------------------------- #
     @Property(int, constant=True)
     def spaceXs(self) -> int: return SPACE["xs"]
@@ -281,6 +325,9 @@ class Theme(QObject):
 
     @Property(int, constant=True)
     def radiusMd(self) -> int: return RADIUS["md"]
+
+    @Property(int, constant=True)
+    def radiusLg(self) -> int: return RADIUS["lg"]
 
     @Property(int, constant=True)
     def radiusPill(self) -> int: return RADIUS["pill"]

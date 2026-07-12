@@ -32,7 +32,7 @@ from analysis.waveform_analysis import analyse_waveform
 from controller.danger_gate import DangerGate
 from controller.repeatability import RepeatabilityTester
 from gui.status_widgets import ReadoutCell, StatusChip, flash_button, set_button_busy, set_button_icon
-from gui.style import palette
+from gui.style import FONT_SM, MONO_FAMILIES, palette
 
 
 class _RepeatWorker(QObject):
@@ -294,7 +294,13 @@ class CalibrationPanel(QWidget):
         self._rep_progress = QLabel("")
         form.addRow(self._rep_progress)
         self._rep_result = QLabel("")
-        self._rep_result.setFont(QFont("Consolas", 9))
+        # Token mono stack, PIXEL-sized (round-2 type pass — was pt-sized,
+        # off the px scale every other readout uses).
+        _mono = QFont()
+        _mono.setFamilies(MONO_FAMILIES)
+        _mono.setPixelSize(FONT_SM)
+        _mono.setStyleHint(QFont.Monospace)
+        self._rep_result.setFont(_mono)
         self._rep_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
         form.addRow(self._rep_result)
 

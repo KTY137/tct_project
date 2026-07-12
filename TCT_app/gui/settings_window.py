@@ -50,7 +50,7 @@ from controller.yaml_persist import merge_yaml_text
 from devices.waveform_generator import prime_pyvisa
 from gui.panel_kit import Card, form_row, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
-from gui.style import DARK, FONT_XS, LIGHT, SPACE_SM
+from gui.style import DARK, FONT_MD, FONT_XS, LIGHT, MONO_FAMILIES, SPACE_SM
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1413,7 +1413,12 @@ class SettingsWindow(QDialog):
         yaml_card = Card("devices.yaml", str(self._config_path))
         yaml_card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
         self._editor = QPlainTextEdit()
-        font = QFont("Consolas", 10)
+        # Token mono stack, PIXEL-sized (round-2 type pass): a pt-sized font
+        # here was the one editor whose size drifted from the px-based QSS
+        # scale as DPI changes; FONT_MD matches the app body size.
+        font = QFont()
+        font.setFamilies(MONO_FAMILIES)
+        font.setPixelSize(FONT_MD)
         font.setStyleHint(QFont.Monospace)
         self._editor.setFont(font)
         self._editor.setLineWrapMode(QPlainTextEdit.NoWrap)
