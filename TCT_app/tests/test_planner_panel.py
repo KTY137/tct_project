@@ -125,6 +125,39 @@ def test_panel_constructs_light_and_dark_theme():
         panel.shutdown()
 
 
+def test_empty_plan_shows_empty_state_row_and_survives_theme_switch():
+    """Design system §7/§9 D1 "Empty recipe state": a routine with no blocks
+    gets a designed EmptyState row (never a silent blank tree), and it
+    rebuilds cleanly across a live light/dark theme switch."""
+    _app()
+    from gui.panel_kit import EmptyState
+
+    panel = PlannerPanel()
+    try:
+        panel.set_plan(ScanPlan(name="empty_routine", root=[]))
+        # topLevelItem(0) is the decorative Preflight row (always present);
+        # an empty plan adds exactly one more decorative row after it.
+        assert panel._tree.topLevelItemCount() == 2
+        widget = panel._tree.itemWidget(panel._tree.topLevelItem(1), 0)
+        assert isinstance(widget, EmptyState)
+
+        panel.refresh_theme("dark")
+        assert panel._tree.topLevelItemCount() == 2
+        widget = panel._tree.itemWidget(panel._tree.topLevelItem(1), 0)
+        assert isinstance(widget, EmptyState)
+        panel.refresh_theme("light")
+
+        # Adding a real block clears the placeholder again (Preflight + the
+        # one loop row, no EmptyState widget left behind).
+        loop = LoopBlock(axis=Axis.STAGE_X, start=0.0, stop=1.0, step=0.1)
+        panel.set_plan(ScanPlan(name="one_block", root=[loop]))
+        assert panel._tree.topLevelItemCount() == 2
+        widget = panel._tree.itemWidget(panel._tree.topLevelItem(1), 0)
+        assert not isinstance(widget, EmptyState)
+    finally:
+        panel.shutdown()
+
+
 def test_default_template_validates_clean_under_default_limits():
     _app()
     panel = PlannerPanel()
@@ -167,11 +200,12 @@ def test_large_estimate_runs_off_gui_thread(monkeypatch):
         elapsed = time.perf_counter() - t0
 
         assert elapsed < 0.2
-        assert panel._chip_points.text() == "Estimating..."
+        assert panel._tile_points.value() == "…"
+        assert panel._tile_points.is_stale()
         assert started.wait(1.0)
 
         release.set()
-        assert _pump_until(lambda: panel._chip_points.text() == "42")
+        assert _pump_until(lambda: panel._tile_points.value() == "42")
     finally:
         release.set()
         panel.shutdown()
@@ -326,7 +360,7 @@ def test_safe_estimate_routes_large_plan_off_gui_thread(monkeypatch):
         # The worker delivers the fresh estimate OFF the GUI thread.
         assert _pump_until(lambda: len(call_threads) == 1)
         assert call_threads[0] is not threading.main_thread()
-        assert _pump_until(lambda: panel._chip_points.text() == "7")
+        assert _pump_until(lambda: panel._tile_points.value() == "7")
     finally:
         panel.shutdown()
 

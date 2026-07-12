@@ -32,7 +32,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView, QApplication, QDoubleSpinBox, QFileDialog, QFormLayout,
+    QAbstractItemView, QApplication, QDoubleSpinBox, QFileDialog,
     QFrame, QGridLayout, QHBoxLayout, QLabel, QListWidget, QListWidgetItem,
     QMenu, QMessageBox, QPushButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
     QWidget,
@@ -43,9 +43,13 @@ from controller.scan_plan import (
     ActionBlock, ActionType, Axis, LoopBlock, STAGE_AXES, ScanBlock, ScanPlan,
 )
 from controller.scan_plan_validator import PlanIssue, PlanLimits, validate_plan
+from gui.panel_kit import EmptyState, MetricGrid, MetricTile
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
-from gui.style import DARK, LIGHT, axis_color, repolish
+from gui.style import (
+    DARK, FONT_BODY_PX, FONT_PANEL_TITLE_PX, LIGHT, WEIGHT_BODY,
+    WEIGHT_PANEL_TITLE, axis_color, palette, repolish,
+)
 
 # --------------------------------------------------------------------------- #
 # Drag & drop wire format                                                     #
@@ -548,14 +552,20 @@ class PlannerPanel(QWidget):
         eyebrow = QLabel("TCT CONTROL · RECIPE")
         eyebrow.setObjectName("eyebrow")
         title = QLabel("Scan Routine Planner")
-        title.setStyleSheet("font-size: 16px; font-weight: 640;")
+        title.setStyleSheet(
+            f"font-size: {FONT_PANEL_TITLE_PX}px; font-weight: {WEIGHT_PANEL_TITLE};"
+        )
         title_col.addWidget(eyebrow)
         title_col.addWidget(title)
         top.addLayout(title_col)
         top.addStretch(1)
-        self._btn_save_routine = QPushButton("Save Routine…")
+        # Save/Load are ghost-class (law 2): plain routine I/O, never a
+        # command-class colour.
+        self._btn_save_routine = QPushButton("Save routine…")
+        self._btn_save_routine.setProperty("state", "ghost")
         set_button_icon(self._btn_save_routine, "mdi.content-save")
-        self._btn_load_routine = QPushButton("Load Routine…")
+        self._btn_load_routine = QPushButton("Load routine…")
+        self._btn_load_routine.setProperty("state", "ghost")
         set_button_icon(self._btn_load_routine, "mdi.folder-open")
         top.addWidget(self._btn_save_routine)
         top.addWidget(self._btn_load_routine)
@@ -576,12 +586,18 @@ class PlannerPanel(QWidget):
         tree_lay.setContentsMargins(0, 0, 0, 0)
         tree_lay.setSpacing(0)
 
+        p = palette(self._theme_mode)
         tree_hd = QHBoxLayout()
         tree_hd.setContentsMargins(14, 12, 14, 8)
         recipe_lbl = QLabel("Recipe")
         recipe_lbl.setStyleSheet("font-weight: 600;")
+        # Sentence-case quiet prose (law 3) -- NOT plannerLeafMeta, which is
+        # reserved for short mono numeric/unit meta (see the axis unit/step
+        # labels below); this is a genuine descriptive sentence.
         sub_lbl = QLabel("edge-TCT · CCE(V) map · drag to reorder, right-click for more")
-        sub_lbl.setObjectName("plannerLeafMeta")
+        sub_lbl.setStyleSheet(
+            f"color: {p['muted']}; font-size: {FONT_BODY_PX}px; font-weight: {WEIGHT_BODY};"
+        )
         tree_hd.addWidget(recipe_lbl)
         tree_hd.addStretch(1)
         tree_hd.addWidget(sub_lbl)
@@ -665,19 +681,24 @@ class PlannerPanel(QWidget):
         hd.setObjectName("eyebrow")
         aside_lay.addWidget(hd)
 
-        stats_form = QFormLayout()
-        stats_form.setSpacing(6)
-        self._chip_points = StatusChip("—", "neutral")
-        self._chip_runtime = StatusChip("—", "neutral")
-        self._chip_data = StatusChip("—", "neutral")
-        self._chip_travel = StatusChip("—", "neutral")
-        self._chip_hv = StatusChip("—", "neutral")
-        stats_form.addRow("Total points:", self._chip_points)
-        stats_form.addRow("Est. runtime:", self._chip_runtime)
-        stats_form.addRow("Est. data:", self._chip_data)
-        stats_form.addRow("Stage travel:", self._chip_travel)
-        stats_form.addRow("HV range:", self._chip_hv)
-        aside_lay.addLayout(stats_form)
+        # Points/Runtime/Data/Travel/HV range as D0 MetricTiles (design
+        # system §7/§9 D1): stale (dim + captioned) whenever there is no
+        # current, valid number to show -- never a bare "—" left unexplained
+        # (law 4). Runtime/points still come from plan_estimate, exactly as
+        # before -- see _render_estimate()/on_progress().
+        # Single column: the aside is a narrow (<=340 px) sidebar, and the
+        # QWidget MetricTile's hero-value face (26 px mono, no compact
+        # variant on this side of the kit yet) needs the full width to show
+        # e.g. "-300 ... 0 V" without eliding to near-nothing.
+        self._metrics = MetricGrid(columns=1)
+        self._tile_points: MetricTile = self._metrics.add_tile(("Points", "—"))
+        self._tile_runtime: MetricTile = self._metrics.add_tile(("Runtime", "—"))
+        self._tile_data: MetricTile = self._metrics.add_tile(("Data", "—"))
+        self._tile_travel: MetricTile = self._metrics.add_tile(("Travel", "—"))
+        self._tile_hv: MetricTile = self._metrics.add_tile(("HV range", "—"))
+        for tile in self._metrics.tiles():
+            tile.set_stale(True, "no valid plan yet")
+        aside_lay.addWidget(self._metrics)
 
         # Drop delta preview -- "Preview: 3,087 -> 9,261 pts . +2h 10m", only
         # visible while a valid drag candidate is hovering the tree; never
@@ -692,16 +713,31 @@ class PlannerPanel(QWidget):
         self._issues_layout.setSpacing(4)
         aside_lay.addLayout(self._issues_layout)
 
-        self._chip_hv_status = StatusChip("HV disarmed — Start is locked", "warn")
+        # D0 normalized state: the disarmed/locked reading uses the
+        # canonical "armed" amber token (this latch is what needs arming
+        # before Start unlocks); once genuinely armed the chip drops to
+        # neutral quiet-nominal ("ready" is not a persistent green light,
+        # law 1) -- see set_hv_armed()/_invalidate_run_state().
+        self._chip_hv_status = StatusChip("HV disarmed — Start is locked", "armed")
         self._chip_hv_status.setWordWrap(True)
         aside_lay.addWidget(self._chip_hv_status)
 
         btn_grid = QGridLayout()
         btn_grid.setSpacing(8)
         self._btn_validate = QPushButton("Validate")
-        self._btn_dry_run = QPushButton("Dry Run")
+        self._btn_validate.setProperty("state", "secondary")
+        self._btn_dry_run = QPushButton("Dry run")
+        self._btn_dry_run.setProperty("state", "secondary")
+        # Arm/Start are law-2 "motion" (amber-gated): a scan start that
+        # ramps HV is amber, never plain/ghost and never red (red is
+        # reserved for HV energization/trips/Abort itself -- see
+        # _on_arm_clicked's confirmation text for the red HV-line callout).
+        # set_hv_armed() escalates the Arm button to the solid "armed" tone
+        # once the latch is actually live.
         self._btn_arm = QPushButton("⚡ Arm HV")
+        self._btn_arm.setProperty("state", "motion")
         self._btn_start = QPushButton("▶ Start")
+        self._btn_start.setProperty("state", "motion")
         self._btn_start.setEnabled(False)
         btn_grid.addWidget(self._btn_validate, 0, 0)
         btn_grid.addWidget(self._btn_dry_run, 0, 1)
@@ -709,6 +745,8 @@ class PlannerPanel(QWidget):
         btn_grid.addWidget(self._btn_start, 2, 0, 1, 2)
         aside_lay.addLayout(btn_grid)
 
+        # Abort stays the loudest control in the panel (law 5) -- nothing
+        # decorative/other command here goes solid-opaque the way this does.
         self._btn_abort = QPushButton("⏹ Abort")
         self._btn_abort.setObjectName("dangerBtn")
         self._btn_abort.setEnabled(False)
@@ -731,6 +769,15 @@ class PlannerPanel(QWidget):
         self._undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, self)
         self._undo_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self._undo_shortcut.activated.connect(self._undo)
+
+        # Command-class properties are set at construction above; repolish
+        # once so Qt evaluates them immediately (the same belt-and-suspenders
+        # idiom gui.panel_kit.ActionBar uses for its own state assignments).
+        for _btn in (
+            self._btn_validate, self._btn_dry_run, self._btn_save_routine,
+            self._btn_load_routine, self._btn_arm, self._btn_start,
+        ):
+            repolish(_btn)
 
         self.set_hv_armed(False)
 
@@ -756,17 +803,24 @@ class PlannerPanel(QWidget):
         lay.addLayout(hd)
 
         self._btn_undo = QPushButton("Undo")
+        self._btn_undo.setProperty("state", "ghost")
         set_button_icon(self._btn_undo, "mdi.undo")
         self._btn_undo.setEnabled(False)
         self._btn_undo.setToolTip("Undo the last structural change (Ctrl+Z)")
         self._btn_undo.clicked.connect(self._undo)
+        repolish(self._btn_undo)
         undo_row = QHBoxLayout()
         undo_row.setContentsMargins(12, 0, 12, 6)
         undo_row.addWidget(self._btn_undo)
         lay.addLayout(undo_row)
 
+        # Sentence-case quiet prose (law 3) -- see the matching comment on
+        # the Recipe card's sub_lbl above.
+        p = palette(self._theme_mode)
         hint = QLabel("Drag into the recipe, or double-click to append")
-        hint.setObjectName("plannerLeafMeta")
+        hint.setStyleSheet(
+            f"color: {p['muted']}; font-size: {FONT_BODY_PX}px; font-weight: {WEIGHT_BODY};"
+        )
         hint.setWordWrap(True)
         hint.setContentsMargins(12, 0, 12, 6)
         lay.addWidget(hint)
@@ -823,6 +877,17 @@ class PlannerPanel(QWidget):
             preflight, 0,
             self._make_guard_row("Preflight", "interlocks · laser safe · stage homed"),
         )
+        if not self._plan.root:
+            # Design system §9 D1 "Empty recipe state": a routine with no
+            # blocks gets a designed placeholder, never a silent blank tree
+            # (law 4). Decorative like Preflight above (never draggable/
+            # selectable/a drop target itself) -- the tree stays the drop
+            # target throughout: a drop into the surrounding empty viewport
+            # still resolves to "append to root" (see
+            # _resolve_drop_location's "viewport" case).
+            empty_item = QTreeWidgetItem(self._tree)
+            self._mark_decorative(empty_item)
+            self._tree.setItemWidget(empty_item, 0, self._make_empty_recipe_row())
         for i, block in enumerate(self._plan.root):
             self._add_block(self._tree, block, [i])
         self._tree.expandAll()
@@ -830,6 +895,13 @@ class PlannerPanel(QWidget):
         # tree.clear() drops the selection -- re-evaluate (normally disables
         # until the user reselects a row in the rebuilt tree).
         self._update_use_position_enabled()
+
+    def _make_empty_recipe_row(self) -> QWidget:
+        return EmptyState(
+            "mdi.playlist-plus", "Empty routine",
+            "Add a block from the left.",
+            theme_mode=self._theme_mode,
+        )
 
     def _snapshot_expansion(self) -> set[int]:
         """``id(block)`` of every currently-collapsed *real* node (default is
@@ -958,6 +1030,7 @@ class PlannerPanel(QWidget):
         unit = "V" if loop.axis == Axis.BIAS_V else "mm"
         decimals = 1 if loop.axis == Axis.BIAS_V else 3
         color = axis_color(axis_key, self._theme_mode)
+        p = palette(self._theme_mode)
 
         frame = QFrame()
         frame.setObjectName("plannerLoopHead")
@@ -967,10 +1040,14 @@ class PlannerPanel(QWidget):
         lay.setContentsMargins(8, 4, 8, 4)
         lay.setSpacing(8)
 
+        # Quiet instrument tag (law 1): the axis semantics already read
+        # through the rail (border-left, above) and the axis-name text
+        # (below) -- tinting this "LOOP" tag the SAME axis colour on top of
+        # both would be a redundant third all-caps marking of the one fact.
         tag = QLabel("LOOP")
         tag.setObjectName("plannerTag")
         tag.setStyleSheet(
-            f"#plannerTag {{ color: {color}; background: {_rgba(color, 0.16)}; }}"
+            f"#plannerTag {{ color: {p['muted']}; background: {p['well']}; }}"
         )
         lay.addWidget(tag)
 
@@ -1281,12 +1358,12 @@ class PlannerPanel(QWidget):
         """Any plan edit re-locks Start: a stale Dry Run / Arm must never
         carry over to a changed routine (per-run arm semantics)."""
         self._dry_run_ok = False
-        self._btn_dry_run.setText("Dry Run")
+        self._btn_dry_run.setText("Dry run")
         if self._hv_armed:
             self.set_hv_armed(False)
         else:
             self._chip_hv_status.set_status(
-                "Plan changed — HV disarmed, Start locked", "warn"
+                "Plan changed — HV disarmed, Start locked", "armed"
             )
         self._update_start_enabled()
 
@@ -1585,9 +1662,12 @@ class PlannerPanel(QWidget):
         lay = QHBoxLayout(frame)
         lay.setContentsMargins(8, 4, 8, 4)
         lay.setSpacing(8)
+        # Quiet tag -- see the matching comment in _make_loop_row (the
+        # dashed rail + coloured name already carry the axis semantics).
+        p = palette(self._theme_mode)
         tag = QLabel("LOOP")
         tag.setObjectName("plannerTag")
-        tag.setStyleSheet(f"#plannerTag {{ color: {color}; background: {_rgba(color, 0.16)}; }}")
+        tag.setStyleSheet(f"#plannerTag {{ color: {p['muted']}; background: {p['well']}; }}")
         lay.addWidget(tag)
         name = QLabel(f"{_AXIS_LABEL[loop.axis]}  {summary}")
         name.setObjectName("plannerGhostLabel")
@@ -1892,31 +1972,50 @@ class PlannerPanel(QWidget):
             self._submit_estimate_request(req)
 
     def _render_estimate_pending(self) -> None:
-        self._chip_points.set_status("Estimating...", "busy")
-        self._chip_runtime.set_status("...", "busy")
-        self._chip_data.set_status("...", "busy")
-        self._chip_travel.set_status("...", "busy")
-        self._chip_hv.set_status("...", "busy")
+        # law 4: a stale-but-computing tile dims + explains why, rather than
+        # freezing the previous (now unreliable) number un-marked.
+        for tile in (self._tile_points, self._tile_runtime, self._tile_data,
+                     self._tile_travel, self._tile_hv):
+            tile.set_value("…")
+            tile.set_stale(True, "estimating…")
 
     def _render_estimate(self, estimate: PlanEstimate | None) -> None:
         if estimate is None:
-            for chip in (self._chip_points, self._chip_runtime, self._chip_data,
-                         self._chip_travel, self._chip_hv):
-                chip.set_status("—", "neutral")
+            for tile in (self._tile_points, self._tile_runtime, self._tile_data,
+                         self._tile_travel, self._tile_hv):
+                tile.set_value("—")
+                tile.set_state("normal")
+                tile.set_stale(True, "plan invalid")
             return
+        # law 1 (quiet nominal): an in-budget/nominal reading is "normal"
+        # grey, not a persistent "good" green -- green stays reserved for a
+        # genuine one-off confirmation elsewhere (e.g. on_finished()).
         over_cap = estimate.total_leaf_visits > self._limits.max_points
-        self._chip_points.set_status(f"{estimate.total_points:,}", "crit" if over_cap else "good")
-        self._chip_runtime.set_status(_fmt_duration(estimate.est_runtime_s), "neutral")
+        self._tile_points.set_value(f"{estimate.total_points:,}")
+        self._tile_points.set_state("crit" if over_cap else "normal")
+        self._tile_points.set_stale(False, "")
+
+        self._tile_runtime.set_value(_fmt_duration(estimate.est_runtime_s))
+        self._tile_runtime.set_state("normal")
+        self._tile_runtime.set_stale(False, "")
+
         over_data = estimate.est_data_bytes > 1536 * 1024 * 1024
-        self._chip_data.set_status(_fmt_data(estimate.est_data_bytes), "warn" if over_data else "neutral")
+        self._tile_data.set_value(_fmt_data(estimate.est_data_bytes))
+        self._tile_data.set_state("warn" if over_data else "normal")
+        self._tile_data.set_stale(False, "")
+
         travel_total = sum(estimate.stage_travel_mm.values())
-        self._chip_travel.set_status(_fmt_travel(travel_total), "neutral")
+        self._tile_travel.set_value(_fmt_travel(travel_total))
+        self._tile_travel.set_state("normal")
+        self._tile_travel.set_stale(False, "")
+
         lo, hi = estimate.hv_range_V
         no_bias = lo == 0.0 and hi == 0.0
-        self._chip_hv.set_status(
-            "0 V" if no_bias else f"{lo:g} … {hi:g} V",
-            "neutral" if no_bias else "warn",
-        )
+        # A non-zero HV excursion is exactly the law-1 "armed"-adjacent
+        # reading (this recipe will energize HV), not a generic warn.
+        self._tile_hv.set_value("0 V" if no_bias else f"{lo:g} … {hi:g} V")
+        self._tile_hv.set_state("normal" if no_bias else "armed")
+        self._tile_hv.set_stale(False, "")
 
     # ------------------------------------------------------------------ #
     # Validate / Dry Run / Arm / Start                                     #
@@ -1930,7 +2029,7 @@ class PlannerPanel(QWidget):
         issues = validate_plan(self._plan, self._limits)
         self._render_issues(issues, kind="dryrun")
         self._dry_run_ok = not any(i.severity == "ERROR" for i in issues)
-        self._btn_dry_run.setText("✓ Dry Run" if self._dry_run_ok else "Dry Run")
+        self._btn_dry_run.setText("✓ Dry run" if self._dry_run_ok else "Dry run")
         self._recompute_estimate()
         self._update_start_enabled()
 
@@ -1946,11 +2045,18 @@ class PlannerPanel(QWidget):
         # bias range here.
         bias_range = _bias_range_from_plan(self._plan)
         lo, hi = bias_range if bias_range is not None else (0.0, 0.0)
+        # Law 2: "a scan start that ramps HV is amber with its HV line
+        # called out red inside the envelope text" -- the Arm/Start buttons
+        # themselves are amber ("motion"), and the one line that actually
+        # names the HV energization is called out in the danger token here.
+        danger = palette(self._theme_mode)["danger"]
         text = (
-            f"This authorizes the run to ramp bias to {hi:g} V / {lo:g} V.\n\n"
-            "Nothing moves yet — the stage and HV energize only when you "
+            "<p>This authorizes the run to ramp bias to "
+            f"<b style=\"color:{danger};\">{hi:g} V / {lo:g} V</b>.</p>"
+            "<p>Nothing moves yet — the stage and HV energize only when you "
             "press Start, and every ramp still steps through the driver's "
-            "software limits. Confirm you understand the hazard."
+            "software limits.</p>"
+            "<p>Confirm you understand the hazard.</p>"
         )
         reply = QMessageBox.warning(
             self, "Arm high voltage", text,
@@ -2059,13 +2165,19 @@ class PlannerPanel(QWidget):
         locally that a click succeeded."""
         self._hv_armed = bool(armed)
         if self._hv_armed:
+            # Genuinely armed = live-dangerous (law 1 explicitly lists
+            # "armed" among the states that keep saturated colour, not
+            # green) -- the button escalates from the outline "motion" look
+            # to the solid "armed" tone; the status chip drops to quiet
+            # neutral because its own job at this moment is "ready to
+            # press Start", not a persistent good/green light.
             self._btn_arm.setText("✓ HV armed")
-            self._btn_arm.setProperty("state", "good")
-            self._chip_hv_status.set_status("HV armed — Start unlocked", "good")
+            self._btn_arm.setProperty("state", "armed")
+            self._chip_hv_status.set_status("HV armed — Start unlocked", "neutral")
         else:
             self._btn_arm.setText("⚡ Arm HV")
-            self._btn_arm.setProperty("state", "")
-            self._chip_hv_status.set_status("HV disarmed — Start is locked", "warn")
+            self._btn_arm.setProperty("state", "motion")
+            self._chip_hv_status.set_status("HV disarmed — Start is locked", "armed")
         repolish(self._btn_arm)
         self._update_start_enabled()
 
@@ -2089,13 +2201,22 @@ class PlannerPanel(QWidget):
         self._btn_abort.setEnabled(running)
         self._update_use_position_enabled()
         if running:
+            # law 8's pulse-phase hook (StatusChip.set_pulse_phase) is
+            # available on this chip for a future 1 Hz-cadence driver; no
+            # new timer is added here (modularity charter §10).
             self._chip_hv_status.set_status("Running…", "busy")
         self._update_start_enabled()
 
     @Slot(int, int)
     def on_progress(self, done: int, total: int) -> None:
-        state = "good" if total and done >= total else "busy"
-        self._chip_points.set_status(f"{done}/{total} pts", state)
+        # "good" only as the one-off completion confirmation (law 1); a
+        # live in-progress count is quiet-nominal ("normal" -- MetricTile has
+        # no separate busy ink, the run's overall state already reads
+        # through _chip_hv_status's "busy"/accent Running… reading above).
+        state = "good" if total and done >= total else "normal"
+        self._tile_points.set_value(f"{done}/{total} pts")
+        self._tile_points.set_state(state)
+        self._tile_points.set_stale(False, "")
 
     @Slot()
     def on_finished(self) -> None:
