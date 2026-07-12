@@ -90,6 +90,23 @@ Rectangle {
 
     HoverHandler { id: hoverHandler }
 
+    // Specular top edge (round-2 material pass): the artifact's
+    // `inset 0 1px 0 var(--specular)` machined-edge highlight, drawn as a
+    // real 1px translucent line just inside the border (QML can composite
+    // true alpha, unlike the QSS side's border-top-color approximation).
+    // Inset from the corners by ~the corner radius so it never crosses the
+    // rounded arc. Static — not an effect, nothing animates.
+    Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.topMargin: 1
+        anchors.leftMargin: root.radius
+        anchors.rightMargin: root.radius
+        height: 1
+        color: Theme.specular
+    }
+
     // Accent bar, inset from the top/bottom edges so the tile's corner
     // radius stays clean (draft defect #5).
     Rectangle {
@@ -118,8 +135,13 @@ Rectangle {
             text: root.title
             width: parent.width
             elide: Text.ElideRight
-            font.pixelSize: Theme.fontXs
+            // Metric-label role (§3): tiny tracked MONO uppercase engraving —
+            // same constants the QSS QLabel#readoutCellTitle rule reads, so
+            // strip tiles and panel tiles carry one label voice.
+            font.family: Theme.monoFamily
+            font.pixelSize: Theme.fontMetricLabel
             font.weight: Font.DemiBold
+            font.letterSpacing: Theme.trackingMetricLabel
             // repo convention (ReadoutCell/MetricTile title.upper()) rather
             // than the draft's SmallCaps.
             font.capitalization: Font.AllUppercase
@@ -136,12 +158,14 @@ Rectangle {
                 id: valueLabel
                 objectName: "tileValue"
                 text: root.value
-                // fontDisplay is the repo's "hero numeric tile value" size
-                // (gui/style.py FONT_DISPLAY, used by the widget-kit
-                // MetricTile/ReadoutCell) — fontLg is its compact fallback,
-                // and also the floor `fontSizeMode: Text.HorizontalFit`
-                // shrinks toward before eliding kicks in.
-                font.pixelSize: root.compact ? Theme.fontLg : Theme.fontDisplay
+                // Hero-value role (§3): "primary values mono 24-28 px w600
+                // tabular" — the round-1 proportional DemiBold was the
+                // single biggest type mismatch vs both the artifact
+                // (`.tile .val` mono tabular) and the QWidget-kit tile
+                // (QLabel#readoutCellValue, MONO_FAMILY). fontValueCompact
+                // is both the compact size and the HorizontalFit floor.
+                font.family: Theme.monoFamily
+                font.pixelSize: root.compact ? Theme.fontValueCompact : Theme.fontValue
                 font.weight: Font.DemiBold
                 color: root.stale ? Theme.faint : Theme.text
                 // Bounded to the row minus the unit label's own width (when
@@ -152,7 +176,7 @@ Rectangle {
                     : valueRow.width
                 elide: Text.ElideRight
                 fontSizeMode: Text.HorizontalFit
-                minimumPixelSize: Theme.fontLg
+                minimumPixelSize: Theme.fontValueCompact
 
                 Behavior on color { ColorAnimation { duration: Theme.transitionMs } }
             }
@@ -161,7 +185,9 @@ Rectangle {
                 objectName: "tileUnit"
                 text: root.unit
                 visible: root.unit.length > 0
-                font.pixelSize: Theme.fontXs
+                // Unit role (§3): "units 11-12 px muted" — subordinated to
+                // the value, never the value's own size/ink.
+                font.pixelSize: Theme.fontUnit
                 color: root.stale ? Theme.faint : Theme.muted
                 anchors.baseline: valueLabel.baseline
             }
@@ -172,7 +198,9 @@ Rectangle {
             visible: !root.compact && root.caption.length > 0
             text: root.caption
             font.pixelSize: Theme.fontXs
-            color: root.stale ? Theme.faint : Theme.muted
+            // Caption ink steps DOWN from the (muted) label — faint, like the
+            // artifact's `.tile .cap` and the QSS metricTileCaption rule.
+            color: Theme.faint
             elide: Text.ElideRight
             width: parent.width
         }

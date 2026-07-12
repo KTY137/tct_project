@@ -38,6 +38,8 @@ should reach for instead of a generic ``FONT["xs".."display"]`` step.
 """
 from __future__ import annotations
 
+from PySide6.QtGui import QFont
+
 # ---------------------------------------------------------------------------
 # Scales — reference these instead of magic numbers so spacing/rounding/type
 # stay coherent across every panel.  They are plain module constants; the QSS
@@ -52,12 +54,17 @@ SPACE_LG = 16
 SPACE_XL = 24
 SPACE = {"xs": SPACE_XS, "sm": SPACE_SM, "md": SPACE_MD, "lg": SPACE_LG, "xl": SPACE_XL}
 
-# Corner-radius scale (px). Cards stay at <= 8 px; pills are the only
+# Corner-radius scale (px) — cockpit v5 round-2: recalibrated to the frozen
+# artifact's OWN radius tokens (tct_cockpit_design_v4_final.html ``--r-sm:8;
+# --r:12; --r-lg:16`` — the spec §2 "Radii 8/12/16" rule). sm = buttons /
+# inputs / chips-adjacent small shapes; md = cards / tiles; lg = large
+# clusters / hero shells. xs (4) survives only for sub-element highlights
+# (menu items, tooltips) that have no artifact counterpart; pill is the one
 # intentionally larger shape.
-RADIUS_XS = 4     # menus / tooltips
-RADIUS_SM = 6
-RADIUS_MD = 8
-RADIUS_LG = 8
+RADIUS_XS = 4     # menu-item highlights / tooltips (sub-element only)
+RADIUS_SM = 8
+RADIUS_MD = 12
+RADIUS_LG = 16
 RADIUS_PILL = 999
 RADIUS = {"xs": RADIUS_XS, "sm": RADIUS_SM, "md": RADIUS_MD,
           "lg": RADIUS_LG, "pill": RADIUS_PILL}
@@ -81,7 +88,75 @@ FONT_DISPLAY = 24  # hero tile values (artifact reference: 26px / weight 350)
 FONT = {"xs": FONT_XS, "sm": FONT_SM, "md": FONT_MD, "lg": FONT_LG, "xl": FONT_XL,
         "display": FONT_DISPLAY}
 
-MONO_FAMILY = '"Consolas", "Cascadia Mono", "Cascadia Code", "Courier New", monospace'
+# ---------------------------------------------------------------------------
+# Font families — round-2 typography pass (Kaya live-review 2026-07-12).
+#
+# SANS_FAMILIES: the artifact's own --sans stack, Windows-first. On Win 11
+# Qt's font DB enumerates the Segoe UI Variable *named instances* as separate
+# families ("... Display"/"... Text"/"... Small"); the plain "Segoe UI
+# Variable" typographic family may or may not be enumerable depending on the
+# font engine, so both spellings are listed — otherwise the old single
+# '"Segoe UI Variable"' request silently fell through to classic Segoe UI,
+# which is a big part of "the fonts don't look like the artifact". Display
+# is listed first because the approved artifact renders with Display in the
+# browser (its --sans lists "Segoe UI Variable Display" before "Segoe UI").
+#
+# MONO_FAMILIES: reordered to prefer Cascadia Mono (the modern Win-11 mono,
+# and the artifact's nearest available --mono entry) over Consolas.
+#
+# Both lists are consumed twice: joined into QSS ``font-family`` strings
+# below (Qt 6 QSS maps a comma list onto QFont::setFamilies — verified: the
+# resolved widget font carries the full fallback list), and set directly on
+# the application-default QFont in ``apply_theme`` (so QML chrome text and
+# any unstyled widget inherit the same stack + hinting).
+# ---------------------------------------------------------------------------
+SANS_FAMILIES = [
+    "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI Variable",
+    "Segoe UI", "Inter", "Helvetica Neue", "Arial",
+]
+SANS_FAMILY = ", ".join(f'"{f}"' for f in SANS_FAMILIES) + ", system-ui, sans-serif"
+
+MONO_FAMILIES = [
+    "Cascadia Mono", "Cascadia Code", "Consolas", "JetBrains Mono", "Courier New",
+]
+MONO_FAMILY = ", ".join(f'"{f}"' for f in MONO_FAMILIES) + ", monospace"
+
+# Text-rasterization hinting for the app-default font (Windows: DirectWrite).
+# "vertical" ≈ the natural/symmetric rendering browsers use — the closest Qt
+# gets to how the approved HTML artifact rasterizes on the same display;
+# "none" is softer/mac-like (fractional advances), "full" is the classic
+# grid-fit Win32 look the app previously inherited by default. ONE tunable
+# token: if Kaya's next live look wants crisper or softer text, change this
+# string, nothing else.
+FONT_HINTING = "vertical"
+_HINTING_PREFS = {
+    "none": QFont.HintingPreference.PreferNoHinting,
+    "vertical": QFont.HintingPreference.PreferVerticalHinting,
+    "full": QFont.HintingPreference.PreferFullHinting,
+    "default": QFont.HintingPreference.PreferDefaultHinting,
+}
+
+
+def _apply_app_font(app) -> None:
+    """Set the application-default ``QFont`` (family stack + px size +
+    hinting preference).
+
+    QSS ``font-family``/``font-size`` only reach QWidgets; the QML chrome
+    (rail / pill shelf / status strip) and anything unstyled inherit the
+    *application* font — previously the raw platform default (classic
+    "Segoe UI" 9 pt, full hinting), which is why chrome text looked flatter
+    than the artifact. Pixel-sized (not pt) so QWidget-QSS px, QML
+    ``font.pixelSize`` and this default all live on one DPI-consistent px
+    scale. Hinting is NOT expressible in QSS, but stylesheet font resolution
+    (``rule.font.resolve(widget.font())``) inherits every property QSS does
+    not set — so setting it here modernises QSS-styled text too."""
+    f = QFont()
+    f.setFamilies(SANS_FAMILIES)
+    f.setPixelSize(FONT_MD)
+    f.setHintingPreference(
+        _HINTING_PREFS.get(FONT_HINTING, QFont.HintingPreference.PreferDefaultHinting))
+    if app.font() != f:
+        app.setFont(f)
 
 # ---------------------------------------------------------------------------
 # Type-scale ROLES (docs/design/cockpit_design_system.md §3, Codex-calibrated).
@@ -294,6 +369,24 @@ LIGHT = {
     "panel_2": "#F4F7FB", "raised": "#F4F7FB", "panel_3": "#eef0f4",
     "sunk": "#E2E7F0", "well": "#EDF1F7",
     "hover": "#F4F7FB",
+    # Round-2 material tokens (all DERIVED via _blend — one source of truth):
+    #   chrome — the frosted rail/topbar strip: the artifact's
+    #     ``color-mix(in srgb, var(--panel-2) 74%, var(--panel))`` (.rail),
+    #     the cheap solid fallback for its backdrop blur ("one frosted
+    #     chrome strip", spec §2).
+    #   strip — the recessed status-strip wash: ``color-mix(sunk 55%, panel)``
+    #     (.statusstrip).
+    #   edge — the specular TOP EDGE of a raised surface: the artifact's
+    #     ``inset 0 1px 0 var(--specular)`` machined-edge highlight,
+    #     approximated in QSS as a lighter ``border-top-color`` (QSS has no
+    #     inset box-shadow). Alpha follows the per-theme specular token.
+    #   edge_shade — the darker top edge of a SUNKEN surface (inputs,
+    #     segmented tracks, progress troughs): the inverse cue, approximating
+    #     the artifact's ``inset 0 1px 2px rgba(0,0,0,.14-.2)``.
+    "chrome": _blend("#F4F7FB", "#FFFFFF", 0.74),
+    "strip": _blend("#E2E7F0", "#FFFFFF", 0.55),
+    "edge": _blend("#FFFFFF", "#D9DFEA", 0.85),
+    "edge_shade": _blend("#000000", "#D9DFEA", 0.16),
     # Plot chrome tokens (grid/overlay) — kept identical in both dicts on
     # purpose, same idiom as good/warn/crit above: the plot canvas itself
     # (PLOT_BG/PLOT_FG, below) is a fixed dark "instrument screen" in BOTH
@@ -326,6 +419,14 @@ DARK = {
     "panel_2": "#192134", "raised": "#192134", "panel_3": "#2b2b31",
     "sunk": "#0C1019", "well": "#0E1420",
     "hover": "#192134",
+    # Round-2 material tokens — see the matching comments in LIGHT above.
+    # Dark "edge" uses a slightly higher alpha than the 0.045 specular token:
+    # a 1px border line has far less area than the artifact's inset highlight
+    # band, so it needs a touch more ink to read at all on a real display.
+    "chrome": _blend("#192134", "#121824", 0.74),
+    "strip": _blend("#0C1019", "#121824", 0.55),
+    "edge": _blend("#FFFFFF", "#222B3E", 0.10),
+    "edge_shade": _blend("#000000", "#222B3E", 0.30),
     "plot_grid": None, "plot_overlay": None,
 }
 
@@ -417,7 +518,7 @@ def set_chip_state(chip, state: str) -> None:
 def build_qss(p: dict) -> str:
     return f"""
 * {{
-    font-family: "Segoe UI Variable", "Segoe UI", "Inter var", "Inter", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    font-family: {SANS_FAMILY};
     font-size: {FONT_MD}px;
     color: {p['text']};
 }}
@@ -427,7 +528,8 @@ QWidget#mainShell {{ background: {p['bg']}; }}
 
 QScrollArea#ribbonScroll {{ background: transparent; border: none; }}
 QFrame#systemRibbon {{
-    background: {p['material']}; border: 1px solid {p['hairline']};
+    background: {p['chrome']}; border: 1px solid {p['hairline']};
+    border-top-color: {p['edge']};
     border-radius: {RADIUS_MD}px;
 }}
 QFrame#ribbonBrand {{ background: transparent; }}
@@ -439,6 +541,7 @@ QLabel#ribbonMark {{
 QLabel#ribbonWordmark {{ font-weight: 700; }}
 QFrame#ribbonGroup {{
     background: {p['field']}; border: 1px solid {p['hairline']};
+    border-top-color: {p['edge']};
     border-radius: {RADIUS_MD}px;
 }}
 QLabel#ribbonLabel {{
@@ -453,6 +556,7 @@ QLabel#ribbonLabel {{
 QGroupBox {{
     background: {p['panel']};
     border: 1px solid {p['hairline']};
+    border-top-color: {p['edge']};
     border-radius: {RADIUS_MD}px;
     margin-top: {SPACE_LG - 2}px;
     padding: {SPACE_LG - 1}px {SPACE_LG + 1}px {SPACE_LG - 1}px {SPACE_LG + 1}px;
@@ -477,7 +581,8 @@ QGroupBox::title {{
    room than the old, tighter 4/8. */
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
     background: {p['well']};
-    border: 1px solid transparent;
+    border: 1px solid {p['hairline']};
+    border-top-color: {p['edge_shade']};
     border-radius: {RADIUS_SM}px;
     padding: {SPACE_SM - 2}px {SPACE_MD}px;
     selection-background-color: {p['accent']};
@@ -506,21 +611,24 @@ QComboBox QAbstractItemView {{
     selection-color: {p['on_accent']};
 }}
 
-/* Buttons — padding/weight match the v5 artifact's `.btn` (7/16, medium
-   weight) so a button label reads as a command rather than body text,
-   without shouting (apple_style_ui_audit.md: "medium labels"). */
+/* Buttons — round-2: the FULL v4-artifact `.btn` recipe (frozen reference's
+   own numbers): raised surface, a VISIBLE hairline-strong border with the
+   specular top edge (machined-edge material — the borderless tonal blob of
+   round 1 is what read as "flat"), w560 label, hover = border to accent
+   (no fill change), padding 8/16 vs the artifact's 9/16. */
 QPushButton {{
     background: {p['field']};
-    border: 1px solid transparent;
+    border: 1px solid {p['hairline_strong']};
+    border-top-color: {p['edge']};
     border-radius: {RADIUS_SM}px;
     padding: {SPACE_SM - 1}px {SPACE_LG}px;
-    font-weight: 500;
+    font-weight: 560;
 }}
-QPushButton:hover {{ border-color: {p['border_strong']}; background: {p['hover']}; }}
+QPushButton:hover {{ border-color: {p['accent']}; background: {p['hover']}; }}
 QPushButton:pressed {{ background: {p['active']}; }}
 QPushButton:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outline-offset: 1px; }}
 QPushButton:disabled {{
-    color: {p['faint']}; background: {p['disabled_bg']}; border-color: transparent;
+    color: {p['faint']}; background: {p['disabled_bg']}; border-color: {p['hairline']};
 }}
 QPushButton:default, QPushButton[state="primary"] {{
     background: {p['accent']}; color: {p['on_accent']}; border: 1px solid {p['accent']};
@@ -658,19 +766,23 @@ QPushButton#disconnectBtn:disabled, QToolButton#disconnectBtn:disabled {{
     background: {p['disabled_bg']}; color: {p['muted']}; border: 1px solid {p['border']};
 }}
 
-/* Tabs (also the DetachableTabWidget) — a quiet card tab; the active page is
-   a pill with accent-tinted material, matching the v5 polish artifact. */
+/* Tabs (also the DetachableTabWidget) — round-2: the v4 artifact's `.pill`
+   language (law 1, quiet nominal): the SELECTED page is a neutral RAISED
+   pill (panel-2 + hairline-strong + specular top edge), not an accent-
+   tinted one — a selected tab is a place, not a state, so it carries no
+   colour. */
 QTabWidget::pane {{
     border: none; top: -1px; background: {p['bg']};
 }}
 QTabBar::tab {{
     background: transparent; padding: {SPACE_SM - 2}px {SPACE_LG - 3}px; margin-right: 4px;
     border: 1px solid transparent; border-radius: {RADIUS_MD}px;
-    color: {p['muted']}; font-weight: 500;
+    color: {p['muted']}; font-weight: 560;
 }}
 QTabBar::tab:selected {{
-    background: {p['tint']}; color: {p['accent']};
-    border: 1px solid {_rgba(p['accent'], 0.22)};
+    background: {p['raised']}; color: {p['text']};
+    border: 1px solid {p['hairline_strong']};
+    border-top-color: {p['edge']};
     font-weight: 600;
 }}
 QTabBar::tab:hover:!selected {{
@@ -703,7 +815,8 @@ QStatusBar {{ background: {p['material_strong']}; border-top: 1px solid {p['hair
 QDockWidget {{ titlebar-close-icon: none; }}
 QDockWidget::title {{
     background: {p['material']}; padding: {SPACE_SM - 2}px {SPACE_MD - 2}px;
-    border: 1px solid {p['hairline']}; border-radius: {RADIUS_SM}px;
+    border: 1px solid {p['hairline']}; border-top-color: {p['edge']};
+    border-radius: {RADIUS_SM}px;
     font-weight: 600;
 }}
 
@@ -754,9 +867,10 @@ QSplitter::handle:horizontal {{ width: 3px; }}
 QSplitter::handle:vertical {{ height: 3px; }}
 QSplitter::handle:hover {{ background: {p['accent']}; }}
 
-/* Progress bars (IV/V-scan sweeps) */
+/* Progress bars (IV/V-scan sweeps) — a sunken trough (shaded top edge). */
 QProgressBar {{
     background: {p['disabled_bg']}; border: 1px solid {p['hairline']};
+    border-top-color: {p['edge_shade']};
     border-radius: {RADIUS_SM}px; text-align: center; color: {p['text']};
     min-height: 16px;
 }}
@@ -803,7 +917,9 @@ QPushButton#dangerBtn:disabled, QPushButton[state="danger"]:disabled {{
    alignment — the "reserve monospace for numeric readouts" half of the
    apple_style_ui_audit.md typography finding. */
 QFrame#instrumentReadout {{
-    background: {PLOT_BG}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_MD}px;
+    background: {PLOT_BG}; border: 1px solid {p['hairline']};
+    border-top-color: {p['edge_shade']};
+    border-radius: {RADIUS_MD}px;
 }}
 QLabel#readoutAxis {{
     color: {PLOT_FG}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
@@ -833,10 +949,14 @@ QLabel#readoutValue {{
    desaturates its ink back to "faint" regardless of the semantic state
    underneath (gui.panel_kit.MetricTile.set_stale()). */
 QFrame#readoutCell {{
-    background: {p['raised']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_MD}px;
+    background: {p['raised']}; border: 1px solid {p['hairline']};
+    border-top-color: {p['edge']};
+    border-radius: {RADIUS_MD}px;
 }}
+/* Label ink: MUTED, not faint — the artifact's `.tile .lab` uses --muted and
+   §3 demands "label ink >=85%"; faint is reserved for the caption below. */
 QLabel#readoutCellTitle {{
-    color: {p['faint']}; font-family: {MONO_FAMILY};
+    color: {p['muted']}; font-family: {MONO_FAMILY};
     font-size: {FONT_METRIC_LABEL_PX}px; font-weight: {WEIGHT_METRIC_LABEL};
     letter-spacing: {TRACKING_METRIC_LABEL_PX}px;
 }}
@@ -869,7 +989,7 @@ QFrame#readoutCell[stale="true"] {{ background: {p['well']}; }}
    3: "Explanations: sentence-case sans. Never uppercase prose."), never the
    tracked-mono-uppercase label treatment above. */
 QLabel#metricTileCaption {{
-    color: {p['muted']}; font-size: {FONT_XS}px; font-weight: {WEIGHT_BODY};
+    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: {WEIGHT_BODY};
 }}
 QLabel#metricTileCaption[stale="true"] {{ color: {p['faint']}; }}
 QFrame#readoutCell[flash="accent"] {{
@@ -886,7 +1006,9 @@ QFrame#readoutCell[flash="crit"] {{
    one visual unit inside a QGroupBox, the way a physical jog controller
    reads as a single control rather than loose buttons in a form. */
 QFrame#controlCluster {{
-    background: {p['field']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_LG}px;
+    background: {p['field']}; border: 1px solid {p['hairline']};
+    border-top-color: {p['edge']};
+    border-radius: {RADIUS_LG}px;
 }}
 /* Tracking/weight per the spec's metric-label role (FONT_METRIC_LABEL_PX/
    WEIGHT_METRIC_LABEL/TRACKING_METRIC_LABEL_PX — see the Type-scale ROLES
@@ -914,17 +1036,27 @@ QPushButton#jogBtn:hover {{ border-color: {p['accent']}; color: {p['accent']}; }
 QPushButton#jogBtn:pressed {{ background: {p['pressed']}; }}
 QPushButton#jogBtn:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outline-offset: 1px; }}
 
-/* Segmented control — exclusive preset buttons (e.g. jog step size) styled
-   as one pill-shaped group with a clear selected segment. */
+/* Segmented control — exclusive preset buttons (e.g. jog step size). Round-2:
+   a genuinely SUNKEN track (the artifact's `.seg`: sunk surface + inset
+   shadow, approximated by the shaded top edge) with segments one radius step
+   tighter than the track (artifact 9/6). */
 QFrame#segmented {{
-    background: {p['field']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_MD}px;
+    background: {p['sunk']}; border: 1px solid {p['hairline']};
+    border-top-color: {p['edge_shade']};
+    border-radius: {RADIUS_SM}px;
 }}
 QPushButton#segBtn {{
-    background: transparent; border: none; border-radius: {RADIUS_SM}px;
+    background: transparent; border: none; border-radius: {RADIUS_SM - 2}px;
     padding: {SPACE_XS + 1}px {SPACE_SM + 2}px; color: {p['muted']}; font-weight: 600;
 }}
 QPushButton#segBtn:hover:!checked {{ background: {p['hover']}; color: {p['text']}; }}
-QPushButton#segBtn:checked {{ background: {p['accent']}; color: {p['on_accent']}; }}
+/* Selected segment: a neutral RAISED chip popping out of the sunken track
+   (artifact `.seg button[aria-selected]` — panel-2 + specular, no accent:
+   law 1, a mode choice is a place, not a state). */
+QPushButton#segBtn:checked {{
+    background: {p['raised']}; color: {p['text']};
+    border: 1px solid {p['hairline_strong']}; border-top-color: {p['edge']};
+}}
 QPushButton#segBtn:disabled {{ color: {p['muted']}; background: transparent; }}
 QPushButton#segBtn:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outline-offset: 1px; }}
 
@@ -932,13 +1064,17 @@ QPushButton#segBtn:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outli
    sit visually level with group boxes (e.g. a live view beside a controls
    column). */
 QFrame#cardPane {{
-    background: {p['panel']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_MD}px;
+    background: {p['panel']}; border: 1px solid {p['hairline']};
+    border-top-color: {p['edge']};
+    border-radius: {RADIUS_MD}px;
 }}
 
 /* Channel card — a cardPane variant used per scope channel.  The panel adds an
    inline coloured left border per channel; this is the shared base look. */
 QFrame#channelCard {{
-    background: {p['panel']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_SM}px;
+    background: {p['panel']}; border: 1px solid {p['hairline']};
+    border-top-color: {p['edge']};
+    border-radius: {RADIUS_SM}px;
 }}
 
 /* Eyebrow — a small caption label above a heading/value.  QSS cannot
@@ -998,7 +1134,7 @@ QLabel#cardSubtitle {{
 QLabel#statusChip {{
     padding: 2px {SPACE_SM + 2}px;
     border-radius: {RADIUS_PILL}px;
-    font-size: {FONT_XS}px; font-weight: 700;
+    font-size: {FONT_XS}px; font-weight: 600;
     background: {p['field']}; color: {p['muted']};
     border: 1px solid {p['hairline']};
 }}
@@ -1115,7 +1251,7 @@ QFrame#statusPill[state="crit"] {{ border-color: {_rgba(p['crit'], 0.60)}; }}
 QFrame#statusPill[state="info"], QFrame#statusPill[state="busy"] {{ border-color: {_rgba(p['accent'], 0.55)}; }}
 QFrame#statusPill[state="simulated"] {{ border: 1px dashed {_rgba(p['sim'], 0.70)}; }}
 QLabel#statusPillText {{
-    font-size: {FONT_XS}px; font-weight: 700; color: {p['text']};
+    font-size: {FONT_XS}px; font-weight: 600; color: {p['text']};
 }}
 
 QFrame#activityRing {{
@@ -1232,8 +1368,15 @@ def _apply_pyqtgraph(p: dict) -> None:
 
 
 def apply_theme(app, mode: str = "light") -> str:
-    """Apply the global stylesheet for *mode* ('light'|'dark'). Returns the mode."""
+    """Apply the global stylesheet for *mode* ('light'|'dark'). Returns the mode.
+
+    Also installs the application-default ``QFont`` (family stack, px size,
+    hinting — see ``_apply_app_font``): the QSS below only reaches QWidgets,
+    while the QML chrome and unstyled text inherit the app font. Set BEFORE
+    the stylesheet so the one global repolish QSS application triggers already
+    sees the final font (no second repolish, no flash)."""
     palette = DARK if str(mode).lower() == "dark" else LIGHT
+    _apply_app_font(app)
     app.setStyleSheet(build_qss(palette))
     _apply_pyqtgraph(palette)
     return "dark" if palette is DARK else "light"

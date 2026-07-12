@@ -86,7 +86,15 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             implicitHeight: 48
-            color: Theme.material
+            // "One frosted chrome strip" (spec §2): Theme.chrome is the
+            // solid color-mix fallback for the artifact topbar's backdrop
+            // blur (translucency over a live camera/plot is banned anyway).
+            color: Theme.chrome
+
+            Rectangle {  // specular top edge — machined-chrome highlight
+                anchors { left: parent.left; right: parent.right; top: parent.top }
+                height: 1; color: Theme.specular
+            }
 
             Rectangle {  // bottom hairline
                 anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
@@ -312,7 +320,11 @@ Item {
                     + " devices simulated (" + root.simNames.join(", ") + ")"
                     + " · no hardware driven"
                 color: Theme.sim
+                // Mono + a touch of tracking, per the artifact's .simribbon
+                // (mono 10.5px, letter-spacing .05em).
+                font.family: Theme.monoFamily
                 font.pixelSize: Theme.fontXs
+                font.letterSpacing: 0.5
                 elide: Text.ElideRight
                 width: parent.width - 32
             }
@@ -336,11 +348,14 @@ Item {
                         Rectangle {
                             id: pillCell
                             property bool active: index === tabShelf.currentIndex
-                            radius: 8; height: 30
+                            // Artifact `.pill[aria-selected]` (law 1): the
+                            // ACTIVE tab is a neutral RAISED pill — a place,
+                            // not a state — never accent-tinted.
+                            radius: Theme.radiusSm; height: 30
                             width: pillRow.implicitWidth + 26
-                            color: active ? Theme.tint : "transparent"
+                            color: active ? Theme.raised : "transparent"
                             border.width: active ? 1 : 0
-                            border.color: Theme.accent
+                            border.color: Theme.hairlineStrong
 
                             MouseArea {
                                 anchors.fill: parent
@@ -354,7 +369,7 @@ Item {
                                     text: modelData
                                     font.pixelSize: Theme.fontSm
                                     font.weight: pillCell.active ? Font.DemiBold : Font.Medium
-                                    color: pillCell.active ? Theme.accent : Theme.muted
+                                    color: pillCell.active ? Theme.text : Theme.muted
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
                                 // detach affordance on the active pill
@@ -391,7 +406,10 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             implicitHeight: statusStrip.implicitHeight + 2 * Theme.spaceSm
-            color: Theme.canvas
+            // Recessed wash (artifact `.statusstrip`: color-mix(sunk 55%,
+            // panel)) so the tiles read as raised cards sitting IN a tray —
+            // the surface-ladder step round 1 flattened onto plain canvas.
+            color: Theme.strip
 
             ScanStatusStrip {
                 id: statusStrip
@@ -415,7 +433,7 @@ Item {
         property alias text: btnLabel.text
         property string tone: "quiet"          // "accent" | "danger" | "quiet"
         signal clicked()
-        radius: 6; implicitHeight: 28; implicitWidth: btnLabel.implicitWidth + 24
+        radius: Theme.radiusSm; implicitHeight: 28; implicitWidth: btnLabel.implicitWidth + 24
         color: btnArea.pressed ? Theme.field : "transparent"
         border.width: 1
         border.color: tone === "danger" ? Theme.crit
@@ -438,7 +456,7 @@ Item {
         property string tone: "quiet"          // "accent" | "danger" | "quiet"
         property string tip: ""
         signal clicked()
-        radius: 6; implicitHeight: 28; implicitWidth: 28
+        radius: Theme.radiusSm; implicitHeight: 28; implicitWidth: 28
         color: iconArea.pressed ? Theme.field : "transparent"
         border.width: 1
         border.color: tone === "danger" ? Theme.crit
@@ -496,6 +514,9 @@ Item {
         }
         Text {
             text: chipRoot.trimmed(); color: Theme.text
+            // Chip values are physical quantities/state words — mono, like
+            // the artifact's `.chip` (law 3: numbers are mono).
+            font.family: Theme.monoFamily
             font.pixelSize: Theme.fontXs
             anchors.verticalCenter: parent.verticalCenter
         }
