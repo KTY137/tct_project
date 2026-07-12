@@ -16,9 +16,11 @@ contract, not as endorsements):
   * ``_run`` (XY raster) does NOT drive HV, so its ``finally`` does not run a
     bias failsafe.  On a bias-compliance TRIP the failsafe still fires, because
     ``_check_compliance`` ramps down itself before the loop breaks.
-  * ``_run_voltage_scan`` ramps to 0 + opens the output on a compliance trip
-    (HV IS left safe) but transitions to FINISHED, not ABORTED, because the trip
-    ``break``s without setting the abort event.  See the note on that test.
+  * ``_run_voltage_scan`` treats a compliance trip as an ABORT: it sets the
+    abort event, ramps to 0 + opens the output, and settles ABORTED.  Until
+    9c207a1 the trip ``break``ed *without* setting the abort event, so an
+    over-current trip settled FINISHED and the GUI painted a green "Scan
+    finished" banner over it.  This file pinned that bug; it now pins the fix.
 """
 from __future__ import annotations
 
@@ -272,14 +274,15 @@ def test_wavegen_output_on_fault_xy_scan(sim):
 # 6. Bias compliance trip mid voltage sweep (HV-driving legacy path)           #
 # --------------------------------------------------------------------------- #
 def test_voltage_scan_compliance_trip_failsafe(sim):
-    """A compliance trip on the 2nd setpoint → the sweep breaks, ramps HV to 0
-    and opens the output (HV left SAFE), and surfaces the trip via on_error.
+    """A compliance trip on the 2nd setpoint → the sweep ABORTS: it sets the
+    abort event, ramps HV to 0 and opens the output (HV left SAFE), surfaces the
+    trip via on_error, and preserves the points taken before the trip.
 
-    Contract quirk (asserted, not endorsed): the sweep transitions to FINISHED,
-    not ABORTED, because the compliance break does not set the abort event.
-    HV is nonetheless failsafed — the safety-critical facts below are what
-    matter; the terminal LABEL is a state-semantics observation flagged for
-    review.
+    Regression guard (9c207a1): this test used to assert FINISHED, pinning the
+    bug — a trip ``break``ed without setting the abort event, so an over-current
+    trip settled as a clean success and the GUI painted the green "Scan
+    finished" banner over it.  A trip is an ABORT, and the terminal LABEL is
+    itself safety-relevant: it is what the operator sees.
     """
     dm, ctrl, sm = sim
     ch = dm.bias_supply
@@ -302,13 +305,18 @@ def test_voltage_scan_compliance_trip_failsafe(sim):
     ctrl.start_voltage_scan(_fast_vscan())
     join_or_fail(ctrl)
 
+    # A trip is an ABORT, not a finish — the operator must not see "success".
+    assert sm.state is AppState.ABORTED
+    assert ctrl._abort_event.is_set(), "a compliance trip must set the abort event"
+
     # HV is left safe on EVERY exit path — this is the safety contract.
     assert ch.setpoint_V == 0.0
     assert not ch.driver.output_is_on_ch(ch.channel)
     assert ch.output_off.called
     assert any(c.args and c.args[0] == 0.0 for c in ch.ramp_to.call_args_list)
     assert any("compliance" in m.lower() for m in errs)
+
+    # Abort PRESERVES data already taken: the pre-trip point is written and the
+    # file is flushed/closed (stop_time present, no dangling handle).
     assert ctrl._writer._voltage_n == 1               # only the pre-trip point
     assert_writer_file_intact(ctrl)
-    # Current contract: FINISHED (trip breaks without setting the abort event).
-    assert sm.state is AppState.FINISHED
