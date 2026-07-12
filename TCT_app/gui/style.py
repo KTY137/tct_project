@@ -38,6 +38,9 @@ should reach for instead of a generic ``FONT["xs".."display"]`` step.
 """
 from __future__ import annotations
 
+import json
+import re
+
 from PySide6.QtGui import QFont
 
 # ---------------------------------------------------------------------------
@@ -1355,6 +1358,355 @@ for _p in (LIGHT, DARK):
     _p["plot_grid"] = PLOT_GRID
     _p["plot_overlay"] = PLOT_OVERLAY
 del _p
+
+
+# ---------------------------------------------------------------------------
+# User theme customization — the theme-editor override layer (Kaya request
+# 2026-07-12: browse/configure themes + a settable opaque<->glass material;
+# UI in gui/theme_editor.py, opened from View ▸ Theme…).
+#
+# LIGHT/DARK above stay the ONE source of truth every consumer already reads
+# (build_qss, palette(), gui/qml_theme.py's live QColor lookups, panels'
+# refresh_theme), so customization works by MUTATING those dicts IN PLACE
+# (identity preserved — apply_theme's ``palette is DARK`` check and every
+# held reference stay valid) from the pristine base snapshots below.
+# Nothing changes without user action: with no overrides and
+# glass == DEFAULT_GLASS_AMOUNT the recompute reproduces the inline dict
+# values byte-for-byte (guarded by tests/test_theme_editor.py).
+# ---------------------------------------------------------------------------
+
+# Pristine defaults, snapshot AFTER the plot-token backfill above so a
+# recompute can rebuild the live dicts wholesale.
+_BASE_LIGHT: dict = dict(LIGHT)
+_BASE_DARK: dict = dict(DARK)
+_BASE_SANS_FAMILIES: tuple = tuple(SANS_FAMILIES)
+_BASE_MONO_FAMILIES: tuple = tuple(MONO_FAMILIES)
+_BASE_FONT_HINTING: str = FONT_HINTING
+_BASE_FONT_MD: int = FONT_MD
+_BASE_RADII: tuple = (RADIUS_SM, RADIUS_MD, RADIUS_LG)
+
+DEFAULT_GLASS_AMOUNT = 1.0
+
+# The four pre-blend strengths that ARE the "glass" material (the same
+# alphas the "Round-2 material tokens" inline definitions in LIGHT/DARK use
+# — see docs/research/apple_vibrancy_qt_feasibility.md: glass = pre-blended
+# opaque tokens, no real blur). ``glass_amount`` g in [0, 1] scales them:
+#   chrome     = _blend(raised, panel, 0.74 * g)  — frosted rail/ribbon chrome
+#   strip      = _blend(sunk,  panel, 0.55 * g)   — recessed status-strip wash
+#   edge       = _blend(#fff, hairline, (0.85 light / 0.10 dark) * g)
+#                                                 — specular machined top edge
+#   edge_shade = _blend(#000, hairline, (0.16 light / 0.30 dark) * g)
+#                                                 — shaded top edge of sunken wells
+# g == 1.0 (DEFAULT) reproduces today's v4 glass ceiling byte-for-byte;
+# g == 0.0 is fully opaque: chrome/strip collapse to plain "panel" and both
+# machined edges collapse to the uniform hairline. PLOT_BG/PLOT_FG are
+# deliberately NOT parametrized: plots/camera keep the fixed opaque
+# instrument screen at ANY glass amount (design law 8 / "nothing translucent
+# over a plot").
+_GLASS_BLEND_ALPHAS = {
+    "light": {"chrome": 0.74, "strip": 0.55, "edge": 0.85, "edge_shade": 0.16},
+    "dark":  {"chrome": 0.74, "strip": 0.55, "edge": 0.10, "edge_shade": 0.30},
+}
+
+# Safety palette — LOCKED (laws 1/2/6: quiet nominal / command classes / sim
+# can never pass as real). "crit"/"warn" are the legacy byte-alias keys of
+# "danger"/"armed" (see the palette dicts): locking "danger" while leaving
+# "crit" writable would be a bypass, since most QSS rules read p['crit'].
+# There is NO override path — apply_theme_overrides raises, and
+# sanitize_overrides silently drops these on any preset-JSON load.
+SAFETY_TOKENS = frozenset({"danger", "armed", "sim", "error", "crit", "warn"})
+
+# User-editable token GROUPS: one editor swatch fans out to every dict key
+# that names the same concept (bg/canvas are byte-equal aliases today;
+# material/material_strong are synced to panel/canvas per the v5 pass; a
+# custom "well" override flattens the subtle well-vs-sunk step — acceptable
+# for a user theme). Everything NOT reachable from here (raised/field/hover/
+# toplight/pressed/..., the axis rails, and every safety token) keeps its
+# shipped value.
+_OVERRIDE_FANOUT: dict[str, tuple[str, ...]] = {
+    "accent":   ("accent",),
+    "canvas":   ("canvas", "bg", "material_strong"),
+    "panel":    ("panel", "material"),
+    "well":     ("well", "sunk"),
+    "text":     ("text",),
+    "muted":    ("muted",),
+    "hairline": ("hairline", "border"),
+}
+EDITABLE_TOKENS: tuple[str, ...] = tuple(_OVERRIDE_FANOUT)
+
+_HEX6_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+# Radius S/M/L scale (theme editor "Radius" segment): (RADIUS_SM, RADIUS_MD,
+# RADIUS_LG) triples. "m" is the shipped default (spec §2 "Radii 8/12/16");
+# RADIUS_XS/RADIUS_PILL never change.
+RADIUS_SCALES: dict[str, tuple[int, int, int]] = {
+    "s": (6, 9, 12),
+    "m": _BASE_RADII,
+    "l": (10, 15, 20),
+}
+
+# QSettings("TCT", "TCTSetup") keys — all under theme/*.
+_SETTINGS_GLASS_KEY = "theme/glass_amount"
+_SETTINGS_OVERRIDES_KEY = "theme/overrides"
+_SETTINGS_TYPOGRAPHY_KEY = "theme/typography"
+_SETTINGS_RADIUS_KEY = "theme/radius_scale"
+
+# Live customization state (module-level; reset via reset_theme_customization).
+_glass_amount: float = DEFAULT_GLASS_AMOUNT
+_overrides: dict[str, dict[str, str]] = {"light": {}, "dark": {}}
+_typography: dict = {"sans": None, "mono": None, "hinting": None, "base_px": None}
+_radius_scale: str = "m"
+
+_UNSET = object()
+
+
+def _recompute_palettes() -> None:
+    """Rebuild the live LIGHT/DARK dicts in place: base snapshot + user
+    overrides (fanned out per _OVERRIDE_FANOUT) + re-derived dependent tokens
+    (accent_strong/tint/active, hairline_strong when hairline is overridden)
+    + the four glass pre-blends at the current glass amount. At the defaults
+    this is byte-identical to the inline definitions (tested)."""
+    g = _glass_amount
+    for mode, base, live, tint_alpha in (
+            ("light", _BASE_LIGHT, LIGHT, 0.10),
+            ("dark", _BASE_DARK, DARK, 0.13)):
+        merged = dict(base)
+        ov = _overrides[mode]
+        for key, value in ov.items():
+            for target in _OVERRIDE_FANOUT.get(key, ()):
+                merged[target] = value
+        # Derived accent family — same formulas the palette dicts use inline.
+        merged["accent_strong"] = _darken(merged["accent"], 0.15)
+        merged["tint"] = merged["active"] = _blend(
+            merged["accent"], merged["panel"], tint_alpha)
+        if "hairline" in ov:
+            # Approximate "strong" as a wash of text over the picked hairline
+            # (only when overridden — the shipped strong values stay exact).
+            merged["hairline_strong"] = merged["border_strong"] = _blend(
+                merged["text"], merged["hairline"], 0.15)
+        alphas = _GLASS_BLEND_ALPHAS[mode]
+
+        def _glass(fg: str, bg: str, alpha: float) -> str:
+            # 0 strength means NO blend: hand back the exact bg token string
+            # (chrome literally IS panel at full opacity — not a re-rounded,
+            # possibly case-differing copy of it).
+            return bg if alpha <= 0.0 else _blend(fg, bg, alpha)
+
+        merged["chrome"] = _glass(merged["raised"], merged["panel"], alphas["chrome"] * g)
+        merged["strip"] = _glass(merged["sunk"], merged["panel"], alphas["strip"] * g)
+        merged["edge"] = _glass("#FFFFFF", merged["hairline"], alphas["edge"] * g)
+        merged["edge_shade"] = _glass("#000000", merged["hairline"], alphas["edge_shade"] * g)
+        live.clear()
+        live.update(merged)
+
+
+def set_glass_amount(amount: float) -> float:
+    """Set the material glass amount (0.0 = fully opaque surfaces, 1.0 = the
+    v4 glass ceiling — see _GLASS_BLEND_ALPHAS) and recompute both palettes.
+    Clamps to [0, 1]; returns the value actually set. The caller still needs
+    to regenerate + reapply the QSS (gui.style.apply_theme) to repaint."""
+    global _glass_amount
+    try:
+        amount = float(amount)
+    except (TypeError, ValueError):
+        amount = DEFAULT_GLASS_AMOUNT
+    _glass_amount = max(0.0, min(1.0, amount))
+    _recompute_palettes()
+    return _glass_amount
+
+
+def get_glass_amount() -> float:
+    return _glass_amount
+
+
+def apply_theme_overrides(overrides: dict | None, mode: str = "dark", *,
+                          merge: bool = True) -> dict:
+    """Validate and store user palette *overrides* for *mode*, shallow-merged
+    onto the base palette BEFORE QSS generation (the live LIGHT/DARK dicts
+    are recomputed in place). Keys must be EDITABLE_TOKENS group names and
+    values '#rrggbb' hex strings; any SAFETY_TOKENS key raises ValueError —
+    the safety palette is fixed by laws 1/2/6, with no override path.
+    ``merge=False`` replaces the stored override set for the mode (the theme
+    editor's Apply semantics). Returns a copy of the stored overrides."""
+    key = "dark" if str(mode).lower() == "dark" else "light"
+    overrides = dict(overrides or {})
+    locked = sorted(k for k in overrides if str(k).lower() in SAFETY_TOKENS)
+    if locked:
+        raise ValueError(
+            f"safety palette is fixed by laws 1/2/6 — cannot override: {locked}")
+    for k, v in overrides.items():
+        if k not in _OVERRIDE_FANOUT:
+            raise ValueError(
+                f"not an editable theme token: {k!r} (editable: {EDITABLE_TOKENS})")
+        if not isinstance(v, str) or not _HEX6_RE.match(v):
+            raise ValueError(
+                f"override for {k!r} must be a '#rrggbb' hex string, got {v!r}")
+    if merge:
+        _overrides[key].update(overrides)
+    else:
+        _overrides[key] = dict(overrides)
+    _recompute_palettes()
+    return dict(_overrides[key])
+
+
+def sanitize_overrides(overrides) -> dict:
+    """Preset-JSON / QSettings gate: keep only EDITABLE_TOKENS keys with
+    valid '#rrggbb' values; safety tokens and unknown keys are DROPPED
+    silently (a hand-edited preset can never unlock the safety palette)."""
+    clean: dict[str, str] = {}
+    if not isinstance(overrides, dict):
+        return clean
+    for k, v in overrides.items():
+        if k in _OVERRIDE_FANOUT and isinstance(v, str) and _HEX6_RE.match(v):
+            clean[k] = v
+    return clean
+
+
+def theme_overrides(mode: str) -> dict:
+    """Copy of the stored user overrides for *mode*."""
+    return dict(_overrides["dark" if str(mode).lower() == "dark" else "light"])
+
+
+def apply_typography(*, sans=_UNSET, mono=_UNSET, hinting=_UNSET,
+                     base_px=_UNSET) -> None:
+    """Set the user typography choices and rebind the live module globals
+    (SANS_FAMILIES/SANS_FAMILY, MONO_FAMILIES/MONO_FAMILY, FONT_HINTING,
+    FONT_MD). ``build_qss``/``_apply_app_font`` resolve these at call time,
+    so the next apply_theme() picks them up. Pass ``None`` to reset a field
+    to the shipped default; omitted fields keep their current choice. A
+    chosen family is promoted to the FRONT of the shipped fallback stack
+    (never replacing it — fallbacks keep working). ``base_px`` clamps to
+    the shipped default +/- 2."""
+    global SANS_FAMILIES, SANS_FAMILY, MONO_FAMILIES, MONO_FAMILY
+    global FONT_HINTING, FONT_MD
+    if sans is not _UNSET:
+        _typography["sans"] = str(sans) if sans else None
+    if mono is not _UNSET:
+        _typography["mono"] = str(mono) if mono else None
+    if hinting is not _UNSET:
+        _typography["hinting"] = hinting if hinting in _HINTING_PREFS else None
+    if base_px is not _UNSET:
+        if base_px is None:
+            _typography["base_px"] = None
+        else:
+            try:
+                px = int(base_px)
+            except (TypeError, ValueError):
+                px = _BASE_FONT_MD
+            _typography["base_px"] = max(_BASE_FONT_MD - 2,
+                                         min(_BASE_FONT_MD + 2, px))
+    chosen_sans = _typography["sans"]
+    families = list(_BASE_SANS_FAMILIES)
+    if chosen_sans:
+        families = [chosen_sans] + [f for f in families if f != chosen_sans]
+    SANS_FAMILIES = families
+    SANS_FAMILY = ", ".join(f'"{f}"' for f in SANS_FAMILIES) + ", system-ui, sans-serif"
+    chosen_mono = _typography["mono"]
+    mono_families = list(_BASE_MONO_FAMILIES)
+    if chosen_mono:
+        mono_families = [chosen_mono] + [f for f in mono_families if f != chosen_mono]
+    MONO_FAMILIES = mono_families
+    MONO_FAMILY = ", ".join(f'"{f}"' for f in MONO_FAMILIES) + ", monospace"
+    FONT_HINTING = _typography["hinting"] or _BASE_FONT_HINTING
+    FONT_MD = _typography["base_px"] or _BASE_FONT_MD
+    FONT["md"] = FONT_MD
+
+
+def typography() -> dict:
+    """Copy of the stored user typography choices (None = shipped default)."""
+    return dict(_typography)
+
+
+def base_typography() -> dict:
+    """The shipped typography defaults (for the editor's combo population)."""
+    return {"sans": list(_BASE_SANS_FAMILIES), "mono": list(_BASE_MONO_FAMILIES),
+            "hinting": _BASE_FONT_HINTING, "base_px": _BASE_FONT_MD}
+
+
+def apply_radius_scale(scale: str) -> str:
+    """Set the corner-radius scale ("s"/"m"/"l" — see RADIUS_SCALES) and
+    rebind the live RADIUS_SM/MD/LG globals + RADIUS dict. Unknown values
+    fall back to "m". NOTE: modules that imported RADIUS_* BY VALUE at import
+    time keep the old numbers in their per-instance inline styles until
+    rebuilt — the global QSS (the dominant consumer) follows immediately."""
+    global RADIUS_SM, RADIUS_MD, RADIUS_LG, _radius_scale
+    key = str(scale).lower()
+    if key not in RADIUS_SCALES:
+        key = "m"
+    _radius_scale = key
+    RADIUS_SM, RADIUS_MD, RADIUS_LG = RADIUS_SCALES[key]
+    RADIUS["sm"], RADIUS["md"], RADIUS["lg"] = RADIUS_SM, RADIUS_MD, RADIUS_LG
+    return key
+
+
+def radius_scale() -> str:
+    return _radius_scale
+
+
+def reset_theme_customization() -> None:
+    """Restore every user-tunable theme knob (palette overrides, glass
+    amount, typography, radius) to the shipped defaults. Does NOT touch
+    QSettings — persistence stays the theme editor's decision."""
+    global _glass_amount
+    _overrides["light"] = {}
+    _overrides["dark"] = {}
+    _glass_amount = DEFAULT_GLASS_AMOUNT
+    apply_typography(sans=None, mono=None, hinting=None, base_px=None)
+    apply_radius_scale("m")
+    _recompute_palettes()
+
+
+def _default_settings():
+    from PySide6.QtCore import QSettings
+    return QSettings("TCT", "TCTSetup")
+
+
+def save_theme_customization(settings=None) -> None:
+    """Persist the current customization under theme/* in
+    QSettings("TCT", "TCTSetup") (or an injected *settings* for tests)."""
+    s = settings if settings is not None else _default_settings()
+    s.setValue(_SETTINGS_GLASS_KEY, float(_glass_amount))
+    s.setValue(_SETTINGS_OVERRIDES_KEY, json.dumps(_overrides))
+    s.setValue(_SETTINGS_TYPOGRAPHY_KEY, json.dumps(_typography))
+    s.setValue(_SETTINGS_RADIUS_KEY, _radius_scale)
+    s.sync()
+
+
+def load_theme_customization(settings=None) -> None:
+    """Load + apply persisted theme/* customization — called at startup right
+    where the saved dark/light choice is loaded (main.py before the first
+    apply_theme; tct_gui.TCTMainWindow.__init__ for direct construction).
+    Every field parses defensively and overrides pass sanitize_overrides, so
+    a hand-edited registry can neither unlock the safety palette nor wedge
+    startup."""
+    global _glass_amount
+    s = settings if settings is not None else _default_settings()
+    raw_glass = s.value(_SETTINGS_GLASS_KEY, None)
+    if raw_glass is not None:
+        try:
+            _glass_amount = max(0.0, min(1.0, float(raw_glass)))
+        except (TypeError, ValueError):
+            _glass_amount = DEFAULT_GLASS_AMOUNT
+    try:
+        blob = json.loads(str(s.value(_SETTINGS_OVERRIDES_KEY, "") or "{}"))
+    except (TypeError, ValueError):
+        blob = {}
+    if isinstance(blob, dict):
+        for mode in ("light", "dark"):
+            _overrides[mode] = sanitize_overrides(blob.get(mode))
+    try:
+        typo = json.loads(str(s.value(_SETTINGS_TYPOGRAPHY_KEY, "") or "{}"))
+    except (TypeError, ValueError):
+        typo = {}
+    if isinstance(typo, dict):
+        apply_typography(
+            sans=typo.get("sans") or None,
+            mono=typo.get("mono") or None,
+            hinting=typo.get("hinting") or None,
+            base_px=typo.get("base_px") or None,
+        )
+    apply_radius_scale(str(s.value(_SETTINGS_RADIUS_KEY, _radius_scale)))
+    _recompute_palettes()
 
 
 def _apply_pyqtgraph(p: dict) -> None:

@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QFrame, QDockWidget, QPlainTextEdit, QScrollArea,
 )
 
-from gui.style import apply_theme
+from gui.style import apply_theme, load_theme_customization
 from gui.detachable_tabs import DetachableTabWidget
 
 from controller.device_manager import DeviceManager
@@ -214,6 +214,14 @@ class TCTMainWindow(QMainWindow):
         self._settings_window: SettingsWindow | None = None
         self._settings = QSettings("TCT", "TCTSetup")
         self._theme_mode = str(self._settings.value("theme", "light"))
+        # Theme-editor customization (gui/theme_editor.py): palette overrides,
+        # glass amount, typography, radius — loaded from theme/* right where
+        # the saved dark/light choice is, so the apply_theme() re-assert in
+        # _build_central styles with the user's theme from the first paint.
+        # (main.py additionally pre-loads before its early apply_theme so a
+        # normal launch never flashes the un-customized look.)
+        load_theme_customization(self._settings)
+        self._theme_editor = None
         self._state_changed_sig.connect(self._on_state_change)
         self._sm.add_callback(
             lambda old, new: self._state_changed_sig.emit(old, new))
@@ -739,6 +747,9 @@ class TCTMainWindow(QMainWindow):
         self._act_dark       = _act("Dark mode", self._toggle_theme, checkable=True,
                                      tip="Toggle dark / light theme")
         self._act_dark.setChecked(self._theme_mode == "dark")
+        self._act_theme_editor = _act(
+            "Theme…", self._open_theme_editor,
+            tip="Browse and configure themes (colors, fonts, material)")
         self._act_quit       = _act("Quit", self.close, shortcut=QKeySequence.Quit)
         self._act_about      = _act("About", self._about)
 
@@ -749,6 +760,7 @@ class TCTMainWindow(QMainWindow):
         m_file.addAction(self._act_quit)
         m_view = mb.addMenu("&View")
         m_view.addAction(self._act_dark)
+        m_view.addAction(self._act_theme_editor)
         m_view.addAction(self._act_log)
         m_view.addAction(self._act_device_debug)
         m_dev = mb.addMenu("&Devices")
@@ -809,13 +821,40 @@ class TCTMainWindow(QMainWindow):
                       getattr(self, "_camera_panel", None),
                       getattr(self, "_calib_panel", None),
                       getattr(self, "_analysis_panel", None),
-                      getattr(self, "_settings_window", None)):
+                      getattr(self, "_settings_window", None),
+                      getattr(self, "_theme_editor", None)):
             if panel is not None and hasattr(panel, "refresh_theme"):
                 try:
                     panel.refresh_theme(self._theme_mode)
                 except Exception:
                     logger.debug("panel refresh_theme failed", exc_info=True)
         self._settings.setValue("theme", self._theme_mode)
+
+    def _open_theme_editor(self) -> None:
+        """View ▸ Theme… — the theme-editor dialog (gui/theme_editor.py),
+        non-modal so its live Apply/glass preview restyles the app behind
+        it. Built lazily once; re-shown afterwards."""
+        if self._theme_editor is None:
+            from gui.theme_editor import ThemeEditorDialog
+            self._theme_editor = ThemeEditorDialog(
+                mode=self._theme_mode, settings=self._settings, parent=self)
+            self._theme_editor.applyRequested.connect(self._on_theme_editor_apply)
+        self._theme_editor.refresh_theme(self._theme_mode)
+        self._theme_editor.show()
+        self._theme_editor.raise_()
+        self._theme_editor.activateWindow()
+
+    def _on_theme_editor_apply(self, mode: str) -> None:
+        """Theme-editor Apply / live preview → the SAME machinery as the
+        dark-mode toggle (apply_theme + QML sync + every panel's
+        refresh_theme + theme persistence). A mode change flips the checkable
+        action (its toggled signal runs _toggle_theme); a same-mode apply
+        invokes _toggle_theme directly to re-apply in place."""
+        want_dark = str(mode).lower() == "dark"
+        if self._act_dark.isChecked() != want_dark:
+            self._act_dark.setChecked(want_dark)   # toggled → _toggle_theme
+        else:
+            self._toggle_theme(want_dark)
 
     def _about(self) -> None:
         QMessageBox.about(

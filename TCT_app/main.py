@@ -34,6 +34,11 @@ def main() -> None:
     # Apply the last-used theme before building the window so there is no flash.
     from PySide6.QtCore import QSettings
     saved_theme = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
+    # Theme-editor customization (theme/* keys: palette overrides, glass
+    # amount, typography, radius) loads alongside the saved dark/light choice
+    # so the first QSS build already carries it (gui/theme_editor.py).
+    from gui.style import load_theme_customization
+    load_theme_customization()
     apply_theme(app, saved_theme)
     window = TCTMainWindow(config_path=str(_HERE / "configs" / "devices.yaml"))
     window.show()
