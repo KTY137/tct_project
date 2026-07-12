@@ -490,6 +490,12 @@ class TCTMainWindow(QMainWindow):
         coord.progress.connect(self._scan_viewer.on_progress)
         coord.scan_started.connect(self._scan_viewer.on_scan_started)
         coord.scan_finished.connect(self._scan_viewer.on_scan_finished)
+        # A fault is not a finish (law 8).  ScanCoordinator._on_error emits
+        # scan_finished *before* error_dialog, so without this connection the
+        # viewer painted the green "Scan finished — map retained." banner over a
+        # compliance trip / slow-control ALARM / driver fault.  on_scan_error
+        # flags the run FAULTED and repaints the terminal state honestly.
+        coord.error_dialog.connect(self._scan_viewer.on_scan_error)
         # Coordinator → run-state facade (read-only mirror for the QML Scan
         # Viewer; the SAME already-marshaled GUI-thread signals feed it in
         # parallel with the classic panel — see run_state_facade.md §3 path 2).

@@ -216,6 +216,10 @@ def _wire_like_tct_gui(coord: ScanCoordinator, viewer: ScanViewerPanel, scanner)
     coord.progress.connect(viewer.on_progress)
     coord.scan_started.connect(viewer.on_scan_started)
     coord.scan_finished.connect(viewer.on_scan_finished)
+    # A fault is not a finish (law 8): the coordinator emits scan_finished before
+    # error_dialog, so the viewer must repaint its terminal state when the error
+    # lands or a compliance trip is reported as a clean green finish.
+    coord.error_dialog.connect(viewer.on_scan_error)
 
     def publish() -> None:
         p = scanner.last_run_path
@@ -471,6 +475,67 @@ def test_refused_zfocus_and_voltage_starts_do_not_arm_run_control():
     assert viewer2._run_active is False
     assert not viewer2._btn_pause.isEnabled()
     assert not viewer2._btn_abort.isEnabled()
+
+
+# --------------------------------------------------------------------------- #
+# (1c) a fault is not a finish — the trip must reach the viewer's terminal      #
+# --------------------------------------------------------------------------- #
+def test_fault_during_run_paints_the_fault_terminal_not_the_green_banner():
+    """The safety wiring 9c207a1 could not close: a run fault (bias compliance
+    trip, slow-control ALARM, driver error) travels on ``error_dialog``, and the
+    coordinator emits ``scan_finished`` FIRST. Without the error_dialog →
+    on_scan_error connection the cockpit painted the green
+    "Scan finished — map retained." banner over an over-current trip (law 8)."""
+    app = _app()
+    coord, fake, sm = _fake_coord(AppState.READY)
+    viewer = ScanViewerPanel()
+    _wire_like_tct_gui(coord, viewer, fake)
+
+    coord.start_plan(object())
+    assert viewer._run_active is True
+
+    # The controller reports the fault on the scan thread → bridge → GUI thread.
+    coord._bridge.error.emit("Bias compliance trip at 4.9 uA — HV ramped down")
+    app.processEvents()
+
+    # Run released, and the terminal is the FAULT variant — never the green one.
+    assert viewer._run_active is False
+    assert viewer._chip_run.text() == "Fault"
+    assert viewer._chip_finished.text() == "Fault"
+    banner = viewer._lbl_finished.text()
+    assert "fault" in banner.lower()
+    assert "Scan finished — map retained." not in banner
+    assert "compliance trip" in viewer._lbl_finished.toolTip()
+    assert viewer._finished_banner.isVisibleTo(viewer)
+
+    # The controller's own on_finished can still land after the error (the fault
+    # path settles the terminal state and may deliver scan_finished twice) — the
+    # green banner must NOT win the repaint race.
+    coord._bridge.finished.emit()
+    app.processEvents()
+    assert viewer._chip_finished.text() == "Fault"
+    assert "Scan finished — map retained." not in viewer._lbl_finished.text()
+
+    # A clean next run clears the fault: the flag is per-run, not sticky forever.
+    coord.start_plan(object())
+    coord._bridge.finished.emit()
+    app.processEvents()
+    assert viewer._chip_finished.text() == "Finished"
+
+
+def test_composition_root_wires_error_dialog_into_the_viewer():
+    """Lock-step guard for ``_wire_like_tct_gui``: the helper above is only a
+    contract if the composition root really makes the same connection. Same
+    source-level idiom as the danger-gate wiring guards."""
+    import inspect
+
+    import tct_gui
+
+    src = inspect.getsource(tct_gui.TCTMainWindow._build_central)
+    assert "coord.error_dialog.connect(self._scan_viewer.on_scan_error)" in src, (
+        "tct_gui no longer wires the run fault into the Scan Viewer — a "
+        "compliance trip would be painted as a clean green finish again."
+    )
 
 
 # --------------------------------------------------------------------------- #
