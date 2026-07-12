@@ -9,6 +9,17 @@ Provides:
   - Compliance setting (with red warning if too high)
   - Voltage setpoint + ramp controls, quick-off safety button
   - Standalone sweeps (advanced, collapsed): IV scan + CCE-vs-V — QThread
+
+Safety (CLAUDE.md hardware-safety rule 2): EVERY path in this panel that can
+energize or step the HV output first asks an injected
+:class:`~controller.danger_gate.DangerGate` to ``confirm`` a
+:class:`~controller.danger_gate.DangerAction` carrying the REAL numbers —
+manual ramp, IV sweep, bias+waveform sweep and the polarity relay.  The main
+window injects the SAME ``QtDangerGate`` the plan executor uses, so there is a
+single confirmation mechanism (and a single audit surface) for HV in the app.
+The fail-safe stops (``Output OFF (0 V)`` here, ``ALL OUTPUTS OFF`` in
+``MultiBiasPanel``) are deliberately NOT gated: a stop can only make the setup
+safer, so it stays one tap (cockpit design law 5).
 """
 from __future__ import annotations
 
@@ -30,6 +41,7 @@ except ImportError:
     _HAS_PG = False
 
 from devices.bias_supply_base import BiasSupplyBase
+from controller.danger_gate import DangerAction, DangerGate
 from controller.scan_controller import VoltageScanConfig
 from gui.panel_kit import Card, CheckableCard, MetricGrid, MetricTile, section_header
 from gui.status_bus import notify
@@ -177,9 +189,16 @@ class BiasPanel(QWidget):
     _POLL_MS = 500               # live readout interval
     _POL_SYMBOLS = {"p": "+", "n": "−"}
 
-    def __init__(self, supply: BiasSupplyBase, parent: QWidget | None = None) -> None:
+    def __init__(self, supply: BiasSupplyBase, parent: QWidget | None = None,
+                 *, gate: DangerGate | None = None) -> None:
         super().__init__(parent)
         self._supply = supply
+        # Confirmation gate for every HV-energizing action in this panel (rule
+        # 2).  The main window injects the same QtDangerGate the plan executor
+        # uses; with no gate every dangerous path refuses (fail-safe) and says
+        # so, rather than silently energizing the output unconfirmed — the same
+        # stance CalibrationPanel takes for gate-less motion.
+        self._gate = gate
         self._iv_v: list[float] = []
         self._iv_i: list[float] = []
         self._vscan_v: list[float] = []
@@ -535,10 +554,54 @@ class BiasPanel(QWidget):
         if started:
             set_button_busy(self._btn_set_comp, True, "Applying...")
 
+    # ------------------------------------------------------------------ #
+    # Danger gate (CLAUDE.md rule 2) — one mechanism for every HV action  #
+    # ------------------------------------------------------------------ #
+
+    def _channel(self):
+        """Channel id for the DangerAction payload (``?`` if the supply
+        doesn't expose one — never an exception on the confirm path)."""
+        return getattr(self._supply, "channel", "?")
+
+    def _confirm_hv(self, action: DangerAction) -> bool:
+        """Ask the injected gate to confirm one HV-energizing *action*.
+
+        Called on the GUI thread, BEFORE any driver call: a refusal must leave
+        the supply untouched and the panel unarmed (no busy button, no RAMPING
+        tile).  ``confirm`` returning ``False`` is a normal user decline, not
+        an error.
+
+        With **no gate injected** the action is REFUSED and surfaced — the same
+        fail-safe fallback ``CalibrationPanel`` uses for gate-less motion
+        (``calibration_panel._run_repeatability``): an un-wired confirmation
+        path must never degrade into "no confirmation needed".
+        """
+        if self._gate is None:
+            QMessageBox.warning(
+                self, "Confirmation unavailable",
+                f"{action.summary}\n\n"
+                "This energizes the HV output and needs a confirmation gate, "
+                "which is not wired. Cannot proceed.")
+            return False
+        return bool(self._gate.confirm(action))
+
     def _apply_voltage(self) -> None:
         target_V = self._spin_volt.value()
         step_V = self._spin_step.value()
         delay_s = self._spin_delay.value()
+        ch = self._channel()
+        # Rule 2: confirm the ramp — with the REAL setpoint, step and delay in
+        # the payload, so the dialog can never describe a different ramp than
+        # the one about to run — before the driver is touched at all.
+        if not self._confirm_hv(DangerAction(
+            kind="hv_ramp",
+            summary=f"Ramp CH{ch} to {target_V:g} V",
+            detail={"channel": ch, "target_V": target_V,
+                    "ramp_step_V": step_V, "ramp_delay_s": delay_s},
+        )):
+            notify(f"HV ramp to {target_V:g} V not confirmed — nothing applied.",
+                   "warn")
+            return
         started = self._run_supply_call(
             lambda: self._supply.ramp_to(
                 target_V,
@@ -553,6 +616,9 @@ class BiasPanel(QWidget):
             self._set_hv_tile("RAMPING", "armed", "ramp command in flight")
 
     def _emergency_off(self) -> None:
+        # NOT danger-gated, deliberately (cockpit design law 5): ramping to 0 V
+        # and disabling the output can only make the setup safer, so the stop
+        # stays ONE TAP.  Never put a confirmation in front of this.
         started = self._run_supply_call(
             self._do_emergency_off,
             self._on_emergency_off_done,
@@ -664,6 +730,23 @@ class BiasPanel(QWidget):
             hold_delay_s=self._spin_vs_hold.value(),
             n_averages=self._spin_vs_nav.value(),
         )
+        # Rule 2: this sweep drives the HV supply across the whole range (the
+        # ScanController's classic voltage-scan loop ramps it, and that loop is
+        # NOT gate-guarded like the plan executor's BiasStep) — so the panel
+        # that starts it must confirm before the request leaves the GUI.
+        ch = self._channel()
+        if not self._confirm_hv(DangerAction(
+            kind="hv_ramp",
+            summary=(f"Bias + waveform scan on CH{ch}: ramp "
+                     f"{cfg.v_start_V:g} V → {cfg.v_stop_V:g} V "
+                     f"in {cfg.v_step_V:g} V steps"),
+            detail={"channel": ch, "target_V": cfg.v_stop_V,
+                    "start_V": cfg.v_start_V, "ramp_step_V": cfg.v_step_V,
+                    "hold_delay_s": cfg.hold_delay_s,
+                    "n_averages": cfg.n_averages},
+        )):
+            notify("Bias + waveform scan not confirmed — not started.", "warn")
+            return
         self._vscan_v = []
         self._vscan_q = []
         self.vscan_requested.emit(cfg)
@@ -706,6 +789,21 @@ class BiasPanel(QWidget):
         else:
             voltages = list(np.arange(start, stop - step / 2, -step))
         if not voltages:
+            return
+
+        # Rule 2: _IVWorker ramps the output to every point in `voltages` (and
+        # leaves it energized at the last one) — confirm the sweep, with its
+        # real envelope, before the worker thread is even created.
+        ch = self._channel()
+        if not self._confirm_hv(DangerAction(
+            kind="hv_ramp",
+            summary=(f"IV sweep on CH{ch}: ramp {start:g} V → {stop:g} V "
+                     f"in {step:g} V steps ({len(voltages)} points)"),
+            detail={"channel": ch, "target_V": stop, "start_V": start,
+                    "ramp_step_V": step, "step_delay_s": delay,
+                    "points": len(voltages)},
+        )):
+            notify("IV scan not confirmed — not started.", "warn")
             return
 
         self._iv_v, self._iv_i = [], []
@@ -802,24 +900,27 @@ class BiasPanel(QWidget):
     def _on_switch_polarity(self) -> None:
         """Confirm, then reverse HV polarity off the GUI thread (DANGEROUS).
 
-        The driver enforces the real gate (output OFF + discharged + confirm);
-        this adds the mandatory explicit user confirmation on top."""
+        The driver enforces the real preconditions (output OFF + discharged +
+        readback confirm); this adds the mandatory explicit user confirmation
+        on top — through the SAME injected gate as every other HV action here,
+        so there is one confirmation mechanism and one audit surface (it used
+        to be a hand-rolled QMessageBox that no gate ever saw)."""
         target = {"p": "n", "n": "p"}.get(self._last_polarity)
-        ch = getattr(self._supply, "channel", "?")
+        ch = self._channel()
         if target is None:
             notify("Current polarity unknown — wait for the readout before switching.",
                    "warn")
             return
         cur_sym = self._POL_SYMBOLS.get(self._last_polarity, "?")
         tgt_sym = self._POL_SYMBOLS.get(target, "?")
-        reply = QMessageBox.warning(
-            self, "Reverse HV Polarity",
-            f"Reverse HV polarity on CH{ch}  ({cur_sym} → {tgt_sym})?\n\n"
-            "Output must be OFF and fully discharged.\n"
-            "This physically throws an HV relay.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        )
-        if reply != QMessageBox.Yes:
+        if not self._confirm_hv(DangerAction(
+            kind="hv_polarity",
+            summary=f"Reverse HV polarity on CH{ch} ({cur_sym} → {tgt_sym})",
+            detail={"channel": ch, "from": self._last_polarity, "to": target,
+                    "precondition": "output must be OFF and fully discharged",
+                    "hazard": "physically throws an HV relay"},
+        )):
+            notify(f"CH{ch} polarity switch not confirmed.", "warn")
             return
         self._run_supply_call(
             lambda: self._supply.set_polarity(target),

@@ -246,6 +246,15 @@ class TCTMainWindow(QMainWindow):
         explicitly ``deleteLater()`` the outgoing central widget itself before
         this method builds and installs the next one."""
         # ── GUI panels ────────────────────────────────────────────────
+        # Danger-confirm gate FIRST: it is the app's single confirmation
+        # mechanism for dangerous actions (CLAUDE.md rule 2), and the panels
+        # below take it by injection.  It lives here (parented to the window)
+        # because the plan executor calls gate.confirm() from the scan worker
+        # thread; teardown must shutdown() it so a pending confirm can never
+        # block app exit.  ONE instance for the whole app — the plan executor,
+        # the calibration panel's motion, and every HV-energizing control in
+        # the bias panels all confirm through this same object.
+        self._danger_gate     = QtDangerGate(parent=self)
         self._motor_panel     = MotorPanel(self._devices.motor)
         self._intensity_panel = IntensityPanel(self._devices.intensity_monitor)
         self._camera_panel    = CameraPanel(self._devices.camera)
@@ -255,21 +264,20 @@ class TCTMainWindow(QMainWindow):
         self._scan_viewer     = ScanViewerPanel()
         # One tab per HV channel.  Starts as [primary] and is rebuilt from the
         # driver's real channel count once connect_all() runs refresh_bias_channels().
-        self._bias_panel      = MultiBiasPanel(self._devices.bias_channels)
+        # The gate is forwarded to every per-channel BiasPanel: the manual ramp,
+        # the IV / bias+waveform sweeps and the polarity relay all confirm
+        # through it (rule 2).  ALL OUTPUTS OFF stays one-tap (law 5).
+        self._bias_panel      = MultiBiasPanel(self._devices.bias_channels,
+                                               gate=self._danger_gate)
         self._monitor_panel   = MonitorPanel(
             self._devices.slow_control,
             poll_interval_s=self._devices._poll_interval_s,
             influx_writer=self._devices.influx,
         )
         self._analysis_panel  = AnalysisPanel()
-        # Danger-confirm gate.  The gate lives here (parented to the window)
-        # because the plan executor calls gate.confirm() from the scan worker
-        # thread; teardown must shutdown() it so a pending confirm can never
-        # block app exit.  Constructed BEFORE the calibration panel because the
-        # panel now requires the SAME gate instance (repeatability motion is
-        # danger-gated — Abel, controller/repeatability.py) and refuses motion
+        # Same gate instance as above: repeatability motion is danger-gated
+        # (Abel, controller/repeatability.py) and the panel refuses to move
         # without it.
-        self._danger_gate     = QtDangerGate(parent=self)
         self._calib_panel     = CalibrationPanel(self._devices, gate=self._danger_gate)
         # Scan-routine planner (Recipe Tree) — shares the gate above.
         self._planner_panel   = PlannerPanel(parent=self)

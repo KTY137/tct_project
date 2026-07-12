@@ -14,7 +14,13 @@ Design / safety notes:
   * "ALL OUTPUTS OFF" ramps + disables every connected channel **off** the GUI
     thread (reusing ``BiasPanel``'s ``_SupplyCallWorker`` pattern), and fails
     safe: it keeps switching off the remaining channels even if one errors, then
-    reports the aggregated failure via the app status bus.
+    reports the aggregated failure via the app status bus.  It is deliberately
+    **not** danger-gated: a stop can only make the setup safer, so it stays one
+    tap (cockpit design law 5).
+  * The injected :class:`~controller.danger_gate.DangerGate` is a pure
+    pass-through to each per-channel ``BiasPanel`` (which confirms every
+    HV-energizing action against it — CLAUDE.md rule 2); it survives
+    :meth:`rebuild`, so channels enumerated after connect are gated too.
   * The bias+waveform (vscan) controls belong to the primary channel (the scan
     controller is bound to the primary supply), so only the primary panel's
     ``vscan_requested`` is surfaced here.
@@ -27,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from devices.bias_channel import BiasChannel
+from controller.danger_gate import DangerGate
 from controller.scan_controller import VoltageScanConfig
 from gui.bias_panel import BiasPanel, _SupplyCallWorker
 from gui.panel_kit import panel_header
@@ -41,9 +48,13 @@ class MultiBiasPanel(QWidget):
     # single, stable signal that survives channel rebuilds.
     vscan_requested = Signal(VoltageScanConfig)
 
-    def __init__(self, channels: list[BiasChannel], parent: QWidget | None = None) -> None:
+    def __init__(self, channels: list[BiasChannel], parent: QWidget | None = None,
+                 *, gate: DangerGate | None = None) -> None:
         super().__init__(parent)
         self._channels: list[BiasChannel] = list(channels or [])
+        # Handed to every per-channel BiasPanel (and to any panel built later by
+        # rebuild()): each one confirms its HV-energizing actions against it.
+        self._gate = gate
         self._panels: list[BiasPanel] = []
         self._off_thread: QThread | None = None
         self._off_worker: _SupplyCallWorker | None = None
@@ -88,7 +99,7 @@ class MultiBiasPanel(QWidget):
         self._channels = list(channels or [])
         self._panels = []
         for ch in self._channels:
-            panel = BiasPanel(ch)
+            panel = BiasPanel(ch, gate=self._gate)
             self._panels.append(panel)
             self._tabs.addTab(panel, f"CH{getattr(ch, 'channel', '?')}")
         self._refresh_summary()
@@ -184,6 +195,9 @@ class MultiBiasPanel(QWidget):
     # ------------------------------------------------------------------ #
 
     def _all_outputs_off(self) -> None:
+        # ONE TAP, no danger gate (law 5): this is the kill switch.  A stop can
+        # only make the setup safer, so it must never wait on a confirmation
+        # dialog — never route this through self._gate.
         if self._off_thread is not None and self._off_thread.isRunning():
             return
         live = [c for c in self._channels if getattr(c, "connected", False)]
