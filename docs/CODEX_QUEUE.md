@@ -233,3 +233,36 @@ critique shaped v4; now be the adversarial designer for v5.
 - Created a structured v5 council memo covering five Qt-specific translation losses, one concrete composition/material move for each of the 11 audited panels, a perf-honest Qt/QML translucency strategy, and three Mac-app interaction ideas.
 - Verification: read `docs/design/cockpit_design_system.md`, `artifacts_claude/tct_cockpit_design_v4_final.html` source, `artifacts_claude/ui_audit_20260711_005405/manifest.txt`, and `TCT_app/gui/style.py`; visually inspected the latest audit captures for all listed light panels plus representative dark/detached captures. `git diff --check` passed. No pytest was run because D2 is documentation-only and requests no app-code edits.
 - Risk: critique is source/audit based; no new capture run was performed.
+
+## D3 — Panel composition inventory (ground truth for v5 redesign)
+
+**Status: DONE — Wrote panel composition inventory for v5.** · Effort: M · Source: Adam, Operation Feinschliff 2026-07-12
+
+The v5 redesign (see docs/design/council_v5_codex.md — your D2 seat) needs a
+mechanical ground-truth inventory of how each panel is ACTUALLY composed
+today, so per-panel redesign artifacts don't guess.
+
+- Read-only with respect to app code. Write ONE file:
+  docs/design/panel_inventory_v5.md
+- For each of these gui/ panels — motor_panel, reference_monitor_panel (or
+  its actual module name; locate it), camera_panel, scope_panel, laser_panel,
+  scan_viewer, scan_planner (planner panel module), bias_panel, calibration_panel,
+  monitor_panel, analysis_panel, plus settings_window and device manager dialog —
+  report, tersely (table or compact list per panel):
+  1. Top-level layout type + orientation (e.g. QVBoxLayout > QSplitter(H)).
+  2. Count of QGroupBox / panel_kit Card / QFrame containers, and max nesting
+     depth of framed containers.
+  3. Scroll areas (how many, wrapping what).
+  4. The panel's "hero" candidate (largest single widget: plot/camera/tree/…)
+     and roughly what fraction of the panel it occupies in the default layout.
+  5. Command surfaces: rows of QPushButtons, toolbars, arm/danger controls.
+  6. Anything that would fight a hero+inspector recomposition (hard-coded
+     minimum sizes, fixed splitter ratios, deeply nested forms).
+- No opinions needed (D2 covered that) — this is a measurement pass.
+- No app-code edits. No commit. Set D3 DONE with findings per Handback.
+
+**Codex findings (2026-07-12):**
+- Files touched: `docs/design/panel_inventory_v5.md`, `docs/CODEX_QUEUE.md`.
+- Created a source-level inventory for the 11 main tabs plus `SettingsWindow` and `DeviceManagerWindow`, including actual module resolution for Reference Monitor (`gui/intensity_panel.py`), top-level layout shape, framed-container counts/depth, scroll areas, hero candidates, command surfaces, and recomposition friction.
+- Verification: read `docs/design/council_v5_codex.md`, `TCT_app/tct_gui.py`, `TCT_app/gui/panel_kit.py`, `TCT_app/gui/scan_map_view.py`, `TCT_app/gui/stage_view.py`, and the target panel/dialog modules; `git diff --check` passed. No pytest was run because D3 is documentation-only and app code is read-only for this task.
+- Risk: counts are static source-level measurements; no new rendered layout screenshots or runtime widget-tree introspection were performed.
