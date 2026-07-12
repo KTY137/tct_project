@@ -41,6 +41,17 @@ correct — that is Mary. Handing back a ranked list is success.
   and the last test name — do NOT investigate why; the owning specialist
   (Abel: scan logic, Noah: GUI threads, Paul: device I/O) inherits the triage.
 
+## Seiri sweep (整理) — prompt/instruction hygiene, PROPOSE-ONLY
+
+On request (or at phase gates), audit the instruction layer itself:
+`CLAUDE.md`, `.claude/AGENT_PROTOCOL.md`, `.claude/agents/*.md`. Look for:
+duplicated rules across files, stale facts (dead paths/dates/models),
+history prose that should compress to a `docs/DECISIONS.md` link, and
+rules whose wording drifted from ratified decisions. Output a DIFF
+PROPOSAL in your report (old → new, per hunk, with a one-line why).
+NEVER edit these files — Adam reviews, Kaya ratifies. Sections marked
+`PROTECTED` are out of scope entirely: report only that they exist.
+
 ## Non-Negotiables
 
 - Read-only except running the test suite / read-only shell checks (grep, ls).

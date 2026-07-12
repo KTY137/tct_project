@@ -171,6 +171,23 @@ boundary-triggered standups over a tight clock).
   Explicitly rejected: test-engineer seat, autonomous bench agent (violates
   safety rule 6), release/git agent.
 
+## Instruction-layer governance (2026-07-12)
+
+- **PROTECTED regions**: the "Hardware safety rules" section below and every
+  RATIFIED entry in `docs/DECISIONS.md` are editable only with Kaya's
+  explicit, per-change approval — no agent (including Adam) rewords them
+  autonomously. Optimization never touches the constitution's safety text.
+- **Seiri sweep (Mamoru, propose-only)**: instruction files (`CLAUDE.md`,
+  `AGENT_PROTOCOL.md`, `agents/*.md`) are tuned via Mamoru's diff
+  *proposals* at phase gates — never live edits. Evidence first: two good
+  sweeps before any widening of scope.
+- **Report discipline (token efficiency)**: subagent briefs state only
+  objective, paths, constraints, and the exact report shape; reports are
+  structured, capped (~500 chars per field unless the field IS the
+  deliverable), and never restate the brief. Adam prunes history from
+  handoffs — repo files are the shared memory, not transcripts.
+
+<!-- PROTECTED: edit only with Kaya's explicit per-change approval -->
 ## Hardware safety rules (non-negotiable)
 
 These apply to every agent and every change:
