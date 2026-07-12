@@ -93,7 +93,7 @@ def _ready_sim(tmp_path):
     dm = DeviceManager(config_path=_sim_config_path(tmp_path))
     assert dm.config_errors() == []
     assert all(v == "ok" for v in dm.connect_all().values())
-    dm.motor.zero_position()             # homed without moving
+    dm.motor.home()                      # real homing (sim: instant, at origin)
     sm = StateMachine()
     for st in (AppState.CONNECTED, AppState.HOMED, AppState.CONFIGURED, AppState.READY):
         sm.transition(st)
@@ -291,6 +291,7 @@ def test_refused_zfocus_and_vscan_warn():
     _app()
     coord, fake, sm = _fake_coord(AppState.CONNECTED)
     warn = Spy(coord.warn_dialog)
+    started = Spy(coord.scan_started)
 
     from controller.scan_controller import ZFocusScanConfig, VoltageScanConfig
     coord.start_z_focus(ZFocusScanConfig())
@@ -298,6 +299,43 @@ def test_refused_zfocus_and_vscan_warn():
 
     assert warn.count == 2
     assert fake.names == []                         # nothing launched
+    assert started.count == 0                       # and nothing armed
+
+
+# --------------------------------------------------------------------------- #
+# (3c) z-focus / voltage runs MUST arm the viewer's run controls.              #
+#      Both drive hardware on their own (z-focus = live stage motion, voltage  #
+#      = HV stepping) but only start_scan/start_plan used to emit scan_started #
+#      — the signal the Scan Viewer's Pause/Abort enable keys off — while      #
+#      scan_finished fired for every run type.  A live run whose Pause/Abort   #
+#      stay greyed out is a safety hole (Codex adversarial review).            #
+# --------------------------------------------------------------------------- #
+def test_zfocus_start_emits_scan_started_once():
+    _app()
+    coord, fake, sm = _fake_coord(AppState.READY)
+    started = Spy(coord.scan_started)
+    status = Spy(coord.status_message)
+
+    from controller.scan_controller import ZFocusScanConfig
+    coord.start_z_focus(ZFocusScanConfig())
+
+    assert fake.names == ["z_focus"]
+    assert started.count == 1                       # exactly once, on success
+    assert ("Z-focus scan running…",) in status.calls
+
+
+def test_voltage_start_emits_scan_started_once():
+    _app()
+    coord, fake, sm = _fake_coord(AppState.READY)
+    started = Spy(coord.scan_started)
+    status = Spy(coord.status_message)
+
+    from controller.scan_controller import VoltageScanConfig
+    coord.start_voltage_scan(VoltageScanConfig())
+
+    assert fake.names == ["vscan"]
+    assert started.count == 1
+    assert ("Voltage scan running…",) in status.calls
 
 
 # --------------------------------------------------------------------------- #
@@ -313,6 +351,7 @@ def test_zfocus_start_refused_by_controller_fails_closed():
         "A run is already active (paused or running).")
     err = Spy(coord.error_dialog)
     status = Spy(coord.status_message)
+    started = Spy(coord.scan_started)
 
     from controller.scan_controller import ZFocusScanConfig
     coord.start_z_focus(ZFocusScanConfig())             # must not raise
@@ -320,6 +359,7 @@ def test_zfocus_start_refused_by_controller_fails_closed():
     assert err.count == 1
     assert err.last[0] == "Z-focus scan refused"
     assert status.count == 0                            # never painted "running…"
+    assert started.count == 0                           # and never armed Pause/Abort
 
 
 def test_voltage_start_refused_by_controller_fails_closed():
@@ -329,6 +369,7 @@ def test_voltage_start_refused_by_controller_fails_closed():
         "A run is already active (paused or running).")
     err = Spy(coord.error_dialog)
     status = Spy(coord.status_message)
+    started = Spy(coord.scan_started)
 
     from controller.scan_controller import VoltageScanConfig
     coord.start_voltage_scan(VoltageScanConfig())       # must not raise
@@ -336,6 +377,7 @@ def test_voltage_start_refused_by_controller_fails_closed():
     assert err.count == 1
     assert err.last[0] == "Voltage scan refused"
     assert status.count == 0                            # never painted "running…"
+    assert started.count == 0                           # and never armed Pause/Abort
 
 
 def test_classic_start_refused_by_controller_fails_closed():
@@ -467,3 +509,157 @@ def test_scanner_callbacks_wired():
     assert callable(fake.on_vscan_point)
     assert callable(fake.on_manual_pause)
     assert isinstance(coord._bridge, _ScanBridge)
+
+
+# --------------------------------------------------------------------------- #
+# (10) Pause must actually PARK a z-focus / voltage run — not just flip the     #
+#      state machine while the stage keeps stepping or HV keeps ramping.        #
+#      Arming the viewer's Pause button for these run types (test 3c) is only   #
+#      safe because the loops now wait on _pause_event between steps; a Pause    #
+#      that does nothing is worse than a disabled one.  Real, fully-simulated    #
+#      ScanController on its worker thread.                                      #
+# --------------------------------------------------------------------------- #
+def _wait_until(app, predicate, timeout=15.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        app.processEvents()
+        if predicate():
+            return True
+        time.sleep(0.005)
+    return False
+
+
+def _settle(app, seconds: float) -> None:
+    """Pump the event loop for *seconds* (lets a NOT-parked loop betray itself)."""
+    end = time.time() + seconds
+    while time.time() < end:
+        app.processEvents()
+        time.sleep(0.01)
+
+
+def test_pause_parks_a_live_zfocus_run_then_abort_from_paused(tmp_path):
+    app = _app()
+    dm, sm, ctrl = _ready_sim(tmp_path)
+    try:
+        from controller.scan_controller import ZFocusScanConfig
+        coord = ScanCoordinator(ctrl, sm, AutoConfirmGate(), lambda: _limits())
+        pts = Spy(coord.z_focus_pt)
+        started = Spy(coord.scan_started)
+
+        # Long enough (201 z steps) that the run is provably still in flight
+        # when we pause a few steps in.
+        coord.start_z_focus(ZFocusScanConfig(
+            mode="amplitude", x_mm=0.0, y_mm=0.0,
+            z_start_mm=0.0, z_stop_mm=2.0, z_step_mm=0.01,
+            n_averages=1, settle_time_s=0.01,
+        ))
+        assert started.count == 1                 # run control armed (the fix)
+        assert _wait_until(app, lambda: pts.count >= 1), "z-focus never started"
+
+        coord.toggle_pause(True)
+        assert sm.state is AppState.PAUSED
+        n = pts.count
+        _settle(app, 0.5)
+        # Parked: at most the in-flight z step may still land.
+        assert pts.count <= n + 1, "pause did not park the z-focus loop"
+        assert ctrl._thread.is_alive()            # parked, NOT finished
+
+        # Abort from PAUSED unblocks the loop and settles ABORTED (the state
+        # machine must not be left wedged in PAUSED — that would refuse every
+        # later start via _refuse_if_active).
+        coord.abort()
+        _drain(app, ctrl)
+        assert sm.state is AppState.ABORTED
+    finally:
+        dm.disconnect_all()
+
+
+def test_pause_parks_a_live_voltage_scan_then_abort_from_paused(tmp_path):
+    app = _app()
+    dm, sm, ctrl = _ready_sim(tmp_path)
+    try:
+        from controller.scan_controller import VoltageScanConfig
+        coord = ScanCoordinator(ctrl, sm, AutoConfirmGate(), lambda: _limits())
+        vpts = Spy(coord.vscan_point)
+        started = Spy(coord.scan_started)
+
+        # 0 → -30 V in 3 V steps (11 points), well clear of any compliance trip.
+        coord.start_voltage_scan(VoltageScanConfig(
+            v_start_V=0.0, v_stop_V=-30.0, v_step_V=-3.0,
+            ramp_step_V=3.0, ramp_delay_s=0.02, hold_delay_s=0.05,
+            n_averages=1,
+        ))
+        assert started.count == 1                 # run control armed (the fix)
+        assert _wait_until(app, lambda: vpts.count >= 1), "voltage scan never started"
+
+        coord.toggle_pause(True)
+        assert sm.state is AppState.PAUSED
+        n = vpts.count
+        _settle(app, 0.5)
+        # Parked BEFORE the next ramp: HV holds the last commanded voltage and
+        # no new setpoint is commanded until the operator resumes.
+        assert vpts.count <= n + 1, "pause did not park the HV sweep"
+        assert ctrl._thread.is_alive()
+
+        # Abort from PAUSED: unblocks, ramps to 0 V, opens the output, ABORTED.
+        coord.abort()
+        _drain(app, ctrl)
+        assert sm.state is AppState.ABORTED
+        assert dm.bias_supply.setpoint_V == 0.0       # HV left safe (rule 5)
+    finally:
+        dm.disconnect_all()
+
+
+# --------------------------------------------------------------------------- #
+# (11) A run whose loop ENDS while parked in PAUSED must still settle.          #
+#      PAUSED→FINISHED is not a legal edge, so the loops promote through        #
+#      RUNNING.  Without that, transition() raised, the except branch tried an  #
+#      equally illegal PAUSED→ERROR, the worker died mid-except and the state   #
+#      machine stayed wedged in PAUSED — where _refuse_if_active() refuses      #
+#      EVERY later start (app-level deadlock until a reconnect).                #
+# --------------------------------------------------------------------------- #
+def test_run_ending_while_paused_settles_finished_not_wedged(tmp_path):
+    _app()
+    dm, sm, ctrl = _ready_sim(tmp_path)
+    try:
+        sm.transition(AppState.RUNNING)
+        sm.transition(AppState.PAUSED)          # pause landed on the last step
+
+        ctrl._settle_terminal_state()
+
+        assert sm.state is AppState.FINISHED
+        assert sm.can(AppState.CONFIGURED)      # recoverable, not wedged
+    finally:
+        dm.disconnect_all()
+
+
+def test_aborted_run_ending_while_paused_settles_aborted(tmp_path):
+    _app()
+    dm, sm, ctrl = _ready_sim(tmp_path)
+    try:
+        sm.transition(AppState.RUNNING)
+        sm.transition(AppState.PAUSED)
+        ctrl._abort_event.set()
+
+        ctrl._settle_terminal_state()
+
+        assert sm.state is AppState.ABORTED
+    finally:
+        dm.disconnect_all()
+
+
+def test_fault_while_paused_still_reports_error(tmp_path):
+    """A fault raised while a run is parked must reach ERROR (PAUSED→ERROR is
+    illegal, so _settle_error_state promotes through RUNNING) — otherwise the
+    except branch raises again and the error is never surfaced."""
+    _app()
+    dm, sm, ctrl = _ready_sim(tmp_path)
+    try:
+        sm.transition(AppState.RUNNING)
+        sm.transition(AppState.PAUSED)
+
+        ctrl._settle_error_state()
+
+        assert sm.state is AppState.ERROR
+    finally:
+        dm.disconnect_all()

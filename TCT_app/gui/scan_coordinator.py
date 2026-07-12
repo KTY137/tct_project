@@ -78,7 +78,7 @@ class ScanCoordinator(QObject):
 
     Public **signals** (connect panel slots / dialog shims here)::
 
-        # Scan Viewer (fired for every run — plan or classic)
+        # Scan Viewer (fired for every run — plan, classic, z-focus, voltage)
         point_done(object)              → ScanViewerPanel.on_point_done
         progress(int, int)              → ScanViewerPanel.on_progress
         scan_started()                  → ScanViewerPanel.on_scan_started
@@ -100,9 +100,15 @@ class ScanCoordinator(QObject):
         status_message(str)             → status bar showMessage
     """
 
-    # ── Scan Viewer (every run — plan or classic) ─────────────────────
+    # ── Scan Viewer (every run — plan, classic, z-focus, voltage) ─────
     point_done   = Signal(object)              # ScanResult
     progress     = Signal(int, int)            # done, total
+    # Arms the viewer's run-active state (Pause/Abort enable, chip, clock).
+    # EVERY start slot that successfully launches a worker must emit this —
+    # a live run whose Pause/Abort stay greyed out is a safety hole, and
+    # scan_finished is already fired for every run type (the asymmetry that
+    # left z-focus/voltage runs un-armed).  Success path only: emitted after
+    # the controller call returns, never before.
     scan_started = Signal()
     scan_finished = Signal()
     z_focus_pt   = Signal(float, float)        # z_mm, amplitude_V
@@ -284,6 +290,12 @@ class ScanCoordinator(QObject):
             # start_scan: emit the running status only after start returns.
             self.error_dialog.emit("Z-focus scan refused", str(exc))
             return
+        # A z-focus run drives REAL STAGE MOTION, so the Scan Viewer's run-
+        # active state (Pause/Abort enable, chip, elapsed clock) must arm for it
+        # exactly like a classic/plan start — scan_started is the only signal
+        # that arms it, and the viewer's Pause/Abort are constructed disabled.
+        # Success path only: a refused start must never arm a run control.
+        self.scan_started.emit()
         self.status_message.emit("Z-focus scan running…")
 
     @Slot(VoltageScanConfig)
@@ -303,6 +315,10 @@ class ScanCoordinator(QObject):
             # emit the running status only after start returns.
             self.error_dialog.emit("Voltage scan refused", str(exc))
             return
+        # A voltage scan STEPS HV under its own power — the operator's central
+        # Pause/Abort must be armed for it (they key off scan_started, and the
+        # viewer builds them disabled).  Success path only.
+        self.scan_started.emit()
         self.status_message.emit("Voltage scan running…")
 
     @Slot(bool)

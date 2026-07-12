@@ -614,6 +614,46 @@ class ScanController:
         self._thread.start()
 
     # ------------------------------------------------------------------ #
+    # Terminal-state resolution (shared by the run loops)                 #
+    # ------------------------------------------------------------------ #
+
+    def _settle_terminal_state(self) -> None:
+        """Resolve a run loop's terminal state from RUNNING **or** PAUSED.
+
+        A cooperative pause — the GUI Pause button or a slow-control safe-hold
+        (:meth:`_slow_control_warn_hold`) — parks the loop with the state
+        machine in PAUSED.  PAUSED has no legal edge to FINISHED, so a run that
+        ends while parked (pause pressed on the last step) must be promoted
+        through RUNNING first.  Without that promotion ``transition(FINISHED)``
+        raises, the loop's ``except`` branch attempts an equally illegal
+        PAUSED→ERROR, that raises again, the worker thread dies mid-``except``
+        and the state machine is wedged in PAUSED — where ``_refuse_if_active``
+        then refuses *every* later start.  ABORTED is legal from both states, so
+        an abort needs no promotion.  Same discipline :meth:`_run` and
+        :meth:`_run_plan` already carry inline.
+        """
+        if self._sm.state not in (AppState.RUNNING, AppState.PAUSED):
+            return                              # already terminal — leave it
+        if self._abort_event.is_set():
+            self._sm.transition(AppState.ABORTED)   # legal from RUNNING + PAUSED
+            return
+        if self._sm.state is AppState.PAUSED:
+            self._sm.transition(AppState.RUNNING)
+        self._sm.transition(AppState.FINISHED)
+
+    def _settle_error_state(self) -> None:
+        """Fail into ERROR from RUNNING **or** PAUSED.
+
+        PAUSED→ERROR is not a legal edge, so a fault raised while a run is
+        parked has to be promoted through RUNNING; otherwise the ``except``
+        branch raises a second time and the error is never reported.
+        """
+        if self._sm.state is AppState.PAUSED:
+            self._sm.transition(AppState.RUNNING)
+        if self._sm.can(AppState.ERROR):
+            self._sm.transition(AppState.ERROR)
+
+    # ------------------------------------------------------------------ #
     # Scan loop (runs in background thread)                               #
     # ------------------------------------------------------------------ #
 
@@ -733,6 +773,12 @@ class ScanController:
             time.sleep(0.01)
 
             for z in zs:
+                # Cooperative pause / abort between steps (non-negotiable 2):
+                # a z-focus run drives real motion, so Pause must actually park
+                # the loop — not just flip the state machine while the stage
+                # keeps stepping.  abort() sets _pause_event too, so an abort
+                # from PAUSED unblocks here and exits on the check below.
+                self._pause_event.wait()
                 if self._abort_event.is_set():
                     break
                 dev.motor.move_to(cfg.x_mm, cfg.y_mm, float(z))
@@ -759,12 +805,10 @@ class ScanController:
                 if on_done:
                     on_done(best_z)
 
-            self._sm.transition(
-                AppState.ABORTED if self._abort_event.is_set() else AppState.FINISHED
-            )
+            self._settle_terminal_state()
         except Exception as exc:
             logger.exception("Z-focus amplitude scan error")
-            self._sm.transition(AppState.ERROR)
+            self._settle_error_state()
             if self.on_error:
                 self.on_error(str(exc))
         finally:
@@ -809,11 +853,17 @@ class ScanController:
             time.sleep(0.01)
 
             for z in zs:
+                # Cooperative pause / abort between steps (non-negotiable 2) —
+                # see _run_z_focus_amplitude.  Checked in the inner X sweep too:
+                # that sweep is itself a long motion loop, so a pause must land
+                # within one X step, not one whole Z step.
+                self._pause_event.wait()
                 if self._abort_event.is_set():
                     break
 
                 charges: list[float] = []
                 for x in xs:
+                    self._pause_event.wait()
                     if self._abort_event.is_set():
                         break
                     dev.motor.move_to(float(x), cfg.y_mm, float(z))
@@ -853,12 +903,10 @@ class ScanController:
                 if on_done:
                     on_done(best_z)
 
-            self._sm.transition(
-                AppState.ABORTED if self._abort_event.is_set() else AppState.FINISHED
-            )
+            self._settle_terminal_state()
         except Exception as exc:
             logger.exception("Z-focus edge scan error")
-            self._sm.transition(AppState.ERROR)
+            self._settle_error_state()
             if self.on_error:
                 self.on_error(str(exc))
         finally:
@@ -897,6 +945,15 @@ class ScanController:
             time.sleep(0.05)
 
             for idx, v in enumerate(voltages):
+                # Cooperative pause / abort between steps (non-negotiable 2).
+                # Parking BEFORE the next ramp is the honest pause semantic for
+                # an HV sweep: the supply holds the last commanded voltage (same
+                # "HV held at setpoint" rule as the plan executor's pause and the
+                # slow-control safe-hold) and no new voltage is commanded until
+                # the operator resumes.  abort() sets _pause_event, so an abort
+                # from PAUSED unblocks here, breaks, and falls through to the
+                # ramp-to-0 + output-off fail-safe below.
+                self._pause_event.wait()
                 if self._abort_event.is_set():
                     break
 
@@ -939,12 +996,10 @@ class ScanController:
             bias.ramp_to(0.0, step_V=20.0, delay_s=0.05)
             bias.output_off()
 
-            self._sm.transition(
-                AppState.ABORTED if self._abort_event.is_set() else AppState.FINISHED
-            )
+            self._settle_terminal_state()
         except Exception as exc:
             logger.exception("Voltage scan error")
-            self._sm.transition(AppState.ERROR)
+            self._settle_error_state()
             if self.on_error:
                 self.on_error(str(exc))
         finally:

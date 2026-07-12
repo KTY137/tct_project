@@ -98,7 +98,7 @@ def _ready_sim(tmp_path):
     dm = DeviceManager(config_path=_sim_config_path(tmp_path))
     assert dm.config_errors() == []
     assert all(v == "ok" for v in dm.connect_all().values())
-    dm.motor.zero_position()             # homed without moving
+    dm.motor.home()                      # real homing (sim: instant, at origin)
     sm = StateMachine()
     for st in (AppState.CONNECTED, AppState.HOMED, AppState.CONFIGURED, AppState.READY):
         sm.transition(st)
@@ -149,15 +149,23 @@ class FakeScanner:
         self.on_manual_pause = None
         self.calls: list = []
         self.last_run_path = None
+        # Per-entry-point RuntimeError injection — models the controller's
+        # fail-closed _refuse_if_active() raising while PAUSED / worker alive.
+        self.start_z_focus_raises: Exception | None = None
+        self.start_voltage_raises: Exception | None = None
 
     def start(self, cfg):
         self.calls.append(("start", cfg))
 
     def start_z_focus_scan(self, cfg, on_point=None, on_done=None):
         self.calls.append(("z_focus", cfg))
+        if self.start_z_focus_raises is not None:
+            raise self.start_z_focus_raises
 
     def start_voltage_scan(self, cfg):
         self.calls.append(("vscan", cfg))
+        if self.start_voltage_raises is not None:
+            raise self.start_voltage_raises
 
     def start_plan(self, plan, limits, gate):
         self.calls.append(("start_plan", plan))
@@ -346,6 +354,120 @@ def test_raised_plan_start_does_not_paint_running_cockpit():
     assert err.count == 1
     assert viewer._run_active is False
     assert not viewer._btn_abort.isEnabled()
+
+
+# --------------------------------------------------------------------------- #
+# (1c) z-focus / voltage runs drive the viewer's run-active state too           #
+#      (Codex adversarial review): both start hardware on their own — z-focus   #
+#      is LIVE STAGE MOTION, a voltage scan STEPS HV — yet only start_scan /    #
+#      start_plan used to emit scan_started, so the operator's central Pause /  #
+#      Abort stayed GREYED OUT for exactly the two run types that move the      #
+#      stage and energize the supply, while scan_finished still fired.          #
+# --------------------------------------------------------------------------- #
+def test_z_focus_run_arms_pause_abort_and_abort_reaches_the_controller():
+    _app()
+    coord, fake, sm = _fake_coord(AppState.READY)
+    viewer = ScanViewerPanel()
+    _wire_like_tct_gui(coord, viewer, fake)
+
+    # Constructed disabled — the whole point of the bug.
+    assert not viewer._btn_pause.isEnabled()
+    assert not viewer._btn_abort.isEnabled()
+
+    # The real user path: the panel's own "Find focus" verb.
+    viewer._btn_zf_start.click()
+    assert fake.names == ["z_focus"]
+
+    assert viewer._run_active is True
+    assert viewer._btn_pause.isEnabled()
+    assert viewer._btn_abort.isEnabled()
+    assert viewer._chip_run.text() == "Running"
+    # Law 8: a z-focus run paints no XY map — the panel must not fabricate one
+    # (nor any progress) just because the cockpit armed.
+    assert viewer._map_view.point_count() == 0
+    assert not viewer._map_view.is_showing_map()
+    assert viewer._metric_progress.value() == "0/0"
+
+    # Pause and Abort must REACH the controller (an armed button that no-ops is
+    # worse than a disabled one).
+    viewer._btn_pause.setChecked(True)
+    assert fake.names == ["z_focus", "pause"]
+    viewer._btn_pause.setChecked(False)
+    assert fake.names == ["z_focus", "pause", "resume"]
+    viewer._btn_abort.click()
+    assert fake.names == ["z_focus", "pause", "resume", "abort"]
+
+
+def test_voltage_run_arms_pause_abort_and_abort_reaches_the_controller():
+    _app()
+    coord, fake, sm = _fake_coord(AppState.READY)
+    viewer = ScanViewerPanel()
+    _wire_like_tct_gui(coord, viewer, fake)
+
+    from controller.scan_controller import VoltageScanConfig
+    # Started from the Bias panel (not the viewer) — the viewer still arms,
+    # because scan_started is the run-active contract for EVERY run type.
+    coord.start_voltage_scan(VoltageScanConfig())
+    assert fake.names == ["vscan"]
+
+    assert viewer._run_active is True
+    assert viewer._btn_pause.isEnabled()
+    assert viewer._btn_abort.isEnabled()
+    assert viewer._chip_run.text() == "Running"
+    assert viewer._map_view.point_count() == 0      # no fabricated map
+    assert not viewer._map_view.is_showing_map()
+
+    viewer._btn_abort.click()                       # HV-stepping run → abort
+    assert fake.names == ["vscan", "abort"]
+    assert viewer._abort_pending is True
+
+    # The run's terminal reaches the viewer (scan_finished fires for these run
+    # types — it always did) and releases the controls, painting ABORTED.
+    coord._bridge.finished.emit()
+    QApplication.instance().processEvents()
+    assert viewer._run_active is False
+    assert not viewer._btn_pause.isEnabled()
+    assert not viewer._btn_abort.isEnabled()
+    assert viewer._chip_run.text() == "Aborted"
+
+
+def test_refused_zfocus_and_voltage_starts_do_not_arm_run_control():
+    """State-gate refusal (not READY) and controller-side refusal (raises) must
+    both leave the cockpit idle and un-armed — fail-closed, never a Pause/Abort
+    armed over a run that was never launched."""
+    _app()
+    from controller.scan_controller import ZFocusScanConfig, VoltageScanConfig
+
+    # (a) state gate refuses.
+    coord, fake, sm = _fake_coord(AppState.CONNECTED)
+    viewer = ScanViewerPanel()
+    _wire_like_tct_gui(coord, viewer, fake)
+    warn = Spy(coord.warn_dialog)
+
+    coord.start_z_focus(ZFocusScanConfig())
+    coord.start_voltage_scan(VoltageScanConfig())
+
+    assert warn.count == 2
+    assert fake.names == []
+    assert viewer._run_active is False
+    assert not viewer._btn_pause.isEnabled()
+    assert not viewer._btn_abort.isEnabled()
+
+    # (b) controller refuses (fail-closed _refuse_if_active raising).
+    coord2, fake2, _sm2 = _fake_coord(AppState.READY)
+    viewer2 = ScanViewerPanel()
+    _wire_like_tct_gui(coord2, viewer2, fake2)
+    err = Spy(coord2.error_dialog)
+    fake2.start_z_focus_raises = RuntimeError("A run is already active.")
+    fake2.start_voltage_raises = RuntimeError("A run is already active.")
+
+    coord2.start_z_focus(ZFocusScanConfig())
+    coord2.start_voltage_scan(VoltageScanConfig())
+
+    assert err.count == 2
+    assert viewer2._run_active is False
+    assert not viewer2._btn_pause.isEnabled()
+    assert not viewer2._btn_abort.isEnabled()
 
 
 # --------------------------------------------------------------------------- #

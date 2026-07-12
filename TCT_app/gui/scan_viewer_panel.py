@@ -319,8 +319,15 @@ class ScanViewerPanel(QWidget):
         self._last_run_path = None
         self._start_time = time.monotonic()
         self._map_view.clear()
+        # Law 8 — never paint a run type as something it isn't.  This slot arms
+        # the cockpit for EVERY run type (raster/plan, z-focus, voltage scan),
+        # but only an XY run ever emits ScanResult points.  So the placeholder
+        # must not promise "waiting for the first point" to a z-focus or voltage
+        # run that will never paint one — it states the condition instead.
         self._map_view.set_empty_state_text(
-            "Run starting", "Waiting for the first point.")
+            "Run in progress",
+            "The live map fills in as XY points arrive — Z-focus and voltage "
+            "runs paint no map (watch the Z-focus curve / Bias panel).")
         self._btn_pause.setEnabled(True)
         self._btn_pause.setChecked(False)
         self._btn_pause.setText("Pause")
@@ -331,7 +338,9 @@ class ScanViewerPanel(QWidget):
         self._metric_progress.set_value("0/0")
         self._metric_progress.set_stale(False, "")
         self._metric_eta.set_value("--")
-        self._metric_eta.set_stale(True, "estimating")
+        # "estimating" would imply an ETA is coming; a z-focus run reports no
+        # progress at all, so the caption states what is actually true.
+        self._metric_eta.set_stale(True, "waiting for progress")
         self._metric_point.set_value("x=-- y=-- z=--")
         self._metric_point.set_stale(True, "no point yet")
         self._metric_elapsed.set_value("0 s")
