@@ -205,3 +205,31 @@ uppercase prose via the mono label role).
 - Added a focused assertion to `test_calibration_panel_construct_and_theme_switch` that guards the header eyebrow/title and confirms the intro label remains a normal body label rather than a mono/styled caption.
 - Verification: `git diff --check` passed; static `rg -n "#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{3}|LIGHT\[|DARK\[" TCT_app/gui/calibration_panel.py -S` found no inline hex or fixed LIGHT/DARK palette usage. Requested pytest from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_bias_and_calibration.py tests/test_no_inline_hex_gui.py` executed 0 tests because the venv launcher failed before process start: it still tries to use missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`.
 - Risk: runtime pytest verification remains blocked until the local Python/venv interpreter is repaired.
+
+## D2 — Design v5 council seat: per-panel "sleek/translucent Apple" proposals
+
+**Status: DONE — Wrote v5 sleek/translucent council proposals.** · Effort: M · Source: Kaya directive 2026-07-12 evening
+
+Kaya rejected the current live look. New north star: SLEEK, subtle
+translucency, genuine Apple-app feel — ambitious, not incremental. Your D1
+critique shaped v4; now be the adversarial designer for v5.
+
+- Read: docs/design/cockpit_design_system.md (v4 baseline),
+  artifacts_claude/tct_cockpit_design_v4_final.html (source), the freshest
+  artifacts_claude/ui_audit_*/manifest.txt + gui/style.py as-implemented.
+  You may run scripts/capture_panels.py (headless) if useful.
+- Write docs/design/council_v5_codex.md (~150 lines max), structured:
+  1. WHY the current implementation reads less premium than the artifact
+     (name the 5 biggest translation losses, Qt-specific).
+  2. Per panel (all 11): ONE concrete v5 move each toward sleek/translucent
+     (composition or material, not color-swaps).
+  3. Translucency strategy for Qt/QML: where REAL blur is worth it vs
+     color-mix fake vs none (perf-honest — no effects on plot hot paths).
+  4. 3 ambitious ideas v5 should steal from the best Mac apps.
+- No app-code edits. No commit. Set D2 DONE with findings per Handback.
+
+**Codex findings (2026-07-12):**
+- Files touched: `docs/design/council_v5_codex.md`, `docs/CODEX_QUEUE.md`.
+- Created a structured v5 council memo covering five Qt-specific translation losses, one concrete composition/material move for each of the 11 audited panels, a perf-honest Qt/QML translucency strategy, and three Mac-app interaction ideas.
+- Verification: read `docs/design/cockpit_design_system.md`, `artifacts_claude/tct_cockpit_design_v4_final.html` source, `artifacts_claude/ui_audit_20260711_005405/manifest.txt`, and `TCT_app/gui/style.py`; visually inspected the latest audit captures for all listed light panels plus representative dark/detached captures. `git diff --check` passed. No pytest was run because D2 is documentation-only and requests no app-code edits.
+- Risk: critique is source/audit based; no new capture run was performed.
