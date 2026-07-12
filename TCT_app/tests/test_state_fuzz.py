@@ -52,7 +52,9 @@ import yaml
 
 from controller.device_manager import DeviceManager
 from controller.state_machine import StateMachine, AppState
-from controller.scan_controller import ScanController
+from controller.scan_controller import (
+    ScanController, VoltageScanConfig, ZFocusScanConfig,
+)
 from controller.scan_plan import ActionBlock, ActionType, Axis, LoopBlock, ScanPlan
 from controller.scan_plan_validator import PlanLimits
 from controller.danger_gate import AutoConfirmGate, DenyAllGate
@@ -587,33 +589,64 @@ def test_abort_from_running_reaches_aborted(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# FOUND BUG (reported to Adam): start_plan() is not refused while a run is      #
-# already PAUSED.  can(RUNNING) is True from PAUSED (the resume edge), and      #
-# start_plan guards ONLY on can(RUNNING) — it does not check for a live worker  #
-# thread.  So starting a plan while one is paused unblocks the parked worker    #
-# AND spawns a SECOND concurrent _run_plan thread, both sharing _writer /       #
-# _abort_event / _hv_armed.  This test asserts the DESIRED behavior (refuse, or #
-# at least no second worker) and is xfail(strict=False) so the suite stays      #
-# green and flips to xpass the moment start_plan grows a live-run guard.        #
+# FIXED (dac5b67 + this beat): every scan/plan entry point is fail-closed while #
+# a run is PAUSED.  can(RUNNING) is True from PAUSED (the resume edge), so a     #
+# start guarding on can(RUNNING) alone unblocks the parked worker AND spawns a  #
+# SECOND concurrent worker, both sharing _writer / _abort_event / _hv_armed /   #
+# state machine (data corruption + uncoordinated HV hazard).  The shared        #
+# _refuse_if_active() helper now hard-refuses from PAUSED / worker-alive on all  #
+# four entry points; these are the hard regression pins (de-xfailed).           #
 # --------------------------------------------------------------------------- #
-@pytest.mark.xfail(reason="start_plan not refused while a run is PAUSED — spawns "
-                          "a 2nd worker thread (reported to Adam)",
-                   strict=False)
+def _drive_to_paused_plan(tmp_path, name):
+    """A ready env with a plan parked in PAUSED; returns (dm, ctrl, sm, first)."""
+    dm, ctrl, sm = _make_env(tmp_path / name)
+    for st in (AppState.CONNECTED, AppState.HOMED, AppState.CONFIGURED,
+               AppState.READY):
+        sm.transition(st)
+    ctrl.start_plan(_midpause_plan(), _limits(), AutoConfirmGate())
+    assert _wait_state(sm, AppState.PAUSED), "run should park in PAUSED"
+    return dm, ctrl, sm, ctrl._thread
+
+
 def test_start_while_paused_is_refused(tmp_path):
-    dm, ctrl, sm = _make_env(tmp_path / "start_while_paused")
+    dm, ctrl, sm, first = _drive_to_paused_plan(tmp_path, "start_while_paused")
     try:
-        for st in (AppState.CONNECTED, AppState.HOMED, AppState.CONFIGURED,
-                   AppState.READY):
-            sm.transition(st)
-        ctrl.start_plan(_midpause_plan(), _limits(), AutoConfirmGate())
-        assert _wait_state(sm, AppState.PAUSED)
-        first = ctrl._thread
-        try:
+        with pytest.raises(RuntimeError):
             ctrl.start_plan(_stage_plan([1.0]), _limits(), AutoConfirmGate())
-        except RuntimeError:
-            return  # desired: refused → xpass
-        # Not refused: a second worker must NOT have been launched.
+        # The refusal must not have launched a second worker: the parked plan
+        # worker is still the one and only _thread, still alive in PAUSED.
         assert ctrl._thread is first, "a second concurrent worker was spawned"
+        assert first.is_alive() and sm.state is AppState.PAUSED
+    finally:
+        ctrl.abort()
+        if ctrl._thread is not None:
+            ctrl._thread.join(timeout=_JOIN_TIMEOUT)
+        dm.disconnect_all()
+
+
+def test_start_z_focus_while_paused_is_refused(tmp_path):
+    """start_z_focus_scan is fail-closed while a plan is PAUSED (no 2nd worker)."""
+    dm, ctrl, sm, first = _drive_to_paused_plan(tmp_path, "zfocus_while_paused")
+    try:
+        with pytest.raises(RuntimeError):
+            ctrl.start_z_focus_scan(ZFocusScanConfig(z_start_mm=0.0, z_stop_mm=0.0))
+        assert ctrl._thread is first, "z-focus spawned a second concurrent worker"
+        assert first.is_alive() and sm.state is AppState.PAUSED
+    finally:
+        ctrl.abort()
+        if ctrl._thread is not None:
+            ctrl._thread.join(timeout=_JOIN_TIMEOUT)
+        dm.disconnect_all()
+
+
+def test_start_voltage_while_paused_is_refused(tmp_path):
+    """start_voltage_scan is fail-closed while a plan is PAUSED (no 2nd worker)."""
+    dm, ctrl, sm, first = _drive_to_paused_plan(tmp_path, "vscan_while_paused")
+    try:
+        with pytest.raises(RuntimeError):
+            ctrl.start_voltage_scan(VoltageScanConfig(v_start_V=0.0, v_stop_V=0.0))
+        assert ctrl._thread is first, "voltage scan spawned a second concurrent worker"
+        assert first.is_alive() and sm.state is AppState.PAUSED
     finally:
         ctrl.abort()
         if ctrl._thread is not None:

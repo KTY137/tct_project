@@ -251,8 +251,15 @@ class ScanCoordinator(QObject):
             return
         # The ScanController allocates its own run directory + writer per run
         # (see ScanController._begin_run), so no writer is created here.
+        try:
+            self._scanner.start(cfg)
+        except RuntimeError as exc:
+            # start() is fail-closed (refuses a 2nd worker while PAUSED/running);
+            # surface the refusal instead of painting a running cockpit.  Match
+            # start_plan's pattern: emit scan_started only after start() returns.
+            self.error_dialog.emit("Scan refused", str(exc))
+            return
         self.scan_started.emit()
-        self._scanner.start(cfg)
 
     @Slot(ZFocusScanConfig)
     def start_z_focus(self, cfg: ZFocusScanConfig) -> None:

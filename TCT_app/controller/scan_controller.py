@@ -395,17 +395,28 @@ class ScanController:
     # Public control interface                                            #
     # ------------------------------------------------------------------ #
 
-    def start(self, cfg: ScanConfig) -> None:
-        if not self._sm.can(AppState.RUNNING):
-            raise RuntimeError("Cannot start scan in current state.")
-        # Fuzz-found (test_state_fuzz): can(RUNNING) is True from PAUSED (the
-        # resume edge), so a start here would spawn a SECOND worker sharing
-        # writer/abort/HV state. Only resume() may leave PAUSED; refuse any
-        # start while a worker thread is alive. Fail-closed.
+    def _refuse_if_active(self) -> None:
+        """Fail-closed guard shared by EVERY scan/plan entry point.
+
+        Fuzz-found (test_state_fuzz): ``can(RUNNING)`` is True from PAUSED (the
+        resume edge), so guarding on it alone lets a start spawn a SECOND worker
+        while a run is parked in PAUSED — both sharing writer / abort / HV /
+        state machine (data corruption + uncoordinated HV hazard; Mary
+        REQUEST-CHANGES on dac5b67, reproduced on the z-focus / voltage paths).
+        Only :meth:`resume` may leave PAUSED; refuse any start while a run is
+        paused OR a worker thread is still alive.  Additive to each caller's
+        existing ``can(RUNNING)`` check — fail-closed, before any state change
+        or hardware action.
+        """
         if self._sm.state is AppState.PAUSED or (
             self._thread is not None and self._thread.is_alive()
         ):
             raise RuntimeError("A run is already active (paused or running).")
+
+    def start(self, cfg: ScanConfig) -> None:
+        if not self._sm.can(AppState.RUNNING):
+            raise RuntimeError("Cannot start scan in current state.")
+        self._refuse_if_active()        # fail-closed: never a 2nd worker from PAUSED
         bias = self._resolve_bias(cfg)  # validate BEFORE any state change / hardware
         self._abort_event.clear()
         self._pause_event.set()
@@ -492,10 +503,7 @@ class ScanController:
             #    start-while-PAUSED / worker-alive refusal — fail-closed).
             if not self._sm.can(AppState.RUNNING):
                 raise RuntimeError("Cannot start scan in current state.")
-            if self._sm.state is AppState.PAUSED or (
-                self._thread is not None and self._thread.is_alive()
-            ):
-                raise RuntimeError("A run is already active (paused or running).")
+            self._refuse_if_active()    # fail-closed: never a 2nd worker from PAUSED
 
             # 2. Pure pre-flight — refuse a bad plan before touching anything.
             errs = errors(validate_plan(plan, limits))
@@ -573,6 +581,7 @@ class ScanController:
         """
         if not self._sm.can(AppState.RUNNING):
             raise RuntimeError("Cannot start Z-focus scan in current state.")
+        self._refuse_if_active()        # fail-closed: never a 2nd worker from PAUSED
         self._abort_event.clear()
         self._pause_event.set()
         self._sm.transition(AppState.RUNNING)
@@ -591,6 +600,7 @@ class ScanController:
         """Run a bias voltage scan (IV curve) in a background thread."""
         if not self._sm.can(AppState.RUNNING):
             raise RuntimeError("Cannot start voltage scan in current state.")
+        self._refuse_if_active()        # fail-closed: never a 2nd worker from PAUSED
         bias = self._resolve_bias(cfg)  # validate BEFORE any state change / hardware
         self._abort_event.clear()
         self._pause_event.set()
