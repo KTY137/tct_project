@@ -351,14 +351,25 @@ Item {
                             // Artifact `.pill[aria-selected]` (law 1): the
                             // ACTIVE tab is a neutral RAISED pill — a place,
                             // not a state — never accent-tinted.
+                            // HOVER (regression triage 2026-07-12): with the
+                            // native QTabBar hidden this shelf is the app's
+                            // tab bar, so non-active pills carry a calm field
+                            // wash + hairline ring on hover — what's
+                            // interactive must look interactive. Chrome-only
+                            // animation (never a hot-path widget).
                             radius: Theme.radiusSm; height: 30
                             width: pillRow.implicitWidth + 26
-                            color: active ? Theme.raised : "transparent"
-                            border.width: active ? 1 : 0
-                            border.color: Theme.hairlineStrong
+                            color: active ? Theme.raised
+                                 : pillArea.containsMouse ? Theme.field
+                                 : "transparent"
+                            border.width: (active || pillArea.containsMouse) ? 1 : 0
+                            border.color: active ? Theme.hairlineStrong : Theme.hairline
+                            Behavior on color { ColorAnimation { duration: Theme.transitionMs } }
 
                             MouseArea {
+                                id: pillArea
                                 anchors.fill: parent
+                                hoverEnabled: true
                                 onClicked: tabShelf.setCurrentIndex(index)
                             }
                             Row {
@@ -369,7 +380,8 @@ Item {
                                     text: modelData
                                     font.pixelSize: Theme.fontSm
                                     font.weight: pillCell.active ? Font.DemiBold : Font.Medium
-                                    color: pillCell.active ? Theme.text : Theme.muted
+                                    color: (pillCell.active || pillArea.containsMouse)
+                                         ? Theme.text : Theme.muted
                                     anchors.verticalCenter: parent.verticalCenter
                                 }
                                 // detach affordance on the active pill
@@ -434,17 +446,25 @@ Item {
         property string tone: "quiet"          // "accent" | "danger" | "quiet"
         signal clicked()
         radius: Theme.radiusSm; implicitHeight: 28; implicitWidth: btnLabel.implicitWidth + 24
-        color: btnArea.pressed ? Theme.field : "transparent"
+        // Hover = raised wash (+ hairline-strong ring on quiet tone) — calm,
+        // token-only, chrome-only (regression triage 2026-07-12).
+        color: btnArea.pressed ? Theme.field
+             : btnArea.containsMouse ? Theme.raised : "transparent"
         border.width: 1
         border.color: tone === "danger" ? Theme.crit
-                    : tone === "accent" ? Theme.accent : Theme.hairline
+                    : tone === "accent" ? Theme.accent
+                    : btnArea.containsMouse ? Theme.hairlineStrong : Theme.hairline
+        Behavior on color { ColorAnimation { duration: Theme.transitionMs } }
         Text {
             id: btnLabel; anchors.centerIn: parent
             font.pixelSize: Theme.fontSm; font.weight: Font.Medium
             color: tone === "danger" ? Theme.crit
                  : tone === "accent" ? Theme.accent : Theme.text
         }
-        MouseArea { id: btnArea; anchors.fill: parent; onClicked: parent.clicked() }
+        MouseArea {
+            id: btnArea; anchors.fill: parent; hoverEnabled: true
+            onClicked: parent.clicked()
+        }
     }
 
     // Icon-only affordance: a unicode glyph + a hover tooltip carrying the
@@ -457,10 +477,15 @@ Item {
         property string tip: ""
         signal clicked()
         radius: Theme.radiusSm; implicitHeight: 28; implicitWidth: 28
-        color: iconArea.pressed ? Theme.field : "transparent"
+        // Same calm hover recipe as ShellButton (iconArea already tracks
+        // hover for its tooltip).
+        color: iconArea.pressed ? Theme.field
+             : iconArea.containsMouse ? Theme.raised : "transparent"
         border.width: 1
         border.color: tone === "danger" ? Theme.crit
-                    : tone === "accent" ? Theme.accent : Theme.hairline
+                    : tone === "accent" ? Theme.accent
+                    : iconArea.containsMouse ? Theme.hairlineStrong : Theme.hairline
+        Behavior on color { ColorAnimation { duration: Theme.transitionMs } }
         Text {
             id: iconLabel; anchors.centerIn: parent
             font.pixelSize: Theme.fontMd
