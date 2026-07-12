@@ -38,8 +38,9 @@ _HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 
 # See module docstring — real, non-comment inline hex outside this task's
 # touch list, tracked here instead of silently failing the guard.
+# (motor_panel.py cleared in the batch-B migration: the jog-cluster centre
+# glyph now resolves palette(mode)["faint"] instead of "#8a97a8".)
 _PENDING_SWEEP = {
-    "motor_panel.py",      # qtawesome icon colour "#8a97a8" (stage-view centre glyph)
     "settings_window.py",  # YAML syntax-highlighter palette (6 literals) +
                             # invalid-YAML editor border "#c0392b"
 }

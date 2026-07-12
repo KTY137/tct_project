@@ -1,4 +1,10 @@
-"""Laser / trigger panel (PDL 800 manual settings + waveform generator control)."""
+"""Laser / trigger panel.
+
+The wavegen (the laser TRIGGER — the one device here software actually
+controls) is the hero card; the manual PDL 800 head gets an amber honesty
+banner (law 7: no software emission switch — emission is unknown to
+software) and a demoted, collapsed metadata card.
+"""
 from __future__ import annotations
 
 import logging
@@ -13,9 +19,9 @@ from PySide6.QtWidgets import (
 from devices.laser_manual import LaserManualMetadata
 from devices.waveform_generator import WaveformGenerator, list_visa_resources
 from gui.motion import set_pulse
-from gui.panel_kit import Card, panel_header
+from gui.panel_kit import Card, CheckableCard, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
-from gui.style import SPACE_MD, WARN_AMBER, palette
+from gui.style import SPACE_MD, SPACE_SM, WARN_AMBER, palette
 
 logger = logging.getLogger(__name__)
 
@@ -108,9 +114,11 @@ class LaserPanel(QWidget):
 
         status_row = QHBoxLayout()
         status_row.setSpacing(6)
-        self._chip_meta = StatusChip("Metadata saved", "good")
+        # Quiet nominal (law 1): saved metadata / output-off are routine
+        # states, not persistent green lights.
+        self._chip_meta = StatusChip("Metadata saved", "neutral")
         self._chip_wfg = StatusChip("Wavegen --", "neutral")
-        self._chip_output = StatusChip("Output off", "good")
+        self._chip_output = StatusChip("Output --", "neutral")
         self._chip_pulse = StatusChip("Pulse --", "neutral")
         self._chip_load = StatusChip("Load --", "neutral")
         for chip in (self._chip_meta, self._chip_wfg, self._chip_output,
@@ -119,8 +127,32 @@ class LaserPanel(QWidget):
         status_row.addStretch(1)
         root.addLayout(status_row)
 
-        # ── PDL 800 manual metadata ───────────────────────────────────
-        self._card_pdl = Card("PDL 800", "manual settings — recorded in metadata")
+        # ── Manual-laser honesty banner (law 7) ───────────────────────
+        # The PDL 800 head has NO software emission control — this panel
+        # must never offer one, and must say plainly that emission state is
+        # unknown to software.  Persistent amber banner, not a dialog.
+        banner = Card()
+        self._banner_card = banner
+        banner.setProperty("bannerKind", "laserManual")
+        banner.body.setContentsMargins(SPACE_MD, SPACE_SM, SPACE_MD, SPACE_SM)
+        self._lbl_banner = QLabel(
+            "Manual laser — not PC-controllable; emission unknown to "
+            "software. Verify at the head.")
+        self._lbl_banner.setWordWrap(True)
+        banner.add_widget(self._lbl_banner)
+        root.addWidget(banner)
+
+        # ── PDL 800 manual metadata (demoted: collapsed by default) ───
+        # Metadata bookkeeping, not a control surface — the wavegen below is
+        # the panel's real (trigger) control.  CheckableCard has no built-in
+        # collapse, so the header checkbox additionally hides/shows the body
+        # (nearest kit primitive — gap reported).
+        self._card_pdl = CheckableCard(
+            "PDL 800 (manual laser head)",
+            "knob settings — recorded in run metadata", checked=False)
+        pdl_body = self._card_pdl.body.parentWidget()
+        self._card_pdl.toggled.connect(pdl_body.setVisible)
+        pdl_body.setVisible(False)
         form = QFormLayout()
 
         self._ed_wavelength = QDoubleSpinBox()
@@ -152,10 +184,12 @@ class LaserPanel(QWidget):
         btn_save.clicked.connect(self._save_metadata)
         form.addRow(btn_save)
         self._card_pdl.add_layout(form)
-        root.addWidget(self._card_pdl)
+        # (added to the layout below, AFTER the wavegen hero card)
 
-        # ── Waveform generator (trigger / rep rate) ───────────────────
-        self._card_wfg = Card("Waveform Generator", "trigger / rep rate")
+        # ── Waveform generator (trigger / rep rate) — the hero control ──
+        # This is the device software actually controls; its output IS the
+        # laser trigger, so it leads the panel (design system §7 "Laser").
+        self._card_wfg = Card("Waveform generator", "laser trigger · rep rate")
         wfg_form = QFormLayout()
 
         # Live signal controls — initialised from the device's configured values
@@ -249,10 +283,10 @@ class LaserPanel(QWidget):
                                    "good" if _load_label == "50 Ω" else "warn")
 
         btn_row = QHBoxLayout()
-        self._btn_on  = QPushButton("Output ON")
+        self._btn_on  = QPushButton("Output on")
         self._btn_on.setObjectName("armedBtn")
         set_button_icon(self._btn_on, "mdi.power-plug", color=WARN_AMBER)
-        self._btn_off = QPushButton("Output OFF")
+        self._btn_off = QPushButton("Output off")
         set_button_icon(self._btn_off, "mdi.power-plug-off")
         self._btn_on.clicked.connect(self._output_on)
         self._btn_off.clicked.connect(self._output_off)
@@ -282,6 +316,7 @@ class LaserPanel(QWidget):
         wfg_form.addRow(diag_row)
         self._card_wfg.add_layout(wfg_form)
         root.addWidget(self._card_wfg)
+        root.addWidget(self._card_pdl)
         root.addStretch(1)
         self._restyle_theme_tokens()
 
@@ -295,7 +330,8 @@ class LaserPanel(QWidget):
         self._laser.power_knob_setting  = self._ed_power.text()
         self._laser.attenuation_filter  = self._ed_atten.text()
         self._laser.notes               = self._ed_notes.text()
-        self._chip_meta.set_status("Metadata saved", "good")
+        # Quiet nominal: saved is the routine state, not a green light.
+        self._chip_meta.set_status("Metadata saved", "neutral")
 
     def _on_pulse_mode(self, mode: str) -> None:
         duty = (mode == "Duty cycle")
@@ -532,7 +568,8 @@ class LaserPanel(QWidget):
             set_pulse(self._chip_output, True, kind="laser")
         elif state is False:
             set_pulse(self._chip_output, False)
-            self._chip_output.set_status("Output off", "good")
+            # Quiet nominal: a disarmed trigger is routine, not a green light.
+            self._chip_output.set_status("Output off", "neutral")
         else:
             set_pulse(self._chip_output, True, kind="laser")
             self._chip_output.set_status("Output state unknown", "warn",
@@ -620,14 +657,24 @@ class LaserPanel(QWidget):
         axis) reads "delay" (green). Same idiom as MotorPanel/BiasPanel's
         axis-rail accents, applied to a whole Card via ``Card.set_rail``.
 
-        Also re-resolves the pulse-hint caption's muted colour — a per-
-        instance inline style baked in at construction time (same as the
-        rail colours above), so it needs this explicit refresh rather than
-        relying on the app-wide stylesheet."""
+        Also re-resolves the pulse-hint caption's muted colour and the
+        manual-laser honesty banner's amber ink — per-instance inline styles
+        baked in at construction time (same as the rail colours above), so
+        they need this explicit refresh rather than relying on the app-wide
+        stylesheet."""
+        p = palette(self._theme_mode)
         self._card_pdl.set_rail("laser", self._theme_mode)
         self._card_wfg.set_rail("delay", self._theme_mode)
         self._pulse_hint.setStyleSheet(
-            f"color: {palette(self._theme_mode)['muted']}; font-size: 11px;")
+            f"color: {p['muted']}; font-size: 11px;")
+        # Amber state banner (law 7): warn-token rail + warn ink, scoped to
+        # this card only via the dynamic bannerKind property (the same
+        # instance-stylesheet scoping idiom Card.set_rail uses).
+        self._banner_card.setStyleSheet(
+            f'QFrame#cardPane[bannerKind="laserManual"] '
+            f'{{ border-left: 3px solid {p["warn"]}; }}')
+        self._lbl_banner.setStyleSheet(
+            f"color: {p['warn']}; font-weight: 600;")
 
     def refresh_theme(self, mode: str | None = None) -> None:
         """Re-resolve the axis-rail accents after a light/dark switch (same
