@@ -100,3 +100,58 @@ never re-themes. C2 fixed one instance; this test makes the class impossible.
 - Verification: `git diff --check` passed. Requested pytest command from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_theme_fanout_completeness.py tests/test_apply_theme_lifetime.py` executed 0 tests because the venv launcher failed before process start: `.venv\pyvenv.cfg` still points at missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`. A bare `python -m py_compile TCT_app\tests\test_theme_fanout_completeness.py` also failed before launch with the local `python.exe` session error.
 - Static review: the test uses only simulated backends, does not touch protected hardware paths, and matches the requested collect/spy/toggle/assert semantics.
 - Risk: runtime pytest verification remains blocked until the local Python/venv interpreter is repaired.
+
+## D1 — Adversarial second opinion: cockpit design-language draft
+
+**Status: DONE — Wrote adversarial cockpit design second opinion.** · Effort: S · Source: Adam/Kaya design council (2026-07-12)
+
+Read the full HTML source of `artifacts_claude/tct_cockpit_design_v2.html`
+(design tokens, type rules, MetricTile, chips, danger wells, hold-to-arm,
+panel mockups) plus `docs/design/apple_style_ui_audit.md` for context.
+Target: highly polished Apple-style instrument cockpit; hard rules: one
+accent, red exclusively for HV/abort, danger controls loudest, mono
+numerals, both themes, detachable panels stay.
+
+- Task: write `docs/design/second_opinion_codex.md` (create it, max ~120
+  lines, structured):
+  1. The 5 weakest design decisions in the draft + concrete better
+     alternatives.
+  2. Honest verdict on hold-to-arm (gloves/one-handed bench operation).
+  3. 3 ideas the draft is missing entirely (command palette? toast
+     discipline? multi-monitor detach aesthetics? density modes?).
+  4. Typography nitpick: system sans + mono numerals — argue, name exact
+     sizes/weights if you disagree.
+- No app code changes. No commit. Set D1 DONE with findings per Handback.
+
+**Codex findings (2026-07-12):**
+- Files touched: `docs/design/second_opinion_codex.md`, `docs/CODEX_QUEUE.md`.
+- Created a structured second-opinion critique covering the five weakest draft design decisions with alternatives, a bench-operation verdict on hold-to-arm, three missing product/design ideas, and exact typography recommendations.
+- Verification: read all 828 lines of `artifacts_claude/tct_cockpit_design_v2.html` in chunks plus `docs/design/apple_style_ui_audit.md`; `git diff --check` passed. No pytest was run because D1 is documentation-only and requests no app code changes.
+- Risk: visual critique is source/audit based; no rendered browser screenshot pass was performed for the draft HTML.
+
+## C4 — stage_view: theme from tokens, not hardcoded dark
+
+**Status: DONE — Stage view now follows live theme tokens; pytest blocked by broken venv interpreter.** · Effort: S · Source: render audit 2026-07-12 (design roadmap D2 fix-it)
+
+`TCT_app/gui/stage_view.py` hardcodes `_theme_mode = "dark"` (~line 107), so
+the Motor panel's 2D/3D stage plot stays a black canvas in the light theme.
+Design law: both themes from tokens (`gui/style.py`), every color-caching
+widget implements `refresh_theme(mode)`.
+
+- Task: make stage_view read the active theme like other panels do (see how
+  scan_map_view or scope_panel pull palette + implement `refresh_theme`);
+  re-pull plot background/grid/marker colors from style tokens on theme
+  switch; keep the existing MotorPanel wiring working (add the panel's
+  refresh_theme fan-out hook if stage_view needs it — check
+  `tests/test_theme_fanout_completeness.py` still passes).
+- No hardware/motion code changes. Verify headless: that fan-out test +
+  tests/test_no_inline_hex_gui.py + a Motor panel construct smoke.
+- Do NOT commit; set C4 DONE with findings per Handback.
+
+**Codex findings (2026-07-12):**
+- Files touched: `TCT_app/gui/stage_view.py`, `TCT_app/gui/motor_panel.py`, `TCT_app/tests/test_no_inline_hex_gui.py`, `docs/CODEX_QUEUE.md`.
+- `StageView`, `StageView2D`, and `StageView3D` now read the active theme from `QSettings` unless a parent supplies one, resolve background/grid/axis/marker/envelope/scan/laser colors through `gui.style.palette()`, and expose `refresh_theme(mode)` fan-out.
+- `MotorPanel` now constructs `StageView` with its current theme mode and forwards `MotorPanel.refresh_theme()` into the stage view, so the existing main-window fan-out remains sufficient.
+- Added a headless regression assertion in `tests/test_no_inline_hex_gui.py` that checks MotorPanel propagates light/dark refreshes to StageView and that the 2D plot background uses the `sunk` token for each theme.
+- Verification: `git diff --check` passed; static `rg` confirmed no hardcoded `_C_*`, plot constants, or inline hex colors remain in `TCT_app/gui/stage_view.py`. Requested pytest command from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_theme_fanout_completeness.py tests/test_no_inline_hex_gui.py tests/test_panel_kit_rollout_batch1.py::test_motor_panel_constructs_both_themes` executed 0 tests because the venv launcher failed before process start: `.venv\pyvenv.cfg` still points to missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`.
+- Risk: runtime pytest verification remains blocked until the local Python/venv interpreter is repaired.

@@ -15,13 +15,15 @@ poller.  ``StageView`` wraps both behind a 2D/3D toggle.
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSettings
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QStackedWidget,
     QButtonGroup, QSizePolicy, QFrame,
 )
 
 from gui.status_widgets import StatusPill
+from gui.style import palette
 
 try:
     import pyqtgraph as pg
@@ -36,12 +38,29 @@ except Exception:
     _HAS_GL = False
 
 
-# Colours (RGB / RGBA)
-_C_ENVELOPE = (90, 130, 200)
-_C_POS      = (0, 200, 255)
-_C_ORIGIN   = (150, 150, 150)
-_C_SCAN     = (0, 230, 118)
-_C_LASER    = (255, 70, 70)
+def _theme_from_settings() -> str:
+    return str(QSettings("TCT", "TCTSetup").value("theme", "light"))
+
+
+def _stage_colors(mode: str) -> dict[str, str]:
+    p = palette(mode)
+    return {
+        "background": p["sunk"],
+        "grid": p["hairline_strong"],
+        "axis": p["muted"],
+        "envelope": p["border_strong"],
+        "position": p["accent"],
+        "position_outline": p["material"],
+        "origin": p["muted"],
+        "scan": p["good"],
+        "laser": p["warn"],
+    }
+
+
+def _qcolor(color: str, alpha: float = 1.0) -> QColor:
+    qcolor = QColor(color)
+    qcolor.setAlphaF(alpha)
+    return qcolor
 
 
 def _rect_xy(x0: float, x1: float, y0: float, y1: float):
@@ -53,10 +72,16 @@ def _rect_xy(x0: float, x1: float, y0: float, y1: float):
 class StageView2D(QWidget):
     """Top (X-Y) + side (X-Z) schematic of the travel envelope and position."""
 
-    def __init__(self, limits=None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        limits=None,
+        parent: QWidget | None = None,
+        theme_mode: str | None = None,
+    ) -> None:
         super().__init__(parent)
         self._x = self._y = self._z = 0.0
         self._limits = limits
+        self._theme_mode = str(theme_mode) if theme_mode else _theme_from_settings()
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
@@ -72,29 +97,57 @@ class StageView2D(QWidget):
 
         self.set_limits(limits)
         self.set_position(0.0, 0.0, 0.0)
+        self.refresh_theme(self._theme_mode)
 
     def _make_plot(self, title: str, xlabel: str, ylabel: str) -> dict:
-        w = pg.PlotWidget(title=title)
+        colors = _stage_colors(self._theme_mode)
+        w = pg.PlotWidget(title=title, background=colors["background"])
         w.setLabel("bottom", xlabel)
         w.setLabel("left", ylabel)
         w.showGrid(x=True, y=True, alpha=0.25)
         w.setAspectLocked(True)
         w.setMouseEnabled(x=False, y=False)
-        envelope = w.plot(pen=pg.mkPen(_C_ENVELOPE, width=2))
-        scan = w.plot(pen=pg.mkPen(_C_SCAN, width=1, style=Qt.PenStyle.DashLine))
-        origin = pg.ScatterPlotItem(size=8, pen=pg.mkPen(_C_ORIGIN),
-                                    brush=pg.mkBrush(_C_ORIGIN), symbol="+")
+        envelope = w.plot(pen=pg.mkPen(colors["envelope"], width=2))
+        scan = w.plot(pen=pg.mkPen(colors["scan"], width=1, style=Qt.PenStyle.DashLine))
+        origin = pg.ScatterPlotItem(size=8, pen=pg.mkPen(colors["origin"]),
+                                    brush=pg.mkBrush(colors["origin"]), symbol="+")
         w.addItem(origin)
-        pos = pg.ScatterPlotItem(size=14, pen=pg.mkPen("w", width=1),
-                                 brush=pg.mkBrush(*_C_POS), symbol="o")
+        pos = pg.ScatterPlotItem(size=14, pen=pg.mkPen(colors["position_outline"], width=1),
+                                 brush=pg.mkBrush(colors["position"]), symbol="o")
         w.addItem(pos)
         vline = pg.InfiniteLine(angle=90, movable=False,
-                                pen=pg.mkPen(_C_POS, width=1, style=Qt.PenStyle.DotLine))
+                                pen=pg.mkPen(colors["position"], width=1, style=Qt.PenStyle.DotLine))
         hline = pg.InfiniteLine(angle=0, movable=False,
-                                pen=pg.mkPen(_C_POS, width=1, style=Qt.PenStyle.DotLine))
+                                pen=pg.mkPen(colors["position"], width=1, style=Qt.PenStyle.DotLine))
         w.addItem(vline); w.addItem(hline)
         return {"w": w, "env": envelope, "scan": scan, "origin": origin,
                 "pos": pos, "vline": vline, "hline": hline}
+
+    def refresh_theme(self, mode: str | None = None) -> None:
+        if mode:
+            self._theme_mode = str(mode)
+        if not _HAS_PG:
+            return
+        colors = _stage_colors(self._theme_mode)
+        for plot in (self._top, self._side):
+            widget = plot["w"]
+            widget.setBackground(colors["background"])
+            widget.showGrid(x=True, y=True, alpha=0.25)
+            axis_pen = pg.mkPen(colors["axis"])
+            grid_pen = pg.mkPen(colors["grid"])
+            for axis_name in ("bottom", "left"):
+                axis = widget.getPlotItem().getAxis(axis_name)
+                axis.setPen(grid_pen)
+                axis.setTickPen(grid_pen)
+                axis.setTextPen(axis_pen)
+            plot["env"].setPen(pg.mkPen(colors["envelope"], width=2))
+            plot["scan"].setPen(pg.mkPen(colors["scan"], width=1, style=Qt.PenStyle.DashLine))
+            plot["origin"].setPen(pg.mkPen(colors["origin"]))
+            plot["origin"].setBrush(pg.mkBrush(colors["origin"]))
+            plot["pos"].setPen(pg.mkPen(colors["position_outline"], width=1))
+            plot["pos"].setBrush(pg.mkBrush(colors["position"]))
+            plot["vline"].setPen(pg.mkPen(colors["position"], width=1, style=Qt.PenStyle.DotLine))
+            plot["hline"].setPen(pg.mkPen(colors["position"], width=1, style=Qt.PenStyle.DotLine))
 
     def set_limits(self, limits) -> None:
         self._limits = limits
@@ -129,9 +182,15 @@ class StageView2D(QWidget):
 class StageView3D(QWidget):
     """OpenGL 3D envelope box with a DUT / current-position marker."""
 
-    def __init__(self, limits=None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        limits=None,
+        parent: QWidget | None = None,
+        theme_mode: str | None = None,
+    ) -> None:
         super().__init__(parent)
         self._limits = limits
+        self._theme_mode = str(theme_mode) if theme_mode else _theme_from_settings()
         self._ok = False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -141,7 +200,9 @@ class StageView3D(QWidget):
                                  "    pip install PyOpenGL"))
             return
         try:
+            colors = _stage_colors(self._theme_mode)
             self._view = gl.GLViewWidget()
+            self._view.setBackgroundColor(colors["background"])
             self._view.setCameraPosition(distance=180, elevation=22, azimuth=-60)
             lay.addWidget(self._view)
 
@@ -151,25 +212,39 @@ class StageView3D(QWidget):
             self._view.addItem(self._grid)
 
             self._box = gl.GLLinePlotItem(width=2, antialias=True,
-                                          color=(0.35, 0.51, 0.78, 1.0), mode="lines")
+                                          color=_qcolor(colors["envelope"]), mode="lines")
             self._view.addItem(self._box)
 
             self._laser = gl.GLLinePlotItem(width=2, antialias=True,
-                                            color=(1.0, 0.27, 0.27, 0.9), mode="lines")
+                                            color=_qcolor(colors["laser"], 0.9), mode="lines")
             self._view.addItem(self._laser)
 
             self._marker = gl.GLScatterPlotItem(size=14,
-                                                color=(0.0, 0.78, 1.0, 1.0))
+                                                color=_qcolor(colors["position"]))
             self._marker.setGLOptions("translucent")
             self._view.addItem(self._marker)
 
             self._ok = True
+            self.refresh_theme(self._theme_mode)
             self.set_limits(limits)
             self.set_position(0.0, 0.0, 0.0)
         except Exception as exc:   # no GL context (e.g. headless) — show a hint
             while lay.count():
                 lay.takeAt(0).widget().deleteLater()
             lay.addWidget(QLabel(f"3D view unavailable:\n{exc}"))
+
+    def refresh_theme(self, mode: str | None = None) -> None:
+        if mode:
+            self._theme_mode = str(mode)
+        if not self._ok:
+            return
+        colors = _stage_colors(self._theme_mode)
+        self._view.setBackgroundColor(colors["background"])
+        if hasattr(self._grid, "setColor"):
+            self._grid.setColor(_qcolor(colors["grid"], 0.65))
+        self._box.setData(color=_qcolor(colors["envelope"]))
+        self._laser.setData(color=_qcolor(colors["laser"], 0.9))
+        self._marker.setData(color=_qcolor(colors["position"]))
 
     @staticmethod
     def _box_edges(x0, x1, y0, y1, z0, z1) -> np.ndarray:
@@ -207,8 +282,14 @@ class StageView3D(QWidget):
 class StageView(QWidget):
     """2D schematic + 3D OpenGL view behind a segmented 2D/3D toggle."""
 
-    def __init__(self, limits=None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        limits=None,
+        parent: QWidget | None = None,
+        theme_mode: str | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._theme_mode = str(theme_mode) if theme_mode else _theme_from_settings()
         self.setMinimumWidth(320)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -248,8 +329,8 @@ class StageView(QWidget):
         lay.addLayout(legend)
 
         self._stack = QStackedWidget()
-        self._v2d = StageView2D(limits)
-        self._v3d = StageView3D(limits)
+        self._v2d = StageView2D(limits, theme_mode=self._theme_mode)
+        self._v3d = StageView3D(limits, theme_mode=self._theme_mode)
         self._stack.addWidget(self._v2d)
         self._stack.addWidget(self._v3d)
         lay.addWidget(self._stack, 1)
@@ -268,3 +349,9 @@ class StageView(QWidget):
 
     def set_scan_region(self, *a, **k) -> None:
         self._v2d.set_scan_region(*a, **k)
+
+    def refresh_theme(self, mode: str | None = None) -> None:
+        if mode:
+            self._theme_mode = str(mode)
+        self._v2d.refresh_theme(self._theme_mode)
+        self._v3d.refresh_theme(self._theme_mode)
