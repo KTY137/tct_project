@@ -17,6 +17,24 @@ scale (700 -> 600 on captions/eyebrows/section titles), and a distinct
 large/light ``FONT_DISPLAY`` role for hero numeric tiles (``#readoutCell``)
 so values "breathe" instead of reusing the small bold-mono instrument-LCD
 look everywhere. Theming-only: no widget/layout was added, removed, or moved.
+
+Cockpit v5 D0 pass (docs/design/cockpit_design_system.md, ratified
+2026-07-12 — the CANONICAL spec, superseding earlier apple_style_ui_audit.md
+calls where the two disagree, e.g. hero values going back to mono/w600 per
+§3): the accent/canvas/panel/hairline/text/sim/good/warn(=armed)/crit(=danger)
+values below are now sourced VERBATIM from the frozen reference
+``artifacts_claude/tct_cockpit_design_v4_final.html``'s ``:root``/
+``[data-theme]`` custom properties, plus four new surface/emphasis tokens
+(``raised``/``sunk``/``well``/``specular``) and the canonical semantic names
+(``danger``/``armed`` alongside the pre-existing ``crit``/``warn`` — same
+values, both keys work) from that spec's §2. This is a FOUNDATION/token pass
+only (docs/design/cockpit_design_system.md §9 "D0"): every existing dict key
+keeps working (additive), individual panels are not yet restyled (that is
+D1+), but because so much shared QSS already reads these tokens, the visual
+effect reaches every panel at once — see the new Type-scale ROLES block
+below (``FONT_RAIL_PX``, ``FONT_PANEL_TITLE_PX``, ``FONT_METRIC_LABEL_PX``,
+``FONT_VALUE_PX``, ``FONT_UNIT_PX``, ...) for the vocabulary D1+ panels
+should reach for instead of a generic ``FONT["xs".."display"]`` step.
 """
 from __future__ import annotations
 
@@ -66,37 +84,155 @@ FONT = {"xs": FONT_XS, "sm": FONT_SM, "md": FONT_MD, "lg": FONT_LG, "xl": FONT_X
 MONO_FAMILY = '"Consolas", "Cascadia Mono", "Cascadia Code", "Courier New", monospace'
 
 # ---------------------------------------------------------------------------
-# Shared accent — scope-cyan (was blue #2d7ff9).  Reads as an oscilloscope
-# trace; ``accent_strong`` is the deeper hover/pressed/default-fill variant.
+# Type-scale ROLES (docs/design/cockpit_design_system.md §3, Codex-calibrated).
+# Distinct from the generic FONT["xs".."display"]/RADIUS scales above: these
+# are named for the *role* a panel is styling (a rail button vs. a panel
+# title vs. a metric label vs. a hero value vs. a unit suffix) rather than a
+# generic size step, so D1+ panels reach for e.g. ``FONT_METRIC_LABEL_PX``
+# instead of re-guessing "was it FONT_XS or 10?" per call site. The spec
+# gives each role a px *range*; each constant here picks ONE concrete number
+# from that range (documented alongside) so every panel adopting a role
+# renders pixel-identical instead of drifting by eye. Weights are plain ints
+# (Qt QSS already accepts arbitrary 100-900 weights — see the pre-existing
+# ``font-weight: 640`` in ``eyebrow_title`` below — not just normal/bold).
 # ---------------------------------------------------------------------------
-ACCENT_LIGHT = "#0e7fa6"
-ACCENT_LIGHT_STRONG = "#0a678a"
-ACCENT_DARK = "#41c8f0"
-ACCENT_DARK_STRONG = "#2fa8cd"
+FONT_RAIL_PX = 13                  # rail / button labels (range 13)
+WEIGHT_RAIL = 600                  # (range w560-600)
 
-# Status accents. The exported names remain available for existing panel code
-# that imports a single fixed semantic colour; the palette below uses theme-
-# tuned light/dark values for the global QSS.
-OK_GREEN = "#30d158"
-WARN_AMBER = "#ffa01e"
-WARN_RED = "#ff4f47"
-OK_GREEN_LIGHT = "#1e9e46"
-WARN_AMBER_LIGHT = "#c77000"
-WARN_RED_LIGHT = "#d93a32"
+FONT_PANEL_TITLE_PX = 18           # panel titles (range 17-20; no hero titles
+WEIGHT_PANEL_TITLE = 650           # in operational panels)
+
+FONT_BODY_PX = 13                  # explanatory prose — sentence-case, never
+WEIGHT_BODY = 450                  # uppercase (law 3) — (range 12.5-13/w400-450)
+
+FONT_METRIC_LABEL_PX = 10          # tiny tracked mono uppercase "instrument
+WEIGHT_METRIC_LABEL = 600          # engraving" label (MetricTile/ReadoutCell
+TRACKING_METRIC_LABEL_EM = 0.08    # title, chip text) — tracking is a MAXIMUM
+TRACKING_METRIC_LABEL_PX = 1       # (<=.08em); Qt QSS letter-spacing takes a
+                                    # px length, not em — 1px is the closest
+                                    # legible step at a 10px face.
+
+FONT_VALUE_PX = 26                 # primary/hero metric value (range 24-28),
+FONT_VALUE_COMPACT_PX = 18         # mono, tabular; compact variant is the
+WEIGHT_VALUE = 600                 # tile's smaller/dense mode (range 17-20).
+
+FONT_UNIT_PX = 11                  # unit suffix, muted ink (range 11-12)
+WEIGHT_UNIT = 400
+
+# Motion/transition timing (law 8: "state transitions ease ~200 ms; only
+# live states pulse"). A shared constant so QSS/QML/any future
+# QVariantAnimation-driven repolish agrees on one number instead of each
+# call site picking its own — mirrored as ``Theme.transitionMs`` in
+# ``gui/qml_theme.py``. Qt Style Sheets have no ``transition`` property (CSS
+# does, the HTML artifact reference uses it), so on the QWidget side this is
+# documentation/a future animation's duration, not a live QSS transition;
+# QML's ``Behavior { ... duration: Theme.transitionMs }`` bindings are where
+# it is actually load-bearing today (see gui/qml/MetricTile.qml).
+TRANSITION_MS = 200
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """Hex ``#rrggbb`` -> ``rgba(r,g,b,alpha)`` for translucent QSS fills.
+
+    Defined above ``LIGHT``/``DARK`` (cockpit v5 token pass) so the palette
+    dicts themselves can compute a derived tone (e.g. ``tint`` from
+    ``accent``) at definition time instead of hand-picking a second,
+    easy-to-drift hex for the same colour."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r}, {g}, {b}, {alpha})"
+
+
+def _darken(hex_color: str, amount: float = 0.15) -> str:
+    """Hex ``#rrggbb`` darkened toward black by *amount* (0..1).
+
+    Used for hover/pressed shades of solid accent buttons (connect/disconnect/
+    danger) so those states derive from the same token instead of a separately
+    hand-picked hex — one source of truth per colour. Defined above
+    ``LIGHT``/``DARK`` alongside ``_rgba`` (see its docstring)."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    r = max(0, min(255, int(r * (1 - amount))))
+    g = max(0, min(255, int(g * (1 - amount))))
+    b = max(0, min(255, int(b * (1 - amount))))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _blend(fg_hex: str, bg_hex: str, alpha: float) -> str:
+    """Alpha-blend *fg_hex* over *bg_hex* at *alpha* (0..1), returning a
+    PLAIN (opaque) hex — unlike ``_rgba`` (a translucent ``rgba(...)`` QSS
+    literal), this is for tokens that must also be a real, directly
+    QColor-parseable hex: ``gui/qml_theme.py``'s ``Theme`` singleton reads
+    palette dict values straight into ``QColor(...)``, which — unlike Qt
+    Style Sheets — does NOT understand CSS ``rgba()`` functional notation.
+    Used for "tint"/"active" (an accent wash resolved once at palette-build
+    time against the surface it typically sits on, "panel") so the SAME
+    dict value works for both a QSS background and a QML ``QColor``
+    property instead of needing two representations of one colour."""
+    fr, fgc, fb = (int(fg_hex.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+    br, bgc, bb = (int(bg_hex.lstrip("#")[i:i + 2], 16) for i in (0, 2, 4))
+    r = round(fr * alpha + br * (1 - alpha))
+    g = round(fgc * alpha + bgc * (1 - alpha))
+    b = round(fb * alpha + bb * (1 - alpha))
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+# ---------------------------------------------------------------------------
+# Shared accent — cockpit v5 token pass (docs/design/cockpit_design_system.md
+# §2, ratified 2026-07-12): "one accent", #5AA9FF dark / #2A6FE0 light,
+# sourced verbatim from artifacts_claude/tct_cockpit_design_v4_final.html's
+# ``:root``/``[data-theme]`` custom properties (the frozen visual reference).
+# ``accent_strong`` is DERIVED (``_darken(accent, 0.15)``, no longer a
+# separately hand-picked hex) — the hover/pressed/default-fill variant.
+# ---------------------------------------------------------------------------
+ACCENT_LIGHT = "#2A6FE0"
+ACCENT_LIGHT_STRONG = _darken(ACCENT_LIGHT, 0.15)
+ACCENT_DARK = "#5AA9FF"
+ACCENT_DARK_STRONG = _darken(ACCENT_DARK, 0.15)
+
+# Status accents — cockpit v5: law 1 collapses the semantic palette to four
+# saturated accents (danger/armed/good/sim) plus the one accent above; "warn"/
+# "crit" (the pre-existing dict keys almost every QSS rule below already
+# reads) are kept as the SAME names but now hold the ratified armed/danger
+# hex exactly (see DANGER_*/ARMED_* aliases below) — every existing p['warn']/
+# p['crit'] consumer repaints to the correct colour with zero call-site edits,
+# which is the whole point of a foundation/token pass ("lifts every panel").
+# The exported names remain available for existing panel code that imports a
+# single fixed semantic colour; the palette below uses theme-tuned light/dark
+# values for the global QSS.
+OK_GREEN = "#3DD68C"          # dark "good" (spec §2)
+WARN_AMBER = "#FFB84D"        # dark "armed" (spec §2) — kept under the old
+WARN_RED = "#FF5A61"          # dark "danger" (spec §2)   name for compat
+OK_GREEN_LIGHT = "#128A63"
+WARN_AMBER_LIGHT = "#B26F00"
+WARN_RED_LIGHT = "#DE434B"
+
+# Canonical spec names (§2) as their own constants/aliases, for new call
+# sites (and the dict keys below) that want to say what they mean instead of
+# reaching for the legacy OK_GREEN/WARN_AMBER/WARN_RED names.
+GOOD_DARK, GOOD_LIGHT = OK_GREEN, OK_GREEN_LIGHT
+ARMED_DARK, ARMED_LIGHT = WARN_AMBER, WARN_AMBER_LIGHT
+DANGER_DARK, DANGER_LIGHT = WARN_RED, WARN_RED_LIGHT
 
 # Device-manager status accents (gui/device_panel.py's ``_STATUS_STYLE``) —
-# two more fixed-both-themes status colours alongside OK_GREEN/WARN_AMBER/
-# WARN_RED above: "simulated" (purple — matches the existing
-# ``statusChip``/``statusLamp[state="simulated"]`` hue in ``build_qss``
-# below) and "error" (a hard device error, distinct from the general
-# WARN_AMBER "warn" look).
-SIM_PURPLE = "#bf8cff"
-SIM_PURPLE_LIGHT = "#7d55d8"
+# "simulated" and "error", alongside OK_GREEN/WARN_AMBER/WARN_RED above.
+# SIM_PURPLE/SIM_PURPLE_LIGHT keep their PRE-EXISTING NAME for import
+# compatibility (gui/device_panel.py, gui/camera_panel.py, ... already import
+# it) but the VALUE is now the ratified spec "sim" cyan (law 6: "sim never
+# borrows green" — and, as importantly, never borrows purple either now that
+# a single cyan is the one-and-only sim-marking colour app-wide; see
+# SIM_CYAN_DARK/LIGHT for the same value under its honest name for new call
+# sites). "error" (a hard device error, distinct from "warn"/"armed") is
+# unchanged — not one of the four spec semantic tokens, left for a future
+# Bias/Camera EmptyState-error pass (D4) to reconsider.
+SIM_PURPLE = "#41D8E4"
+SIM_PURPLE_LIGHT = "#0C9FB0"
+SIM_CYAN_DARK, SIM_CYAN_LIGHT = SIM_PURPLE, SIM_PURPLE_LIGHT
 ERROR_ORANGE = "#ff8a1f"
 ERROR_ORANGE_LIGHT = "#d96c00"
 
 # General amber token (distinct from the warn status colour): matches the
-# bias axis-rail hue so a "bias" accent is amber everywhere.
+# bias axis-rail hue so a "bias" accent is amber everywhere. Unchanged by the
+# v5 token pass — axis-rail semantics are D1 (Planner) territory.
 AMBER_LIGHT = "#C67F14"
 AMBER_DARK = "#E8A33D"
 
@@ -105,22 +241,59 @@ LIGHT = {
     "amber": AMBER_LIGHT,
     "good": OK_GREEN_LIGHT, "warn": WARN_AMBER_LIGHT, "crit": WARN_RED_LIGHT,
     "sim": SIM_PURPLE_LIGHT, "error": ERROR_ORANGE_LIGHT,
-    "canvas": "#eef0f4", "bg": "#eef0f4",
-    "material": "#ffffff", "material_strong": "#ffffff",
-    "panel": "#ffffff", "border": "#d6dbe3",
-    "hairline": "#dfe4ec", "hairline_strong": "#b9c2cf",
-    "toplight": "#ffffff",
-    "text": "#1b1d22", "muted": "#5c626e", "faint": "#9aa0ab",
-    "on_accent": "#ffffff", "tint": "#d9edf3",
-    "field": "#f2f4f7", "pressed": "#e4e8ee", "disabled_bg": "#eceff3",
+    # Canonical spec names (§2) — same values as good/warn/crit/sim above,
+    # added so new code can read/write the name the design contract actually
+    # uses instead of the legacy good/warn/crit vocabulary.
+    "danger": DANGER_LIGHT, "armed": ARMED_LIGHT,
+    "canvas": "#E9EDF4", "bg": "#E9EDF4",
+    # material/material_strong: toolbar/menu/status-bar chrome. Synced to
+    # panel/canvas (v5) rather than a third hand-picked tone, so the ribbon
+    # reads as the SAME surface ladder as every card instead of a separately
+    # drifting grey.
+    "material": "#FFFFFF", "material_strong": "#E9EDF4",
+    "panel": "#FFFFFF",
+    # border/border_strong: kept as their own keys for existing call sites,
+    # synced 1:1 to hairline/hairline_strong (the two concepts were already
+    # near-identical pre-v5; DARK even had them byte-equal).
+    "border": "#D9DFEA", "border_strong": "#BFC9DA",
+    "hairline": "#D9DFEA", "hairline_strong": "#BFC9DA",
+    "specular": "rgba(255, 255, 255, 0.85)",
+    "toplight": "#F4F7FB",
+    "text": "#131A28", "muted": "#525D72", "faint": "#949DB0",
+    "on_accent": "#ffffff",
+    # tint/active: accent-tinted wash, blended (see ``_blend``) at the
+    # spec's "--accent-soft" alpha (0.10 light / 0.13 dark — see DARK below)
+    # against "panel" instead of a separately hand-picked hex that could
+    # drift from "accent" — and, unlike a raw ``_rgba()`` string, still a
+    # plain hex ``gui/qml_theme.py``'s ``Theme.tint`` QColor property can
+    # parse directly (see ``_blend``'s docstring).
+    "tint": _blend(ACCENT_LIGHT, "#FFFFFF", 0.10),
+    "active": _blend(ACCENT_LIGHT, "#FFFFFF", 0.10),
+    # field: v5 evidence (tct_cockpit_design_v4_final.html's `.btn` rule) —
+    # a DEFAULT BUTTON/CHIP surface is "panel-2" (raised), not a sunken
+    # input well; that raised tone is what "field" already meant here
+    # (QPushButton/QToolButton/QComboBox/statusChip all key off it). Genuine
+    # input wells (QLineEdit/QSpinBox/...) are repointed to "well" directly
+    # at their own QSS rule below instead of overloading this token.
+    "field": "#F4F7FB",
+    # pressed/disabled_bg: a control being pushed in / greyed out both read
+    # as "recessed" — the spec's "sunk" surface, rather than two more
+    # one-off hand-picked tones.
+    "pressed": "#E2E7F0", "disabled_bg": "#E2E7F0",
     # Cockpit kit (Phase 0, docs/design/cockpit_style_overhaul.md §2) —
-    # additive layering/emphasis tokens. panel_2/panel_3 step progressively
-    # deeper than "panel" (nested card bodies); "sunk" is a recessed/inset
-    # surface (input wells, dial recesses); "border_strong" is an emphasized
-    # border for hover/active/focus rings; "hover"/"active" are neutral
-    # interaction washes distinct from the accent-tinted "pressed" above.
-    "panel_2": "#f6f7f9", "panel_3": "#eef0f4", "sunk": "#e8ebf0",
-    "border_strong": "#b9c2cf", "hover": "#e8ebf0", "active": "#d9edf3",
+    # additive layering/emphasis tokens, v5-recalibrated
+    # (docs/design/cockpit_design_system.md §2): "raised" (the spec's own
+    # name — "panel_2" is kept as an exact alias for existing call sites),
+    # "sunk"/"well" are the two recessed surfaces (well = input wells/dial
+    # recesses; sunk = a deeper trough, e.g. a segmented-control track or a
+    # progress trough); "hover" is a neutral interaction wash — synced to
+    # "raised" so the existing `background: p['hover']` hover rules become a
+    # same-tone no-op and only their sibling `border-color` rule actually
+    # shifts on hover, matching the v5 artifact's own `.btn:hover` (border
+    # colour only, no background change).
+    "panel_2": "#F4F7FB", "raised": "#F4F7FB", "panel_3": "#eef0f4",
+    "sunk": "#E2E7F0", "well": "#EDF1F7",
+    "hover": "#F4F7FB",
     # Plot chrome tokens (grid/overlay) — kept identical in both dicts on
     # purpose, same idiom as good/warn/crit above: the plot canvas itself
     # (PLOT_BG/PLOT_FG, below) is a fixed dark "instrument screen" in BOTH
@@ -135,17 +308,24 @@ DARK = {
     "amber": AMBER_DARK,
     "good": OK_GREEN, "warn": WARN_AMBER, "crit": WARN_RED,
     "sim": SIM_PURPLE, "error": ERROR_ORANGE,
-    "canvas": "#131316", "bg": "#131316",
-    "material": "#1e1e22", "material_strong": "#18181b",
-    "panel": "#1d1d21", "border": "#33343a",
-    "hairline": "#33343a", "hairline_strong": "#4a4d56",
-    "toplight": "#292a2f",
-    "text": "#f2f3f5", "muted": "#a3a8b3", "faint": "#63676f",
-    "on_accent": "#04222c", "tint": "#18343d",
-    "field": "#2a2b31", "pressed": "#30323a", "disabled_bg": "#25262b",
-    # See the matching comment in LIGHT above.
-    "panel_2": "#242429", "panel_3": "#2b2b31", "sunk": "#0f1012",
-    "border_strong": "#4a4d56", "hover": "#2c2d34", "active": "#18343d",
+    "danger": DANGER_DARK, "armed": ARMED_DARK,
+    "canvas": "#0A0D13", "bg": "#0A0D13",
+    "material": "#121824", "material_strong": "#0A0D13",
+    "panel": "#121824",
+    "border": "#222B3E", "border_strong": "#334159",
+    "hairline": "#222B3E", "hairline_strong": "#334159",
+    "specular": "rgba(255, 255, 255, 0.045)",
+    "toplight": "#192134",
+    "text": "#E9EDF5", "muted": "#98A1B5", "faint": "#5B657A",
+    "on_accent": "#04222c",
+    "tint": _blend(ACCENT_DARK, "#121824", 0.13),
+    "active": _blend(ACCENT_DARK, "#121824", 0.13),
+    "field": "#192134",
+    "pressed": "#0C1019", "disabled_bg": "#0C1019",
+    # See the matching comments in LIGHT above.
+    "panel_2": "#192134", "raised": "#192134", "panel_3": "#2b2b31",
+    "sunk": "#0C1019", "well": "#0E1420",
+    "hover": "#192134",
     "plot_grid": None, "plot_overlay": None,
 }
 
@@ -202,6 +382,7 @@ GLOW = {
     "warn": WARN_AMBER,
     "crit": WARN_RED,
     "armed": WARN_AMBER,
+    "danger": WARN_RED,   # canonical spec alias for "crit" (see palette dicts)
 }
 
 
@@ -233,32 +414,10 @@ def set_chip_state(chip, state: str) -> None:
     repolish(chip)
 
 
-def _rgba(hex_color: str, alpha: float) -> str:
-    """Hex ``#rrggbb`` -> ``rgba(r,g,b,alpha)`` for translucent QSS fills."""
-    h = hex_color.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return f"rgba({r}, {g}, {b}, {alpha})"
-
-
-def _darken(hex_color: str, amount: float = 0.15) -> str:
-    """Hex ``#rrggbb`` darkened toward black by *amount* (0..1).
-
-    Used for hover/pressed shades of solid accent buttons (connect/disconnect/
-    danger) so those states derive from the same token instead of a separately
-    hand-picked hex — one source of truth per colour.
-    """
-    h = hex_color.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    r = max(0, min(255, int(r * (1 - amount))))
-    g = max(0, min(255, int(g * (1 - amount))))
-    b = max(0, min(255, int(b * (1 - amount))))
-    return f"#{r:02x}{g:02x}{b:02x}"
-
-
 def build_qss(p: dict) -> str:
     return f"""
 * {{
-    font-family: "Segoe UI", "Inter var", "Inter", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    font-family: "Segoe UI Variable", "Segoe UI", "Inter var", "Inter", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
     font-size: {FONT_MD}px;
     color: {p['text']};
 }}
@@ -308,11 +467,16 @@ QGroupBox::title {{
     letter-spacing: 0;
 }}
 
-/* Inputs — padding matches the v5 artifact's field treatment
-   (tct_polish_preview.html's `.well`, 6/12) for more breathing room than
-   the old, tighter 4/8. */
+/* Inputs — a genuine recessed input WELL (docs/design/cockpit_design_system.md
+   §2's ``well`` token — "input wells, dial recesses"; the v4 artifact's own
+   ``.field`` class keys off ``--well`` too), distinct from the "field" dict
+   key above (which is now the RAISED default-button/chip surface, per the
+   artifact's ``.btn{{background:var(--panel-2)}}`` — see the LIGHT/DARK
+   comments in gui/style.py). Padding matches the v5 artifact's field
+   treatment (tct_polish_preview.html's `.well`, 6/12) for more breathing
+   room than the old, tighter 4/8. */
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-    background: {p['field']};
+    background: {p['well']};
     border: 1px solid transparent;
     border-radius: {RADIUS_SM}px;
     padding: {SPACE_SM - 2}px {SPACE_MD}px;
@@ -320,7 +484,7 @@ QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
     selection-color: {p['on_accent']};
 }}
 QLineEdit:hover, QPlainTextEdit:hover, QSpinBox:hover,
-QDoubleSpinBox:hover, QComboBox:hover {{ border-color: {p['border_strong']}; background: {p['hover']}; }}
+QDoubleSpinBox:hover, QComboBox:hover {{ border-color: {p['border_strong']}; background: {p['well']}; }}
 QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus,
 QDoubleSpinBox:focus, QComboBox:focus {{
     border: 1px solid {p['accent']};
@@ -406,6 +570,27 @@ QPushButton[state="ghost"]:hover {{
 }}
 QPushButton[state="ghost"]:pressed {{ background: {_rgba(p['accent'], 0.14)}; }}
 QPushButton[state="ghost"]:disabled {{ color: {p['faint']}; background: transparent; }}
+
+/* "motion" variant — law 2's amber-gated command class (motion commands are
+   never plain/ghost and never red; a stage move, a homing action, ... reads
+   as amber outline). Numbers match the v4 artifact's ``.btn.motion`` exactly
+   (a transparent fill, a ~55%-alpha armed border, armed-coloured text,
+   filling to the armed-soft tint on hover) so the QSS-widget and QML/HTML
+   references agree byte-for-byte on the recipe, not just the colour. Uses
+   "armed" (the canonical spec name — see the palette dicts) rather than the
+   legacy "warn" key so a reader can tell this rule was written against the
+   ratified command-class law, not a generic warning look. */
+QPushButton[state="motion"] {{
+    background: transparent; color: {p['armed']};
+    border: 1.5px solid {_rgba(p['armed'], 0.55)}; font-weight: 620;
+}}
+QPushButton[state="motion"]:hover {{
+    background: {_rgba(p['armed'], 0.14)}; border-color: {p['armed']};
+}}
+QPushButton[state="motion"]:pressed {{ background: {_rgba(p['armed'], 0.24)}; }}
+QPushButton[state="motion"]:disabled {{
+    color: {p['faint']}; background: transparent; border-color: {p['hairline']};
+}}
 
 /* Toolbuttons (toolbar actions, tab corner "detach" button, ...) get the same
    quiet hover/pressed/checked language as QPushButton so a toolbar reads as
@@ -631,36 +816,56 @@ QLabel#readoutValue {{
 
 /* Metric tile (gui/status_widgets.py ReadoutCell / gui/panel_kit.py
    MetricTile — the app-wide "hero number" tile: Scan Viewer progress/ETA,
-   Camera beam stats, calibration results, intensity readouts, ...). v5 fix:
-   this used to reuse the dark-LCD instrumentReadout look above (small bold
-   mono digits on a black plate) even though it is not a true instrument
-   screen — exactly the "metrics are too chunky/black-box" finding in
-   apple_style_ui_audit.md. Now it is a calm card-2 surface with a large,
-   light, PROPORTIONAL value (tct_polish_preview.html's `.tile`); monospace
-   is intentionally dropped here and stays reserved for the true instrument
-   readout above and for file/data identifiers. The tri-state colour hooks
-   below stay neutral-by-default: only a real good/warn/crit/armed state
-   earns colour, so that signal keeps meaning instead of every tile reading
-   permanently "active" (which the old fixed-accent value colour did). */
+   Camera beam stats, calibration results, intensity readouts, ...).
+   cockpit v5 (docs/design/cockpit_design_system.md §3) SUPERSEDES the
+   earlier apple_style_ui_audit.md "drop monospace, go proportional" call:
+   the ratified type scale is explicit — "primary values mono 24-28 px w600
+   tabular" — so the value goes back to MONO_FAMILY at the spec's weight/size
+   instead of the old light-proportional look. Label uses the spec's "tiny
+   tracked mono uppercase" metric-label role (FONT_METRIC_LABEL_PX/
+   WEIGHT_METRIC_LABEL/TRACKING_METRIC_LABEL_PX, defined near FONT above).
+   State communicates through VALUE INK ONLY (law 1/no accent side-bars) —
+   the four canonical semantic states (danger/armed/good/sim) plus the
+   legacy warn/crit names both resolve here; "normal"/no property falls
+   through to the bare rule, the same graceful-unknown idiom as statusChip.
+   ``stale`` (law 4: "staleness is designed") is a SEPARATE boolean property
+   placed after the state rules so it always wins the cascade — a stale tile
+   desaturates its ink back to "faint" regardless of the semantic state
+   underneath (gui.panel_kit.MetricTile.set_stale()). */
 QFrame#readoutCell {{
-    background: {p['panel_2']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_MD}px;
+    background: {p['raised']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_MD}px;
 }}
 QLabel#readoutCellTitle {{
-    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
+    color: {p['faint']}; font-family: {MONO_FAMILY};
+    font-size: {FONT_METRIC_LABEL_PX}px; font-weight: {WEIGHT_METRIC_LABEL};
+    letter-spacing: {TRACKING_METRIC_LABEL_PX}px;
 }}
 QLabel#readoutCellValue {{
     color: {p['text']};
-    font-size: {FONT_DISPLAY}px; font-weight: 400;
+    font-family: {MONO_FAMILY};
+    font-size: {FONT_VALUE_PX}px; font-weight: {WEIGHT_VALUE};
+    letter-spacing: 0;
 }}
-/* Tri-state (+ "armed") value-colour hook — drive with a dynamic ``state``
-   property in {{good, warn, crit}} via gui.status_widgets.ReadoutCell.set_state()
-   (or {{normal, warn, armed}} via gui.panel_kit.MetricTile, which is built on
-   ReadoutCell and reuses this exact hook). "normal"/no property falls through
-   to the bare rule above, the same graceful-unknown idiom as statusChip. */
 QLabel#readoutCellValue[state="good"] {{ color: {p['good']}; }}
-QLabel#readoutCellValue[state="warn"] {{ color: {p['warn']}; }}
-QLabel#readoutCellValue[state="crit"] {{ color: {p['crit']}; }}
-QLabel#readoutCellValue[state="armed"] {{ color: {p['warn']}; font-weight: 800; }}
+QLabel#readoutCellValue[state="warn"], QLabel#readoutCellValue[state="armed"] {{
+    color: {p['armed']}; font-weight: 700;
+}}
+QLabel#readoutCellValue[state="crit"], QLabel#readoutCellValue[state="danger"] {{
+    color: {p['danger']}; font-weight: 700;
+}}
+QLabel#readoutCellValue[state="sim"] {{ color: {p['sim']}; }}
+QLabel#readoutCellValue[stale="true"] {{ color: {p['faint']}; font-weight: 400; }}
+QLabel#readoutCellTitle[stale="true"] {{ color: {p['faint']}; }}
+QFrame#readoutCell[stale="true"] {{ background: {p['well']}; }}
+/* MetricTile caption (gui/panel_kit.py) — the law-4 "why" line under a stale
+   tile ("not connected" / "no run" / "value aged Ns"), and any live tile's
+   short body caption (e.g. an "avg x N" chip). Sentence-case body ink (law
+   3: "Explanations: sentence-case sans. Never uppercase prose."), never the
+   tracked-mono-uppercase label treatment above. */
+QLabel#metricTileCaption {{
+    color: {p['muted']}; font-size: {FONT_XS}px; font-weight: {WEIGHT_BODY};
+}}
+QLabel#metricTileCaption[stale="true"] {{ color: {p['faint']}; }}
 QFrame#readoutCell[flash="accent"] {{
     border: 1px solid {p['accent']}; background: {_rgba(p['accent'], 0.10)};
 }}
@@ -677,8 +882,21 @@ QFrame#readoutCell[flash="crit"] {{
 QFrame#controlCluster {{
     background: {p['field']}; border: 1px solid {p['hairline']}; border-radius: {RADIUS_LG}px;
 }}
+/* Tracking/weight per the spec's metric-label role (FONT_METRIC_LABEL_PX/
+   WEIGHT_METRIC_LABEL/TRACKING_METRIC_LABEL_PX — see the Type-scale ROLES
+   block near FONT above); font-family is DELIBERATELY left on the shared
+   sans stack (the ``*`` selector), not switched to MONO_FAMILY: unlike the
+   narrowly-scoped ReadoutCell/MetricTile title (which the spec explicitly
+   names and which is almost always a single short ALL-CAPS word), this
+   objectName is reused across many existing per-field captions that carry
+   real punctuation (units in parens, a trailing colon — e.g. "Y (MM):")
+   where a mono fallback face was observed to substitute distractingly wide
+   glyphs for "(" ")" ":" on at least one text backend. D1+ per-panel work
+   can promote individual captions to MONO_FAMILY once each is reviewed. */
 QLabel#clusterCaption {{
-    color: {p['muted']}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
+    color: {p['muted']};
+    font-size: {FONT_METRIC_LABEL_PX}px; font-weight: {WEIGHT_METRIC_LABEL};
+    letter-spacing: {TRACKING_METRIC_LABEL_PX}px;
 }}
 
 /* Jog pad buttons — compact, square-ish directional keys inside a cluster. */
@@ -721,8 +939,14 @@ QFrame#channelCard {{
    uppercase text, so the panel should pass already-uppercased text; letter-
    spacing gives it the tracking real small-caps captions need to read
    comfortably at this size instead of looking merely "shrunk". */
+/* font-family deliberately stays on the shared sans stack — see the
+   matching comment on QLabel#clusterCaption above (this selector has the
+   exact same "reused for punctuation-bearing captions" risk: eyebrow_title
+   AND form_row's per-field caption both key off it). */
 QLabel#eyebrow {{
-    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
+    color: {p['faint']};
+    font-size: {FONT_METRIC_LABEL_PX}px; font-weight: {WEIGHT_METRIC_LABEL};
+    letter-spacing: {TRACKING_METRIC_LABEL_PX}px;
 }}
 
 /* ---------------------------------------------------------------------
@@ -743,12 +967,28 @@ QLabel#cardSubtitle {{
 }}
 
 /* Status chip — a small pill communicating a status.  Drive the look with a
-   dynamic property ``state`` in {{neutral, good, warn, crit}}.  To restyle live
-   after changing the property, unpolish THEN polish (polish alone can keep the
-   old look when transitioning between two non-default states):
+   dynamic property ``state``; ``gui.status_widgets.normalize_state()`` maps
+   every raw device/run string onto the small canonical set used below.
+   LAW 1 (quiet nominal): "neutral" is the deliberately unremarkable default
+   for connected/ready/idle — ISA-101 grey, not a green "all clear" light;
+   colour is reserved for a genuine confirmation ("good"), an abnormal/fault
+   condition ("crit"/"warn"), an armed/live-dangerous state ("armed"), or a
+   running/live process ("info"/"busy"). LAW 7 (never lie about hardware):
+   "disconnected" and "unknown" are each their OWN state — a hollow outline
+   (no fill: "nothing there") vs. a dashed border (filled but "not
+   confirmed") — collapsing either into plain "neutral" would claim more
+   certainty than the driver actually has. LAW 6 (sim can never pass as
+   real): "simulated" gets a dashed cyan ring (a cheap hatch approximation)
+   instead of a solid fill, and its colour (``p['sim']``) can never resolve
+   to green (see gui/style.py's SIM_PURPLE/SIM_CYAN_* constants).
+   To restyle live after changing the property, unpolish THEN polish (polish
+   alone can keep the old look when transitioning between two non-default
+   states):
        chip.setProperty("state", "good")
        chip.style().unpolish(chip); chip.style().polish(chip)
-   Any unlisted state value falls through to the quiet neutral pill. */
+   (``gui.status_widgets.StatusChip.set_status()``/``gui.style.set_chip_state``
+   already do this.) Any unlisted state value falls through to the quiet
+   neutral pill. */
 QLabel#statusChip {{
     padding: 2px {SPACE_SM + 2}px;
     border-radius: {RADIUS_PILL}px;
@@ -759,11 +999,18 @@ QLabel#statusChip {{
 QLabel#statusChip[state="neutral"] {{
     background: {p['field']}; color: {p['muted']}; border: 1px solid {p['hairline']};
 }}
+QLabel#statusChip[state="disconnected"] {{
+    background: transparent; color: {p['faint']}; border: 1px solid {p['hairline']};
+}}
+QLabel#statusChip[state="unknown"] {{
+    background: {p['field']}; color: {p['muted']};
+    border: 1px dashed {p['hairline_strong']};
+}}
 QLabel#statusChip[state="good"] {{
     background: {_rgba(p['good'], 0.16)}; color: {p['good']};
     border: 1px solid {_rgba(p['good'], 0.55)};
 }}
-QLabel#statusChip[state="warn"] {{
+QLabel#statusChip[state="warn"], QLabel#statusChip[state="fault"] {{
     background: {_rgba(p['warn'], 0.16)}; color: {p['warn']};
     border: 1px solid {_rgba(p['warn'], 0.55)};
 }}
@@ -775,13 +1022,22 @@ QLabel#statusChip[state="info"], QLabel#statusChip[state="busy"] {{
     background: {p['tint']}; color: {p['accent']};
     border: 1px solid {_rgba(p['accent'], 0.50)};
 }}
+/* Generic pulse hook for a live/running chip (law 8: "only live states
+   pulse"). ``pulsePhase`` is a plain "0"/"1" property an external 1 Hz-
+   cadence driver toggles (no timer lives in this module or in
+   gui/status_widgets.py — see StatusChip.set_pulse_phase()); distinct from
+   the pre-existing per-subsystem ``motionPulse``/``motionPulsePhase`` hooks
+   below, which stay as-is for their own laser/HV/scan call sites. */
+QLabel#statusChip[state="busy"][pulsePhase="1"] {{
+    background: {_rgba(p['accent'], 0.30)}; border: 1px solid {p['accent']};
+}}
 QLabel#statusChip[state="armed"] {{
     background: {_rgba(p['warn'], 0.20)}; color: {p['warn']};
     border: 1px solid {_rgba(p['warn'], 0.70)};
 }}
 QLabel#statusChip[state="simulated"] {{
-    background: {_rgba(p['sim'], 0.16)}; color: {p['sim']};
-    border: 1px solid {_rgba(p['sim'], 0.55)};
+    background: {_rgba(p['sim'], 0.12)}; color: {p['sim']};
+    border: 1px dashed {_rgba(p['sim'], 0.70)};
 }}
 QLabel#statusChip[motionPulse="laser"][motionPulsePhase="0"] {{
     background: {_rgba(p['crit'], 0.14)}; color: {p['crit']};
@@ -808,26 +1064,50 @@ QLabel#statusChip[motionPulse="scan"][motionPulsePhase="1"] {{
     border: 1px solid {_rgba(p['accent'], 0.78)};
 }}
 
+/* Same law-1/6/7/8 state language as statusChip above, adapted to a 9px dot:
+   "disconnected" is a hollow ring (no fill), "unknown" is a filled-but-
+   dashed ring (known-but-unconfirmed), "simulated" is a dashed cyan ring
+   with a soft fill (the cheap "hatched" approximation — never a solid fill,
+   so it can never read as a confident "good"/"crit" state at a glance), and
+   ``pulsePhase`` is the same externally-driven "0"/"1" toggle as the chip's
+   hook (no timer here — see StatusLamp.set_pulse_phase()). */
 QFrame#statusLamp {{
     min-width: 9px; max-width: 9px; min-height: 9px; max-height: 9px;
-    border-radius: 4px; background: {p['muted']};
+    border-radius: 4px; background: {p['muted']}; border: none;
 }}
-QFrame#statusLamp[state="neutral"] {{ background: {p['muted']}; }}
-QFrame#statusLamp[state="good"] {{ background: {p['good']}; }}
-QFrame#statusLamp[state="warn"], QFrame#statusLamp[state="armed"] {{ background: {p['warn']}; }}
-QFrame#statusLamp[state="crit"] {{ background: {p['crit']}; }}
-QFrame#statusLamp[state="info"], QFrame#statusLamp[state="busy"] {{ background: {p['accent']}; }}
-QFrame#statusLamp[state="simulated"] {{ background: {p['sim']}; }}
+QFrame#statusLamp[state="neutral"] {{ background: {p['muted']}; border: none; }}
+QFrame#statusLamp[state="disconnected"] {{
+    background: transparent; border: 1px solid {p['faint']};
+}}
+QFrame#statusLamp[state="unknown"] {{
+    background: {p['faint']}; border: 1px dashed {p['hairline_strong']};
+}}
+QFrame#statusLamp[state="good"] {{ background: {p['good']}; border: none; }}
+QFrame#statusLamp[state="warn"], QFrame#statusLamp[state="armed"], QFrame#statusLamp[state="fault"] {{
+    background: {p['warn']}; border: none;
+}}
+QFrame#statusLamp[state="crit"] {{ background: {p['crit']}; border: none; }}
+QFrame#statusLamp[state="info"], QFrame#statusLamp[state="busy"] {{ background: {p['accent']}; border: none; }}
+QFrame#statusLamp[state="busy"][pulsePhase="1"] {{
+    background: {p['accent']}; border: 1px solid {_rgba(p['accent'], 0.55)};
+}}
+QFrame#statusLamp[state="simulated"] {{
+    background: {_rgba(p['sim'], 0.35)}; border: 1px dashed {p['sim']};
+}}
 
 QFrame#statusPill {{
     background: {p['material']}; border: 1px solid {p['hairline']};
     border-radius: {RADIUS_PILL}px;
 }}
+QFrame#statusPill[state="disconnected"] {{ border: 1px solid {p['hairline']}; }}
+QFrame#statusPill[state="unknown"] {{ border: 1px dashed {p['hairline_strong']}; }}
 QFrame#statusPill[state="good"] {{ border-color: {_rgba(p['good'], 0.55)}; }}
-QFrame#statusPill[state="warn"], QFrame#statusPill[state="armed"] {{ border-color: {_rgba(p['warn'], 0.60)}; }}
+QFrame#statusPill[state="warn"], QFrame#statusPill[state="armed"], QFrame#statusPill[state="fault"] {{
+    border-color: {_rgba(p['warn'], 0.60)};
+}}
 QFrame#statusPill[state="crit"] {{ border-color: {_rgba(p['crit'], 0.60)}; }}
 QFrame#statusPill[state="info"], QFrame#statusPill[state="busy"] {{ border-color: {_rgba(p['accent'], 0.55)}; }}
-QFrame#statusPill[state="simulated"] {{ border-color: {_rgba(p['sim'], 0.60)}; }}
+QFrame#statusPill[state="simulated"] {{ border: 1px dashed {_rgba(p['sim'], 0.70)}; }}
 QLabel#statusPillText {{
     font-size: {FONT_XS}px; font-weight: 700; color: {p['text']};
 }}

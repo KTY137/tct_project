@@ -20,6 +20,27 @@
 //   5. The accent bar is inset top/bottom (not full `root.height`) and given
 //      a small radius so it doesn't visually collide with the tile's own
 //      corner radius.
+//
+// Cockpit v5 D0 pass (docs/design/cockpit_design_system.md §3-4, mirrors the
+// same behaviours gui/panel_kit.py::MetricTile/gui/status_widgets.py::
+// ReadoutCell just gained on the QWidget side):
+//   6. Fit/ellipsize — "Values must ellipsize/fit — a tile can never bleed
+//      into a neighbour" (§3). title/value/caption are now each bound to a
+//      real, finite width (Column doesn't stretch children to its own width
+//      by default) with `elide: Text.ElideRight`; the value ALSO gets
+//      `fontSizeMode: Text.HorizontalFit` (shrink the font first, elide only
+//      if it still doesn't fit at `minimumPixelSize`) — the two techniques
+//      the task brief names ("elide/fontSizeMode"). `root.clip = true` is a
+//      belt-and-suspenders backstop. This is the fix for the render audit's
+//      "DISCONNECTED-overflow" bug: a long value/title used to just paint
+//      past the tile's own bounds with no clipping and no shrink/truncate.
+//   7. Stale ink — a stale tile (law 4) now desaturates its text colour to
+//      `Theme.faint` (title/value/caption), not just the pre-existing
+//      opacity dim, matching the QWidget-kit's ink-based treatment.
+//   8. Behavior durations now bind `Theme.transitionMs` (law 8: "state
+//      transitions ease ~200 ms") instead of a hardcoded `150`, so the QML
+//      and QSS/QWidget sides agree on one number (gui/style.py
+//      TRANSITION_MS).
 import QtQuick
 import Tct
 
@@ -45,9 +66,13 @@ Rectangle {
     // an imperative onEntered/onExited colour assignment.
     border.color: hoverHandler.hovered ? Theme.hairlineStrong : Theme.hairline
     opacity: stale ? 0.6 : 1.0
+    // Belt-and-suspenders backstop for fit/ellipsize below (§3 "never bleed
+    // into a neighbour") — even if some future edit adds an unbound child,
+    // it cannot paint outside this tile's own rectangle.
+    clip: true
 
-    Behavior on border.color { ColorAnimation { duration: 150 } }
-    Behavior on opacity { NumberAnimation { duration: 150 } }
+    Behavior on border.color { ColorAnimation { duration: Theme.transitionMs } }
+    Behavior on opacity { NumberAnimation { duration: Theme.transitionMs } }
 
     HoverHandler { id: hoverHandler }
 
@@ -64,10 +89,11 @@ Rectangle {
         anchors.bottomMargin: 6
         anchors.leftMargin: 2
 
-        Behavior on color { ColorAnimation { duration: 150 } }
+        Behavior on color { ColorAnimation { duration: Theme.transitionMs } }
     }
 
     Column {
+        id: body
         anchors.fill: parent
         anchors.margins: Theme.spaceSm
         anchors.leftMargin: Theme.spaceSm + 6   // clear the accent bar
@@ -76,15 +102,21 @@ Rectangle {
         Text {
             objectName: "tileTitle"
             text: root.title
+            width: parent.width
+            elide: Text.ElideRight
             font.pixelSize: Theme.fontXs
             font.weight: Font.DemiBold
             // repo convention (ReadoutCell/MetricTile title.upper()) rather
             // than the draft's SmallCaps.
             font.capitalization: Font.AllUppercase
-            color: Theme.muted
+            color: root.stale ? Theme.faint : Theme.muted
+
+            Behavior on color { ColorAnimation { duration: Theme.transitionMs } }
         }
 
         Row {
+            id: valueRow
+            width: parent.width
             spacing: 4
             Text {
                 id: valueLabel
@@ -92,19 +124,30 @@ Rectangle {
                 text: root.value
                 // fontDisplay is the repo's "hero numeric tile value" size
                 // (gui/style.py FONT_DISPLAY, used by the widget-kit
-                // MetricTile/ReadoutCell) — fontLg is its compact fallback.
+                // MetricTile/ReadoutCell) — fontLg is its compact fallback,
+                // and also the floor `fontSizeMode: Text.HorizontalFit`
+                // shrinks toward before eliding kicks in.
                 font.pixelSize: root.compact ? Theme.fontLg : Theme.fontDisplay
                 font.weight: Font.DemiBold
-                color: Theme.text
+                color: root.stale ? Theme.faint : Theme.text
+                // Bounded to the row minus the unit label's own width (when
+                // shown) so a long value shrinks/elides instead of pushing
+                // the unit off the tile or bleeding past it (§3).
+                width: unitLabel.visible
+                    ? valueRow.width - unitLabel.implicitWidth - valueRow.spacing
+                    : valueRow.width
+                elide: Text.ElideRight
+                fontSizeMode: Text.HorizontalFit
+                minimumPixelSize: Theme.fontLg
 
-                Behavior on color { ColorAnimation { duration: 150 } }
+                Behavior on color { ColorAnimation { duration: Theme.transitionMs } }
             }
             Text {
                 objectName: "tileUnit"
                 text: root.unit
                 visible: root.unit.length > 0
                 font.pixelSize: Theme.fontXs
-                color: Theme.muted
+                color: root.stale ? Theme.faint : Theme.muted
                 anchors.baseline: valueLabel.baseline
             }
         }
@@ -114,7 +157,7 @@ Rectangle {
             visible: !root.compact && root.caption.length > 0
             text: root.caption
             font.pixelSize: Theme.fontXs
-            color: Theme.muted
+            color: root.stale ? Theme.faint : Theme.muted
             elide: Text.ElideRight
             width: parent.width
         }

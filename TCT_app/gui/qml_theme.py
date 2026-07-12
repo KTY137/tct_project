@@ -37,7 +37,8 @@ from PySide6.QtGui import QColor
 from PySide6.QtQml import QmlElement, QmlSingleton
 
 from gui.style import (
-    FONT, RADIUS, SPACE, PLOT_BG, PLOT_FG, PLOT_GRID, PLOT_OVERLAY, palette,
+    FONT, RADIUS, SPACE, PLOT_BG, PLOT_FG, PLOT_GRID, PLOT_OVERLAY,
+    TRANSITION_MS, palette,
 )
 
 # PySide6 declarative registration: the QML side does ``import Tct``.
@@ -53,6 +54,9 @@ TOKEN_MAP: dict[str, str] = {
     "material": "material",
     "panel": "panel",
     "panel2": "panel_2",
+    "raised": "raised",     # cockpit v5 (docs/design/cockpit_design_system.md
+    "sunk": "sunk",         # §2) surface-ladder additions — same hex as the
+    "well": "well",         # matching gui/style.py LIGHT/DARK dict key.
     "field": "field",
     "hairline": "hairline",
     "hairlineStrong": "hairline_strong",
@@ -67,6 +71,8 @@ TOKEN_MAP: dict[str, str] = {
     "warn": "warn",
     "crit": "crit",
     "sim": "sim",
+    "danger": "danger",     # cockpit v5 canonical semantic names — same
+    "armed": "armed",       # value as crit/warn above, see gui/style.py.
     "onAccent": "on_accent",
 }
 
@@ -138,6 +144,16 @@ class Theme(QObject):
     @Property(QColor, notify=changed)
     def panel2(self) -> QColor: return self._c("panel_2")
 
+    # -- cockpit v5 surface ladder (docs/design/cockpit_design_system.md §2) #
+    @Property(QColor, notify=changed)
+    def raised(self) -> QColor: return self._c("raised")
+
+    @Property(QColor, notify=changed)
+    def sunk(self) -> QColor: return self._c("sunk")
+
+    @Property(QColor, notify=changed)
+    def well(self) -> QColor: return self._c("well")
+
     @Property(QColor, notify=changed)
     def field(self) -> QColor: return self._c("field")
 
@@ -180,8 +196,36 @@ class Theme(QObject):
     @Property(QColor, notify=changed)
     def sim(self) -> QColor: return self._c("sim")
 
+    # -- cockpit v5 canonical semantic names (same value as crit/warn) --- #
+    @Property(QColor, notify=changed)
+    def danger(self) -> QColor: return self._c("danger")
+
+    @Property(QColor, notify=changed)
+    def armed(self) -> QColor: return self._c("armed")
+
     @Property(QColor, notify=changed)
     def onAccent(self) -> QColor: return self._c("on_accent")
+
+    # ``specular`` (docs/design/cockpit_design_system.md §2) is a
+    # translucent white highlight whose ALPHA (not hue) differs per theme —
+    # gui/style.py stores it as an ``rgba(255, 255, 255, a)`` QSS string,
+    # which QColor cannot parse (QColor's string constructor only accepts
+    # named colours / "#rrggbb[aa]", not CSS rgba() functional notation), so
+    # it is intentionally NOT in TOKEN_MAP (whose consistency test compares
+    # exact hex strings) and is computed here from a small alpha-only table
+    # instead of duplicating a second hex.
+    _SPECULAR_ALPHA = {"light": 0.85, "dark": 0.045}
+
+    @Property(QColor, notify=changed)
+    def specular(self) -> QColor:
+        alpha = self._SPECULAR_ALPHA.get(_MODE, self._SPECULAR_ALPHA["dark"])
+        c = QColor(255, 255, 255)
+        c.setAlphaF(alpha)
+        return c
+
+    # -- motion/transition timing (law 8 — constant across both themes) -- #
+    @Property(int, constant=True)
+    def transitionMs(self) -> int: return TRANSITION_MS
 
     # -- plot canvas colours (fixed in BOTH themes — constants) ---------- #
     @Property(QColor, constant=True)
