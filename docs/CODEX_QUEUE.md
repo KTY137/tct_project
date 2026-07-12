@@ -266,3 +266,25 @@ today, so per-panel redesign artifacts don't guess.
 - Created a source-level inventory for the 11 main tabs plus `SettingsWindow` and `DeviceManagerWindow`, including actual module resolution for Reference Monitor (`gui/intensity_panel.py`), top-level layout shape, framed-container counts/depth, scroll areas, hero candidates, command surfaces, and recomposition friction.
 - Verification: read `docs/design/council_v5_codex.md`, `TCT_app/tct_gui.py`, `TCT_app/gui/panel_kit.py`, `TCT_app/gui/scan_map_view.py`, `TCT_app/gui/stage_view.py`, and the target panel/dialog modules; `git diff --check` passed. No pytest was run because D3 is documentation-only and app code is read-only for this task.
 - Risk: counts are static source-level measurements; no new rendered layout screenshots or runtime widget-tree introspection were performed.
+
+## D4 — State-color usage census (ground truth for wave W1 taxonomy sweep)
+
+**Status: OPEN** · Effort: M · Source: Adam, Feinschliff 2026-07-12 night
+
+Wave W1 will sweep every panel onto the ratified 9-rung hardware state
+ladder (docs/design/council_v5_paul.md §1). Before anyone edits, we need a
+mechanical census of TODAY's state-color usage.
+
+- Read-only wrt app code. Write ONE file: docs/design/state_color_census.md
+- For each file in TCT_app/gui/ (panels + panel_kit + style consumers):
+  list every use of status/state color: palette keys danger/armed/sim/error,
+  token roles that carry color (chips, dots, banners, button variants), and
+  any green-ish styling (search for "green", ok-state styling, success
+  variants). For each hit: file:line, the widget/state it colors, and which
+  ladder rung it SHOULD map to (OFFLINE/CONNECTING/SIM/IDLE/ACTIVE-motion/
+  ACTIVE-HV/ACTIVE-benign/UNKNOWN/TRIPPED) or "command-class, not state".
+- Flag directly (top section, ranked): every place red is used for a
+  non-HV/non-abort state, every green-on-nominal, every unknown-state
+  rendered as a confident fill.
+- Table form, terse. No opinions beyond the rung mapping, no app-code edits.
+- No commit. Set D4 DONE with findings per Handback.
