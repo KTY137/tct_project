@@ -41,6 +41,16 @@
 //      transitions ease ~200 ms") instead of a hardcoded `150`, so the QML
 //      and QSS/QWidget sides agree on one number (gui/style.py
 //      TRANSITION_MS).
+//
+// Cockpit v5 D2 pass (docs/design/cockpit_design_system.md §5 — the merged
+// Progress·ETA strip tile "with meter"):
+//   9. Optional thin progress meter — `meterFraction` (0..1; a negative value,
+//      the default, hides it). QML analogue of the artifact's `.tile .meter`
+//      bar. View only: the caller computes the fraction (e.g.
+//      `runState.progressFraction`, already derived presentation-only on the
+//      view-model) — this file just clamps + renders it, with a width
+//      Behavior (law 8: values update, they don't animate continuously; this
+//      eases a CHANGE, it does not run on its own).
 import QtQuick
 import Tct
 
@@ -55,6 +65,10 @@ Rectangle {
     property color accent: Theme.muted
     property bool stale: false
     property bool compact: false
+    // -1 (default) hides the meter; any 0..1 value shows it (values outside
+    // 0..1 are clamped so a caller's rounding/timing glitch can never paint a
+    // bar past the tile's own bounds).
+    property real meterFraction: -1
 
     objectName: "metricTile"
     implicitWidth: 180
@@ -143,6 +157,7 @@ Rectangle {
                 Behavior on color { ColorAnimation { duration: Theme.transitionMs } }
             }
             Text {
+                id: unitLabel
                 objectName: "tileUnit"
                 text: root.unit
                 visible: root.unit.length > 0
@@ -160,6 +175,28 @@ Rectangle {
             color: root.stale ? Theme.faint : Theme.muted
             elide: Text.ElideRight
             width: parent.width
+        }
+
+        // Thin progress meter (defect #9 above) — a static track + a fill
+        // that eases its width on change, never on its own.
+        Rectangle {
+            objectName: "tileMeter"
+            visible: root.meterFraction >= 0
+            width: parent.width
+            height: 2
+            radius: 1
+            color: Theme.hairline
+
+            Rectangle {
+                objectName: "tileMeterFill"
+                height: parent.height
+                radius: parent.radius
+                color: root.stale ? Theme.faint : root.accent
+                width: parent.width * Math.max(0, Math.min(1, root.meterFraction))
+
+                Behavior on width { NumberAnimation { duration: Theme.transitionMs } }
+                Behavior on color { ColorAnimation { duration: Theme.transitionMs } }
+            }
         }
     }
 }

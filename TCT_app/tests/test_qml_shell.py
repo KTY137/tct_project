@@ -695,3 +695,144 @@ def test_no_inline_hex_in_qml():
     assert failures == {}, (
         "inline hex literal(s) in QML — bind Theme.* instead: " f"{failures}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# 7. D2 — readiness-ladder caption (tct_gui._readiness_caption)                 #
+# --------------------------------------------------------------------------- #
+def test_readiness_caption_ladder_progression():
+    """Pure-function unit test for the rail "State" chip's tooltip ladder
+    (cockpit_design_system.md §5/§6 — "say WHY Start is disabled")."""
+    from tct_gui import _readiness_caption
+
+    assert _readiness_caption("DISCONNECTED") == "connected · homed · configured · ready"
+    assert _readiness_caption("CONNECTED") == "connected ✓ · homed · configured · ready"
+    assert _readiness_caption("HOMED") == "connected ✓ · homed ✓ · configured · ready"
+    assert _readiness_caption("CONFIGURED") == "connected ✓ · homed ✓ · configured ✓ · ready"
+    assert _readiness_caption("READY") == "connected ✓ · homed ✓ · configured ✓ · ready ✓"
+    # Not the relevant question once a run is live or just finished.
+    for st in ("RUNNING", "PAUSED", "FINISHED", "ABORTED", "ERROR"):
+        assert _readiness_caption(st) == "", st
+
+
+def test_qml_rail_readiness_reaches_bridge_and_tracks_state(monkeypatch):
+    """End-to-end: sm.state -> _collect_shell_state()["app_readiness"] ->
+    _ShellBridge.appReadiness, riding the SAME shared 1 Hz light-timer tick
+    the rest of the rail uses (no separate poll)."""
+    from controller.state_machine import AppState
+    from tct_gui import _readiness_caption
+
+    app = _app()
+    win = _make_window(monkeypatch, qml=True)
+    try:
+        bridge = win._shell_bridge
+        assert bridge.appReadiness == _readiness_caption("DISCONNECTED")
+
+        # win._sm.transition (not the _on_state_change UI callback alone) —
+        # _collect_shell_state reads the real machine state, not the label
+        # text _on_state_change sets; transition() fires that callback too.
+        win._sm.transition(AppState.CONNECTED)
+        # Stale until the shared timer ticks (matches the appText contract).
+        assert bridge.appReadiness == _readiness_caption("DISCONNECTED")
+        win._light_timer.timeout.emit()
+        _pump()
+        assert bridge.appReadiness == _readiness_caption("CONNECTED")
+        assert bridge.appReadiness == "connected ✓ · homed · configured · ready"
+
+        win._sm.transition(AppState.HOMED)
+        win._sm.transition(AppState.CONFIGURED)
+        win._sm.transition(AppState.READY)
+        win._sm.transition(AppState.RUNNING)
+        win._light_timer.timeout.emit()
+        _pump()
+        assert bridge.appReadiness == ""  # not the relevant question mid-run
+    finally:
+        _destroy(win)
+        app.processEvents()
+
+
+# --------------------------------------------------------------------------- #
+# 8. D2 — device-dot fault state (attempted-and-failed connect)                 #
+# --------------------------------------------------------------------------- #
+def test_collect_shell_state_marks_failed_connect_as_fault(monkeypatch):
+    """A device present in the last connect_all() failures (and still
+    disconnected) reports the rail's 4th dot state, "fault" — distinct from a
+    device that was simply never attempted ("off")."""
+    app = _app()
+    win = _make_window(monkeypatch, qml=False)
+    try:
+        assert win._connect_faults == {}
+        state = win._collect_shell_state()
+        assert all(s != "fault" for _name, s in state["devices"])
+
+        win._connect_faults = {"motor": "COM3: timeout"}
+        state = win._collect_shell_state()
+        by_name = dict(state["devices"])
+        assert by_name["Motor Stage"] == "fault"
+        # Every other never-attempted device stays plain "off", not "fault".
+        assert by_name["Oscilloscope"] == "off"
+
+        # An explicit disconnect clears the fault cache (tct_gui._on_disconnect_done).
+        win._on_disconnect_done(None, "")
+        assert win._connect_faults == {}
+    finally:
+        _destroy(win)
+        app.processEvents()
+
+
+# --------------------------------------------------------------------------- #
+# 9. D2 — sim ribbon visibility (Shell.qml, law 6)                              #
+# --------------------------------------------------------------------------- #
+def test_sim_ribbon_hidden_when_no_device_simulated(monkeypatch):
+    """Fresh boot: hardware safety rule 1 (no auto-connect on construction)
+    means every device is plain "disconnected" — zero devices report "sim",
+    so the ribbon must be hidden (not just visually empty)."""
+    from PySide6.QtCore import QObject
+
+    app = _app()
+    win = _make_window(monkeypatch, qml=True)
+    try:
+        assert win._shell_bridge.hasSimulated is False
+        root = win._qml_chrome.rootObject()
+        ribbon = root.findChild(QObject, "simRibbon")
+        assert ribbon is not None
+        assert ribbon.property("visible") is False
+    finally:
+        _destroy(win)
+        app.processEvents()
+
+
+def test_sim_ribbon_visible_after_connecting_simulated_devices(monkeypatch):
+    """The repo's default ``configs/devices.yaml`` is fully simulated — after
+    a (synchronous, in-test) ``connect_all()`` every named device reports
+    "sim", so the ribbon must show and name them, and the chrome must grow to
+    make room for it (no clipping, no dead gap)."""
+    from PySide6.QtCore import QObject
+
+    app = _app()
+    win = _make_window(monkeypatch, qml=True)
+    try:
+        base_height = win._qml_chrome.height()
+
+        win._devices.connect_all()   # synchronous — the suite's own pattern
+        win._light_timer.timeout.emit()
+        _pump()
+
+        bridge = win._shell_bridge
+        assert bridge.hasSimulated is True
+        assert all(state == "sim" for _name, state in bridge.devicesModel)
+
+        root = win._qml_chrome.rootObject()
+        ribbon = root.findChild(QObject, "simRibbon")
+        assert ribbon.property("visible") is True
+        text_label = root.findChild(QObject, "simRibbonText")
+        assert "SIMULATION" in text_label.property("text")
+        assert f"of {len(bridge.devicesModel)} devices simulated" in text_label.property("text")
+
+        # The chrome grew to make room for the now-visible ribbon.
+        assert win._qml_chrome.height() > base_height
+
+        win._devices.disconnect_all()
+    finally:
+        _destroy(win)
+        app.processEvents()

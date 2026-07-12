@@ -51,6 +51,32 @@ from controller.scan_plan_validator import PlanLimits
 logger = logging.getLogger(__name__)
 
 
+# Readiness-ladder steps for the QML rail's "State" chip tooltip (cockpit
+# design system §5/§6: "say WHY Start is disabled" — Abel's run-lifecycle map).
+# Presentation only: reads AppState's own `.name` string, never introduces a
+# new AppState member (the D2 task brief's explicit constraint). Mirrors the
+# phrasing already established by gui/planner_panel.py's narrower recipe-level
+# `_latch_readiness` ("say WHY it is unavailable"), just for the device-level
+# ladder instead of the plan-level one.
+_READINESS_LADDER = ("CONNECTED", "HOMED", "CONFIGURED", "READY")
+_READINESS_ORDER = ("DISCONNECTED",) + _READINESS_LADDER
+
+
+def _readiness_caption(state_name: str) -> str:
+    """Render the readiness ladder as a short caption, e.g. for a CONNECTED
+    state: "connected ✓ · homed · configured · ready" (the first bare —
+    unchecked — step is the thing blocking Start). Returns "" once a run is
+    live or just finished (RUNNING/PAUSED/FINISHED/ABORTED/ERROR) — the ladder
+    answers "why can't I start", which isn't the relevant question there."""
+    if state_name not in _READINESS_ORDER:
+        return ""
+    idx = _READINESS_ORDER.index(state_name)
+    parts = []
+    for i, step in enumerate(_READINESS_LADDER, start=1):
+        parts.append(f"{step.lower()} ✓" if i <= idx else step.lower())
+    return " · ".join(parts)
+
+
 def _scrollable(widget: QWidget) -> QScrollArea:
     """Wrap *widget* in a resizable scroll area.
 
@@ -170,6 +196,13 @@ class TCTMainWindow(QMainWindow):
         # ── Core objects ──────────────────────────────────────────────
         self._sm      = StateMachine()
         self._devices = DeviceManager(config_path)
+        # Last connect_all() per-device failures (short device key -> error
+        # string), read-only cache for the QML rail's device-dot "fault"
+        # state (§6: disconnected-and-attempted != never-attempted). Replaced
+        # wholesale on every connect attempt (a device missing from the new
+        # dict is no longer at fault) and cleared on an explicit disconnect —
+        # see _on_connect_done / _on_disconnect_done.
+        self._connect_faults: dict[str, str] = {}
         # The ScanController allocates a fresh per-run HDF5Writer itself
         # (_begin_run); no writer is created here.
         self._scanner = ScanController(self._devices, self._sm)
@@ -869,9 +902,19 @@ class TCTMainWindow(QMainWindow):
         cached state the classic ribbon shows, mirrored into the QML view.
         """
         dot_map = {"connected": "on", "simulated": "sim", "disconnected": "off"}
+        # Display name -> connect_all() short key, so a cached per-device
+        # failure (self._connect_faults) can be matched against named_devices()
+        # (read-only reuse of DeviceManager's own lookup table — same purpose
+        # its docstring names: "connect_all() short key" <-> display name).
+        short_key = DeviceManager._DISPLAY_TO_SHORT
+        faults = self._connect_faults
         devices: list[list[str]] = []
         for disp, dev in self._devices.named_devices().items():
-            devices.append([disp, dot_map.get(device_state(dev), "off")])
+            state = device_state(dev)
+            if state == "disconnected" and short_key.get(disp) in faults:
+                devices.append([disp, "fault"])
+            else:
+                devices.append([disp, dot_map.get(state, "off")])
 
         def _chip(chip) -> list[str]:
             return [chip.text(), str(chip.property("state") or "neutral")]
@@ -898,6 +941,9 @@ class TCTMainWindow(QMainWindow):
             # the "Scan" chip above — re-exposed on the rail since the classic
             # toolbar is hidden in QML mode (see _build_central's QML branch).
             "app": _chip(self._lbl_state),
+            # Readiness ladder for the "State" chip's tooltip (design system
+            # §5/§6) — "" once RUNNING/PAUSED/terminal (see _readiness_caption).
+            "app_readiness": _readiness_caption(self._sm.state.name),
             "scope": {
                 "connected": sc_conn, "simulated": sc_sim,
                 "acquiring": acquiring, "status": sc_status,
@@ -1275,6 +1321,10 @@ class TCTMainWindow(QMainWindow):
             self._status.showMessage("Connect failed")
             return
         failed = {k: v for k, v in (results or {}).items() if v != "ok"}
+        # Cache for the QML rail's device-dot "fault" state (see
+        # _collect_shell_state). Whole-dict replace: a device absent from
+        # `failed` this time is no longer at fault, even if it was before.
+        self._connect_faults = dict(failed)
         if failed:
             detail = "\n".join(f"  {k}: {v}" for k, v in failed.items())
             QMessageBox.warning(self, "Connection Warning",
@@ -1310,6 +1360,9 @@ class TCTMainWindow(QMainWindow):
         self._act_connect.setEnabled(True)
         self._act_disconnect.setEnabled(False)
         self._status.showMessage("Disconnected")
+        # An explicit, user-requested disconnect is not a "fault" — clear the
+        # rail's device-dot fault cache so the dots read plain disconnected.
+        self._connect_faults = {}
         self._refresh_lights()
         self._refresh_bias_strip(None)
         self._bias_panel.set_reading(None)

@@ -210,6 +210,7 @@ class _ShellBridge(QObject):
             # StatChip) — separate from "scan" above.
             "app": ["State --", "neutral"],
         }
+        self._app_readiness = ""
         self._log_visible = False
         self._debug_visible = False
 
@@ -236,6 +237,11 @@ class _ShellBridge(QObject):
                 val = state.get(key)
                 if val:
                     self._readouts[key] = list(val)
+            # Readiness-ladder caption for the "State" chip's tooltip (§5/§6);
+            # "" is itself meaningful (RUNNING/PAUSED/terminal — see
+            # tct_gui._readiness_caption), so it is always overwritten, not
+            # merged like the truthy-only readouts above.
+            self._app_readiness = str(state.get("app_readiness", "") or "")
             self._log_visible = bool(state.get("log_visible", False))
             self._debug_visible = bool(state.get("debug_visible", False))
             scope = state.get("scope")
@@ -293,6 +299,13 @@ class _ShellBridge(QObject):
     def devicesModel(self) -> list[list[str]]:
         return self._devices
 
+    @Property(bool, notify=changed)
+    def hasSimulated(self) -> bool:
+        """True while >=1 named device reports the 'sim' dot state — drives
+        both the QML sim ribbon's visibility and build_qml_chrome's chrome
+        resize (law 6: "simulation can never pass as real")."""
+        return any(len(d) > 1 and d[1] == "sim" for d in self._devices)
+
     @Property(str, notify=changed)
     def hvText(self) -> str: return self._readouts["hv"][0]
 
@@ -322,6 +335,9 @@ class _ShellBridge(QObject):
 
     @Property(str, notify=changed)
     def appState(self) -> str: return self._readouts["app"][1]
+
+    @Property(str, notify=changed)
+    def appReadiness(self) -> str: return self._app_readiness
 
     @Property(bool, notify=changed)
     def logVisible(self) -> bool: return self._log_visible
@@ -429,10 +445,24 @@ def build_qml_chrome(
         tab_adapter.deleteLater()
         return None, None
 
-    # Fixed-height chrome strip (rail 48 + pill shelf 44 + the
-    # ScanStatusStrip section 112 = 204 — see Shell.qml's matching
-    # `implicitHeight` comment); the tabs take the rest.
-    chrome.setFixedHeight(204)
+    # Fixed-height chrome strip (rail 48 + pill shelf 44 + the ScanStatusStrip
+    # section 112 = 204 baseline — see Shell.qml's matching `implicitHeight`
+    # comment), PLUS a small extra band while the D2 sim ribbon (§6 — "law 6:
+    # simulation can never pass as real") is showing. Recomputed from
+    # ``bridge.hasSimulated`` on every ``bridge.changed`` emission — the SAME
+    # 1 Hz cached-state pull that already feeds the rail (connected below,
+    # before ``bridge.start()``, so the initial seed also sizes the chrome
+    # correctly on the very first paint) — a plain Qt signal connection, not
+    # a new timer/poll.
+    _BASE_HEIGHT = 204
+    _SIM_RIBBON_HEIGHT = 26
+
+    def _sync_chrome_height() -> None:
+        chrome.setFixedHeight(
+            _BASE_HEIGHT + (_SIM_RIBBON_HEIGHT if bridge.hasSimulated else 0)
+        )
+
+    bridge.changed.connect(_sync_chrome_height)
 
     # Keep adapters alive with the widget and expose them for teardown/tests.
     chrome._shell_bridge = bridge

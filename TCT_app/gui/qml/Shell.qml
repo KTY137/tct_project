@@ -31,12 +31,15 @@
 // which also keeps it correct headless (software renderer) and off the
 // glow/hot-path-effect rule.
 //
-// Below the pill shelf sits a third, persistent strip: ScanStatusStrip
-// (gui/qml/ScanStatusStrip.qml), a row of MetricTiles (gui/qml/MetricTile.qml)
-// bound to the read-only `runState` facade (gui/run_state_viewmodel.py),
-// already a QML context property in both shells (see tct_gui.py's `_run_vm`
-// wiring / qml_shell.py's `build_qml_chrome`). Pure view, per those files'
-// own header notes — no logic lives here either.
+// Between the rail and the pill shelf sits the sim ribbon (law 6 — visible
+// only while >=1 device is simulated); below the pill shelf sits a third,
+// persistent strip: ScanStatusStrip (gui/qml/ScanStatusStrip.qml), a row of
+// MetricTiles (gui/qml/MetricTile.qml) bound to the read-only `runState`
+// facade (gui/run_state_viewmodel.py) for run/scan state and `shell` for the
+// HV tile's cached bias readout — both already QML context properties in
+// both shells (see tct_gui.py's `_run_vm` wiring / qml_shell.py's
+// `build_qml_chrome`). Pure view, per those files' own header notes — no
+// logic lives here either.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -45,16 +48,37 @@ import Tct
 Item {
     id: root
     implicitWidth: 960
-    // rail (48) + pill shelf (44) + scan status strip (96 tile + 2*spaceSm
-    // padding = 112) — kept in lockstep with gui/qml_shell.py's
-    // `chrome.setFixedHeight(...)` (SizeRootObjectToView stretches this root
-    // to the QQuickWidget's actual size, so this number is documentation/
-    // sizing-hint, not load-bearing, but the two should still agree).
-    implicitHeight: 204
+    // Height mirrors mainColumn's own implicitHeight (rail 48 + sim ribbon
+    // 0/26 (visible only when >=1 device is simulated) + pill shelf 44 +
+    // scan status strip 112 = 204 baseline, +26 with the ribbon showing) —
+    // computed, not a hardcoded magic number, so it stays honest as rows are
+    // added/resized. NOT load-bearing on the Python side any more (unlike
+    // the pre-D2 constant this replaced): SizeRootObjectToView means the
+    // widget's own size still drives this item's actual `height`, and
+    // gui/qml_shell.py::build_qml_chrome sizes the QQuickWidget itself from
+    // ``bridge.hasSimulated`` (the same cached device list this ribbon
+    // renders from) rather than reading this property back — see that
+    // file's docstring.
+    implicitHeight: mainColumn.implicitHeight
+
+    // Sim-ribbon derivation (law 6) — computed straight from the SAME
+    // `shell.devicesModel` the rail's device dots already bind (no new
+    // Python field: presentation-only filtering of already-cached state).
+    readonly property var simNames: {
+        var out = []
+        var list = shell ? shell.devicesModel : []
+        for (var i = 0; i < list.length; i++) {
+            if (list[i][1] === "sim") out.push(list[i][0])
+        }
+        return out
+    }
+    readonly property int simCount: simNames.length
+    readonly property int totalCount: shell ? shell.devicesModel.length : 0
 
     Rectangle { anchors.fill: parent; color: Theme.canvas }
 
     ColumnLayout {
+        id: mainColumn
         anchors.fill: parent
         spacing: 0
 
@@ -104,12 +128,15 @@ Item {
                 // the primary, dangerous-adjacent actions: stay labelled.
                 ShellButton {
                     Layout.alignment: Qt.AlignVCenter
-                    text: "Connect All"; tone: "accent"
+                    text: "Connect All"; tone: "accent"       // primary-quiet
                     onClicked: shell.connectAll()
                 }
                 ShellButton {
                     Layout.alignment: Qt.AlignVCenter
-                    text: "Disconnect All"; tone: "danger"
+                    // Command classes (cockpit_design_system.md §1 law 2):
+                    // red is reserved for HV energization/trips/Abort. A bulk
+                    // disconnect is a neutral, safe action — never red.
+                    text: "Disconnect All"; tone: "quiet"
                     onClicked: shell.disconnectAll()
                 }
 
@@ -117,6 +144,13 @@ Item {
 
                 // device status — a compact dot row (cached device state); the
                 // device name + state lives in a hover tooltip, not a label.
+                // 4-state per cockpit_design_system.md §6: real-connected
+                // (solid good) / simulated (a hatched-cyan RING — never a
+                // solid cyan fill, so it can never be mistaken for "good" at
+                // a glance — law 6) / disconnected (faint hollow ring) /
+                // fault (solid red — attempted-and-failed, from the last
+                // connect_all() result; distinct from a plain never-attempted
+                // disconnect — see tct_gui._collect_shell_state).
                 Row {
                     Layout.alignment: Qt.AlignVCenter
                     spacing: 8
@@ -124,17 +158,18 @@ Item {
                         model: shell.devicesModel
                         Rectangle {
                             id: deviceDot
+                            readonly property string st: modelData[1]
                             width: 8; height: 8; radius: 4
                             anchors.verticalCenter: parent.verticalCenter
-                            color: modelData[1] === "on" ? Theme.good
-                                 : modelData[1] === "sim" ? Theme.sim : "transparent"
-                            border.width: modelData[1] === "off" ? 1 : 0
-                            border.color: Theme.faint
+                            color: st === "on" ? Theme.good
+                                 : st === "fault" ? Theme.crit : "transparent"
+                            border.width: st === "sim" ? 1.6 : (st === "off" ? 1 : 0)
+                            border.color: st === "sim" ? Theme.sim : Theme.faint
 
                             HoverHandler { id: deviceHover }
                             ToolTip.visible: deviceHover.hovered
                             ToolTip.delay: 350
-                            ToolTip.text: modelData[0] + " — " + modelData[1]
+                            ToolTip.text: modelData[0] + " — " + st
                         }
                     }
                 }
@@ -156,7 +191,16 @@ Item {
                     }
                     // The toolbar's app-state readout, re-exposed here since the
                     // classic toolbar is hidden in QML mode (tct_gui._build_central).
-                    StatChip { lab: "State"; val: shell.appText; state: shell.appState }
+                    // Readiness ladder (design system §5/§6 — "say WHY Start is
+                    // disabled") lives in this chip's tooltip: shell.appReadiness
+                    // is "" once RUNNING/PAUSED/terminal (tct_gui._readiness_
+                    // caption), in which case the tooltip falls back to the
+                    // plain "State" label like every other chip.
+                    StatChip {
+                        lab: "State"; val: shell.appText; state: shell.appState
+                        tip: shell.appReadiness.length > 0
+                             ? ("State — " + shell.appReadiness) : ""
+                    }
                 }
 
                 Rectangle { Layout.alignment: Qt.AlignVCenter; width: 1; height: 20; color: Theme.hairline }
@@ -202,6 +246,76 @@ Item {
                     onClicked: shell.toggleTheme()
                 }
             }   // end railRow (RowLayout)
+        }
+
+        // ------------------------------------------------------ sim ribbon
+        // Law 6 ("simulation can never pass as real"): a thin persistent
+        // strip, visible only while >=1 named device is simulated, naming
+        // which ones — cached from the SAME `shell.devicesModel` the rail's
+        // device dots already render (no new poll). `visible: false` makes
+        // ColumnLayout skip this row entirely in its height sum, so the
+        // ribbon truly disappears (not just an empty gap) when nothing is
+        // simulated.
+        Rectangle {
+            id: simRibbon
+            objectName: "simRibbon"
+            Layout.fillWidth: true
+            implicitHeight: 26
+            visible: root.simCount > 0
+            // The classic-shell "cheap hatch approximation" (gui/style.py:
+            // a soft tinted fill, never a solid one) plus an actual diagonal
+            // stripe texture via Canvas — a static, one-shot paint (redrawn
+            // only on resize/theme change, never per-frame), so this stays
+            // inside the "no glow/animated effect" rule (law 8: nothing
+            // decorative MOVES; this doesn't).
+            color: Qt.rgba(Theme.sim.r, Theme.sim.g, Theme.sim.b, 0.08)
+
+            Canvas {
+                id: hatchCanvas
+                anchors.fill: parent
+                // Default (Canvas.Image, a CPU QImage backend) rather than
+                // FramebufferObject — this repaints rarely (resize/theme
+                // toggle only) and Image is the reliable choice under a
+                // software/offscreen scene graph (the test harness's mode),
+                // with no dependency on a working GL context.
+                onPaint: {
+                    var ctx = getContext("2d")
+                    ctx.reset()
+                    ctx.strokeStyle = Theme.sim
+                    ctx.globalAlpha = 0.30
+                    ctx.lineWidth = 5
+                    var step = 14
+                    for (var x = -height; x < width + height; x += step) {
+                        ctx.beginPath()
+                        ctx.moveTo(x, height)
+                        ctx.lineTo(x + height, 0)
+                        ctx.stroke()
+                    }
+                }
+                onWidthChanged: requestPaint()
+                onHeightChanged: requestPaint()
+                Connections {
+                    target: Theme
+                    function onChanged() { hatchCanvas.requestPaint() }
+                }
+            }
+
+            Rectangle {  // bottom hairline
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                height: 1; color: Theme.hairline
+            }
+
+            Text {
+                objectName: "simRibbonText"
+                anchors { left: parent.left; leftMargin: 16; verticalCenter: parent.verticalCenter }
+                text: "SIMULATION — " + root.simCount + " of " + root.totalCount
+                    + " devices simulated (" + root.simNames.join(", ") + ")"
+                    + " · no hardware driven"
+                color: Theme.sim
+                font.pixelSize: Theme.fontXs
+                elide: Text.ElideRight
+                width: parent.width - 32
+            }
         }
 
         // ------------------------------------------------------- pill shelf
@@ -268,10 +382,12 @@ Item {
         }
 
         // ------------------------------------------------- scan status strip
-        // Persistent live run readout (State/Progress/ETA/Elapsed/Scan) — see
-        // the file header above and gui/qml/ScanStatusStrip.qml. Sized to the
-        // same >=1280px baseline the rail's no-Flickable contract targets (5
-        // tiles fit one row well under that width); binds ONLY, no logic.
+        // Persistent live readout — State / HV·measured / Progress·ETA
+        // (merged, with meter) / Position (compact) — see the file header
+        // above and gui/qml/ScanStatusStrip.qml (design system §5's strip
+        // hierarchy). Sized to the same >=1280px baseline the rail's
+        // no-Flickable contract targets (4 tiles fit one row well under that
+        // width); binds ONLY, no logic.
         Rectangle {
             Layout.fillWidth: true
             implicitHeight: statusStrip.implicitHeight + 2 * Theme.spaceSm
@@ -350,6 +466,10 @@ Item {
         property string lab
         property string val
         property string state: "neutral"
+        // Optional tooltip override (e.g. the State chip's readiness ladder);
+        // empty (the default) falls back to the plain label every other chip
+        // shows.
+        property string tip: ""
         spacing: 5
 
         // Cached readout values already carry their own label as a prefix
@@ -383,6 +503,6 @@ Item {
         HoverHandler { id: chipHover }
         ToolTip.visible: chipHover.hovered
         ToolTip.delay: 350
-        ToolTip.text: chipRoot.lab
+        ToolTip.text: chipRoot.tip.length > 0 ? chipRoot.tip : chipRoot.lab
     }
 }
