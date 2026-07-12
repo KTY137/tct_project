@@ -24,7 +24,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QListWidget, QListWidgetItem, QPushButton,
-    QDoubleSpinBox, QFileDialog, QStackedWidget,
+    QDoubleSpinBox, QSpinBox, QFileDialog, QStackedWidget,
+    QSplitter, QToolButton,
 )
 
 try:
@@ -40,13 +41,35 @@ except ImportError:
     _HAS_H5 = False
 
 from analysis.cce import cce_vs_reference
+from analysis.map_slice import (
+    display_unit_scale, mm_to_index, slice_grid_at_mm, strip_unit_suffix,
+)
+from analysis.scan_grid import grid_extent
 from gui.panel_kit import Card, FigureCard, SegmentedControl, panel_header
-from gui.scan_map_view import QUANTITIES, ScanMapView
+from gui.scan_map_view import QUANTITIES, QUANTITY_UNITS, ScanMapView
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
-from gui.style import DARK, PLOT_OVERLAY, SPACE_MD, SPACE_SM
+from gui.style import DARK, PLOT_FG, PLOT_OVERLAY, SPACE_MD, SPACE_SM
 
 # How many recent .h5 files the empty-state list offers.
 _RECENT_RUNS_MAX = 8
+
+
+def _translucent_brush(hex_color: str, alpha: int):
+    """A low-alpha ``pg.mkBrush`` from a ``gui.style`` colour token — the
+    slicer's averaging-band fill. Takes a token (never a literal ``#rrggbb``
+    in this file — the no-inline-hex guard, ``tests/test_no_inline_hex_gui.py``)
+    and resolves the alpha via ``QColor.setAlpha`` rather than a 4th positional
+    hex digit, so the source never spells out an ``#rrggbbaa`` literal either.
+    Kept intentionally low (matches ``gui/scope_panel.py``'s own
+    ``_int_region`` integration-window overlay, alpha 40/255) — a translucent
+    fill sitting on the viridis map pixels must stay as unobtrusive as
+    possible (design system council_v5_jonathan.md §1a: translucency must
+    never meaningfully shift a map pixel's perceived colour)."""
+    if not _HAS_PG:  # pragma: no cover - exercised only without pyqtgraph
+        return None
+    color = pg.mkColor(hex_color)
+    color.setAlpha(alpha)
+    return pg.mkBrush(color)
 
 
 class AnalysisPanel(QWidget):
@@ -163,6 +186,12 @@ class AnalysisPanel(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(SPACE_SM)
 
+        # 1D slicer state — defined before any control below is built/wired
+        # so a signal that could (in principle) fire during construction
+        # never hits an undefined attribute.
+        self._slice_active = False
+        self._slice_syncing = False   # re-entrancy guard, spin <-> cut line
+
         # The SHARED map renderer (single source of viridis/NaN-honesty/
         # colorbar-unit truth) — its own toolbar provides quantity switch,
         # freeze-levels and PNG/per-quantity-CSV export.
@@ -174,7 +203,33 @@ class AnalysisPanel(QWidget):
         # widget; existing callers/tests drive panel._combo_qty.
         self._combo_qty = self._map_view._combo_qty
         self._combo_qty.currentTextChanged.connect(self._update_map_info)
-        lay.addWidget(self._map_view, 1)
+
+        lay.addLayout(self._build_slice_row())
+
+        # Map (top) + line-cut profile (bottom, hidden until "Slice" is
+        # toggled on) — a splitter so a physicist can grow the profile once
+        # it's the thing they're reading (design brief: "profile plot below
+        # or beside the map, splitter").
+        self._map_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._map_splitter.addWidget(self._map_view)
+        if _HAS_PG:
+            # Non-empty initial subtitle: Card only builds a subtitle QLabel
+            # at all when constructed with truthy text (gui/panel_kit.py
+            # Card/section_header) — an empty string here would leave
+            # set_subtitle() a permanent, silent no-op for this card's whole
+            # life. Matches ScanMapView's own "no data" convention.
+            self._slice_figure = FigureCard("Line-cut profile", "no data")
+            self._slice_curve = self._slice_figure.plot.plot(
+                pen=pg.mkPen(PLOT_FG, width=2))
+            self._slice_figure.setVisible(False)
+            self._map_splitter.addWidget(self._slice_figure)
+            self._map_splitter.setStretchFactor(0, 3)
+            self._map_splitter.setStretchFactor(1, 2)
+            self._build_slice_overlay()
+        else:  # pragma: no cover - exercised only without pyqtgraph installed
+            self._slice_figure = None
+            self._slice_curve = None
+        lay.addWidget(self._map_splitter, 1)
 
         info_row = QHBoxLayout()
         # objectName "cardSubtitle" reuses the shared muted/monospace QSS
@@ -191,6 +246,88 @@ class AnalysisPanel(QWidget):
         info_row.addWidget(self._btn_export_csv)
         lay.addLayout(info_row)
         return page
+
+    def _build_slice_row(self) -> QHBoxLayout:
+        """Toolbar for the 1D slicer: on/off toggle + X/Y orientation +
+        position + averaging width + CSV export. The controls (everything
+        but the toggle itself) stay hidden until "Slice" is checked."""
+        row = QHBoxLayout()
+        row.setSpacing(SPACE_SM)
+
+        self._btn_slice = QToolButton()
+        self._btn_slice.setCheckable(True)
+        self._btn_slice.setText("Slice")
+        self._btn_slice.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._btn_slice.setToolTip(
+            "1D line-cut — drag a cut line across the map for a "
+            "value-vs-position profile (the canonical edge-TCT depth plot)")
+        set_button_icon(self._btn_slice, "mdi.chart-timeline-variant")
+        self._btn_slice.toggled.connect(self._on_slice_toggled)
+        row.addWidget(self._btn_slice)
+
+        self._slice_seg = SegmentedControl([("x", "X"), ("y", "Y")], current="x")
+        self._slice_seg.selection_changed.connect(self._on_slice_axis_changed)
+        row.addWidget(self._slice_seg)
+
+        self._lbl_slice_pos = QLabel("Position:")
+        row.addWidget(self._lbl_slice_pos)
+        self._spin_slice_pos = QDoubleSpinBox()
+        self._spin_slice_pos.setDecimals(4)
+        self._spin_slice_pos.setSuffix(" mm")
+        self._spin_slice_pos.setRange(-1e6, 1e6)
+        self._spin_slice_pos.valueChanged.connect(self._on_slice_pos_spin_changed)
+        row.addWidget(self._spin_slice_pos)
+
+        self._lbl_slice_width = QLabel("Avg width ±:")
+        row.addWidget(self._lbl_slice_width)
+        self._spin_slice_width = QSpinBox()
+        self._spin_slice_width.setRange(0, 200)
+        self._spin_slice_width.setSuffix(" pts")
+        self._spin_slice_width.setToolTip(
+            "Average ±N rows/cols across the cut (0 = single row/column, "
+            "no averaging)")
+        self._spin_slice_width.valueChanged.connect(self._on_slice_width_changed)
+        row.addWidget(self._spin_slice_width)
+
+        self._btn_slice_export = QPushButton("Export slice (CSV)")
+        self._btn_slice_export.setProperty("state", "secondary")
+        set_button_icon(self._btn_slice_export, "mdi.content-save")
+        self._btn_slice_export.clicked.connect(self._export_slice_csv)
+        row.addWidget(self._btn_slice_export)
+
+        row.addStretch(1)
+
+        self._slice_control_widgets = [
+            self._slice_seg, self._lbl_slice_pos, self._spin_slice_pos,
+            self._lbl_slice_width, self._spin_slice_width, self._btn_slice_export,
+        ]
+        for w in self._slice_control_widgets:
+            w.setVisible(False)
+        return row
+
+    def _build_slice_overlay(self) -> None:
+        """Draggable cut line + (non-movable) averaging-band region on the
+        shared map's own PlotItem — built once, visibility toggled with the
+        "Slice" control rather than added/removed per toggle."""
+        plot_item = self._map_view.image_view().view
+        self._slice_line = pg.InfiniteLine(
+            angle=0, movable=True, pen=pg.mkPen(PLOT_FG, width=1))
+        self._slice_line.setVisible(False)
+        self._slice_line.sigPositionChanged.connect(self._on_slice_line_moved)
+        plot_item.addItem(self._slice_line)
+
+        band_brush = _translucent_brush(PLOT_OVERLAY, 40)
+        band_pen = pg.mkPen(PLOT_OVERLAY, width=1)
+        # Two pre-built regions (one per orientation) rather than mutating
+        # one in place — pyqtgraph's LinearRegionItem has no public
+        # setOrientation(), so switching X<->Y swaps which one is visible.
+        self._slice_band_h = pg.LinearRegionItem(
+            orientation="horizontal", movable=False, brush=band_brush, pen=band_pen)
+        self._slice_band_v = pg.LinearRegionItem(
+            orientation="vertical", movable=False, brush=band_brush, pen=band_pen)
+        for band in (self._slice_band_h, self._slice_band_v):
+            band.setVisible(False)
+            plot_item.addItem(band)
 
     def _build_cce_mode(self) -> QWidget:
         page = QWidget()
@@ -418,6 +555,11 @@ class AnalysisPanel(QWidget):
         """Seed the shared map view from the loaded arrays. All rendering
         truth (viridis, NaN transparency, colorbar unit, missing/duplicate
         counts) lives in :class:`~gui.scan_map_view.ScanMapView`."""
+        # A new run may have a completely different extent than whatever the
+        # slicer's cut line/position/band referenced before — start clean
+        # rather than risk an out-of-range or now-meaningless cut (design
+        # brief: "slice state resets when a different run ... loads").
+        self._reset_slice_state()
         if not _HAS_PG or not self._data:
             return
         x = self._data.get("x_mm")
@@ -470,6 +612,217 @@ class AnalysisPanel(QWidget):
         )
         self._chip_map.set_status(f"Map {len(xs)}x{len(ys)}", "good")
         self._chip_export.set_status("Export ready", "good")
+        # Same run, new quantity/grid — recompute the profile in place (the
+        # cut position/orientation/width are still meaningful; only the
+        # plotted values change) rather than resetting the slicer.
+        if _HAS_PG and getattr(self, "_slice_active", False):
+            self._update_slice_profile()
+
+    # ------------------------------------------------------------------ #
+    # 1D map slicer                                                        #
+    # ------------------------------------------------------------------ #
+
+    def _reset_slice_state(self) -> None:
+        """New run loaded — turn the slicer off and reset its controls to
+        defaults rather than carry over a cut line/band that may no longer
+        make sense against the new map's extent."""
+        if not _HAS_PG or not hasattr(self, "_btn_slice"):
+            return
+        if self._btn_slice.isChecked():
+            self._btn_slice.setChecked(False)   # fires _on_slice_toggled(False)
+        self._slice_seg.set_current("x")
+        self._spin_slice_width.setValue(0)
+
+    def _slice_axis_pitch(self, axis_key: str, result) -> float:
+        """Grid pitch (mm/step) along the FIXED axis for *axis_key* — "x"
+        profiles walk X with Y fixed, so its pitch is dy (and vice versa)."""
+        _, (dx, dy) = grid_extent(result)
+        return dy if axis_key == "x" else dx
+
+    def _on_slice_toggled(self, checked: bool) -> None:
+        self._slice_active = bool(checked)
+        for w in self._slice_control_widgets:
+            w.setVisible(self._slice_active)
+        if not _HAS_PG:
+            return
+        self._slice_line.setVisible(self._slice_active)
+        axis_key = self._slice_seg.current_key() or "x"
+        active_band = self._slice_band_h if axis_key == "x" else self._slice_band_v
+        inactive_band = self._slice_band_v if axis_key == "x" else self._slice_band_h
+        inactive_band.setVisible(False)
+        active_band.setVisible(self._slice_active)
+        self._slice_figure.setVisible(self._slice_active)
+        if self._slice_active:
+            self._init_slice_position()
+            self._update_slice_profile()
+
+    def _init_slice_position(self) -> None:
+        """(Re)centre the position spin/cut line on the current grid extent
+        for the selected orientation — called on slice-on and on an
+        orientation (X/Y) switch, since the FIXED axis (and therefore what
+        "position" even means) changes with it."""
+        if not _HAS_PG:
+            return
+        axis_key = self._slice_seg.current_key() or "x"
+        self._slice_line.setAngle(0 if axis_key == "x" else 90)
+        result = self._map_view.grid_result()
+        if result is None:
+            return
+        fixed = result.y_mm if axis_key == "x" else result.x_mm
+        if len(fixed) == 0:
+            return
+        pitch = self._slice_axis_pitch(axis_key, result)
+        step = abs(pitch) if pitch else 1.0
+        lo, hi = float(fixed[0]), float(fixed[-1])
+        if lo > hi:
+            lo, hi = hi, lo
+        mid = float(fixed[len(fixed) // 2])
+        self._slice_syncing = True
+        try:
+            self._spin_slice_pos.setRange(lo - step, hi + step)
+            self._spin_slice_pos.setSingleStep(max(step, 1e-6))
+            self._spin_slice_pos.setValue(mid)
+            self._slice_line.setValue(mid)
+        finally:
+            self._slice_syncing = False
+
+    def _on_slice_axis_changed(self, key: str) -> None:
+        if not (_HAS_PG and self._slice_active):
+            return
+        active_band = self._slice_band_h if key == "x" else self._slice_band_v
+        inactive_band = self._slice_band_v if key == "x" else self._slice_band_h
+        inactive_band.setVisible(False)
+        active_band.setVisible(True)
+        self._init_slice_position()
+        self._update_slice_profile()
+
+    def _on_slice_pos_spin_changed(self, _value: float) -> None:
+        if self._slice_syncing or not self._slice_active:
+            return
+        self._slice_syncing = True
+        try:
+            self._update_slice_profile()
+        finally:
+            self._slice_syncing = False
+
+    def _on_slice_width_changed(self, _value: int) -> None:
+        if not self._slice_active:
+            return
+        self._update_slice_profile()
+
+    def _on_slice_line_moved(self) -> None:
+        """The draggable cut line moved — mirror it into the position spin
+        (guarded against the spin's own valueChanged bouncing straight back,
+        design brief: "guard against feedback loops when syncing spin<->line")
+        and recompute the profile directly (grids here are small)."""
+        if self._slice_syncing or not self._slice_active:
+            return
+        self._slice_syncing = True
+        try:
+            self._spin_slice_pos.setValue(float(self._slice_line.value()))
+            self._update_slice_profile()
+        finally:
+            self._slice_syncing = False
+
+    def _update_slice_profile(self) -> None:
+        """Recompute (positions, values) via ``analysis.map_slice`` and push
+        them into the profile curve + cut-line/band overlay. The only place
+        that calls :func:`analysis.map_slice.slice_grid_at_mm` — GUI code
+        never re-derives the slice math inline."""
+        if not (_HAS_PG and self._slice_active):
+            return
+        result = self._map_view.grid_result()
+        axis_key = self._slice_seg.current_key() or "x"
+        if result is None:
+            self._slice_curve.setData([], [])
+            self._slice_figure.set_subtitle("no map data")
+            return
+        qty = self._map_view.current_quantity()
+        position_mm = float(self._spin_slice_pos.value())
+        width = int(self._spin_slice_width.value())
+        positions, values = slice_grid_at_mm(
+            result.grid, result.x_mm, result.y_mm, axis_key, position_mm, width)
+        native_unit = QUANTITY_UNITS.get(qty, "")
+        disp_unit, scale = display_unit_scale(qty, native_unit)
+        base_label = strip_unit_suffix(qty, native_unit)
+        self._slice_curve.setData(positions, values * scale)
+        free_label = "X" if axis_key == "x" else "Y"
+        self._slice_figure.plot.setLabel("bottom", free_label, units="mm")
+        # base_label (native-unit suffix stripped) + units=disp_unit — never
+        # qty itself, or pyqtgraph's "(units)" suffix doubles up against a
+        # unit qty's own name already spells out (e.g. "dut_charge_pC (fC)").
+        self._slice_figure.plot.setLabel("left", base_label, units=disp_unit)
+        n_valid = int(np.count_nonzero(~np.isnan(values)))
+        self._slice_figure.set_subtitle(
+            f"{axis_key.upper()} @ {position_mm:.4f} mm  |  ±{width}  |  "
+            f"{n_valid}/{len(values)} valid")
+        self._update_slice_overlay(result, axis_key, position_mm, width)
+
+    def _update_slice_overlay(
+        self, result, axis_key: str, position_mm: float, width: int,
+    ) -> None:
+        """Move the cut line + resize the averaging-band region to match the
+        just-computed slice (band bounds extend half a pixel pitch past the
+        outermost included row/col, so the band visually covers the same
+        pixel extent ``ScanMapView``'s own image rendering does)."""
+        fixed = result.y_mm if axis_key == "x" else result.x_mm
+        if len(fixed) == 0:
+            return
+        idx = mm_to_index(fixed, position_mm)
+        n = len(fixed)
+        lo_idx = max(0, idx - width)
+        hi_idx = min(n - 1, idx + width)
+        pitch = self._slice_axis_pitch(axis_key, result)
+        half = abs(pitch) / 2.0 if pitch else 0.0
+        lo_mm = float(fixed[lo_idx]) - half
+        hi_mm = float(fixed[hi_idx]) + half
+
+        self._slice_line.setAngle(0 if axis_key == "x" else 90)
+        if float(self._slice_line.value()) != position_mm:
+            self._slice_line.setValue(position_mm)
+
+        active_band = self._slice_band_h if axis_key == "x" else self._slice_band_v
+        active_band.setRegion((lo_mm, hi_mm))
+
+    def _default_slice_csv_name(self) -> str:
+        axis_key = self._slice_seg.current_key() or "x"
+        pos = float(self._spin_slice_pos.value())
+        if self._run_path:
+            p = Path(self._run_path)
+            # Every run writes 'waveforms.h5' (SCAN_DATA_FORMAT.md) — the
+            # meaningful name is the run FOLDER, not the fixed filename.
+            run_name = p.parent.name if p.stem.lower() == "waveforms" else p.stem
+        else:
+            run_name = "run"
+        return f"{run_name}_slice_{axis_key}_{pos:.4f}mm.csv"
+
+    def _export_slice_csv(self) -> None:
+        if not (_HAS_PG and self._slice_active):
+            return
+        result = self._map_view.grid_result()
+        if result is None:
+            return
+        qty = self._map_view.current_quantity()
+        axis_key = self._slice_seg.current_key() or "x"
+        position_mm = float(self._spin_slice_pos.value())
+        width = int(self._spin_slice_width.value())
+        positions, values = slice_grid_at_mm(
+            result.grid, result.x_mm, result.y_mm, axis_key, position_mm, width)
+        native_unit = QUANTITY_UNITS.get(qty, "")
+        disp_unit, scale = display_unit_scale(qty, native_unit)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export slice", self._default_slice_csv_name(), "CSV (*.csv)")
+        if not path:
+            return
+        pos_col = "x_mm" if axis_key == "x" else "y_mm"
+        base_label = strip_unit_suffix(qty, native_unit)
+        value_col = f"{base_label}_{disp_unit}" if disp_unit else base_label
+        with open(path, "w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow([pos_col, value_col])
+            for p_, v_ in zip(positions, values * scale):
+                w.writerow([f"{p_:.6f}", f"{v_:.8g}"])
+        flash_button(self._btn_slice_export, "good", "Exported")
 
     # ------------------------------------------------------------------ #
     # CCE vs. bias                                                         #
