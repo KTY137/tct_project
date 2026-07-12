@@ -617,6 +617,11 @@ class ScanController:
     # Terminal-state resolution (shared by the run loops)                 #
     # ------------------------------------------------------------------ #
 
+    # How many transition attempts a settle helper makes before giving up.  A
+    # settle needs at most two edges (PAUSED->RUNNING->FINISHED/ERROR); the
+    # extra headroom absorbs a GUI pause/resume racing the promotion.
+    _SETTLE_ATTEMPTS = 6
+
     def _settle_terminal_state(self) -> None:
         """Resolve a run loop's terminal state from RUNNING **or** PAUSED.
 
@@ -624,34 +629,118 @@ class ScanController:
         (:meth:`_slow_control_warn_hold`) — parks the loop with the state
         machine in PAUSED.  PAUSED has no legal edge to FINISHED, so a run that
         ends while parked (pause pressed on the last step) must be promoted
-        through RUNNING first.  Without that promotion ``transition(FINISHED)``
-        raises, the loop's ``except`` branch attempts an equally illegal
-        PAUSED→ERROR, that raises again, the worker thread dies mid-``except``
-        and the state machine is wedged in PAUSED — where ``_refuse_if_active``
-        then refuses *every* later start.  ABORTED is legal from both states, so
-        an abort needs no promotion.  Same discipline :meth:`_run` and
-        :meth:`_run_plan` already carry inline.
+        through RUNNING first.  ABORTED is legal from both states, so an abort
+        needs no promotion.
+
+        **Race-safe** (Mary, review of 3f6e2b7): the promotion is two calls
+        against an *unlocked* :class:`StateMachine`, so a GUI ``resume()`` (or
+        ``pause()``) landing between them makes the next ``transition`` illegal
+        — a CLEAN run would then be reported as ``ERROR("Invalid transition:
+        RUNNING → RUNNING")``.  Every edge is therefore ``can()``-guarded, a lost
+        race is swallowed, and the state is **re-read** each attempt so the
+        helper still converges on a terminal state (bounded by
+        ``_SETTLE_ATTEMPTS`` — it can never spin).
         """
-        if self._sm.state not in (AppState.RUNNING, AppState.PAUSED):
-            return                              # already terminal — leave it
-        if self._abort_event.is_set():
-            self._sm.transition(AppState.ABORTED)   # legal from RUNNING + PAUSED
-            return
-        if self._sm.state is AppState.PAUSED:
-            self._sm.transition(AppState.RUNNING)
-        self._sm.transition(AppState.FINISHED)
+        for _ in range(self._SETTLE_ATTEMPTS):
+            state = self._sm.state
+            if state not in (AppState.RUNNING, AppState.PAUSED):
+                return                          # already terminal — leave it
+            if self._abort_event.is_set():
+                target = AppState.ABORTED       # legal from RUNNING + PAUSED
+            elif state is AppState.PAUSED:
+                target = AppState.RUNNING       # promote: PAUSED has no FINISHED edge
+            else:
+                target = AppState.FINISHED
+            try:
+                if self._sm.can(target):
+                    self._sm.transition(target)
+            except ValueError:
+                continue        # raced a GUI pause/resume — re-read and retry
+        logger.warning("Terminal state unresolved (still %s)", self._sm.state.name)
 
     def _settle_error_state(self) -> None:
         """Fail into ERROR from RUNNING **or** PAUSED.
 
         PAUSED→ERROR is not a legal edge, so a fault raised while a run is
-        parked has to be promoted through RUNNING; otherwise the ``except``
-        branch raises a second time and the error is never reported.
+        parked has to be promoted through RUNNING first.  Same race-safety as
+        :meth:`_settle_terminal_state`: every edge is ``can()``-guarded and a
+        lost race with a GUI pause/resume is swallowed, because a ``ValueError``
+        raised *here* would propagate out of the caller's ``except`` block and
+        the operator would never see the ORIGINAL fault.  Callers therefore also
+        fire ``on_error`` BEFORE calling this — the fault message can never be
+        lost to a settle race.
         """
-        if self._sm.state is AppState.PAUSED:
-            self._sm.transition(AppState.RUNNING)
-        if self._sm.can(AppState.ERROR):
-            self._sm.transition(AppState.ERROR)
+        for _ in range(self._SETTLE_ATTEMPTS):
+            state = self._sm.state
+            if state is AppState.PAUSED:
+                target = AppState.RUNNING       # promote, then ERROR next pass
+            elif self._sm.can(AppState.ERROR):
+                target = AppState.ERROR
+            else:
+                return                          # already terminal — leave it
+            try:
+                if self._sm.can(target):
+                    self._sm.transition(target)
+            except ValueError:
+                continue        # raced a GUI pause/resume — re-read and retry
+            if target is AppState.ERROR:
+                return
+        logger.warning("Error state unresolved (still %s)", self._sm.state.name)
+
+    # ------------------------------------------------------------------ #
+    # Paused-run supervision (the park loop every run loop waits in)      #
+    # ------------------------------------------------------------------ #
+
+    # Supervision cadence while a run is parked in PAUSED.  Bounded poll, no new
+    # thread: the worker is already blocked in the park, so it does the watching.
+    _PAUSE_POLL_S = 0.5
+
+    def _park_while_paused(self, bias: BiasChannel | None) -> None:
+        """Block while the run is paused — **supervising the hardware it holds**.
+
+        Replaces the bare ``self._pause_event.wait()`` every run loop used to
+        park in.  A pause HOLDS HV at the last set point (the ratified WARN
+        safe-hold semantic, DECISIONS 2026-07-12 §2), but a blocked worker
+        re-reads *nothing*: a paused run could sit at HV indefinitely with no
+        compliance check and no slow-control evaluation, and the only thing
+        watching was a display-only GUI tile (Mary, review of 3f6e2b7).
+
+        So the park is a **bounded-cadence poll** instead of an unbounded wait:
+        every ``_PAUSE_POLL_S`` the worker re-checks bias compliance and the
+        slow-control channels (:meth:`_supervise_parked_run`).  A compliance trip
+        or an ALARM while parked fail-safe aborts exactly as it does mid-run (HV
+        ramped down, output off, abort event set) and releases the park so the
+        loop breaks.  Not paused → ``wait`` returns immediately and this costs
+        nothing.
+        """
+        while not self._pause_event.wait(timeout=self._PAUSE_POLL_S):
+            if self._abort_event.is_set():
+                return                          # abort() unblocks the park itself
+            self._supervise_parked_run(bias)
+
+    def _supervise_parked_run(self, bias: BiasChannel | None) -> None:
+        """One supervision sweep of a run parked in PAUSED (HV still energized).
+
+        Same two guards the run loop applies between steps, at the park cadence:
+
+        * bias compliance / readability — :meth:`_check_compliance` (a trip sets
+          the abort event, ramps HV down and opens the output; 3 consecutive
+          unreadable reads raise ``DeviceError``, which propagates into the run
+          loop's ``except`` and fails the run safe);
+        * the slow-control excursion policy — an ALARM while parked is a full
+          fail-safe abort (ratified policy), a WARN is already held.
+
+        On abort the pause event is re-set so :meth:`_park_while_paused` returns
+        and the loop's ``if self._abort_event.is_set(): break`` fires.
+        """
+        if bias is None:
+            return
+        if self._check_compliance(bias, context=" while paused"):
+            self._pause_event.set()             # release the park -> loop breaks
+            return
+        self._apply_slow_control_policy(self._slow_control_read_all(), bias)
+        if self._abort_event.is_set():
+            self._pause_event.set()             # release the park -> loop breaks
 
     # ------------------------------------------------------------------ #
     # Scan loop (runs in background thread)                               #
@@ -666,8 +755,10 @@ class ScanController:
         try:
             self._begin_run("xy_scan", cfg)
             for point in points:
-                # Pause / abort checks
-                self._pause_event.wait()
+                # Pause / abort checks.  The park SUPERVISES the parked run
+                # (compliance + slow control at a bounded cadence) instead of
+                # blocking blind — see _park_while_paused.
+                self._park_while_paused(bias)
                 if self._abort_event.is_set():
                     logger.info("Scan aborted at point %d / %d", point.index, total)
                     break
@@ -691,30 +782,18 @@ class ScanController:
                 if self.on_progress:
                     self.on_progress(point.index + 1, total)
 
-            # Resolve the end state for every exit path.  The loop can break
-            # out of an abort/compliance check *without* having transitioned
-            # (the old for/else only handled full completion, leaving the
-            # state machine stuck in RUNNING after an abort).
-            if self._sm.state in (AppState.RUNNING, AppState.PAUSED):
-                if self._abort_event.is_set():
-                    self._sm.transition(AppState.ABORTED)   # RUNNING/PAUSED both legal
-                    logger.info("Scan aborted")
-                else:
-                    # A slow-control safe-hold on the LAST point leaves the loop
-                    # in PAUSED with everything acquired/saved; PAUSED cannot go
-                    # straight to FINISHED, so promote through RUNNING first (both
-                    # legal) — otherwise a clean finish would raise + be mislabeled
-                    # (same fix the plan executor already carries).
-                    if self._sm.state is AppState.PAUSED:
-                        self._sm.transition(AppState.RUNNING)
-                    self._sm.transition(AppState.FINISHED)
-                    logger.info("Scan finished")
+            # Resolve the end state for every exit path (abort / compliance
+            # break / clean finish / safe-hold on the last point), race-safe
+            # against a GUI pause or resume — see _settle_terminal_state.
+            self._settle_terminal_state()
 
         except Exception as exc:
             logger.exception("Scan error")
-            self._sm.transition(AppState.ERROR)
+            # on_error FIRST: a settle that raced a GUI pause/resume must never
+            # swallow the operator's only view of the original fault.
             if self.on_error:
                 self.on_error(str(exc))
+            self._settle_error_state()
         finally:
             # Fail-safe rule 5 ('stop motion'): halt any in-flight stage move on
             # an exception-driven exit (abort() already stops the motor, but a
@@ -765,20 +844,28 @@ class ScanController:
         """
         dev = self._dev
         zs = np.arange(cfg.z_start_mm, cfg.z_stop_mm + cfg.z_step_mm / 2, cfg.z_step_mm)
+        total = len(zs)
         results: list[tuple[float, float]] = []
+        # The DUT is biased during a focus scan even though this loop does not
+        # drive HV — the slow-control policy needs a channel to fail safe on, and
+        # a ZFocusScanConfig carries no bias_channel, so _resolve_bias returns the
+        # primary proxy (exactly what start_voltage_scan does for cfg.bias_channel
+        # = None).  Resolved before any hardware action.
+        bias = self._resolve_bias(cfg)
 
         try:
             self._begin_run("z_focus_amplitude", cfg)
             dev.waveform_generator.output_on()
             time.sleep(0.01)
 
-            for z in zs:
+            for i, z in enumerate(zs):
                 # Cooperative pause / abort between steps (non-negotiable 2):
                 # a z-focus run drives real motion, so Pause must actually park
                 # the loop — not just flip the state machine while the stage
                 # keeps stepping.  abort() sets _pause_event too, so an abort
-                # from PAUSED unblocks here and exits on the check below.
-                self._pause_event.wait()
+                # from PAUSED unblocks here and exits on the check below.  The
+                # park supervises compliance + slow control while held.
+                self._park_while_paused(bias)
                 if self._abort_event.is_set():
                     break
                 dev.motor.move_to(cfg.x_mm, cfg.y_mm, float(z))
@@ -796,6 +883,19 @@ class ScanController:
                 logger.debug("Z-focus (amplitude): z=%.3f mm  amp=%.4f V", z, amp_mean)
                 if on_point:
                     on_point(float(z), amp_mean)
+                # Law 8 / honest cockpit: this loop knows its length, so it
+                # reports real progress (and therefore a real ETA) instead of
+                # leaving the tiles frozen at "0/0" for the whole run.
+                if self.on_progress:
+                    self.on_progress(i + 1, total)
+
+                # Environmental interlock (DECISIONS 2026-07-12 §2): this loop
+                # reads the scope directly and never went through _acquire_core,
+                # so it USED to run with NO temperature/humidity interlock at all.
+                # WARN -> safe-hold pause; ALARM -> fail-safe abort (HV down).
+                self._apply_slow_control_policy(self._slow_control_read_all(), bias)
+                if self._abort_event.is_set():
+                    break
 
             dev.waveform_generator.output_off()
 
@@ -808,9 +908,11 @@ class ScanController:
             self._settle_terminal_state()
         except Exception as exc:
             logger.exception("Z-focus amplitude scan error")
-            self._settle_error_state()
+            # on_error BEFORE the settle — a settle racing a GUI pause/resume
+            # must never swallow the fault message.
             if self.on_error:
                 self.on_error(str(exc))
+            self._settle_error_state()
         finally:
             try:
                 dev.waveform_generator.output_off()
@@ -845,25 +947,31 @@ class ScanController:
             cfg.x_edge_center_mm + cfg.x_edge_range_mm + cfg.x_edge_step_mm / 2,
             cfg.x_edge_step_mm,
         )
+        total = len(zs)
         results: list[tuple[float, float]] = []   # (z_mm, sharpness)
+        # See _run_z_focus_amplitude: the focus loops drive no HV but the DUT is
+        # biased, so the excursion policy needs the primary bias channel to fail
+        # safe on.  Resolved before any hardware action.
+        bias = self._resolve_bias(cfg)
 
         try:
             self._begin_run("z_focus_edge", cfg)
             dev.waveform_generator.output_on()
             time.sleep(0.01)
 
-            for z in zs:
+            for i, z in enumerate(zs):
                 # Cooperative pause / abort between steps (non-negotiable 2) —
                 # see _run_z_focus_amplitude.  Checked in the inner X sweep too:
                 # that sweep is itself a long motion loop, so a pause must land
-                # within one X step, not one whole Z step.
-                self._pause_event.wait()
+                # within one X step, not one whole Z step.  The park supervises
+                # compliance + slow control while held.
+                self._park_while_paused(bias)
                 if self._abort_event.is_set():
                     break
 
                 charges: list[float] = []
                 for x in xs:
-                    self._pause_event.wait()
+                    self._park_while_paused(bias)
                     if self._abort_event.is_set():
                         break
                     dev.motor.move_to(float(x), cfg.y_mm, float(z))
@@ -894,6 +1002,18 @@ class ScanController:
                 # Report sharpness as the "amplitude" value so the GUI plot works
                 if on_point:
                     on_point(float(z), sharpness)
+                # Law 8 / honest cockpit: real progress (and therefore a real
+                # ETA) per Z step — the loop knows its length.
+                if self.on_progress:
+                    self.on_progress(i + 1, total)
+
+                # Environmental interlock (DECISIONS 2026-07-12 §2) — evaluated
+                # once per Z step (the unit of work); this loop reads the scope
+                # directly and never went through _acquire_core, so it USED to
+                # run with NO temperature/humidity interlock at all.
+                self._apply_slow_control_policy(self._slow_control_read_all(), bias)
+                if self._abort_event.is_set():
+                    break
 
             dev.waveform_generator.output_off()
 
@@ -906,9 +1026,10 @@ class ScanController:
             self._settle_terminal_state()
         except Exception as exc:
             logger.exception("Z-focus edge scan error")
-            self._settle_error_state()
+            # on_error BEFORE the settle (see _settle_error_state).
             if self.on_error:
                 self.on_error(str(exc))
+            self._settle_error_state()
         finally:
             try:
                 dev.waveform_generator.output_off()
@@ -952,8 +1073,10 @@ class ScanController:
                 # slow-control safe-hold) and no new voltage is commanded until
                 # the operator resumes.  abort() sets _pause_event, so an abort
                 # from PAUSED unblocks here, breaks, and falls through to the
-                # ramp-to-0 + output-off fail-safe below.
-                self._pause_event.wait()
+                # ramp-to-0 + output-off fail-safe below.  The park supervises
+                # compliance + slow control while held (the supply is still at
+                # the last set point) — see _park_while_paused.
+                self._park_while_paused(bias)
                 if self._abort_event.is_set():
                     break
 
@@ -962,6 +1085,14 @@ class ScanController:
                     step_V=abs(cfg.ramp_step_V),
                     delay_s=cfg.ramp_delay_s,
                 )
+                # ramp_to is a blocking driver loop with no abort check inside
+                # (making it abort-aware is a devices/ follow-up).  Without this
+                # check an Abort pressed mid-ramp still dwelled, acquired and
+                # only broke on the NEXT iteration — a second of CONTINUED HV
+                # INCREASE after the operator hit stop.  The fail-safe finally
+                # below ramps to 0 V + opens the output.
+                if self._abort_event.is_set():
+                    break
                 time.sleep(cfg.hold_delay_s)
 
                 reading = bias.read()
@@ -971,6 +1102,11 @@ class ScanController:
                         "Compliance hit at %.1f V (I=%.3e A) — aborting voltage scan",
                         reading.voltage_V, reading.current_A,
                     )
+                    # A trip IS an abort (mirrors _check_compliance): without the
+                    # abort event _settle_terminal_state below saw a "clean" exit
+                    # and transitioned FINISHED — the GUI then painted the green
+                    # "Scan finished" banner over a compliance trip.
+                    self._abort_event.set()
                     if self.on_error:
                         self.on_error(
                             f"Compliance trip at {reading.voltage_V:.1f} V — "
@@ -992,6 +1128,17 @@ class ScanController:
                 if self.on_progress:
                     self.on_progress(idx + 1, total)
 
+                # Environmental interlock (DECISIONS 2026-07-12 §2), AFTER the
+                # point is saved so an excursion never costs data already taken.
+                # This loop reads the scope directly and never went through
+                # _acquire_core, so an IV sweep USED to drive HV to the setpoint
+                # with NO temperature/humidity interlock: an ALARM could not
+                # ramp HV down.  WARN -> safe-hold (HV held); ALARM -> fail-safe
+                # abort (HV to 0 V, output off).
+                self._apply_slow_control_policy(self._slow_control_read_all(), bias)
+                if self._abort_event.is_set():
+                    break
+
             # Ramp back to 0 V
             bias.ramp_to(0.0, step_V=20.0, delay_s=0.05)
             bias.output_off()
@@ -999,9 +1146,10 @@ class ScanController:
             self._settle_terminal_state()
         except Exception as exc:
             logger.exception("Voltage scan error")
-            self._settle_error_state()
+            # on_error BEFORE the settle (see _settle_error_state).
             if self.on_error:
                 self.on_error(str(exc))
+            self._settle_error_state()
         finally:
             # Isolated best-effort blocks: a wavegen fault must not skip the
             # HV ramp-down, and a failed ramp must not skip output-off (same
@@ -1069,7 +1217,9 @@ class ScanController:
 
             for step in steps:
                 # -- cooperative pause / resume-with-HV-reassert / abort ------
-                self._pause_event.wait()
+                # The park supervises the parked run (a plan pause HOLDS HV at
+                # the last set point) — see _park_while_paused.
+                self._park_while_paused(bias)
                 if self._abort_event.is_set():
                     break
                 if self._reassert_pending:
@@ -1155,36 +1305,25 @@ class ScanController:
                 else:  # pragma: no cover - Step is a closed union
                     raise ValueError(f"unhandled plan step: {type(step).__name__}")
 
-            # -- terminal state (mirror _run) --------------------------------
-            if self._sm.state in (AppState.RUNNING, AppState.PAUSED):
-                if self._abort_event.is_set():
-                    self._sm.transition(AppState.ABORTED)
-                    logger.info("Plan aborted")
-                else:
-                    # A plan whose last executable step is a ManualPauseStep exits
-                    # the loop in PAUSED with everything acquired/saved.  PAUSED
-                    # cannot transition straight to FINISHED, so promote it back
-                    # through RUNNING first (both legal) — otherwise the clean run
-                    # is mislabeled ABORTED + on_error (BUG, M2.2 review).
-                    if self._sm.state is AppState.PAUSED:
-                        self._sm.transition(AppState.RUNNING)
-                    self._sm.transition(AppState.FINISHED)
-                    logger.info("Plan finished")
+            # -- terminal state (ONE shared, race-safe implementation) --------
+            # A plan whose last executable step is a ManualPauseStep exits the
+            # loop in PAUSED with everything acquired/saved; PAUSED has no
+            # FINISHED edge, so the helper promotes through RUNNING (and
+            # can()-guards every edge against a GUI pause/resume race).
+            self._settle_terminal_state()
 
         except Exception as exc:
             logger.exception("Plan error")
-            # PAUSED cannot transition straight to ERROR (a ManualPauseStep can
-            # leave us there); fall back to ABORTED so a terminal state is always
-            # reached and the error transition never itself raises.
-            if self._sm.state not in (AppState.ERROR, AppState.FINISHED, AppState.ABORTED):
-                try:
-                    self._sm.transition(AppState.ERROR)
-                except ValueError:
-                    if self._sm.can(AppState.ABORTED):
-                        self._abort_event.set()
-                        self._sm.transition(AppState.ABORTED)
+            # on_error FIRST (same rule as the classic loops): a state settle
+            # that loses a race with a GUI pause/resume must never swallow the
+            # operator's only view of the original fault.
             if self.on_error:
                 self.on_error(str(exc))
+            # PAUSED cannot transition straight to ERROR (a ManualPauseStep can
+            # leave us there); _settle_error_state promotes through RUNNING,
+            # can()-guards every edge and swallows a lost race, so a terminal
+            # state is always reached and the error transition never re-raises.
+            self._settle_error_state()
         finally:
             self._hv_armed = False        # arm is per-run; never sticky
             # Fail-safe rule 5 ('stop motion'): halt any in-flight stage move on

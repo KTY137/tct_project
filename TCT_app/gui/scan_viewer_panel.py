@@ -75,6 +75,11 @@ class ScanViewerPanel(QWidget):
     on_scan_started(), on_scan_finished(), on_point_done(result),
     on_progress(done, total), on_z_focus_pt(z_mm, amp_V),
     on_z_focus_done(best_z_mm), on_manual_pause(msg),
+    on_scan_error(title, msg) — shape of ``ScanCoordinator.error_dialog``;
+        marks the run as FAULTED so the terminal banner is never painted as a
+        clean green finish over a compliance trip / slow-control ALARM / driver
+        fault (law 8). Composition root: ``coord.error_dialog.connect(
+        viewer.on_scan_error)``.
     set_current_position(x, y, z) — optional live motor-position feed.
 
     ``set_last_run_path(path)`` — the coordinator/controller has no signal
@@ -97,6 +102,12 @@ class ScanViewerPanel(QWidget):
         self._theme_mode = "light"
         self._run_active = False
         self._abort_pending = False
+        # A fault (compliance trip, slow-control ALARM, driver error) reached the
+        # panel for THIS run — the terminal paint must then be the FAULT variant,
+        # never the green "Scan finished" banner (law 8).  Set by on_scan_error,
+        # cleared at every run start.
+        self._fault_pending = False
+        self._fault_reason: str = ""
         self._last_run_path: str | None = None
         self._start_time: float | None = None
         self._zf_z_data: list[float] = []
@@ -313,6 +324,8 @@ class ScanViewerPanel(QWidget):
     def on_scan_started(self) -> None:
         self._run_active = True
         self._abort_pending = False
+        self._fault_pending = False
+        self._fault_reason = ""
         # Invalidate the previous run's handoff path — without this, a run
         # that never publishes a fresh path (e.g. aborted before the writer
         # opened) would re-offer the *prior* run's file on finish.
@@ -335,11 +348,13 @@ class ScanViewerPanel(QWidget):
         self._btn_open_analysis.setEnabled(False)
         self._finished_banner.setVisible(False)
         self._chip_run.set_status("Running", "busy")
+        # Law 8 — "0/0" is not yet a measurement: no run has reported progress
+        # at this instant, so the tile is stale-captioned until the first
+        # on_progress lands (exactly like the ETA tile next to it).  Painting it
+        # crisp-fresh made a run with no progress yet look like a live 0-of-0.
         self._metric_progress.set_value("0/0")
-        self._metric_progress.set_stale(False, "")
+        self._metric_progress.set_stale(True, "waiting for progress")
         self._metric_eta.set_value("--")
-        # "estimating" would imply an ETA is coming; a z-focus run reports no
-        # progress at all, so the caption states what is actually true.
         self._metric_eta.set_stale(True, "waiting for progress")
         self._metric_point.set_value("x=-- y=-- z=--")
         self._metric_point.set_stale(True, "no point yet")
@@ -351,11 +366,53 @@ class ScanViewerPanel(QWidget):
         self._btn_pause.setEnabled(False)
         self._btn_pause.setChecked(False)
         self._btn_abort.setEnabled(False)
-        # Terminal states differ (design system §5): FINISHED reads good;
-        # an abort the user requested from THIS panel reads as the neutral-
-        # critical ABORTED variant with a fail-safe caption. (A trip/FAULT
-        # variant needs an error signal the coordinator does not carry yet.)
-        if self._abort_pending:
+        self._paint_terminal()
+        self._finished_banner.setVisible(True)
+        # Law 4: the tiles stop updating now — say so instead of freezing
+        # silently. Values stay readable (final numbers), ink goes stale.
+        for tile in self._metrics.tiles():
+            tile.set_stale(True, "final — run ended")
+        if self._last_run_path:
+            self._btn_open_analysis.setEnabled(True)
+
+    def on_scan_error(self, title: str, msg: str) -> None:
+        """A fault ended this run — repaint the terminal state honestly.
+
+        Shape matches ``ScanCoordinator.error_dialog(title, msg)``, the signal
+        that already carries every run fault (compliance trip, slow-control
+        ALARM, denied confirmation, driver error) to the GUI. The coordinator
+        emits ``scan_finished`` *before* ``error_dialog`` on the fault path, so
+        by the time this lands the banner is already up — hence the repaint
+        rather than a mere flag. Law 8: a trip must never be reported to the
+        operator as a clean green "Scan finished".
+        """
+        self._fault_pending = True
+        self._fault_reason = (msg or title or "").strip()
+        # A fault always ends the run; if the finish has not arrived yet the
+        # subsequent on_scan_finished repaints with the same flag set.
+        self._paint_terminal()
+        if not self._run_active:
+            self._finished_banner.setVisible(True)
+
+    def _paint_terminal(self) -> None:
+        """Paint the run chip + finished banner for the terminal state.
+
+        Three variants (design system §5): FAULT (a trip/ALARM/error reached the
+        panel — critical, never green), ABORTED (the operator's own Abort from
+        this panel — neutral-critical, fail-safe caption), FINISHED (good).
+        FAULT outranks ABORTED: an abort that was *forced* by a trip is still a
+        fault, and the fault reason is the operator's most useful text.
+        """
+        if self._fault_pending:
+            first_line = self._fault_reason.splitlines()[0] if self._fault_reason else ""
+            self._chip_run.set_status("Fault", "crit")
+            self._chip_finished.set_status("Fault", "crit")
+            self._lbl_finished.setText(
+                (f"Scan stopped by a fault — {first_line} "
+                 if first_line else "Scan stopped by a fault — ")
+                + "hardware left safe, data taken so far retained.")
+            self._lbl_finished.setToolTip(self._fault_reason)
+        elif self._abort_pending:
             self._chip_run.set_status("Aborted", "warn")
             self._chip_finished.set_status("Aborted", "warn")
             self._lbl_finished.setText(
@@ -364,14 +421,11 @@ class ScanViewerPanel(QWidget):
             self._chip_run.set_status("Finished", "good")
             self._chip_finished.set_status("Finished", "good")
             self._lbl_finished.setText("Scan finished — map retained.")
+        # _abort_pending is a one-shot for the run that just ended; _fault_pending
+        # must survive until the next run start, because on_scan_finished can be
+        # delivered twice on the fault path (once from the coordinator's error
+        # dispatch, once from the run's on_finished).
         self._abort_pending = False
-        self._finished_banner.setVisible(True)
-        # Law 4: the tiles stop updating now — say so instead of freezing
-        # silently. Values stay readable (final numbers), ink goes stale.
-        for tile in self._metrics.tiles():
-            tile.set_stale(True, "final — run ended")
-        if self._last_run_path:
-            self._btn_open_analysis.setEnabled(True)
 
     def on_point_done(self, result: ScanResult) -> None:
         self._map_view.update_point(result)
@@ -382,6 +436,10 @@ class ScanViewerPanel(QWidget):
 
     def on_progress(self, done: int, total: int) -> None:
         self._metric_progress.set_value(f"{done}/{total}")
+        # First real progress of the run — the tile now carries a measurement
+        # (every run type reports progress: raster/plan, voltage sweep, z-focus).
+        if self._run_active:
+            self._metric_progress.set_stale(False, "")
         eta = self._compute_eta(done, total)
         self._metric_eta.set_value(eta)
         if eta != "--":
