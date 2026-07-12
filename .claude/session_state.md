@@ -19,7 +19,6 @@ Updated: 2026-07-12 night shift.
 | Beat | Agent | Locked paths |
 |---|---|---|
 | driver-truth batch (own gripes 1-4) | Paul | `TCT_app/devices/`, `TCT_app/tests/test_driver_truth.py`, `test_arm_envelope.py`, `test_bias_simulation_mode.py`, `test_fault_injection.py`, `test_fault_injection_legacy.py`, `test_plan_executor.py`, `test_repeatability_gate.py`, `test_scan_bias_channel.py`, `test_slow_control_policy.py`, `test_state_fuzz.py` |
-| motion danger-gate (rule 2, jog ungated per Kaya) | Noah | `TCT_app/gui/motor_panel.py`, `TCT_app/tct_gui.py`, `TCT_app/tests/test_motor_danger_gate.py` |
 
 ## LANDED tonight (all pushed)
 
@@ -38,6 +37,9 @@ Updated: 2026-07-12 night shift.
 | `f2b9acc` | RATIFIED: danger-gate boundary, jog stays ungated (Kaya) |
 | `3f6e2b7` | **z-focus/voltage arm Pause/Abort — and Pause actually pauses** (Codex find → Abel found the wedge) |
 | `9cc14dd` | Coffee Break of Kings: 17 findings → TECH_DEBT |
+| `81d1f6a` | orchestrator state externalized (this ledger + `beat_status.ps1`) |
+| `99c527e` | CLAUDE.md session-hygiene rules (Kaya-approved) |
+| `bf9e009` | **homing / absolute move / centre / zero-here behind DangerGate** (new kind `zero_here`) |
 
 ## PENDING REVIEWS (Mary)
 

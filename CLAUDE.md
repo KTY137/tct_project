@@ -187,6 +187,24 @@ boundary-triggered standups over a tight clock).
   deliverable), and never restate the brief. Adam prunes history from
   handoffs — repo files are the shared memory, not transcripts.
 
+## Test-lane policy (Kaya, 2026-07-13) — heavy suites belong on the bench
+
+**Full-suite runs, the UI monkey (`tests/test_ui_monkey.py`) and the state
+fuzzer (`tests/test_state_fuzz.py`) go to sophonone whenever it is up.**
+
+- Bench: `powershell -File C:\Users\nukei\Desktop\agent_env\bench_run.ps1
+  -Branch <branch>` (git bundle + scp over Tailscale; repo at
+  `C:\bench\project_tct`, shared venv, Python 3.10). Reachability check:
+  `ssh -o BatchMode=yes Administrator@100.119.126.9 echo up`.
+- Why: the laptop is CPU-bound, and **concurrent full suites contend** — two
+  pytest processes racing produce spurious pytest-timeout failures inside
+  code neither run touched (observed repeatedly). Heavy random-walk suites
+  (monkey, fuzzer) are exactly the ones that get starved.
+- Per-beat work stays local and **targeted only** (the specific test files a
+  beat touches). One full suite at a time, on the bench.
+- If the bench is down, say so explicitly in the report — never silently
+  substitute a laptop full-suite run and call it a green baseline.
+
 ## Session hygiene — countering orchestrator decay (Kaya-approved 2026-07-12)
 
 Long sessions do not degrade the crew: subagents are stateless, start cold,
