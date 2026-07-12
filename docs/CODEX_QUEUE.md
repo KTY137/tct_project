@@ -155,3 +155,27 @@ widget implements `refresh_theme(mode)`.
 - Added a headless regression assertion in `tests/test_no_inline_hex_gui.py` that checks MotorPanel propagates light/dark refreshes to StageView and that the 2D plot background uses the `sunk` token for each theme.
 - Verification: `git diff --check` passed; static `rg` confirmed no hardcoded `_C_*`, plot constants, or inline hex colors remain in `TCT_app/gui/stage_view.py`. Requested pytest command from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_theme_fanout_completeness.py tests/test_no_inline_hex_gui.py tests/test_panel_kit_rollout_batch1.py::test_motor_panel_constructs_both_themes` executed 0 tests because the venv launcher failed before process start: `.venv\pyvenv.cfg` still points to missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`.
 - Risk: runtime pytest verification remains blocked until the local Python/venv interpreter is repaired.
+
+## C5 — Update 2 migration-invalidated kit tests to the D0 contract
+
+**Status: SKIP — D0 contract not present on this branch.** · Effort: S · Source: D0/D1 migration (2026-07-12)
+
+Design-system D0 (commit 0f0157f on the qml-hybrid-slice1 branch — but DO
+THE WORK HERE ON THIS BRANCH ONLY IF the failing tests exist here too;
+otherwise report SKIP) deliberately changed MetricTile state styling from
+accent-border/side-bar to value-ink-only, and remapped quiet-nominal states.
+Two tests still assert the removed design and fail:
+`tests/test_panel_kit_cockpit.py` and `tests/test_shell_cockpit_v5.py`
+(armed-border / token assertions).
+
+- Task: update ONLY the stale assertions to the new contract (value-ink
+  state coloring; states {normal,good,warn,crit,armed,sim}; connected/ok =
+  neutral not green). Do not weaken unrelated assertions; do not touch
+  gui/ code. Run just those two files headless; both must pass.
+- Do NOT commit; set C5 DONE with findings per Handback.
+
+**Codex findings (2026-07-12):**
+- Files touched: `docs/CODEX_QUEUE.md` only.
+- Static branch check found the target tests present, but this branch still has the pre-D0 implementation: `gui/panel_kit.py` still gives `MetricTile("armed")` an instance border via `glow_color("armed")`, and `gui/status_widgets.py` still maps `connected`/`ok` to `good`. Updating only the tests to D0 value-ink/quiet-nominal expectations would make them contradict current `gui/` code, and C5 explicitly forbids `gui/` edits.
+- Verification attempted from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_panel_kit_cockpit.py tests/test_shell_cockpit_v5.py`; it failed before pytest launched because `.venv\pyvenv.cfg` points to missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`.
+- Risk: if D0 is later merged onto this branch, this C5 should be reopened and the two stale assertions updated then.
