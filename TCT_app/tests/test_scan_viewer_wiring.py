@@ -386,7 +386,10 @@ def test_z_focus_run_arms_pause_abort_and_abort_reaches_the_controller():
     # (nor any progress) just because the cockpit armed.
     assert viewer._map_view.point_count() == 0
     assert not viewer._map_view.is_showing_map()
+    # "0/0" may be *printed*, but only as stale ink — a run that has reported
+    # no progress yet must not read as a live 0-of-0.
     assert viewer._metric_progress.value() == "0/0"
+    assert viewer._metric_progress.is_stale()
 
     # Pause and Abort must REACH the controller (an armed button that no-ops is
     # worse than a disabled one).

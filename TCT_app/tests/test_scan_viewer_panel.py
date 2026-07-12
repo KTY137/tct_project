@@ -96,11 +96,29 @@ def test_scan_started_enables_run_control_and_arms_tiles():
     assert not panel._btn_open_analysis.isEnabled()
     assert panel._finished_banner.isHidden()
     assert panel._chip_run.text() == "Running"
-    # Law 4: progress/elapsed go live at start; ETA/point stay honestly
-    # stale (captioned) until they have something real to say.
-    assert not panel._metric_progress.is_stale()
+    # Laws 4/8: only *elapsed* has something real to say the instant a run is
+    # armed (the clock started). Progress/ETA/point stay honestly stale
+    # (captioned) until a real callback lands. "0/0" painted crisp-fresh is a
+    # claim the panel cannot back: a z-focus run that reported nothing yet
+    # would show a live-ink 0-of-0 that is not a measurement.
+    assert not panel._metric_elapsed.is_stale()
+    assert panel._metric_progress.is_stale()
+    assert "waiting for progress" in panel._metric_progress._caption.text()
     assert panel._metric_eta.is_stale()
     assert panel._metric_point.is_stale()
+
+
+def test_first_progress_de_stales_the_progress_tile():
+    """The other half of the contract above: the tile goes live only once a
+    real ``on_progress`` has landed, and then it carries the real count."""
+    _app()
+    panel = ScanViewerPanel()
+    panel.on_scan_started()
+    assert panel._metric_progress.is_stale()
+
+    panel.on_progress(1, 4)
+    assert not panel._metric_progress.is_stale()
+    assert panel._metric_progress.value() == "1/4"
 
 
 def test_point_done_fills_map_and_updates_point_metric():
