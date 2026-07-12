@@ -165,6 +165,31 @@ def test_customization_persistence_roundtrip(tmp_path):
     assert style.RADIUS_SM == style.RADIUS_SCALES["l"][0]
 
 
+def test_load_from_empty_settings_resets_every_knob(tmp_path):
+    """A load DEFINES the state — it must not inherit the previous one.
+
+    Absent theme/* keys mean "shipped default", not "keep what is currently
+    applied": otherwise glass amount, radius scale and typography survive a
+    load from a *different* settings store, which is module-global state
+    persisting across loads (and, in the suite, across tests).
+    """
+    style.set_glass_amount(0.2)
+    style.apply_radius_scale("l")
+    style.apply_typography(sans="Arial", base_px=style.base_typography()["base_px"] + 2)
+    style.apply_theme_overrides({"accent": "#abcdef"}, "dark")
+
+    style.load_theme_customization(_tmp_settings(tmp_path))   # empty store
+
+    assert style.get_glass_amount() == style.DEFAULT_GLASS_AMOUNT
+    assert style.radius_scale() == "m"
+    assert style.RADIUS_SM == style.RADIUS_SCALES["m"][0]
+    assert style.typography() == {"sans": None, "mono": None,
+                                  "hinting": None, "base_px": None}
+    assert style.FONT_MD == style.base_typography()["base_px"]
+    assert style.theme_overrides("dark") == {}
+    assert style.DARK["accent"] != "#abcdef"
+
+
 def test_load_ignores_safety_override_in_registry(tmp_path):
     """A hand-edited theme/overrides blob cannot unlock the safety palette."""
     s = _tmp_settings(tmp_path)

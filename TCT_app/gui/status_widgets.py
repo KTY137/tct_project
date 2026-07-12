@@ -353,7 +353,16 @@ def flash_button(
         button.setText(old_text)
         repolish(button)
 
-    QTimer.singleShot(timeout_ms, _restore)
+    # OWNED timer (context-object overload): _restore closes over `button`, so
+    # an unowned singleShot outlives the widget — close the window / rebuild the
+    # panel / soft-reload the config inside the flash window and the timer still
+    # fires, touching a deleted C++ object (RuntimeError: "Internal C++ object
+    # already deleted").  Passing `button` as the context object makes Qt drop
+    # the pending invocation when the button is destroyed.  This also kept the
+    # test suite honest: a pending _restore armed near the end of one test used
+    # to fire inside the NEXT test's event pumping, which is why the parallel
+    # (-n auto) suite failed tests that pass in isolation.
+    QTimer.singleShot(timeout_ms, button, _restore)
 
 
 def set_button_icon(button: QPushButton, icon_name: str, color: str | None = None) -> None:

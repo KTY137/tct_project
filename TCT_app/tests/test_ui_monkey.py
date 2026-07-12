@@ -80,9 +80,9 @@ prints ``MONKEY REPRO: seed=... action=<n>`` plus the last
 
 Offscreen, fully simulated, never connected: safe to run with real hardware
 attached (hardware-safety rules 1/2/3/6).  ``QSettings`` is repointed at a
-throwaway temp .ini before any window is built, so a monkey click can never
-write the developer's real persisted settings (same isolation
-``scripts/capture_panels.py`` uses).
+throwaway per-process temp .ini by ``tests/conftest.py`` (before collection,
+so before any window is built), and a monkey click can never write the
+developer's real persisted settings.
 """
 from __future__ import annotations
 
@@ -90,7 +90,6 @@ import gc
 import os
 import re
 import sys
-import tempfile
 import threading
 import time
 import traceback
@@ -104,7 +103,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 
 from PySide6.QtCore import (
-    QEvent, QObject, QtMsgType, QThread, QSettings, QUrl,
+    QEvent, QObject, QtMsgType, QThread, QUrl,
     qInstallMessageHandler,
 )
 from PySide6.QtTest import QTest
@@ -114,15 +113,12 @@ from PySide6.QtWidgets import (
     QRadioButton, QSlider, QSpinBox, QSplitter, QToolButton, QWidget,
 )
 
-# Isolate from the developer's REAL QSettings("TCT", "TCTSetup") store (the
-# Windows registry by default) BEFORE any window is constructed: a monkey click
-# must never mutate the real theme / geometry / detached-tab state.
-QSettings.setDefaultFormat(QSettings.Format.IniFormat)
-QSettings.setPath(
-    QSettings.Format.IniFormat,
-    QSettings.Scope.UserScope,
-    tempfile.mkdtemp(prefix="tct_ui_monkey_settings_"),
-)
+# Isolation from the developer's REAL QSettings("TCT", "TCTSetup") store (the
+# Windows registry by default) now lives in tests/conftest.py, which repoints
+# QSettings at a per-process throwaway .ini before collection — so it holds for
+# EVERY test and every subset run, not just the ones that happen to import this
+# module. A monkey click still cannot mutate the real theme / geometry /
+# detached-tab state; nothing else did.
 
 REPO_CONFIG = "configs/devices.yaml"      # cwd is TCT_app/ (see tests/conftest.py)
 
@@ -920,21 +916,20 @@ def test_xfail_scope_averages_combo_raises_attributeerror(monkeypatch, tmp_path)
 
 
 @pytest.mark.monkey
-@pytest.mark.xfail(
-    strict=True,
-    reason="FINDING 2 (UI monkey, 2026-07-12): gui/status_widgets.py::flash_button "
-           "arms QTimer.singleShot(900ms, _restore) with an UNOWNED closure over the "
-           "button; if the widget is destroyed inside that window the timer still "
-           "fires and touches a deleted C++ object -> RuntimeError. Owner: Noah. "
-           "Minimal fix: pass the button as the singleShot context object "
-           "(QTimer.singleShot(ms, button, _restore)) so Qt cancels it on destroy.")
-def test_xfail_flash_button_survives_widget_destruction():
+def test_flash_button_survives_widget_destruction():
     """A flashed button destroyed before its restore-timer fires must not crash.
 
     Real-world path: click any command button that flashes success, then close
     the window / soft-reload the config / rebuild the panel within 900 ms — the
     pending ``_restore`` closure outlives the widget.  This is the same
     timer/worker-outlives-its-widget class as the D1 teardown batch.
+
+    Was FINDING 2 (UI monkey, 2026-07-12), fixed 2026-07-13: ``flash_button``
+    now arms the restore timer with the button as the singleShot *context
+    object*, so Qt drops the pending invocation when the widget dies.  The
+    same leak was what made the parallel (``-n auto``) suite untrustworthy —
+    a restore timer armed near the end of one test fired inside the NEXT
+    test's event pumping (see ``test_flash_timer_does_not_leak_into_next_test``).
     """
     from gui.status_widgets import flash_button
     from PySide6.QtCore import QCoreApplication
@@ -954,4 +949,37 @@ def test_xfail_flash_button_survives_widget_destruction():
         _pump(0.12)          # > timeout_ms: let the singleShot fire
     assert not caught, (
         "flash_button's restore timer fired on a destroyed widget: "
+        + "; ".join(f"{type(e).__name__}: {e}" for e in caught))
+
+
+@pytest.mark.monkey
+def test_flash_timer_does_not_leak_into_next_test():
+    """Cross-test isolation: a flash armed on a widget that dies must leave NO
+    pending invocation behind for a later test to trip over.
+
+    This is the parallel-suite (xdist) failure mode in miniature: under
+    ``-n auto`` the workers slice the suite differently, so a restore timer
+    armed in the last moments of one test lands in the middle of another —
+    which is why tests that pass in isolation failed in parallel.  A long
+    ``timeout_ms`` here stands in for "the test ended before the flash did".
+    """
+    from gui.status_widgets import flash_button
+    from PySide6.QtCore import QCoreApplication
+
+    app = _app()
+    btn = QPushButton("flash me")
+    btn.show()
+    flash_button(btn, "good", text="OK", timeout_ms=900)   # outlives this scope
+    btn.deleteLater()
+    del btn
+
+    # Emulate the next test starting: conftest's drain finishes the destruction,
+    # then the "later test" pumps the event loop past the flash deadline.
+    gc.collect()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+    with _slot_exceptions() as caught:
+        _pump(1.1)           # > 900 ms: an unowned timer would fire here
+    assert not caught, (
+        "a flash timer leaked past its widget into the next test: "
         + "; ".join(f"{type(e).__name__}: {e}" for e in caught))

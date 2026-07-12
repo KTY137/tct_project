@@ -1681,8 +1681,15 @@ def load_theme_customization(settings=None) -> None:
     startup."""
     global _glass_amount
     s = settings if settings is not None else _default_settings()
+    # A load DEFINES the customization state; it never inherits leftovers from
+    # whatever was loaded/applied before. An ABSENT key means "shipped default",
+    # not "keep the current value" — otherwise a second load (settings-store
+    # swap, a test's throwaway .ini) silently carries the previous glass amount
+    # / radius scale forward, which is state persisting across loads.
     raw_glass = s.value(_SETTINGS_GLASS_KEY, None)
-    if raw_glass is not None:
+    if raw_glass is None:
+        _glass_amount = DEFAULT_GLASS_AMOUNT
+    else:
         try:
             _glass_amount = max(0.0, min(1.0, float(raw_glass)))
         except (TypeError, ValueError):
@@ -1691,21 +1698,27 @@ def load_theme_customization(settings=None) -> None:
         blob = json.loads(str(s.value(_SETTINGS_OVERRIDES_KEY, "") or "{}"))
     except (TypeError, ValueError):
         blob = {}
-    if isinstance(blob, dict):
-        for mode in ("light", "dark"):
-            _overrides[mode] = sanitize_overrides(blob.get(mode))
+    if not isinstance(blob, dict):
+        blob = {}
+    for mode in ("light", "dark"):
+        _overrides[mode] = sanitize_overrides(blob.get(mode))
     try:
         typo = json.loads(str(s.value(_SETTINGS_TYPOGRAPHY_KEY, "") or "{}"))
     except (TypeError, ValueError):
         typo = {}
-    if isinstance(typo, dict):
-        apply_typography(
-            sans=typo.get("sans") or None,
-            mono=typo.get("mono") or None,
-            hinting=typo.get("hinting") or None,
-            base_px=typo.get("base_px") or None,
-        )
-    apply_radius_scale(str(s.value(_SETTINGS_RADIUS_KEY, _radius_scale)))
+    if not isinstance(typo, dict):
+        typo = {}
+    # Unconditional: a missing/garbage blob resets typography to the shipped
+    # defaults (apply_typography(None, ...)) rather than leaving the previous
+    # choice bound to the live SANS_FAMILY/FONT_MD globals.
+    apply_typography(
+        sans=typo.get("sans") or None,
+        mono=typo.get("mono") or None,
+        hinting=typo.get("hinting") or None,
+        base_px=typo.get("base_px") or None,
+    )
+    # Default is the shipped "m" scale, NOT the currently-loaded one.
+    apply_radius_scale(str(s.value(_SETTINGS_RADIUS_KEY, "m")))
     _recompute_palettes()
 
 
