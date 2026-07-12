@@ -294,3 +294,40 @@ mechanical census of TODAY's state-color usage.
 - Created the D4 static census for `TCT_app/gui/`, with a ranked top section for green-on-nominal, non-HV/non-abort red, confident UNKNOWN fills, ACTIVE-HV amber carryover, and solid SIM dots, followed by terse per-file tables mapping current status/state color uses to the W1 ladder or command-class/not-state.
 - Verification: read `docs/design/council_v5_paul.md` section 1 and statically searched/inspected `TCT_app/gui/` Python + QML sources for status chips, lamps, pills, MetricTiles, button states, palette safety tokens, green/red/sim/error tokens, and inline status styling; `git diff --check` passed. No pytest was run because D4 is documentation-only and app code is read-only for this task.
 - Risk: census is source-level only; no runtime widget-tree introspection or rendered screenshot pass was performed.
+
+## D5 — Adversarial second opinion on tonight's landed commits
+
+**Status: DONE — Wrote adversarial static review of landed commits.** · Effort: M · Source: Adam, night shift 2026-07-12
+
+READ-ONLY review. **Do not run pytest** (other lanes hold the test runner
+tonight) and do not edit app code — static reading only.
+
+Review these four commits on branch design/cockpit-v5 (use `git show`):
+- `5730644` fix(safety): fail-closed start guard on all four scan entry points
+- `9b91ed1` feat(analysis): 1D map slicer (analysis/map_slice.py + analysis_panel)
+- `c12a6a1` feat(gui): theme editor (gui/theme_editor.py + style.py override layer)
+- `7663d74` fix(gui): z-focus/voltage coordinator slots fail closed
+
+Write ONE file: `docs/design/codex_review_20260712.md` (~120 lines max):
+1. Per commit: the strongest concrete defect or risk you can find that the
+   crew's own review would plausibly MISS (be adversarial; "looks fine" is a
+   valid verdict only after you name what you checked and why it holds).
+   Cite file:line. Rank by risk (safety > data > correctness > style).
+2. Cross-cutting: does the theme editor's override layer have any path that
+   could reach the LOCKED safety tokens (danger/armed/sim/error) — via preset
+   JSON, QSettings, typography/radius helpers, or the glass blend? Trace it
+   and say yes/no with evidence.
+3. Does `glass_amount = 0` (fully opaque) leave any surface unreadable
+   (text-on-background contrast below ~4.5:1) or any state indistinguishable?
+   Reason from the token math in `gui/style.py`, not from a screenshot.
+4. Anything in `map_slice.py` NaN/edge math you can falsify with a concrete
+   counter-example (state inputs + expected vs actual).
+
+No app-code edits. No commit. Set D5 DONE with findings per Handback.
+
+**Codex findings (2026-07-12):**
+- Files touched: `docs/design/codex_review_20260712.md`, `docs/CODEX_QUEUE.md`.
+- Wrote the requested static review covering the four named commits, with the highest-risk finding on z-focus/voltage starts not emitting the shared `scan_started` fan-out, plus controller atomicity, map-slice NaN handling, and theme customization persistence risks.
+- Cross-cutting trace concluded there is no direct override path to locked safety tokens (`danger`/`armed`/`sim`/`error`, including `crit`/`warn` aliases) through preset JSON, QSettings, typography/radius helpers, or glass blending; residual design risk is unrestricted editable accent/text colors, not safety-token mutation.
+- Verification: read the relevant `git show` diffs and current source with line numbers for `scan_controller.py`, `scan_coordinator.py`, `scan_viewer_panel.py`, `tct_gui.py`, `analysis/map_slice.py`, `analysis_panel.py`, `style.py`, `theme_editor.py`, `qml_theme.py`, and targeted tests. `git diff --check` passed. Per D5 instruction, pytest was not run.
+- Risk: review is static-only; no runtime reproduction or screenshot/contrast measurement pass was performed.
