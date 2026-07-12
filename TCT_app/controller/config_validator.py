@@ -137,6 +137,7 @@ def validate_config(cfg: dict[str, Any]) -> list[ConfigIssue]:
     _check_bias(cfg.get("bias_supply") or {}, issues)
     _check_waveform(cfg.get("waveform_generator") or {}, issues)
     _check_analysis(cfg.get("analysis") or {}, issues)
+    _check_slow_control(cfg.get("slow_control") or {}, issues)
     return issues
 
 
@@ -354,6 +355,94 @@ def _check_waveform(wfg: dict[str, Any], issues: list[ConfigIssue]) -> None:
             f"level_low_V ({low}) must be < level_high_V ({high}) — the square "
             "rail low must sit below the high (the driver's set_levels() rejects "
             "high <= low)."))
+
+
+# Per-channel keys under slow_control.channels.  The threshold keys (all
+# optional) feed the runtime WARN/ALARM excursion policy in scan_controller; the
+# tuning keys feed the simulated backend.  Unknown keys are WARNED (typo
+# detection), matching the section idiom.
+_SLOW_CONTROL_CHANNEL_KEYS = {
+    "name", "unit", "backend",
+    "warn_low", "warn_high", "alarm_low", "alarm_high",
+    # simulated backend tuning
+    "nominal", "noise", "drift_amplitude", "drift_period_s",
+}
+_SLOW_CONTROL_THRESHOLD_KEYS = ("warn_low", "warn_high", "alarm_low", "alarm_high")
+
+
+def _check_slow_control(sc: dict[str, Any], issues: list[ConfigIssue]) -> None:
+    """Validate per-channel slow-control alarm thresholds.
+
+    Thresholds are all OPTIONAL, but when present they must be numeric and
+    correctly ORDERED so the alarm band sits OUTSIDE the warn band — otherwise
+    ``AlarmThresholds.evaluate`` (which checks alarm before warn) would fire an
+    ALARM before the value ever reads WARN, so the excursion policy would abort
+    where it should only safe-hold.  Fail closed on a contradiction (ERROR).
+    """
+    if not sc:
+        return
+    sec = "slow_control"
+    channels = sc.get("channels")
+    if channels is None:
+        return
+    if not isinstance(channels, list):
+        issues.append(ConfigIssue(
+            ERROR, sec, f"channels must be a list (got {type(channels).__name__})"))
+        return
+
+    for i, ch in enumerate(channels):
+        if not isinstance(ch, dict):
+            issues.append(ConfigIssue(
+                ERROR, sec, f"channel[{i}] must be a mapping (got "
+                            f"{type(ch).__name__})"))
+            continue
+        name = ch.get("name", f"[{i}]")
+
+        # Typo detection on per-channel keys (the top-level section is covered by
+        # _check_unknown_keys; the per-channel dict is validated here).
+        for key in ch:
+            if key not in _SLOW_CONTROL_CHANNEL_KEYS:
+                issues.append(ConfigIssue(
+                    WARNING, sec,
+                    f"channel '{name}': unknown key '{key}' — typo? It is ignored "
+                    "by the code."))
+
+        thr: dict[str, float] = {}
+        for key in _SLOW_CONTROL_THRESHOLD_KEYS:
+            v = ch.get(key)
+            if v is None:
+                continue
+            if not _is_num(v) or not math.isfinite(float(v)):
+                issues.append(ConfigIssue(
+                    ERROR, sec,
+                    f"channel '{name}': {key} must be a finite number (got {v!r})"))
+            else:
+                thr[key] = float(v)
+
+        wl, wh = thr.get("warn_low"), thr.get("warn_high")
+        al, ah = thr.get("alarm_low"), thr.get("alarm_high")
+        if wl is not None and wh is not None and wl > wh:
+            issues.append(ConfigIssue(
+                ERROR, sec,
+                f"channel '{name}': warn_low ({wl:g}) > warn_high ({wh:g}) — the "
+                "WARN band is inverted."))
+        if al is not None and ah is not None and al > ah:
+            issues.append(ConfigIssue(
+                ERROR, sec,
+                f"channel '{name}': alarm_low ({al:g}) > alarm_high ({ah:g}) — the "
+                "ALARM band is inverted."))
+        if ah is not None and wh is not None and ah < wh:
+            issues.append(ConfigIssue(
+                ERROR, sec,
+                f"channel '{name}': alarm_high ({ah:g}) < warn_high ({wh:g}) — the "
+                "high alarm would trip before the high warn (alarm is checked "
+                "first). Set alarm_high >= warn_high."))
+        if al is not None and wl is not None and al > wl:
+            issues.append(ConfigIssue(
+                ERROR, sec,
+                f"channel '{name}': alarm_low ({al:g}) > warn_low ({wl:g}) — the "
+                "low alarm would trip before the low warn (alarm is checked "
+                "first). Set alarm_low <= warn_low."))
 
 
 def _check_analysis(analysis: dict[str, Any], issues: list[ConfigIssue]) -> None:

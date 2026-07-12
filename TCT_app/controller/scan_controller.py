@@ -28,8 +28,10 @@ from controller.plan_compiler import (
 )
 from controller.scan_plan_validator import validate_plan, errors, PlanLimits
 from controller.danger_gate import DangerGate, DangerAction
+from controller.arm_envelope import ArmedEnvelope, envelope_from_plan
 from devices.base import DeviceError
 from devices.bias_channel import BiasChannel
+from devices.slow_control_base import AlarmStatus
 from analysis.waveform_analysis import analyse_waveform, WaveformResult
 from analysis.laser_normalization import normalise
 from data.hdf5_writer import HDF5Writer
@@ -223,6 +225,14 @@ class ScanController:
         # BiasStep list is deduped, so a resume must re-establish bias itself).
         self._reassert_pending = False
 
+        # Slow-control excursion latch (DECISIONS 2026-07-12 policy): the set of
+        # channel names currently in an acknowledged WARN / UNAVAILABLE excursion.
+        # A channel is latched when the policy first pauses on it and cleared only
+        # when it reads OK again, so an ongoing WARN does not re-pause every
+        # snapshot after the operator acks (Resume).  ALARM ignores the latch —
+        # it always fail-safe aborts.  Reset per run in _begin_run.
+        self._sc_latched: set[str] = set()
+
         # Public callbacks
         self.on_point_done: Callable[[ScanResult], None] | None = None
         self.on_progress:   Callable[[int, int], None]   | None = None
@@ -282,6 +292,9 @@ class ScanController:
         # A new run supersedes any previous run's path (cleared on start; set
         # again in _end_run once this run's file is closed).
         self._set_last_run_path(None)
+        # Fresh slow-control excursion latch per run — an excursion from a prior
+        # run never suppresses the first pause of this one.
+        self._sc_latched.clear()
         # Publish the active scan type for the GUI's run-state facade; cleared
         # in _end_run's finally so it is non-None exactly while a run runs.
         self._current_scan_type = scan_type
@@ -405,6 +418,30 @@ class ScanController:
         never sticky across runs.
         """
         self._hv_armed = bool(confirmed)
+
+    def arm_envelope_for(
+        self, plan: ScanPlan, *, timeout_s: float | None = None
+    ) -> ArmedEnvelope:
+        """Derive the :class:`ArmedEnvelope` the two-step latch will authorize.
+
+        Resolves the plan's bias channel exactly as :meth:`start_plan` does (via
+        :meth:`_resolve_bias`, honoring ``plan.safety['bias_channel']``), compiles
+        the plan, and returns the bounded, enumerated envelope (channels, signed
+        HV range, ramp shape, per-axis motion bounds, optional expiry) with a
+        human-readable :attr:`~ArmedEnvelope.summary`.
+
+        Pure/read-only: no hardware I/O, no state change.  The GUI (Noah's beat)
+        calls this to render the Arm latch, then on Execute builds an
+        :class:`~controller.arm_envelope.ArmedEnvelopeGate` around the returned
+        envelope, calls :meth:`arm_hv` ``(True)``, and passes the gate to
+        :meth:`start_plan`.  ``timeout_s`` sets an OPTIONAL gate expiry (a
+        defense-in-depth freshness bound); the ~10 s Arm->Execute latch of design
+        law 5 is a separate GUI timer, NOT this value.
+        """
+        bias = self._resolve_bias(
+            SimpleNamespace(bias_channel=(plan.safety or {}).get("bias_channel"))
+        )
+        return envelope_from_plan(plan, bias.channel, timeout_s=timeout_s)
 
     def start_plan(
         self, plan: ScanPlan, limits: PlanLimits, gate: DangerGate
@@ -597,9 +634,16 @@ class ScanController:
             # state machine stuck in RUNNING after an abort).
             if self._sm.state in (AppState.RUNNING, AppState.PAUSED):
                 if self._abort_event.is_set():
-                    self._sm.transition(AppState.ABORTED)
+                    self._sm.transition(AppState.ABORTED)   # RUNNING/PAUSED both legal
                     logger.info("Scan aborted")
                 else:
+                    # A slow-control safe-hold on the LAST point leaves the loop
+                    # in PAUSED with everything acquired/saved; PAUSED cannot go
+                    # straight to FINISHED, so promote through RUNNING first (both
+                    # legal) — otherwise a clean finish would raise + be mislabeled
+                    # (same fix the plan executor already carries).
+                    if self._sm.state is AppState.PAUSED:
+                        self._sm.transition(AppState.RUNNING)
                     self._sm.transition(AppState.FINISHED)
                     logger.info("Scan finished")
 
@@ -1025,7 +1069,10 @@ class ScanController:
                         self.on_manual_pause(step.prompt)
 
                 elif isinstance(step, ReadSlowControlStep):
-                    self._read_slow_control_snapshot()
+                    # Sample the slow-control sensors AND enforce the excursion
+                    # policy (WARN -> safe-hold pause, ALARM -> fail-safe abort).
+                    readings = self._slow_control_read_all()
+                    self._apply_slow_control_policy(readings, bias)
 
                 else:  # pragma: no cover - Step is a closed union
                     raise ValueError(f"unhandled plan step: {type(step).__name__}")
@@ -1372,7 +1419,12 @@ class ScanController:
             bias_v, bias_i = float(br.voltage_V), float(br.current_A)
         except Exception:
             pass
-        sc_snapshot = self._read_slow_control_snapshot()
+        # One slow-control read serves BOTH the per-point snapshot (values in the
+        # ScanResult) and the excursion policy (WARN safe-hold / ALARM fail-safe),
+        # so a drifting simulated sensor can't disagree between the two.
+        sc_readings = self._slow_control_read_all()
+        sc_snapshot = self._snapshot_values(sc_readings)
+        self._apply_slow_control_policy(sc_readings, bias)
 
         # Absolute-charge calibration (no-op until a calibration is configured).
         dut_chg_cal, chg_units = self._apply_charge_calibration(dut_chg)
@@ -1401,12 +1453,22 @@ class ScanController:
             charge_units=chg_units,
         )
 
-    def _read_slow_control_snapshot(self) -> dict | None:
-        """Return {channel_name: value} from the slow-control manager, or None."""
+    def _slow_control_read_all(self) -> dict:
+        """One snapshot of every slow-control channel, keyed by name.
+
+        Returns ``{name: SlowControlReading}`` (each reading carries an evaluated
+        :class:`~devices.slow_control_base.AlarmStatus`), or ``{}`` if the manager
+        is absent or the read fails wholesale — a slow-control read must never
+        crash the scan loop, only feed the excursion policy.
+        """
         try:
-            readings = self._dev.slow_control.read_all()
+            return self._dev.slow_control.read_all()
         except Exception:
-            return None
+            logger.warning("Slow-control read_all failed", exc_info=True)
+            return {}
+
+    def _snapshot_values(self, readings: dict) -> dict | None:
+        """Reduce readings to ``{name: value}`` for the ScanResult, or None."""
         snap: dict[str, float] = {}
         for name, reading in readings.items():
             val = getattr(reading, "value", reading)
@@ -1415,6 +1477,149 @@ class ScanController:
             except (TypeError, ValueError):
                 continue
         return snap or None
+
+    def _read_slow_control_snapshot(self) -> dict | None:
+        """Back-compat wrapper: values-only snapshot (no policy).  Kept so any
+        external caller keeps working; the run loops use ``_slow_control_read_all``
+        + ``_apply_slow_control_policy`` so a single read feeds both."""
+        return self._snapshot_values(self._slow_control_read_all())
+
+    # ------------------------------------------------------------------ #
+    # Slow-control excursion policy (DECISIONS 2026-07-12)                 #
+    #                                                                      #
+    #   WARN or UNAVAILABLE/stale -> SAFE-HOLD PAUSE (motion stopped, HV   #
+    #     HELD at setpoint, run -> PAUSED, operator prompt via the         #
+    #     manual-pause seam; operator Resumes or Aborts).                  #
+    #   ALARM -> FULL FAIL-SAFE ABORT (HV ramp-down, motion stop, writer   #
+    #     flushed via _end_run; on_error carries channel/value/threshold). #
+    #   Once per excursion: a per-channel latch suppresses a re-pause on   #
+    #     an ongoing WARN after the operator acks, until it reads OK again.#
+    # ------------------------------------------------------------------ #
+
+    _WARN_STATUSES = frozenset({AlarmStatus.WARN_LOW, AlarmStatus.WARN_HIGH})
+    _ALARM_STATUSES = frozenset({AlarmStatus.ALARM_LOW, AlarmStatus.ALARM_HIGH})
+
+    def _apply_slow_control_policy(self, readings: dict, bias: BiasChannel) -> None:
+        """Enforce the WARN/ALARM excursion policy on a slow-control snapshot.
+
+        Called on the worker thread from the shared acquisition body
+        (:meth:`_acquire_core`) and from a plan ``READ_SLOW_CONTROL`` step, so it
+        protects both the classic scan loop and the plan executor.  ALARM has
+        priority over WARN.  No-op when nothing is configured / already aborting.
+        """
+        if not readings or self._abort_event.is_set():
+            return
+
+        thresholds = {
+            getattr(ch, "name", None): getattr(ch, "thresholds", None)
+            for ch in self._safe_slow_channels()
+        }
+
+        alarms: list[tuple] = []
+        warns: list[tuple] = []
+        for name, reading in readings.items():
+            status = getattr(reading, "status", None)
+            if status is AlarmStatus.OK:
+                self._sc_latched.discard(name)   # excursion resolved
+                continue
+            if status in self._ALARM_STATUSES:
+                alarms.append((name, reading, status, thresholds.get(name)))
+            elif status in self._WARN_STATUSES or status is AlarmStatus.UNAVAILABLE:
+                if name not in self._sc_latched:
+                    warns.append((name, reading, status, thresholds.get(name)))
+
+        if alarms:
+            self._slow_control_alarm_abort(alarms, bias)
+            return
+        if warns:
+            # Latch every new excursion first (so a persisting WARN never
+            # re-pauses after ack), then safe-hold once if we're still RUNNING.
+            for name, *_ in warns:
+                self._sc_latched.add(name)
+            self._slow_control_warn_hold(warns)
+
+    def _slow_control_warn_hold(self, warns: list[tuple]) -> None:
+        """Safe-hold PAUSE: motion stopped, HV HELD at setpoint, operator prompt.
+
+        Only enters the hold from RUNNING — if the run is already PAUSED (another
+        held excursion) or terminal, the channels are already latched and we must
+        not stack a second prompt.
+        """
+        reason = ("Slow-control safe-hold — "
+                  + "; ".join(self._sc_reading_desc(*w) for w in warns)
+                  + ". Motion stopped, HV held at setpoint. Resume when safe, "
+                    "or Abort.")
+        logger.warning("%s", reason)
+        if self._sm.state is not AppState.RUNNING:
+            return
+        # Motion stopped (a no-op between steps); HV is HELD — we do NOT ramp it
+        # down on a WARN, only ALARM does that.
+        self._motor_stop_safe()
+        self._pause_event.clear()
+        self._reassert_pending = True     # plan re-asserts the held HV on resume
+        if self._sm.can(AppState.PAUSED):
+            self._sm.transition(AppState.PAUSED)
+        if self.on_manual_pause:
+            self.on_manual_pause(reason)
+
+    def _slow_control_alarm_abort(self, alarms: list[tuple], bias: BiasChannel) -> None:
+        """Full fail-safe ABORT: HV ramp-down, motion stop, writer flushed.
+
+        Mirrors a compliance trip / denied confirmation: set the abort event,
+        halt motion, ramp HV to 0 + open the output (an ALARM de-energizes HV
+        regardless of whether the run itself drove it), and surface the reason.
+        The writer is flushed by ``_end_run`` on the loop's fail-safe exit.
+        """
+        reason = ("Slow-control ALARM — scan aborted (fail-safe): "
+                  + "; ".join(self._sc_reading_desc(*a) for a in alarms)
+                  + ". HV ramped to 0 V, motion stopped.")
+        logger.error("%s", reason)
+        self._abort_event.set()
+        self._pause_event.set()           # unblock if a prior hold parked us
+        self._motor_stop_safe()
+        if bias is not None and getattr(bias, "connected", False):
+            self._bias_failsafe(bias)     # ramp to 0 V + output off
+        if self.on_error:
+            self.on_error(reason)
+
+    def _safe_slow_channels(self) -> list:
+        """The slow-control channel objects (for threshold lookup), or []."""
+        try:
+            return list(self._dev.slow_control.channels)
+        except Exception:
+            return []
+
+    def _sc_reading_desc(self, name, reading, status, thresholds) -> str:
+        """One human clause carrying channel + value + crossed threshold + unit."""
+        unit = (getattr(reading, "unit", "") or "").strip()
+        unit_sfx = f" {unit}" if unit else ""
+        if status is AlarmStatus.UNAVAILABLE:
+            return f"{name} sensor unavailable/stale"
+        value = getattr(reading, "value", float("nan"))
+        thr = self._crossed_threshold(status, thresholds)
+        band = "warn" if status in self._WARN_STATUSES else "alarm"
+        side = "low" if status in (AlarmStatus.WARN_LOW, AlarmStatus.ALARM_LOW) else "high"
+        thr_txt = "" if thr is None else f" {thr:g}{unit_sfx}"
+        return (f"{name} = {value:g}{unit_sfx} crossed {band}_{side}{thr_txt}")
+
+    @staticmethod
+    def _crossed_threshold(status, thresholds) -> float | None:
+        """The configured threshold value the *status* crossed, or None."""
+        if thresholds is None:
+            return None
+        attr = {
+            AlarmStatus.WARN_LOW:  "warn_low",
+            AlarmStatus.WARN_HIGH: "warn_high",
+            AlarmStatus.ALARM_LOW: "alarm_low",
+            AlarmStatus.ALARM_HIGH: "alarm_high",
+        }.get(status)
+        if attr is None:
+            return None
+        val = getattr(thresholds, attr, None)
+        try:
+            return None if val is None else float(val)
+        except (TypeError, ValueError):
+            return None
 
     def _apply_charge_calibration(self, dut_charge_pC: float):
         """Map raw integrated charge to a calibrated value + units.
