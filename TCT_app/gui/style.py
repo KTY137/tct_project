@@ -553,10 +553,16 @@ QLabel#ribbonLabel {{
    instead of the old, tighter 12/10. The title is a section header — medium
    weight, not bold: apple_style_ui_audit.md flagged headings/labels as
    "too loud/heavy" (was 700; size is unchanged). */
+/* NOTE (regression triage 2026-07-12): QGroupBox is the app's plot/camera
+   CONTAINER class (scope, camera, monitor, ...). Per-side border colors force
+   Qt's slow four-edge border path on every repaint of the frame, so the
+   machined top edge is deliberately NOT applied here (hard rule 3: no extra
+   paint cost on hot-path containers). The machined material survives on
+   static chrome + interaction-only controls (ribbon, buttons, tabs,
+   segments, dock titles, control clusters). */
 QGroupBox {{
     background: {p['panel']};
     border: 1px solid {p['hairline']};
-    border-top-color: {p['edge']};
     border-radius: {RADIUS_MD}px;
     margin-top: {SPACE_LG - 2}px;
     padding: {SPACE_LG - 1}px {SPACE_LG + 1}px {SPACE_LG - 1}px {SPACE_LG + 1}px;
@@ -582,11 +588,17 @@ QGroupBox::title {{
 QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
     background: {p['well']};
     border: 1px solid {p['hairline']};
-    border-top-color: {p['edge_shade']};
     border-radius: {RADIUS_SM}px;
     padding: {SPACE_SM - 2}px {SPACE_MD}px;
     selection-background-color: {p['accent']};
     selection-color: {p['on_accent']};
+}}
+/* Machined shaded top edge ONLY on the single-line inputs (cursor-blink-rate
+   repaints — cheap). The multiline editors (QPlainTextEdit/QTextEdit: log
+   view, YAML editor) repaint on every appended line/scroll, so they keep a
+   uniform border (hard rule 3 — see the QGroupBox note above). */
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
+    border-top-color: {p['edge_shade']};
 }}
 QLineEdit:hover, QPlainTextEdit:hover, QSpinBox:hover,
 QDoubleSpinBox:hover, QComboBox:hover {{ border-color: {p['border_strong']}; background: {p['well']}; }}
@@ -785,8 +797,11 @@ QTabBar::tab:selected {{
     border-top-color: {p['edge']};
     font-weight: 600;
 }}
+/* Hover must be unmistakable (law: what's interactive must look interactive):
+   raised wash + hairline-STRONG ring — regression triage 2026-07-12 after the
+   neutral-raised selected rewrite left hover reading as nothing. */
 QTabBar::tab:hover:!selected {{
-    background: {p['field']}; color: {p['text']}; border-color: {p['hairline']};
+    background: {p['field']}; color: {p['text']}; border-color: {p['hairline_strong']};
 }}
 QTabBar::tab:focus {{ outline: none; }}
 
@@ -867,10 +882,10 @@ QSplitter::handle:horizontal {{ width: 3px; }}
 QSplitter::handle:vertical {{ height: 3px; }}
 QSplitter::handle:hover {{ background: {p['accent']}; }}
 
-/* Progress bars (IV/V-scan sweeps) — a sunken trough (shaded top edge). */
+/* Progress bars (IV/V-scan sweeps) — a sunken trough. Uniform border: this
+   widget repaints on every scan/sweep tick (hard rule 3 — see QGroupBox). */
 QProgressBar {{
     background: {p['disabled_bg']}; border: 1px solid {p['hairline']};
-    border-top-color: {p['edge_shade']};
     border-radius: {RADIUS_SM}px; text-align: center; color: {p['text']};
     min-height: 16px;
 }}
@@ -918,7 +933,6 @@ QPushButton#dangerBtn:disabled, QPushButton[state="danger"]:disabled {{
    apple_style_ui_audit.md typography finding. */
 QFrame#instrumentReadout {{
     background: {PLOT_BG}; border: 1px solid {p['hairline']};
-    border-top-color: {p['edge_shade']};
     border-radius: {RADIUS_MD}px;
 }}
 QLabel#readoutAxis {{
@@ -948,9 +962,11 @@ QLabel#readoutValue {{
    placed after the state rules so it always wins the cascade — a stale tile
    desaturates its ink back to "faint" regardless of the semantic state
    underneath (gui.panel_kit.MetricTile.set_stale()). */
+/* Uniform border on purpose: readout cells repaint on every metric update /
+   flash repolish (hard rule 3 — see QGroupBox). The QML MetricTile draws its
+   specular edge as a real translucent line instead, which QSS cannot. */
 QFrame#readoutCell {{
     background: {p['raised']}; border: 1px solid {p['hairline']};
-    border-top-color: {p['edge']};
     border-radius: {RADIUS_MD}px;
 }}
 /* Label ink: MUTED, not faint — the artifact's `.tile .lab` uses --muted and
@@ -1063,9 +1079,10 @@ QPushButton#segBtn:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outli
 /* Card wrapper matching QGroupBox's look, for non-groupbox panes that must
    sit visually level with group boxes (e.g. a live view beside a controls
    column). */
+/* Uniform border on purpose: cardPane hosts the camera live view, the stage
+   view and every FigureCard plot (hard rule 3 — see QGroupBox). */
 QFrame#cardPane {{
     background: {p['panel']}; border: 1px solid {p['hairline']};
-    border-top-color: {p['edge']};
     border-radius: {RADIUS_MD}px;
 }}
 
@@ -1073,7 +1090,6 @@ QFrame#cardPane {{
    inline coloured left border per channel; this is the shared base look. */
 QFrame#channelCard {{
     background: {p['panel']}; border: 1px solid {p['hairline']};
-    border-top-color: {p['edge']};
     border-radius: {RADIUS_SM}px;
 }}
 
