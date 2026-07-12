@@ -398,6 +398,14 @@ class ScanController:
     def start(self, cfg: ScanConfig) -> None:
         if not self._sm.can(AppState.RUNNING):
             raise RuntimeError("Cannot start scan in current state.")
+        # Fuzz-found (test_state_fuzz): can(RUNNING) is True from PAUSED (the
+        # resume edge), so a start here would spawn a SECOND worker sharing
+        # writer/abort/HV state. Only resume() may leave PAUSED; refuse any
+        # start while a worker thread is alive. Fail-closed.
+        if self._sm.state is AppState.PAUSED or (
+            self._thread is not None and self._thread.is_alive()
+        ):
+            raise RuntimeError("A run is already active (paused or running).")
         bias = self._resolve_bias(cfg)  # validate BEFORE any state change / hardware
         self._abort_event.clear()
         self._pause_event.set()
@@ -480,9 +488,14 @@ class ScanController:
         # failed *armed* start is never sticky into a later plan.  A SUCCESSFUL
         # start keeps the arm; it is consumed at run end (_run_plan finally).
         try:
-            # 1. State guard (identical to start).
+            # 1. State guard (identical to start, incl. the fuzz-found
+            #    start-while-PAUSED / worker-alive refusal — fail-closed).
             if not self._sm.can(AppState.RUNNING):
                 raise RuntimeError("Cannot start scan in current state.")
+            if self._sm.state is AppState.PAUSED or (
+                self._thread is not None and self._thread.is_alive()
+            ):
+                raise RuntimeError("A run is already active (paused or running).")
 
             # 2. Pure pre-flight — refuse a bad plan before touching anything.
             errs = errors(validate_plan(plan, limits))
