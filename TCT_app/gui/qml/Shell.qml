@@ -30,6 +30,13 @@
 // No QtQuick.Effects / MultiEffect: the rail is a flat material (calm depth),
 // which also keeps it correct headless (software renderer) and off the
 // glow/hot-path-effect rule.
+//
+// Below the pill shelf sits a third, persistent strip: ScanStatusStrip
+// (gui/qml/ScanStatusStrip.qml), a row of MetricTiles (gui/qml/MetricTile.qml)
+// bound to the read-only `runState` facade (gui/run_state_viewmodel.py),
+// already a QML context property in both shells (see tct_gui.py's `_run_vm`
+// wiring / qml_shell.py's `build_qml_chrome`). Pure view, per those files'
+// own header notes — no logic lives here either.
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
@@ -38,7 +45,12 @@ import Tct
 Item {
     id: root
     implicitWidth: 960
-    implicitHeight: 96
+    // rail (48) + pill shelf (44) + scan status strip (96 tile + 2*spaceSm
+    // padding = 112) — kept in lockstep with gui/qml_shell.py's
+    // `chrome.setFixedHeight(...)` (SizeRootObjectToView stretches this root
+    // to the QQuickWidget's actual size, so this number is documentation/
+    // sizing-hint, not load-bearing, but the two should still agree).
+    implicitHeight: 204
 
     Rectangle { anchors.fill: parent; color: Theme.canvas }
 
@@ -250,6 +262,32 @@ Item {
             }
 
             Rectangle {  // bottom hairline
+                anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+                height: 1; color: Theme.hairline
+            }
+        }
+
+        // ------------------------------------------------- scan status strip
+        // Persistent live run readout (State/Progress/ETA/Elapsed/Scan) — see
+        // the file header above and gui/qml/ScanStatusStrip.qml. Sized to the
+        // same >=1280px baseline the rail's no-Flickable contract targets (5
+        // tiles fit one row well under that width); binds ONLY, no logic.
+        Rectangle {
+            Layout.fillWidth: true
+            implicitHeight: statusStrip.implicitHeight + 2 * Theme.spaceSm
+            color: Theme.canvas
+
+            ScanStatusStrip {
+                id: statusStrip
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.topMargin: Theme.spaceSm
+                anchors.leftMargin: 16
+                anchors.rightMargin: 16
+            }
+
+            Rectangle {  // bottom hairline — separates chrome from tab content
                 anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
                 height: 1; color: Theme.hairline
             }

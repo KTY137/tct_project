@@ -429,8 +429,10 @@ def build_qml_chrome(
         tab_adapter.deleteLater()
         return None, None
 
-    # Fixed-height chrome strip (rail + pill shelf); the tabs take the rest.
-    chrome.setFixedHeight(96)
+    # Fixed-height chrome strip (rail 48 + pill shelf 44 + the
+    # ScanStatusStrip section 112 = 204 — see Shell.qml's matching
+    # `implicitHeight` comment); the tabs take the rest.
+    chrome.setFixedHeight(204)
 
     # Keep adapters alive with the widget and expose them for teardown/tests.
     chrome._shell_bridge = bridge
