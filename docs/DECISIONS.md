@@ -50,3 +50,14 @@ When working on code, check this table:
 *Resolved decisions are moved here once work is complete. (Future: when table grows large, archive old entries.)*
 
 - *None yet.*
+
+## 2026-07-12 — Cockpit design system v4 RATIFIED as canonical (pending 2 open items)
+
+7-seat design council (crew + Prometheus SOTA research + Codex adversarial +
+Ollama advisory), two iteration rounds. Canonical spec:
+`docs/design/cockpit_design_system.md` (eight laws, tokens, type scale,
+data-ink rules, lifecycle/hardware-truth mapping, panel recipes, D0-D6
+roadmap with gates, Abel's 8-rule modularity charter). Interactive reference:
+`artifacts_claude/tct_cockpit_design_v4_final.html`. All GUI work hard-follows
+this spec; violations do not merge. OPEN for Kaya: arm-envelope model
+(two-step latch) and slow-control excursion policy.

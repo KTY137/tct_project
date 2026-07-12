@@ -252,6 +252,13 @@ Rules:
     committed by the crew; verify-gate escalations go back to specialists.
     Codex real-task budget is 8-20 min (provider timeout 1500 s; lane
     fixes: agent_env 3c13d89/6a7e6bd/8022213).
+  - **Free lanes never idle (Kaya, 2026-07-12):** Codex and Ollama are
+    standing crew, not occasional tools. Whenever the Claude crew is busy
+    or the session is waiting, Adam keeps at least one free-lane task in
+    flight — second-opinion reviews of recent commits, bookkeeping sweeps,
+    docstring/test-hygiene chores, advisory critiques. Ollama = advisory /
+    simple-mechanical; Codex = medium mechanical + adversarial second
+    opinions. Same review gate as always.
 - Read reports from `C:\Users\nukei\Desktop\agent_env\inbox`.
 - Check recovery memory at `C:\Users\nukei\Desktop\agent_env\memory\todos.local.md`.
 
