@@ -21,11 +21,12 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import math
 import time
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import Qt, QRectF
+from PySide6.QtCore import Qt, QRectF, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
@@ -61,6 +62,7 @@ from gui.panel_kit import (
 from gui.scan_map_view import QUANTITIES, QUANTITY_UNITS, ScanMapView
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
 from gui.style import DARK, PLOT_FG, PLOT_OVERLAY, SPACE_MD, SPACE_SM
+from vision import sensor_align
 
 # Survey mode's mosaic mode ("map"/"cce"/"survey" -> _modes stack index) —
 # module-level so the segmented-control wiring and any future page reorder
@@ -157,6 +159,26 @@ def _affine_from_stored(raw: "np.ndarray | None") -> AffineFit | None:
     )
 
 
+def _vision_unavailable_reason() -> str:
+    """Best-effort capture of :class:`~vision.sensor_align.
+    VisionUnavailableError`'s own install-hint message (E7c objective 1:
+    "install hint from VisionUnavailableError when cv2 missing") — never
+    hand-duplicated here, so it can't drift from that class's own text.
+
+    Only called once ``sensor_align.is_available()`` has already returned
+    ``False`` (see ``_update_pose_availability``), so
+    ``generate_marker_image`` always hits ``sensor_align``'s own cv2-import
+    gate immediately and never actually renders a marker image — safe to
+    call unconditionally from the disabled-tooltip path."""
+    try:
+        sensor_align.generate_marker_image(0, 4)
+    except sensor_align.VisionUnavailableError as exc:
+        return str(exc)
+    except Exception:
+        pass
+    return ""
+
+
 class AnalysisPanel(QWidget):
     """Load a completed run HDF5 file and re-analyse / re-plot.
 
@@ -165,6 +187,15 @@ class AnalysisPanel(QWidget):
     — run folders like ``runs/run_00001/waveforms.h5``). Purely a read-only
     listing; nothing is written there by this panel.
     """
+
+    # E7c "Align scan grid" — HARD LAW: numbers only, never motion. Carries
+    # the suggested correction as a plain dict (theta_deg/dx_mm/dy_mm/
+    # baseline_px/estimated_precision_deg/meets_precision_target — see
+    # _on_align_scan_grid). This class never imports controller/ and this
+    # signal is the ONLY output of the "Align scan grid" button; the
+    # eventual consumer (a later, danger-gated beat) decides whether/how to
+    # apply it to a plan or motion.
+    grid_alignment_suggested = Signal(dict)
 
     def __init__(self, parent: QWidget | None = None,
                  runs_dir: str | Path = "runs") -> None:
@@ -189,6 +220,15 @@ class AnalysisPanel(QWidget):
         self._survey_position_source: str | None = None
         self._survey_n_pos_omitted: int = 0
         self._survey_theme_mode: str = "dark"
+        # Sensor-pose alignment (E7c) — see _on_detect_sensor_pose/
+        # _on_align_scan_grid. '_survey_pose' is the last
+        # vision.sensor_align.PoseEstimate (None before any detect, or
+        # after a new run load — see _reset_pose_state); '_survey_pose_items'/
+        # '_survey_pose_bbox' are the pyqtgraph overlay items on the mosaic
+        # plot, cleared/rebuilt on every detect (see _clear_pose_overlay).
+        self._survey_pose: "sensor_align.PoseEstimate | None" = None
+        self._survey_pose_items: list = []
+        self._survey_pose_bbox = None
         self._run_path: str = ""
         # How the loaded run ended (HDF5Writer root attrs 'outcome' /
         # 'abort_reason' — SCAN_DATA_FORMAT.md "Root attributes"). None
@@ -606,6 +646,46 @@ class AnalysisPanel(QWidget):
         self._lbl_survey_calib.setWordWrap(True)
         lay.addWidget(self._lbl_survey_calib)
 
+        # ── Sensor-pose alignment (E7c) — numbers only, never motion ──
+        # "Detect sensor pose" runs vision.sensor_align on this run's own
+        # first/last camera frame (see _on_detect_sensor_pose's reference-
+        # frame-choice docstring); "Align scan grid" only DISPLAYS/copies
+        # the suggested correction and emits grid_alignment_suggested — it
+        # never calls a controller or touches a scan plan/motion (see its
+        # own docstring). Both buttons are plain QWidgets, built regardless
+        # of pyqtgraph availability (matching _chk_survey_refine/
+        # _btn_build_survey above); only the mosaic OVERLAY drawing needs
+        # pyqtgraph (see _render_pose_overlay).
+        pose_row = QHBoxLayout()
+        self._btn_detect_pose = QPushButton("Detect sensor pose")
+        self._btn_detect_pose.setProperty("state", "secondary")
+        set_button_icon(self._btn_detect_pose, "mdi.crosshairs-gps")
+        self._btn_detect_pose.setEnabled(False)
+        self._btn_detect_pose.clicked.connect(self._on_detect_sensor_pose)
+        pose_row.addWidget(self._btn_detect_pose)
+        self._btn_align_grid = QPushButton("Align scan grid")
+        self._btn_align_grid.setProperty("state", "secondary")
+        set_button_icon(self._btn_align_grid, "mdi.compass-outline")
+        self._btn_align_grid.setEnabled(False)
+        self._btn_align_grid.clicked.connect(self._on_align_scan_grid)
+        pose_row.addWidget(self._btn_align_grid)
+        pose_row.addStretch(1)
+        self._chip_pose_precision = StatusChip("No pose", "neutral")
+        pose_row.addWidget(self._chip_pose_precision)
+        lay.addLayout(pose_row)
+
+        # Copyable suggested-correction numbers (also copied to the
+        # clipboard on click — see _on_align_scan_grid); selectable text,
+        # never tooltip-only, matching _lbl_survey_calib's own "caption
+        # over tooltip" idiom above.
+        self._lbl_align_grid_result = QLabel("")
+        self._lbl_align_grid_result.setObjectName("cardSubtitle")
+        self._lbl_align_grid_result.setWordWrap(True)
+        self._lbl_align_grid_result.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._lbl_align_grid_result.setVisible(False)
+        lay.addWidget(self._lbl_align_grid_result)
+
         self._survey_stack = QStackedWidget()
         if _HAS_PG:
             self._survey_figure = FigureCard("Survey mosaic", "no data")
@@ -649,8 +729,23 @@ class AnalysisPanel(QWidget):
             ("Seam clamps", "—"))
         self._tile_survey_offset: MetricTile = self._survey_tiles_grid.add_tile(
             ("Mean |offset|", "—"))
+        # E7c pose numbers (objective 4) — extends the SAME diagnostics
+        # grid rather than a parallel one (5 columns -> these 4 tiles wrap
+        # onto a second row). Populated by _update_pose_tiles after a
+        # successful "Detect sensor pose"; see _reset_pose_state for the
+        # stale/no-pose default.
+        self._tile_pose_theta: MetricTile = self._survey_tiles_grid.add_tile(
+            ("Pose θ", "—"))
+        self._tile_pose_translation: MetricTile = self._survey_tiles_grid.add_tile(
+            ("Pose Δ", "—"))
+        self._tile_pose_baseline: MetricTile = self._survey_tiles_grid.add_tile(
+            ("Pose baseline", "—"))
+        self._tile_pose_precision: MetricTile = self._survey_tiles_grid.add_tile(
+            ("Pose precision", "—"))
         lay.addWidget(self._survey_tiles_grid)
         self._reset_survey_tiles("no run loaded")
+        self._reset_pose_state()
+        self._update_pose_availability()
         return page
 
     # ------------------------------------------------------------------ #
@@ -1429,7 +1524,16 @@ class AnalysisPanel(QWidget):
         rather than leave a stale image on screen (same "a previous run's
         state may not still apply" reasoning as ``_reset_slice_state``/
         ``_reset_cce_fit_tiles``). Does NOT auto-rebuild — building is an
-        explicit action (see ``_build_survey_mode``)."""
+        explicit action (see ``_build_survey_mode``).
+
+        Pose reset/gating (E7c) runs UNCONDITIONALLY, ahead of the
+        pyqtgraph-only guard below: ``_update_pose_availability`` must
+        reflect the newly loaded run's own ``camera/frames`` every time,
+        not just once at construction — otherwise loading a second run
+        without pyqtgraph installed would leave "Detect sensor pose" gated
+        on the PREVIOUS run's frames."""
+        self._reset_pose_state()
+        self._update_pose_availability()
         if not (_HAS_PG and hasattr(self, "_survey_stack")):
             return
         self._survey_empty.set_label("No mosaic built")
@@ -1755,6 +1859,318 @@ class AnalysisPanel(QWidget):
         self._tile_survey_offset.setToolTip(
             "Mean |applied seam-refinement offset| over placed tiles "
             "(0 when 'Refine seams' is off).")
+
+    # ------------------------------------------------------------------ #
+    # Sensor-pose alignment — E7c ("numbers only, never motion")          #
+    # ------------------------------------------------------------------ #
+
+    def _update_pose_availability(self) -> None:
+        """Gate "Detect sensor pose" on ``sensor_align.is_available()`` AND
+        loaded camera frames (E7c objective 1) — a mosaic does not need to
+        be BUILT yet, only ``camera/frames`` loaded (``_load_camera_group``
+        already ran by the time this is called from ``_reset_survey_state``).
+        Always sets a tooltip explaining a disabled state (never a bare
+        greyed-out button): the exact cv2 install hint when OpenCV is
+        missing/too old, or "load a run" when frames are absent."""
+        if not hasattr(self, "_btn_detect_pose"):
+            return
+        frames = self._camera.get("frames")
+        has_frames = frames is not None and len(frames) > 0
+        available = sensor_align.is_available()
+        self._btn_detect_pose.setEnabled(bool(available and has_frames))
+        if not available:
+            reason = _vision_unavailable_reason() or (
+                "OpenCV (opencv-python-headless) is not installed, or "
+                "lacks the modern cv2.aruco.ArucoDetector API — "
+                "sensor-pose detection is unavailable."
+            )
+            self._btn_detect_pose.setToolTip(reason)
+        elif not has_frames:
+            self._btn_detect_pose.setToolTip(
+                "Load a run with camera frames first — no 'camera/frames' "
+                "dataset loaded.")
+        else:
+            self._btn_detect_pose.setToolTip(
+                "Detect ArUco fiducial markers in this run's first and "
+                "last captured frame and estimate the sensor's pose drift "
+                "between them (vision.sensor_align — numbers only, "
+                "commands nothing).")
+
+    def _reset_pose_state(self) -> None:
+        """New run loaded (or panel just built) — a previously detected
+        pose belongs to a different file's camera frames; drop back to the
+        honest "no pose" state (same "a previous run's state may not still
+        apply" reasoning as ``_reset_cce_fit_tiles``/``_reset_survey_state``).
+        Works with or without pyqtgraph (only ``_clear_pose_overlay``
+        itself is pg-gated) so the tiles/buttons/chip always reflect
+        reality even on the "pyqtgraph not installed" degraded page."""
+        self._survey_pose = None
+        self._clear_pose_overlay()
+        if not hasattr(self, "_tile_pose_theta"):
+            return
+        for tile in (
+            self._tile_pose_theta, self._tile_pose_translation,
+            self._tile_pose_baseline, self._tile_pose_precision,
+        ):
+            tile.set_value("—")
+            tile.set_state("normal")
+            tile.set_stale(True, "no pose detected")
+            tile.setToolTip("")
+        self._chip_pose_precision.set_status("No pose", "neutral", "")
+        self._btn_align_grid.setEnabled(False)
+        self._btn_align_grid.setToolTip(
+            "Run “Detect sensor pose” first — applies nothing — copies "
+            "the suggested correction (numbers only; no plan/motion "
+            "change).")
+        self._lbl_align_grid_result.setVisible(False)
+        self._lbl_align_grid_result.setText("")
+
+    def _clear_pose_overlay(self) -> None:
+        """Remove any pose-overlay pyqtgraph items from the mosaic plot —
+        called before every new detect (and on reset) so a stale overlay
+        never lingers alongside a fresh one. A no-op without pyqtgraph or
+        before the survey plot exists."""
+        if _HAS_PG and getattr(self, "_survey_plot", None) is not None:
+            for item in self._survey_pose_items:
+                self._survey_plot.removeItem(item)
+            if self._survey_pose_bbox is not None:
+                self._survey_plot.removeItem(self._survey_pose_bbox)
+        self._survey_pose_items = []
+        self._survey_pose_bbox = None
+
+    def _last_frame_center_mm(self) -> tuple[float, float] | None:
+        """mm centre of the LAST loaded camera frame (index -1) — the
+        "current" detection's tile position, used only to place the pose
+        overlay on the mosaic canvas (rung 1 of the position-source ladder,
+        ``camera/frame_pos_mm``, only — unlike ``_collect_survey_tiles``
+        this does NOT fall back to ``safety['survey']`` geometry, since the
+        overlay is a bonus visual and calling ``_collect_survey_tiles``
+        here would have the side effect of switching the Survey stack to
+        an EmptyState on a position-source miss, clobbering whatever the
+        page currently shows). The pose NUMBERS (``_update_pose_tiles``)
+        never depend on this — only the optional overlay does. Returns
+        ``None`` (skip the overlay) when unavailable."""
+        pos_mm = self._camera.get("frame_pos_mm")
+        if pos_mm is None or len(pos_mm) == 0:
+            return None
+        x, y = float(pos_mm[-1][0]), float(pos_mm[-1][1])
+        if not (np.isfinite(x) and np.isfinite(y)):
+            return None
+        return x, y
+
+    def _on_detect_sensor_pose(self) -> None:
+        """"Detect sensor pose" (E7c objectives 1-2): estimate the ArUco
+        pose delta between the FIRST and LAST captured frame of this run.
+
+        Reference-frame choice: frame index 0 is treated as this run's own
+        nominal/plan orientation (the earliest capture — the assumed
+        baseline an operator wants to check for drift against, before any
+        of the run's own stage motion could have disturbed the mount), and
+        frame index -1 (the most recently captured frame) is "current".
+        This is a WITHIN-RUN drift check, not a comparison against a
+        separately stored reference image: ``vision.sensor_align``'s own
+        contract (``estimate_relative_pose``'s docstring) only requires two
+        ``DetectionResult``s with overlapping marker IDs and does not
+        prescribe which frames those come from. A future beat could let an
+        operator pick an explicit reference frame instead.
+        """
+        frames = self._camera.get("frames")
+        if frames is None or len(frames) == 0 or not sensor_align.is_available():
+            return   # defensive — the button is gated on both already
+        try:
+            reference = sensor_align.detect_markers(frames[0])
+            current = sensor_align.detect_markers(frames[-1])
+            pose = sensor_align.estimate_relative_pose(reference, current)
+        except sensor_align.VisionError as exc:
+            self._show_pose_failure(str(exc))
+            return
+
+        self._survey_pose = pose
+        self._update_pose_tiles(pose)
+        self._render_pose_overlay(current, pose)
+        self._btn_align_grid.setEnabled(True)
+        self._btn_align_grid.setToolTip(
+            "Copy the suggested scan-grid correction — applies nothing "
+            "(numbers only; no plan/motion change).")
+        flash_button(self._btn_detect_pose, "good", "Pose detected")
+
+    def _show_pose_failure(self, msg: str) -> None:
+        """Detection/pose failure (e.g. no markers in either frame, or no
+        marker ID common to both) — an honest reset with the real reason,
+        never a crash or a stale previous pose left on screen."""
+        logger.warning(
+            "Sensor-pose detection failed for run %r: %s", self._run_path, msg)
+        self._survey_pose = None
+        self._clear_pose_overlay()
+        self._btn_align_grid.setEnabled(False)
+        self._lbl_align_grid_result.setVisible(False)
+        reason = msg[:160]
+        for tile in (
+            self._tile_pose_theta, self._tile_pose_translation,
+            self._tile_pose_baseline, self._tile_pose_precision,
+        ):
+            tile.set_value("—")
+            tile.set_state("normal")
+            tile.set_stale(True, reason)
+        self._chip_pose_precision.set_status("Detection failed", "warn", msg)
+
+    def _update_pose_tiles(self, pose) -> None:
+        """Populate the θ/translation/baseline/precision tiles + the
+        ``meets_precision_target`` chip from one ``PoseEstimate`` (E7c
+        objective 4) — quality is always shown, never hidden:
+        ``meets_precision_target`` drives both the precision tile's state
+        AND a dedicated ``StatusChip``, matching this file's own
+        ``_QUALITY_OK_MIN``/``_QUALITY_WARN_MIN`` banding precedent."""
+        self._tile_pose_theta.set_value(f"{pose.theta_deg:+.3f}°")
+        self._tile_pose_theta.set_state("normal")
+        self._tile_pose_theta.set_stale(False, "")
+        self._tile_pose_theta.setToolTip(
+            f"scale={pose.scale:.4f}, n_points={pose.n_points}, "
+            f"n_inliers={pose.n_inliers}")
+
+        px_per_mm, _px_src = self._resolve_px_per_mm()
+        tx_px, ty_px = float(pose.translation_px[0]), float(pose.translation_px[1])
+        if px_per_mm:
+            tx_um = tx_px / px_per_mm * 1000.0
+            ty_um = ty_px / px_per_mm * 1000.0
+            mag_um = math.hypot(tx_um, ty_um)
+            self._tile_pose_translation.set_value(f"{mag_um:.2f} µm")
+            self._tile_pose_translation.setToolTip(
+                f"dx={tx_um:+.2f} µm, dy={ty_um:+.2f} µm "
+                f"(dx={tx_px:+.2f} px, dy={ty_px:+.2f} px)")
+        else:
+            self._tile_pose_translation.set_value(
+                f"{math.hypot(tx_px, ty_px):.2f} px")
+            self._tile_pose_translation.setToolTip(
+                "no pixel scale on file — showing raw pixels, not µm")
+        self._tile_pose_translation.set_state("normal")
+        self._tile_pose_translation.set_stale(False, "")
+
+        self._tile_pose_baseline.set_value(f"{pose.baseline_px:.1f} px")
+        self._tile_pose_baseline.set_state("normal")
+        self._tile_pose_baseline.set_stale(False, "")
+        self._tile_pose_baseline.setToolTip(
+            "recommended minimum: "
+            f"{sensor_align.RECOMMENDED_MIN_BASELINE_PX:.0f} px "
+            "(docs/research/sensor_alignment_cv.md sec. 4)")
+
+        precision_state = "good" if pose.meets_precision_target else "warn"
+        self._tile_pose_precision.set_value(f"{pose.estimated_precision_deg:.4f}°")
+        self._tile_pose_precision.set_state(precision_state)
+        self._tile_pose_precision.set_stale(False, "")
+        self._tile_pose_precision.set_caption(
+            "meets target" if pose.meets_precision_target
+            else "below target — widen marker spread")
+
+        if pose.meets_precision_target:
+            self._chip_pose_precision.set_status("Meets target", "good")
+        else:
+            self._chip_pose_precision.set_status("Below target", "warn")
+        self._chip_pose_precision.setToolTip(
+            f"estimated_precision_deg={pose.estimated_precision_deg:.4f}, "
+            f"baseline_px={pose.baseline_px:.1f}, target="
+            f"{sensor_align.TARGET_ANGLE_PRECISION_DEG:.2f}°")
+
+    def _render_pose_overlay(self, current, pose) -> None:
+        """Pose overlay (E7c objective 3): the "current" (last-frame)
+        detection's marker corner outlines + a rotated bounding-box
+        indicator, in mm, on the Survey mosaic — pyqtgraph items, theme-
+        token colours only (``DARK["accent"]``/``DARK["sim"]`` — never
+        danger red), matching the CCE plot's own "fixed-dark canvas,
+        theme-invariant pens" convention (``_build_cce_mode``).
+
+        Placement uses the SAME nominal (isotropic ``px_per_mm``, no
+        rotation) scale this page already uses for an uncalibrated run's
+        tile footprint (``half_w_mm``/``half_h_mm`` in
+        ``_build_survey_mosaic``) — even when a rotation/shear affine is on
+        file, since this is a diagnostic overlay, not the load-bearing pose
+        NUMBERS (which come untouched from ``vision.sensor_align`` and are
+        never approximated). Silently clears any stale overlay and no-ops
+        when the last frame's mm position/pixel scale cannot be resolved —
+        the numbers above already stand on their own regardless.
+        """
+        self._clear_pose_overlay()
+        if not (_HAS_PG and getattr(self, "_survey_plot", None) is not None):
+            return
+        if current.n_detected == 0:
+            return
+        center_mm = self._last_frame_center_mm()
+        px_per_mm, _px_src = self._resolve_px_per_mm()
+        frames = self._camera.get("frames")
+        if center_mm is None or px_per_mm is None or frames is None or len(frames) == 0:
+            return
+        frame_h, frame_w = self._as_grayscale(frames[-1]).shape
+
+        def _to_mm(u: float, v: float) -> tuple[float, float]:
+            return (
+                center_mm[0] + (float(u) - frame_w / 2.0) / px_per_mm,
+                center_mm[1] + (float(v) - frame_h / 2.0) / px_per_mm,
+            )
+
+        for marker in current.markers:
+            pts_mm = [_to_mm(u, v) for u, v in marker.corners_px]
+            pts_mm.append(pts_mm[0])
+            curve = pg.PlotCurveItem(
+                [p[0] for p in pts_mm], [p[1] for p in pts_mm],
+                pen=pg.mkPen(DARK["accent"], width=2))
+            self._survey_plot.addItem(curve)
+            self._survey_pose_items.append(curve)
+
+        half_w_mm = (frame_w / 2.0) / px_per_mm
+        half_h_mm = (frame_h / 2.0) / px_per_mm
+        theta = math.radians(pose.theta_deg)
+        c, s = math.cos(theta), math.sin(theta)
+        corners_local = (
+            (-half_w_mm, -half_h_mm), (half_w_mm, -half_h_mm),
+            (half_w_mm, half_h_mm), (-half_w_mm, half_h_mm),
+        )
+        xs = [center_mm[0] + lx * c - ly * s for lx, ly in corners_local]
+        ys = [center_mm[1] + lx * s + ly * c for lx, ly in corners_local]
+        xs.append(xs[0])
+        ys.append(ys[0])
+        self._survey_pose_bbox = pg.PlotCurveItem(
+            xs, ys,
+            pen=pg.mkPen(DARK["sim"], width=2, style=Qt.PenStyle.DashLine))
+        self._survey_plot.addItem(self._survey_pose_bbox)
+
+    def _on_align_scan_grid(self) -> None:
+        """"Align scan grid" (E7c objective 5) — HARD LAW: numbers only,
+        never motion. Computes and DISPLAYS the suggested grid correction
+        (also copied to the clipboard) and emits ``grid_alignment_suggested``
+        with the same numbers. This method never imports/calls a
+        controller, never mutates a scan plan, and never commands a
+        device — the eventual consumer of the emitted numbers (applying
+        them to a plan/motion) is a later, danger-gated beat."""
+        pose = self._survey_pose
+        if pose is None:
+            return   # defensive — the button is gated on a successful detect
+        px_per_mm, _px_src = self._resolve_px_per_mm()
+        tx_px, ty_px = float(pose.translation_px[0]), float(pose.translation_px[1])
+        dx_mm = tx_px / px_per_mm if px_per_mm else None
+        dy_mm = ty_px / px_per_mm if px_per_mm else None
+        payload = {
+            "theta_deg": pose.theta_deg,
+            "dx_mm": dx_mm,
+            "dy_mm": dy_mm,
+            "baseline_px": pose.baseline_px,
+            "estimated_precision_deg": pose.estimated_precision_deg,
+            "meets_precision_target": pose.meets_precision_target,
+        }
+        text = (
+            f"theta_deg={payload['theta_deg']:+.4f}  "
+            f"dx_mm={'n/a' if dx_mm is None else f'{dx_mm:+.5f}'}  "
+            f"dy_mm={'n/a' if dy_mm is None else f'{dy_mm:+.5f}'}  "
+            f"baseline_px={payload['baseline_px']:.2f}  "
+            f"meets_precision_target={payload['meets_precision_target']}"
+        )
+        try:
+            QApplication.clipboard().setText(text)
+        except Exception:
+            pass   # clipboard is a convenience only — the visible label is load-bearing
+        self._lbl_align_grid_result.setText(text)
+        self._lbl_align_grid_result.setVisible(True)
+        self.grid_alignment_suggested.emit(payload)
+        flash_button(self._btn_align_grid, "good", "Copied")
 
     # ------------------------------------------------------------------ #
     # Theme                                                               #

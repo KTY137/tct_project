@@ -22,6 +22,11 @@ from its own entry in ``_ALLOWED_TARGETS`` below, plus its own layer):
     devices    -- drivers: stdlib/third-party only (PyVISA, pyserial, the
                   vendored e4control transports, ...), no project imports
                   above it (not controller/data/analysis/gui/tct_gui/main).
+    vision     -- pure leaf, optional-dependency sibling of analysis/: numpy
+                  + a lazily-imported cv2 (never at module scope — see
+                  vision/__init__.py), no project imports above it. ArUco
+                  fiducial detection / 2D pose estimation (E7b/E7c);
+                  numbers only, no GUI/device/motion imports of its own.
     controller, data -- backend: may depend on devices + analysis (data may
                   also depend on devices/analysis; controller does today via
                   device_manager.py's writers/calibration imports).
@@ -52,7 +57,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 _APP_ROOT = Path(__file__).resolve().parent.parent
 
-_PROJECT_LAYERS = ("analysis", "devices", "controller", "data", "gui")
+_PROJECT_LAYERS = ("analysis", "devices", "vision", "controller", "data", "gui")
 _ROOT_MODULES = ("tct_gui", "main")
 
 # Every project-internal name an import root could resolve to (layers +
@@ -67,9 +72,10 @@ _PROJECT_NAMES = set(_PROJECT_LAYERS) | set(_ROOT_MODULES)
 _ALLOWED_TARGETS: dict[str, set[str]] = {
     "analysis":   set(),                                   # pure leaf
     "devices":    set(),                                    # driver floor
+    "vision":     set(),                                    # pure leaf (E7b/E7c)
     "controller": {"devices", "analysis", "data"},
     "data":       {"devices", "analysis"},
-    "gui":        {"devices", "analysis", "controller", "data"},
+    "gui":        {"devices", "analysis", "controller", "data", "vision"},
     "tct_gui":    {"gui", "controller", "devices", "analysis", "data"},
     "main":       {"tct_gui", "gui", "controller", "devices", "analysis", "data"},
 }
