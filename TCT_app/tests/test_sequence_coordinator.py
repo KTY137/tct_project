@@ -530,3 +530,84 @@ def test_progress_and_rows_emitted():
     assert progress.last == (2, 2)                 # both entries terminal
     # rows carry (index, EntryState value, message); a DONE row is eventually seen.
     assert any(c[1] == EntryState.DONE.value for c in rows.calls)
+
+
+# --------------------------------------------------------------------------- #
+# (11) REAL stack: a 2-entry BIAS queue runs BOTH entries (per-entry re-arm)    #
+#      — the union envelope carries NO wall-clock expiry (overnight-queue law). #
+# --------------------------------------------------------------------------- #
+def test_real_stack_two_bias_entry_queue_runs_both_entries(tmp_path):
+    """REAL stack (no FakeScanCoordinator): a 2-entry BIAS queue must run BOTH
+    entries through the union ArmedEnvelopeGate, HV re-armed per entry.  The fake
+    stand-in never energizes HV, so it cannot catch a per-entry-latch or an
+    envelope-expiry regression — this pins it against the live ScanController +
+    simulated devices, exactly the armed-envelope-expiry investigation's repro."""
+    import time
+    import yaml
+    from controller.device_manager import DeviceManager
+    from controller.scan_controller import ScanController
+    from controller.scan_plan_validator import PlanLimits
+    from controller.danger_gate import DenyAllGate
+    from gui.scan_coordinator import ScanCoordinator
+
+    def _sim_cfg(p):
+        cfg = {
+            "oscilloscope":       {"backend": "visa", "simulation": True},
+            "motor_stage":        {"backend": "simulated"},
+            "intensity_monitor":  {"backend": "simulated"},
+            "camera":             {"simulation": True},
+            "waveform_generator": {"simulation": True},
+            "bias_supply":        {"backend": "simulated"},
+            "output":             {"data_dir": str(p / "runs")},
+        }
+        path = p / "devices.yaml"
+        path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+        return str(path)
+
+    def _limits():
+        return PlanLimits(x_min_mm=-50, x_max_mm=50, y_min_mm=-50, y_max_mm=50,
+                          z_min_mm=-10, z_max_mm=10, voltage_range_V=1000.0,
+                          max_points=1_000_000)
+
+    def _bias_plan(name, v):
+        loop = LoopBlock(axis=Axis.BIAS_V, values=[float(v)], children=[
+            ActionBlock(action=ActionType.ACQUIRE_WAVEFORM, params={}),
+            ActionBlock(action=ActionType.SAVE_POINT, params={}),
+        ])
+        return ScanPlan(name=name, root=[loop],
+                        safety={"require_hv_confirmation": True})
+
+    app = _app()
+    dm = DeviceManager(config_path=_sim_cfg(tmp_path))
+    assert all(v == "ok" for v in dm.connect_all().values())
+    dm.motor.home()
+    sm = _ready_sm()
+    ctrl = ScanController(dm, sm)
+
+    # DenyAllGate is the per-action MANUAL gate; it stands in to PROVE the union
+    # ArmedEnvelopeGate (not this one) is what gates a queued run — if the queue
+    # ran on the manual gate, every ramp would be denied and nothing would run.
+    scan_coord = ScanCoordinator(ctrl, sm, DenyAllGate(), _limits)
+    seq = SequenceCoordinator(scan_coord, sm, park_safe=ctrl.park_safe)
+
+    finished: list = []
+    seq.sequence_finished.connect(finished.append)
+
+    seq.load([("r0", _bias_plan("r0", -50.0)), ("r1", _bias_plan("r1", -80.0))])
+    env, gate = seq.build_gate(channel=dm.bias_supply.channel)
+    assert env.expiry_monotonic is None            # the overnight queue carries NO clock
+
+    seq.arm_and_start()
+    t0 = time.monotonic()
+    while not finished and time.monotonic() - t0 < 60:
+        app.processEvents()
+        time.sleep(0.01)
+    app.processEvents()
+
+    states = [e.state for e in seq._runner.entries]
+    hv_armed_after = ctrl._hv_armed
+    dm.disconnect_all()
+
+    assert finished == ["finished"]                        # BOTH entries ran clean
+    assert states == [EntryState.DONE, EntryState.DONE]    # per-entry re-arm worked
+    assert hv_armed_after is False                         # per-run latch cleared at queue end

@@ -6,7 +6,11 @@ Two layers:
   from a plan carries the correct bias + motion extremes (including a ramped
   bias loop), and the ArmedEnvelopeGate auto-approves actions provably inside
   the envelope while DENYING (fail-closed) anything outside it — wrong channel,
-  out-of-range voltage, out-of-bounds / un-armed-axis move, and past-expiry.
+  out-of-range voltage, out-of-bounds / un-armed-axis move, unknown danger kind.
+  Expiry is NOT a gate decision: a stale arm is refused LOUDLY once at
+  ScanController.start_plan (arm→start), so the gate keeps approving in-range
+  actions even past expiry (a per-ramp expiry would silently abort a run that
+  merely outlived its clock — the armed-envelope-expiry bug, Kaya 2026-07-13).
 
 * END-TO-END through the plan executor on fully-simulated backends: an
   in-envelope run FINISHES via the ArmedEnvelopeGate (no per-action dialog),
@@ -160,21 +164,45 @@ def test_unknown_danger_kind_denied():
 
 
 # --------------------------------------------------------------------------- #
-# (4) expiry denies                                                            #
+# (4) expiry is NOT a gate decision (contract change, Kaya 2026-07-13)          #
+#     The gate keeps approving in-range actions past expiry; freshness is       #
+#     enforced ONCE at start_plan (arm→start), never per ramp (arm→every-ramp). #
 # --------------------------------------------------------------------------- #
-def test_expiry_denies():
-    # Armed with a timeout already in the past.
+def test_expired_envelope_gate_still_approves_in_range_action():
+    """An expired envelope's gate STILL auto-approves an in-range action: a
+    per-ramp expiry check would silently abort a run that merely outlived its
+    clock (the armed-envelope-expiry bug).  is_expired() is untouched — it is
+    consumed by ScanController.start_plan's pre-flight, not by the gate."""
     env = derive_envelope(compile_plan(_bias_plan(-10.0)), channel=0,
                           timeout_s=0.0, now=time.monotonic() - 1.0)
     gate = ArmedEnvelopeGate(env)
-    assert env.is_expired() is True
-    assert gate.confirm(_D("hv_ramp", {"channel": 0, "target_V": -10.0})) is False
+    assert env.is_expired() is True                      # the clock HAS lapsed
+    # ...yet the gate approves the in-envelope ramp: set membership is the
+    # run-time law, not a wall clock.
+    assert gate.confirm(_D("hv_ramp", {"channel": 0, "target_V": -10.0})) is True
+    # An OUT-of-range action is still denied fail-closed, expiry or not.
+    assert gate.confirm(_D("hv_ramp", {"channel": 0, "target_V": -999.0})) is False
 
 
 def test_no_timeout_never_expires():
     env = envelope_from_plan(_bias_plan(-10.0), channel=0)  # no timeout
     assert env.expiry_monotonic is None
     assert env.is_expired() is False
+
+
+def test_gate_records_last_deny_reason_for_the_executor():
+    """The gate keeps the reason of its most recent deny on last_deny_reason so
+    the executor can fold the REAL cause into the operator-facing abort message
+    (a plain user 'not confirmed' deny reads differently from 'outside armed
+    range […]').  None before any deny."""
+    env = envelope_from_plan(_bias_plan(-10.0), channel=0)
+    gate = ArmedEnvelopeGate(env)
+    assert gate.last_deny_reason is None
+    assert gate.confirm(_D("hv_ramp", {"channel": 0, "target_V": -10.0})) is True
+    assert gate.last_deny_reason is None                 # an approve records nothing
+    assert gate.confirm(_D("hv_ramp", {"channel": 0, "target_V": -999.0})) is False
+    assert gate.last_deny_reason is not None
+    assert "outside armed range" in gate.last_deny_reason
 
 
 # --------------------------------------------------------------------------- #

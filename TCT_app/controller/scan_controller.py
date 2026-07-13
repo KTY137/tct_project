@@ -520,6 +520,12 @@ class ScanController:
         3. If the compiled plan contains a ``BiasStep`` and HV is not armed,
            raise ``RuntimeError`` — a bias-driving plan needs an explicit
            :meth:`arm_hv` after a user confirmation.
+        3b. If *gate* carries an :class:`ArmedEnvelope` (``getattr(gate,
+           'envelope', None)``) that has expired, raise ``RuntimeError`` naming
+           the expiry — a stale arm is refused LOUDLY at start (where the
+           operator can re-arm), never silently mid-run.  The gate itself no
+           longer re-checks expiry per ramp; this is the single freshness check
+           for the whole run (arm→start, NOT arm→every-ramp).
         4. Resolve the bias channel BEFORE any state change (via the existing
            :meth:`_resolve_bias`, using ``plan.safety['bias_channel']`` when
            present, else the primary proxy — same validation semantics).
@@ -563,6 +569,19 @@ class ScanController:
                 raise RuntimeError(
                     "Plan drives HV but HV is not armed — call arm_hv(True) after "
                     "a user confirmation before starting."
+                )
+
+            # 4b. Fail-closed FRESHNESS check (defense in depth).  If the gate
+            #     carries an ArmedEnvelope with an expiry, the expiry bounds the
+            #     arm→START interval ONLY: a stale arm is refused LOUDLY here,
+            #     where the operator can re-arm, and NEVER silently mid-run (the
+            #     gate no longer re-checks expiry per ramp — see arm_envelope).
+            #     A plain DangerGate has no ``envelope`` attribute → skipped
+            #     (getattr default None), so this is inert on the legacy path.
+            gate_env = getattr(gate, "envelope", None)
+            if gate_env is not None and gate_env.is_expired():
+                raise RuntimeError(
+                    "Armed envelope expired — re-arm and start again."
                 )
 
             # 5. Resolve the bias channel BEFORE any state change / hardware.  A
@@ -1385,7 +1404,9 @@ class ScanController:
                         if not gate.confirm(self._move_action(steps)):
                             self._deny_abort(
                                 bias, has_bias_step,
-                                "Stage motion not confirmed — plan aborted.")
+                                "Stage motion not confirmed"
+                                + self._deny_reason_suffix(gate)
+                                + " — plan aborted.")
                             break
                         move_confirmed = True
                     self._command_move(step)
@@ -1404,8 +1425,9 @@ class ScanController:
                     if not gate.confirm(action):
                         self._deny_abort(
                             bias, has_bias_step,
-                            f"HV ramp to {step.target_V:g} V not confirmed — "
-                            "plan aborted.")
+                            f"HV ramp to {step.target_V:g} V not confirmed"
+                            + self._deny_reason_suffix(gate)
+                            + " — plan aborted.")
                         break
                     self._ramp_bias(bias, step.target_V,
                                     step.ramp_step_V, step.ramp_delay_s)
@@ -1829,6 +1851,21 @@ class ScanController:
         except Exception:
             logger.warning("Bias re-read on resume failed", exc_info=True)
         self._ramp_bias(bias, target_V, ramp_step_V, ramp_delay_s)
+
+    @staticmethod
+    def _deny_reason_suffix(gate: DangerGate) -> str:
+        """`` (<reason>)`` when *gate* recorded a specific deny cause, else ``''``.
+
+        Folds the :class:`~controller.arm_envelope.ArmedEnvelopeGate`'s
+        ``last_deny_reason`` (e.g. ``"HV ramp CH0 to -100 V outside armed range
+        […]"``) into the operator-facing abort message so an out-of-envelope
+        deny reads DIFFERENTLY from a plain user "not confirmed" deny.  A gate
+        without the attribute (a QtDangerGate / AutoConfirmGate) contributes no
+        suffix — read via ``getattr``, so the generic message is the fail-safe
+        default and nothing about the deny/fail-safe path changes.
+        """
+        reason = getattr(gate, "last_deny_reason", None)
+        return f" ({reason})" if reason else ""
 
     def _deny_abort(self, bias: BiasChannel, has_bias_step: bool, msg: str) -> None:
         """Treat a refused danger confirmation as a clean user abort.

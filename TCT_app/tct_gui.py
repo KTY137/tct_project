@@ -583,12 +583,16 @@ class TCTMainWindow(QMainWindow):
         self._planner_panel.start_plan_requested.connect(coord.start_plan)
         self._planner_panel.execute_plan_requested.connect(coord.execute_plan)
         self._planner_panel.abort_requested.connect(coord.abort)
-        # Mary milestone review: give the gate an INDEPENDENT freshness bound
-        # (~3x the GUI's 10 s arm latch) so the controller boundary rejects a
-        # stale arm even if a future edit path missed disarm — defense in
-        # depth; the 10 s latch stays the primary UX timer.
+        # The single-plan envelope carries NO wall-clock expiry (timeout_s=None),
+        # matching the sequencer's overnight-queue philosophy: freshness is a
+        # GUI concern (the arm→Execute latch, design law 5) plus the fail-closed
+        # arm→start check at ScanController.start_plan — never a clock that bounds
+        # the RUN'S duration.  A stamped-at-derivation expiry was the armed-
+        # envelope-expiry bug (Kaya, 2026-07-13): it started counting at the dry-
+        # run preview, survived a completed run, and re-checked at every ramp, so
+        # a slow operator or a 2nd Execute aborted silently mid-run.
         self._planner_panel.set_envelope_provider(
-            lambda plan: self._scanner.arm_envelope_for(plan, timeout_s=30.0)
+            lambda plan: self._scanner.arm_envelope_for(plan)
         )
 
         # Bias panel → coordinator (voltage scan also starts from the bias panel).

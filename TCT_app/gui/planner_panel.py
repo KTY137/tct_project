@@ -2195,12 +2195,19 @@ class PlannerPanel(QWidget):
             # operator can review it before committing to the hold.
             self._refresh_envelope_well()
 
-    def _derive_envelope(self) -> ArmedEnvelope | None:
+    def _derive_envelope(self, *, fresh: bool = False) -> ArmedEnvelope | None:
         """Derive (and cache by plan identity) the ArmedEnvelope for the live
-        plan. Cached so a repeated arm gesture on an unchanged plan never
-        recompiles; any plan edit clears the cache via :meth:`_invalidate_run_state`."""
+        plan. Cached so a repeated PREVIEW gesture on an unchanged plan never
+        recompiles; the cache is cleared by :meth:`_invalidate_run_state` (plan
+        edit) and :meth:`_clear_run_authorization` (run end).
+
+        ``fresh=True`` bypasses the cache READ and re-derives (still refreshing
+        the cache): the COMMITTED (armed) envelope must reflect the moment of
+        arming, so a provider-set expiry clock starts at arm→ not at an earlier
+        dry-run preview — the GUI half of the armed-envelope-expiry bug (Kaya,
+        2026-07-13). Compile is cheap, so re-deriving at arm is safe."""
         key = self._estimate_key()
-        if self._env_cache_key == key and self._env_cache is not None:
+        if not fresh and self._env_cache_key == key and self._env_cache is not None:
             return self._env_cache
         try:
             env = self._envelope_provider(self._plan)
@@ -2243,9 +2250,12 @@ class PlannerPanel(QWidget):
         self._refresh_envelope_well()
 
     def _on_latch_armed(self) -> None:
-        # Commit the rendered envelope as the authorized one.
-        if self._armed_env is None:
-            self._armed_env = self._derive_envelope()
+        # Commit a FRESHLY derived envelope as the authorized one: the arm
+        # gesture (not the earlier dry-run/preview) is the moment the
+        # authorization takes effect, so any provider-set expiry clock starts
+        # HERE, never at the preview — the GUI half of the armed-envelope-expiry
+        # bug (Kaya, 2026-07-13). Compile is cheap; re-derive over reusing cache.
+        self._armed_env = self._derive_envelope(fresh=True)
 
     def _on_latch_disarmed(self, reason: str) -> None:
         # The envelope preview stays visible (the recipe is unchanged); only the
@@ -2257,10 +2267,24 @@ class PlannerPanel(QWidget):
         if env is None:
             notify("Cannot start — arm envelope unavailable", "error")
             return
-        gate = ArmedEnvelopeGate(env)
+        # Wire the gate's deny-audit hook so a run-time breach's specific reason
+        # is logged (never thrown away). The operator-facing abort MESSAGE is
+        # carried separately by the controller, which folds the gate's
+        # last_deny_reason into on_error so "outside armed range […]" reads
+        # differently from a plain "not confirmed".
+        gate = ArmedEnvelopeGate(env, on_deny=self._on_gate_deny)
         # Abel's Execute sequence: the coordinator arms HV and calls
         # start_plan(plan, limits, gate) with this armed-envelope gate.
         self.execute_plan_requested.emit(self._plan, gate)
+
+    def _on_gate_deny(self, action, reason: str) -> None:
+        """Audit hook for an armed-envelope run-time deny (wired into the
+        :class:`ArmedEnvelopeGate`). The operator-facing abort message is carried
+        by the controller (which folds the gate's ``last_deny_reason`` into
+        ``on_error``); this only records the specific breach in the log so the
+        real cause is never lost even if the run terminal repaints the panel."""
+        logger.warning("Armed-envelope gate denied %s: %s",
+                       getattr(action, "kind", "?"), reason)
 
     # ------------------------------------------------------------------ #
     # Issues list                                                          #
@@ -2407,20 +2431,45 @@ class PlannerPanel(QWidget):
         self._tile_points.set_state(state)
         self._tile_points.set_stale(False, "")
 
+    def _clear_run_authorization(self) -> None:
+        """Drop the per-run HV arm at run END so a finished/errored run can never
+        carry a stale authorization into the next Execute.
+
+        The 2nd Execute of an UNCHANGED recipe was a 100%-deterministic silent
+        abort: ``_hv_armed`` / ``_armed_env`` / ``_env_cache`` all SURVIVED the
+        run (only a plan EDIT cleared them, via :meth:`_invalidate_run_state`),
+        so Start stayed unlocked and Execute rebuilt a gate from the stale
+        envelope — the GUI half of the armed-envelope-expiry bug (Kaya,
+        2026-07-13). Clearing ``_hv_armed`` re-locks Start; per-run arm semantics
+        then require the operator to re-arm (which re-derives a FRESH envelope,
+        P2a). ``_dry_run_ok`` is deliberately LEFT intact — the recipe is
+        unchanged and still validated; only an EDIT re-locks the dry run.
+
+        Called LAST in the run terminals (:meth:`on_finished` / :meth:`on_error`)
+        so it also discards the envelope the run-end readiness re-render
+        re-committed as a preview side effect. ``set_hv_armed(False)`` writes the
+        HV chip to "disarmed"; the caller re-sets the terminal chip afterwards."""
+        self.set_hv_armed(False)          # locks Start (chip overwritten by the run terminal)
+        self._armed_env = None
+        self._env_cache = None
+        self._env_cache_key = None
+
     @Slot()
     def on_finished(self) -> None:
         self.set_running(False)
-        self._chip_hv_status.set_status("Run finished", "good")
         flash_button(self._btn_start, "good", "Done")
         self._recompute_estimate()
         self._refresh_latch_readiness()
+        self._clear_run_authorization()   # LAST: drop the run's arm + any re-rendered preview env
+        self._chip_hv_status.set_status("Run finished", "good")
 
     @Slot(str)
     def on_error(self, message: str) -> None:
         self.set_running(False)
         self._add_issue_row(f"Run error: {message}", "crit")
-        self._chip_hv_status.set_status("Run error — see issues below", "crit")
         self._refresh_latch_readiness()
+        self._clear_run_authorization()   # LAST: drop the run's arm + any re-rendered preview env
+        self._chip_hv_status.set_status("Run error — see issues below", "crit")
 
     def refresh_theme(self, mode: str | None = None) -> None:
         """Re-resolve axis-rail colours after a light/dark theme switch (same

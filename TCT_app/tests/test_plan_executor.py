@@ -32,6 +32,7 @@ from controller.scan_controller import ScanController
 from controller.scan_plan import ActionBlock, ActionType, Axis, LoopBlock, ScanPlan
 from controller.scan_plan_validator import PlanLimits
 from controller.danger_gate import AutoConfirmGate, DenyAllGate, DangerAction
+from controller.arm_envelope import ArmedEnvelopeGate, envelope_from_plan
 from devices.bias_supply_base import BiasReading
 from devices.bias_supply_simulated import SimulatedBiasSupply
 from devices.bias_channel import BiasChannel
@@ -107,6 +108,10 @@ def _pause(msg):
 
 def _photo(**p):
     return ActionBlock(action=ActionType.CAPTURE_PHOTO, params=p)
+
+
+def _wait(seconds):
+    return ActionBlock(action=ActionType.WAIT, params={"seconds": float(seconds)})
 
 
 def _stage_plan(values):
@@ -1002,3 +1007,130 @@ def test_danger_gates_are_pure():
     assert DenyAllGate().confirm(action) is False
     # DangerAction is frozen / hashable-ish and carries the real numbers.
     assert action.detail["target_V"] == -300.0
+
+
+# --------------------------------------------------------------------------- #
+# (n) armed-envelope expiry (Kaya 2026-07-13): the clock bounds arm→START only, #
+#     never arm→every-ramp — the armed-envelope-expiry bug.                     #
+# --------------------------------------------------------------------------- #
+def test_kaya_regression_aged_arm_still_finishes(sim):
+    """Kaya's case: dry-run renders the envelope, the operator reads it, presses
+    Execute 31 s later.  With the FIXED production wiring the envelope carries NO
+    wall-clock expiry (``arm_envelope_for`` no longer stamps ``timeout_s``), so
+    the aged arm still FINISHES — where before the gate re-checked ``is_expired``
+    at every ramp and silently ABORTED the first BiasStep ('not confirmed', no
+    dialog)."""
+    dm, ctrl, sm = sim
+    plan = _bias_plan(-30.0, points=2)
+    env = ctrl.arm_envelope_for(plan)                 # exactly what tct_gui builds now
+    assert env.expiry_monotonic is None               # P0: no clock stamped at all
+    assert env.is_expired() is False                  # ...so nothing to lapse, ever
+
+    ctrl.arm_hv(True)
+    ctrl.start_plan(plan, _limits(), ArmedEnvelopeGate(env))
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.FINISHED              # today: was ABORTED
+    assert ctrl._writer._n_points == 2
+    assert ctrl._hv_armed is False
+
+
+def test_expiry_lapsing_mid_run_does_not_deny_in_envelope_ramp(sim):
+    """Variant B: a FRESH arm whose expiry lapses DURING the run.  Ramp #1
+    energizes HV; by ramp #2 the clock has lapsed — but the gate no longer
+    re-checks expiry, so ramp #2 is APPROVED and the run FINISHES (before: a
+    silent mid-run ABORT with HV already energized)."""
+    dm, ctrl, sm = sim
+    plan = ScanPlan(
+        name="two_setpoints", safety={"require_hv_confirmation": True},
+        root=[LoopBlock(axis=Axis.BIAS_V, values=[-20.0, -40.0],
+                        children=[_acq(), _save(), _wait(1.5)])])
+    env = ctrl.arm_envelope_for(plan, timeout_s=1.0)  # valid at start, lapses in-run
+    assert env.is_expired() is False                  # still fresh at start_plan
+
+    ch = dm.bias_supply
+    ch.ramp_to = mock.Mock(wraps=ch.ramp_to)
+    ctrl.arm_hv(True)
+    ctrl.start_plan(plan, _limits(), ArmedEnvelopeGate(env))
+    ctrl._thread.join(timeout=30)
+
+    targets = [c.args[0] for c in ch.ramp_to.call_args_list if c.args]
+    assert env.is_expired() is True                   # the clock DID lapse during the run
+    assert sm.state is AppState.FINISHED              # ...but the run still finished
+    assert -20.0 in targets and -40.0 in targets      # BOTH ramps happened
+    assert ctrl._writer._n_points == 2
+
+
+def test_stale_armed_envelope_refused_loudly_at_start(sim):
+    """A stale arm (envelope expired AT start) is refused LOUDLY at the
+    ``start_plan`` pre-flight — a RuntimeError naming the expiry — before any
+    state change or hardware action, with the HV arm latch cleared.  A stale arm
+    fails LOUD at start (where the operator can re-arm), never silently mid-run."""
+    dm, ctrl, sm = sim
+    ch = dm.bias_supply
+    ch.ramp_to = mock.Mock(wraps=ch.ramp_to)
+    plan = _bias_plan(-30.0, points=2)
+    # Exactly the old tct_gui wiring (timeout_s=30) aged 31 s past derivation.
+    stale = envelope_from_plan(plan, ch.channel, timeout_s=30.0,
+                               now=time.monotonic() - 31.0)
+    assert stale.is_expired() is True
+
+    ctrl.arm_hv(True)
+    with pytest.raises(RuntimeError, match="expired"):
+        ctrl.start_plan(plan, _limits(), ArmedEnvelopeGate(stale))
+
+    assert sm.state is AppState.READY                 # no state change
+    assert ctrl._thread is None                       # no worker launched
+    assert ctrl._hv_armed is False                    # arm latch cleared by the refusal
+    assert not ch.ramp_to.called                      # no hardware touched
+
+
+def test_three_deny_causes_are_distinguishable(sim):
+    """The three deny causes surface as THREE distinguishable operator-facing
+    messages: an EXPIRED arm (refused at start), an out-of-ARMED-RANGE ramp
+    (mid-run envelope deny) and a plain NOT-CONFIRMED deny (a manual gate).  The
+    gate's specific reason is folded into the executor's abort message so the
+    operator reads WHY, not a generic 'not confirmed' for every cause."""
+    dm, ctrl, sm = sim
+    ch = dm.bias_supply
+    plan = _bias_plan(-100.0, points=2)
+
+    # (1) expired arm → the start refusal names the expiry.
+    stale = envelope_from_plan(plan, ch.channel, timeout_s=30.0,
+                               now=time.monotonic() - 31.0)
+    ctrl.arm_hv(True)
+    with pytest.raises(RuntimeError) as ei:
+        ctrl.start_plan(plan, _limits(), ArmedEnvelopeGate(stale))
+    expired_msg = str(ei.value)
+    assert "expired" in expired_msg.lower()
+
+    # (2) out-of-armed-range ramp → a mid-run envelope deny naming the range.
+    range_errs: list = []
+    ctrl.on_error = lambda m: range_errs.append(m)
+    narrow = ctrl.arm_envelope_for(_bias_plan(-10.0))     # armed only for -10 V
+    ctrl.arm_hv(True)
+    ctrl.start_plan(plan, _limits(), ArmedEnvelopeGate(narrow))   # runs to -100 V
+    ctrl._thread.join(timeout=20)
+    assert sm.state is AppState.ABORTED
+    assert range_errs
+    range_msg = range_errs[-1]
+    assert "outside armed range" in range_msg
+
+    # Reset the state machine for a third run (ABORTED → CONFIGURED → READY).
+    sm.transition(AppState.CONFIGURED)
+    sm.transition(AppState.READY)
+
+    # (3) a plain manual-gate deny → 'not confirmed', WITHOUT the envelope reason.
+    plain_errs: list = []
+    ctrl.on_error = lambda m: plain_errs.append(m)
+    ctrl.arm_hv(True)
+    ctrl.start_plan(plan, _limits(), DenyAllGate())
+    ctrl._thread.join(timeout=20)
+    assert sm.state is AppState.ABORTED
+    assert plain_errs
+    plain_msg = plain_errs[-1]
+    assert "not confirmed" in plain_msg
+    assert "outside armed range" not in plain_msg      # a plain deny carries no range
+
+    # The three messages are pairwise distinguishable.
+    assert len({expired_msg, range_msg, plain_msg}) == 3

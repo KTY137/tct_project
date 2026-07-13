@@ -933,6 +933,80 @@ def test_public_api_surface_unchanged():
 
 
 # --------------------------------------------------------------------------- #
+# Run-end clears the per-run arm (armed-envelope-expiry bug, Kaya 2026-07-13)  #
+# --------------------------------------------------------------------------- #
+def test_run_end_clears_stale_arm_so_second_execute_needs_rearm():
+    """A finished run must leave NOTHING armed: before the fix _hv_armed /
+    _armed_env / _env_cache all SURVIVED the run (only a plan EDIT cleared them),
+    so the 2nd Execute of an UNCHANGED recipe rebuilt a gate from the stale
+    envelope — a 100%-deterministic silent mid-run abort.  After the fix,
+    on_finished re-locks Start and discards the committed envelope; the operator
+    must re-arm, which re-derives FRESH."""
+    _app()
+    panel = PlannerPanel()
+    try:
+        # Arm the recipe the way a real run does: dry run → latch arm → the
+        # coordinator's set_hv_armed(True) → set_running(True).
+        panel._on_dry_run_clicked()
+        panel._latch._arm_btn.click()
+        panel._latch._arm_btn.click()
+        assert panel._latch.is_armed()
+        panel.set_hv_armed(True)
+
+        # Bug PRECONDITION: everything the stale 2nd Execute fed on is live.
+        assert panel._hv_armed is True
+        assert panel._armed_env is not None
+        assert panel._env_cache is not None
+        stale_env = panel._armed_env
+
+        panel.set_running(True)     # run starts (latch drops its arm during a run)
+        panel.on_finished()         # run ends
+
+        # The per-run arm is gone: Start re-locks, the committed envelope + cache
+        # are discarded, and the latch is not armed — a 2nd Execute is impossible
+        # without a fresh re-arm.
+        assert panel._hv_armed is False
+        assert panel._armed_env is None
+        assert panel._env_cache is None
+        assert panel._env_cache_key is None
+        assert not panel._latch.is_armed()
+
+        # Re-arming re-derives a FRESH envelope (never the stale one): the recipe
+        # is unchanged (dry-run still valid), so the operator can re-arm.
+        panel._on_dry_run_clicked()
+        panel._latch._arm_btn.click()
+        panel._latch._arm_btn.click()
+        assert panel._latch.is_armed()
+        assert panel._armed_env is not None
+        assert panel._armed_env is not stale_env      # a fresh derivation, not the stale one
+    finally:
+        panel.shutdown()
+
+
+def test_on_error_also_clears_the_per_run_arm():
+    """The error terminal clears the arm exactly like on_finished — an errored
+    run must not leave a stale authorization behind either."""
+    _app()
+    panel = PlannerPanel()
+    try:
+        panel._on_dry_run_clicked()
+        panel._latch._arm_btn.click()
+        panel._latch._arm_btn.click()
+        panel.set_hv_armed(True)
+        assert panel._hv_armed is True and panel._armed_env is not None
+
+        panel.set_running(True)
+        panel.on_error("compliance trip")
+
+        assert panel._hv_armed is False
+        assert panel._armed_env is None
+        assert panel._env_cache is None
+        assert not panel._latch.is_armed()
+    finally:
+        panel.shutdown()
+
+
+# --------------------------------------------------------------------------- #
 # Motor position -> loop start ("Use current position")                        #
 #                                                                                #
 # set_position_from_motor is the slot MotorPanel.set_as_scan_start(float,      #

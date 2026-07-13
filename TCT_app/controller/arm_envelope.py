@@ -19,8 +19,12 @@ here we provide the pure, hardware-free pieces the controller and the GUI share:
 * :class:`ArmedEnvelopeGate` — a :class:`~controller.danger_gate.DangerGate`
   armed once with an envelope: it AUTO-APPROVES any live :class:`DangerAction`
   provably inside the envelope and DENIES (fail-closed, returns ``False``)
-  anything outside it or after expiry.  A deny is a clean return value, so the
-  executor treats it exactly like a user deny today (abort + fail-safe).
+  anything outside it — wrong channel, out-of-range HV, out-of-bounds / un-armed
+  motion, or an un-enumerated danger kind.  A deny is a clean return value, so
+  the executor treats it exactly like a user deny today (abort + fail-safe).
+  The gate is set-membership law at RUN TIME; it does NOT re-check expiry per
+  ramp — a stale arm is refused LOUDLY once, at :meth:`ScanController.start_plan`
+  (arm→start), never silently mid-run (arm→every-ramp).  See :meth:`ArmedEnvelope.is_expired`.
 
 This module is pure: no Qt, no hardware I/O, no threads, no files.  It never
 imports a widget or a device backend — the gate only ever inspects a
@@ -82,10 +86,17 @@ class ArmedEnvelope:
       live move is approved iff every driven axis' span lies within the armed
       bound for that axis; a move on an axis the envelope did not authorize is
       DENIED.
-    * ``expiry_monotonic`` — an optional ``time.monotonic()`` deadline.  Past it,
-      the gate denies fail-closed (a stale arm can never authorize a run).
-      ``None`` == no expiry (the GUI arm→Execute latch timeout, design law 5, is
-      a separate GUI concern — see the module note and the handoff).
+    * ``expiry_monotonic`` — an optional ``time.monotonic()`` deadline bounding
+      the interval **arm → start** (freshness of the authorization at the moment
+      a run is launched), NEVER arm → every-ramp.  It is checked ONCE, fail-
+      closed, in :meth:`ScanController.start_plan`'s pre-flight (a stale arm is
+      refused LOUDLY where the operator can re-arm), and never again mid-run: a
+      run that outlives its expiry keeps ramping the setpoints it was authorized
+      for.  This is the same rationale :func:`envelope_from_plans` documents for
+      an overnight queue — runtime set-membership re-validation is the safety
+      backstop, not a wall-clock that would strand a mid-run ramp.  ``None`` ==
+      no expiry (the GUI arm→Execute latch timeout, design law 5, is a separate
+      GUI concern — see the module note and the handoff).
     * ``summary`` — the human sentence shown over the Arm latch.
     * ``routine_names`` — the ordered names of the routines this envelope was
       armed over.  Empty ``()`` for a single-plan arm (the historic case);
@@ -110,7 +121,14 @@ class ArmedEnvelope:
 
     # -- expiry --------------------------------------------------------------
     def is_expired(self, now: Optional[float] = None) -> bool:
-        """True when the armed authorization has lapsed (fail-closed default)."""
+        """True when the armed authorization has lapsed (fail-closed default).
+
+        Consumed ONCE, at :meth:`ScanController.start_plan`'s pre-flight, to
+        refuse a stale arm→start loudly.  It is deliberately NOT consulted by
+        :meth:`ArmedEnvelopeGate.confirm`: an expiry that bounded every ramp
+        would silently abort a run that merely outlived its clock (the exact
+        overnight-queue failure :func:`envelope_from_plans` warns against).
+        ``expiry_monotonic is None`` (the no-timeout default) never expires."""
         if self.expiry_monotonic is None:
             return False
         return (now if now is not None else time.monotonic()) >= self.expiry_monotonic
@@ -170,31 +188,48 @@ class ArmedEnvelopeGate:
     """A :class:`~controller.danger_gate.DangerGate` armed once with an envelope.
 
     ``confirm(action)`` returns ``True`` only when *action* is provably inside
-    the armed :class:`ArmedEnvelope` and the envelope has not expired; otherwise
-    it returns ``False`` (fail-closed).  A ``False`` is a clean return value, so
-    the executor treats an out-of-envelope action exactly like a user deny today:
-    :meth:`ScanController._deny_abort` sets the abort event, surfaces the reason,
-    runs the HV fail-safe if the run energized HV, and the run stops ABORTED.
+    the armed :class:`ArmedEnvelope`; otherwise it returns ``False`` (fail-
+    closed).  Set membership is the run-time law — channel, signed HV range,
+    per-axis motion bounds, enumerated danger kind — NOT a clock: a stale arm is
+    refused once at :meth:`ScanController.start_plan` (arm→start), so ``confirm``
+    never re-checks :meth:`ArmedEnvelope.is_expired` (an expiry bounding every
+    ramp would silently abort a run that merely outlived its authorization).  A
+    ``False`` is a clean return value, so the executor treats an out-of-envelope
+    action exactly like a user deny today: :meth:`ScanController._deny_abort`
+    sets the abort event, surfaces the reason, runs the HV fail-safe if the run
+    energized HV, and the run stops ABORTED.
 
     ``on_deny`` (optional) is an audit hook ``(action, reason)`` for logging the
-    specific breach; the operator-facing message still comes from the executor's
-    ``_deny_abort`` (unchanged).  This object is single-use per run: it holds no
-    mutable run state and never talks to hardware.
+    specific breach.  The specific reason of the most recent deny is also kept on
+    :attr:`last_deny_reason` — audit-only state that never affects a gate
+    decision — so the executor can fold the REAL cause ("outside armed range
+    […]") into its operator-facing abort message rather than a generic "not
+    confirmed".  The gate never talks to hardware and holds no run-control state.
     """
 
     def __init__(self, envelope: ArmedEnvelope, on_deny=None) -> None:
         self._env = envelope
         self._on_deny = on_deny
+        # Audit-only: the reason of the most recent deny, so the executor can
+        # surface the REAL cause in its operator-facing abort message (a plain
+        # QtDangerGate has no such attribute — the executor reads it via getattr
+        # and falls back to its generic message, fail-safe).  Never consulted by
+        # confirm(); never a gate decision input.
+        self._last_deny_reason: Optional[str] = None
 
     @property
     def envelope(self) -> ArmedEnvelope:
         return self._env
 
+    @property
+    def last_deny_reason(self) -> Optional[str]:
+        """Reason string of the most recent :meth:`confirm` deny, or ``None``."""
+        return self._last_deny_reason
+
     def confirm(self, action: DangerAction) -> bool:
         env = self._env
-        if env.is_expired():
-            return self._deny(action, "armed envelope expired")
-
+        # NB: expiry is NOT checked here — a stale arm is refused loudly at
+        # start_plan (arm→start), never silently per ramp (arm→every-ramp).
         kind = getattr(action, "kind", None)
         detail = getattr(action, "detail", None) or {}
 
@@ -222,6 +257,7 @@ class ArmedEnvelopeGate:
 
     def _deny(self, action: DangerAction, reason: str) -> bool:
         logger.warning("ArmedEnvelopeGate DENY: %s", reason)
+        self._last_deny_reason = reason   # audit-only; read by the executor's message
         if self._on_deny is not None:
             try:
                 self._on_deny(action, reason)
