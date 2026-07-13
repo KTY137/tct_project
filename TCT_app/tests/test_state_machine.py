@@ -61,3 +61,26 @@ def test_callback_fires():
     sm.add_callback(lambda old, new: seen.append((old, new)))
     sm.transition(AppState.CONNECTED)
     assert seen == [(AppState.DISCONNECTED, AppState.CONNECTED)]
+
+
+def test_callback_can_reenter_transition_without_deadlock():
+    """A state callback that itself calls transition() (the controller's
+    settle/advance re-entrancy pattern) must not deadlock: callbacks run OUTSIDE
+    the state lock, so re-entering transition() re-acquires it cleanly."""
+    sm = StateMachine()
+    walk(sm, AppState.CONNECTED, AppState.HOMED, AppState.CONFIGURED,
+         AppState.READY, AppState.RUNNING)
+    seen = []
+
+    def on_change(old, new):
+        seen.append((old, new))
+        # On landing terminal, advance one more edge from within the callback —
+        # this re-enters transition() while the outer transition() is unwinding.
+        if new is AppState.FINISHED:
+            sm.transition(AppState.CONFIGURED)
+
+    sm.add_callback(on_change)
+    sm.transition(AppState.FINISHED)          # must return, not hang
+    assert sm.state is AppState.CONFIGURED
+    assert (AppState.RUNNING, AppState.FINISHED) in seen
+    assert (AppState.FINISHED, AppState.CONFIGURED) in seen

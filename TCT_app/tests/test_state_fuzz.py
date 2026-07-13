@@ -589,6 +589,52 @@ def test_abort_from_running_reaches_aborted(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
+# StateMachine.transition() race — the check-then-act defect this beat fixes.   #
+# Two threads race FINISHED vs ABORTED from RUNNING.  The GUI thread and a scan #
+# worker really do call transition() concurrently at end-of-run, so an unlocked #
+# can()->swap could let BOTH "win" and mislabel the terminal state (the xdist   #
+# lane saw a clean run reported ABORTED).  With the lock, exactly one wins, the  #
+# loser raises ValueError (the settle-retry contract), and the reported state    #
+# is ALWAYS the winner's target — proved deterministically over many rounds.     #
+# --------------------------------------------------------------------------- #
+def test_transition_race_has_exactly_one_winner():
+    ROUNDS = 200
+    for rnd in range(ROUNDS):
+        sm = StateMachine()
+        for st in (AppState.CONNECTED, AppState.HOMED, AppState.CONFIGURED,
+                   AppState.READY, AppState.RUNNING):
+            sm.transition(st)
+
+        barrier = threading.Barrier(2)          # fire both threads together
+        results: dict[AppState, str] = {}
+
+        def racer(target: AppState) -> None:
+            barrier.wait()
+            try:
+                sm.transition(target)
+                results[target] = "won"
+            except ValueError:
+                results[target] = "valueerror"
+
+        t_fin = threading.Thread(target=racer, args=(AppState.FINISHED,))
+        t_abo = threading.Thread(target=racer, args=(AppState.ABORTED,))
+        t_fin.start(); t_abo.start()
+        t_fin.join(timeout=_JOIN_TIMEOUT); t_abo.join(timeout=_JOIN_TIMEOUT)
+        assert not t_fin.is_alive() and not t_abo.is_alive(), \
+            f"round {rnd}: a racing transition thread hung"
+
+        winners = [tgt for tgt, r in results.items() if r == "won"]
+        losers = [tgt for tgt, r in results.items() if r == "valueerror"]
+        assert len(winners) == 1, \
+            f"round {rnd}: expected exactly one winner, got {results}"
+        assert len(losers) == 1, \
+            f"round {rnd}: expected exactly one ValueError loser, got {results}"
+        # No silent swallow / mislabel: the reported state is the winner's target.
+        assert sm.state is winners[0], \
+            f"round {rnd}: state {sm.state} != winner target {winners[0]}"
+
+
+# --------------------------------------------------------------------------- #
 # FIXED (dac5b67 + this beat): every scan/plan entry point is fail-closed while #
 # a run is PAUSED.  can(RUNNING) is True from PAUSED (the resume edge), so a     #
 # start guarding on can(RUNNING) alone unblocks the parked worker AND spawns a  #
