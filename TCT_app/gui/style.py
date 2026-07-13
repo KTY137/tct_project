@@ -2195,10 +2195,15 @@ def _reassert_window_palette(window) -> None:
     ``WA_SetPalette`` anyway (Qt's stylesheet engine bakes a resolved
     palette into any widget it polishes under an active app stylesheet) —
     but that is harmless in THIS app specifically, because every theme
-    change goes through :func:`apply_theme`'s ``app.setStyleSheet(...)``,
-    and a stylesheet change unconditionally re-polishes the whole widget
-    tree regardless of ``WA_SetPalette`` (confirmed the same way: toggling
-    to the other mode right after this reset still updates the window).
+    change THAT ACTUALLY CHANGES THE QSS (a real mode/colour/glass/
+    typography edit) goes through :func:`apply_theme`'s
+    ``app.setStyleSheet(...)``, and a stylesheet change unconditionally
+    re-polishes the whole widget tree regardless of ``WA_SetPalette``
+    (confirmed the same way: toggling to the other mode right after this
+    reset still updates the window). A SAME-MODE re-assert is skipped by
+    apply_theme's identical-QSS guard (Phase-0 fix 26538a4) — a no-op
+    with nothing to repaint, so the skip cannot strand a
+    ``WA_SetPalette``'d window.
 
     MUST NOT run while a real backdrop material is applied — a live mica/
     acrylic window needs its transparent Window-role palette
