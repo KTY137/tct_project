@@ -510,6 +510,22 @@ Source: `docs/research/camera_optics_setup.md` (verified live 2026-07-10).
 
 ---
 
+## 11. QML Shell Probe (decision-gated: TCT_QML_SHELL default flip)
+
+**Requires Kaya at the real display. Prerequisites:** decision to ratify the shell as standard (ratified 2026-07-13, `docs/research/qml_hybrid_standard_decision.md`).
+
+| Step | Check | Expected | Notes |
+|---|---|---|---|
+| R1 | **RHI coexistence:** Motor-Stage GLViewWidget + QML chrome render correctly in one OpenGL-pinned window on the i7-10510U iGPU. | No black box, no RHI error ("Failed to make context current"). Chrome renders; motor stage updates live. | GTX/RTX not available; iGPU is the real target. |
+| R2 | **Detach under QML shell:** Motor Stage → float → 2nd monitor (diff DPI if available) → redock. No persistent blank frame (a one-shot `update()` nudge is OK). | Redock restores live motor updates; no permanent render gap. | Tests window lifecycle + GPU context rebuild. |
+| F3 | **Perf on i7 (5% CPU idle; 100 ms heartbeat under load):** `TCT_QML_SHELL=1` app idle: rail + pill hover ColorAnimation + 1 Hz poll < 5% CPU. With a live simulated scope acquire (pyqtgraph 15 Hz sibling), GUI-thread heartbeat gap < 100 ms. | CPU stays calm; scope/motor updates are not starved. | Reuse `tests/test_gui_thread_watchdog.py` bounds on real hardware. Integrates animation cost into budget. |
+| F2/R4 | **RDP usability:** Launch the shell via RDP into the lab laptop (Microsoft Remote Desktop on Windows). Shell must launch and be usable under `opengl32sw`/llvmpipe (Mesa software backend). | App is responsive or gracefully falls back to classic shell (TCT_QML_SHELL unset). | If RDP path fails: document it; classic shell is the supported remote mode (one-env-var fallback). |
+| R5 | **Frozen PyInstaller build:** Build a snapshot with PyInstaller; app launches without "missing QtQuick" error. Shell.qml loads error-free. | No plugin/resource missing errors; QML engine boots cold on a fresh machine. | Smoke test for release build integrity. |
+
+**Decision rule (per `docs/research/qml_hybrid_standard_decision.md`):** Steps R1-R3 + R5 green on the iGPU → ratify shell as standard, with QWidgets+safety single-impl as standing rule for panels. F2 fails → ratify with "classic shell is the supported RDP/remote mode" (design already permits this via env-var fallback).
+
+---
+
 ## Next Steps
 
 Once all checklist items are complete:

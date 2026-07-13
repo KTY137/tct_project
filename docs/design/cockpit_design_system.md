@@ -44,14 +44,17 @@ Council sources: `docs/research/cockpit_design_sota.md`,
 
 ## 2. Tokens (extend gui/style.py + QML Theme; additive)
 
-Dark: canvas #0A0D13 · panel #121824 · raised #192134 · sunk #0C1019 ·
-well #0E1420 · hairline #222B3E / strong #334159 · specular rgba(255,255,255,.045)
+Dark: canvas #0A0D13 · panel #0d111a · raised #192134 · sunk #070a0f ·
+well #070a0f · hairline #27344A / strong #334159 · specular rgba(255,255,255,0.14)
 · text #E9EDF5 · muted #98A1B5 · faint #5B657A. Accent #5AA9FF (one accent).
 Semantic: danger #FF5A61 · armed #FFB84D · good #3DD68C · sim #41D8E4
-(hatch pattern, chrome use = sim-marking only). Light theme: see artifact
-tokens; both first-class, contrast-checked. Depth = surface ladder +
+(hatch pattern, chrome use = sim-marking only). Light theme: canvas #E6EBF3 · panel #FFFFFF ·
+raised #F8FAFD · sunk #d4d8e0 · well #d4d8e0 · hairline #D9DFEA / strong #BFC9DA ·
+specular rgba(255,255,255,0.92); both first-class, contrast-checked. Depth = surface ladder +
 hairlines + one frosted chrome strip; no drop-shadow soup; nothing
 translucent over a plot. Radii 8/12/16.
+
+**v6 glass revision 2026-07-13 — see DECISIONS.md**
 
 ## 3. Type scale (Codex-calibrated; system sans + mono numerals)
 
