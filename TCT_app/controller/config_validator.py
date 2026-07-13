@@ -74,6 +74,9 @@ _KNOWN_KEYS: dict[str, set[str]] = {
         "host", "port", "channel", "ramp_speed_V_s",
         # e4control
         "e4c_device", "connection_type", "ramp_step_V", "ramp_delay_s",
+        # simulated backend only (see _check_bias): how many HV channels the
+        # FAKE supply reports.  Real backends report their own count.
+        "sim_channel_count",
     },
     "waveform_generator": {
         "visa_address", "vendor", "frequency_hz", "pulse_width_s",
@@ -304,6 +307,94 @@ def _check_bias(bias: dict[str, Any], issues: list[ConfigIssue]) -> None:
         issues.append(ConfigIssue(WARNING, sec,
                                   f"ramp_speed_V_s = {ramp} V/s is very fast for "
                                   "a silicon sensor — intentional?"))
+    _check_bias_channels(bias, issues)
+
+
+# How many channels the *simulated* supply may pretend to have.  Not a hardware
+# limit — a sanity ceiling: the largest iseg HV modules the lab could plausibly
+# fake are 16-channel, and one GUI tab per channel stops being usable long before
+# that.  A bigger number is a typo (e.g. a voltage pasted into the wrong key), and
+# a typo that silently spawns 2000 HV channel views is worth failing on.
+_MAX_SIM_BIAS_CHANNELS = 16
+
+
+def _check_bias_channels(bias: dict[str, Any], issues: list[ConfigIssue]) -> None:
+    """Validate the primary channel INDEX (``channel``) and the SIMULATION-ONLY
+    channel COUNT (``sim_channel_count``), plus their interaction.
+
+    ``channel``            — primary HV channel index (0-based).  Consumed by the
+                             iseg backend and by the simulated backend; the real
+                             single-channel backends ignore it.
+    ``sim_channel_count``  — how many channels the SIMULATED supply reports.
+                             **Simulation only** (``backend: simulated``).  On real
+                             hardware the count is whatever the module reports
+                             (iseg: ``:READ:MODULE:CHANNELNUMBER?``); a config file
+                             may not claim it, so the key is WARNED as ignored on
+                             any other backend — including ``simulation: true`` on
+                             a real backend, whose driver reports 1 by fallback.
+
+    Interaction: for the simulated backend both are known here, so
+    ``channel >= sim_channel_count`` is a hard ERROR — the primary channel would
+    address a channel the supply does not expose, and DeviceManager would then
+    show a phantom extra tab (refresh_bias_channels appends the out-of-range
+    primary so ``bias_supply`` never vanishes from the list).  HV channel identity
+    must never be a guess.
+    """
+    sec = "bias_supply"
+    # Mirror DeviceManager's default: an absent backend key means "simulated".
+    backend = str(bias.get("backend", "simulated")).lower()
+    is_sim_backend = backend == "simulated"
+
+    count = bias.get("sim_channel_count")
+    count_ok = False
+    if count is not None:
+        if isinstance(count, bool) or not isinstance(count, int):
+            issues.append(ConfigIssue(
+                ERROR, sec,
+                f"sim_channel_count must be an integer >= 1 (got {count!r}) — it "
+                "is the number of HV channels the SIMULATED supply reports."))
+        elif count < 1:
+            issues.append(ConfigIssue(
+                ERROR, sec,
+                f"sim_channel_count must be >= 1 (got {count!r}) — a supply with "
+                "no channels cannot be controlled."))
+        elif count > _MAX_SIM_BIAS_CHANNELS:
+            issues.append(ConfigIssue(
+                ERROR, sec,
+                f"sim_channel_count = {count} exceeds the sanity ceiling of "
+                f"{_MAX_SIM_BIAS_CHANNELS} — that is a typo, not a supply."))
+        else:
+            count_ok = True
+            if not is_sim_backend:
+                issues.append(ConfigIssue(
+                    WARNING, sec,
+                    f"sim_channel_count = {count} is IGNORED with backend: "
+                    f"{backend} — it is a simulation-only knob. On a real "
+                    "backend (even with simulation: true) the channel count "
+                    "comes from the hardware, not from this file."))
+
+    ch = bias.get("channel")
+    ch_ok = False
+    if ch is not None:
+        if isinstance(ch, bool) or not isinstance(ch, int) or ch < 0:
+            issues.append(ConfigIssue(
+                ERROR, sec,
+                f"channel must be an integer >= 0 (got {ch!r}) — it is the "
+                "PRIMARY channel INDEX, not a channel count."))
+        else:
+            ch_ok = True
+
+    # Both individually valid → check the pair (simulated backend only: it is the
+    # only case where the channel count is knowable from the config).
+    if is_sim_backend and ch_ok:
+        n = count if count_ok else 1
+        if int(ch) >= n:
+            issues.append(ConfigIssue(
+                ERROR, sec,
+                f"channel = {ch} (the primary channel INDEX) is outside the "
+                f"{n} channel(s) the simulated supply exposes (valid: "
+                f"0..{n - 1}). Set sim_channel_count >= {int(ch) + 1}, or pick a "
+                "primary channel that exists."))
 
 
 def _check_waveform(wfg: dict[str, Any], issues: list[ConfigIssue]) -> None:

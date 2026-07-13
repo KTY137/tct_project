@@ -325,7 +325,22 @@ class DeviceManager:
                 simulation      = bias_cfg.get("simulation",       False),
             )
         else:
-            bias_driver = SimulatedBiasSupply()
+            # SIMULATION-ONLY channel count.  ``sim_channel_count`` exists purely
+            # so the multi-channel path (BiasChannel views, per-channel panels,
+            # plan safety['bias_channel'], ALL-OFF) is reachable with no hardware
+            # attached — the normal dev mode.  It is deliberately NOT read for the
+            # iseg/keithley/e4control backends: on a real module the count is
+            # whatever the hardware reports (iseg: :READ:MODULE:CHANNELNUMBER?),
+            # never something a config file may claim.  Absent → 1 (byte-identical
+            # to the historic bare SimulatedBiasSupply()).
+            #
+            # ``channel`` is the PRIMARY channel INDEX (same key, same meaning as
+            # for the iseg backend), not a count; the validator rejects
+            # channel >= sim_channel_count.
+            bias_driver = SimulatedBiasSupply(
+                channel       = bias_cfg.get("channel",           0),
+                channel_count = bias_cfg.get("sim_channel_count", 1),
+            )
 
         # One driver owns the transport; each HV channel is a BiasChannel view.
         # ``channel_count()`` needs a live link, so we start with a single

@@ -244,3 +244,89 @@ def test_covered_section_real_keys_do_not_warn():
         "binning": 1, "fps": 10.0, "simulation": True,
     }}
     assert not any(w.startswith("[camera]") for w in warnings(validate_config(cfg)))
+
+
+# --------------------------------------------------------------------------- #
+# bias_supply.sim_channel_count — the SIMULATION-ONLY HV channel count, and    #
+# its interaction with `channel` (the PRIMARY channel INDEX).                  #
+#                                                                              #
+# Gap it closes: the multi-channel bias machinery (BiasChannel views, one GUI  #
+# tab per channel, ALL OUTPUTS OFF over every channel, plan safety             #
+# 'bias_channel') was unreachable in simulation — the normal dev mode and the  #
+# mode every test runs in — because DeviceManager built a bare                 #
+# SimulatedBiasSupply() (count always 1) and no config key existed at all.     #
+# --------------------------------------------------------------------------- #
+def _bias_sim(**over):
+    cfg = {"backend": "simulated"}
+    cfg.update(over)
+    return {"bias_supply": cfg}
+
+
+def test_sim_channel_count_absent_is_clean():
+    """Optional key: omitting it must behave exactly as before (count 1)."""
+    issues = validate_config(_bias_sim())
+    assert errors(issues) == []
+    assert not any("sim_channel_count" in w for w in warnings(issues))
+
+
+def test_sim_channel_count_valid_is_clean():
+    issues = validate_config(_bias_sim(sim_channel_count=3))
+    assert errors(issues) == []
+    # And it is a KNOWN key — no "unknown key" typo warning.
+    assert not any("sim_channel_count" in w for w in warnings(issues))
+
+
+@pytest.mark.parametrize("bad", [0, -1, 2.5, "3", True, [3]])
+def test_sim_channel_count_bad_value_is_error(bad):
+    """0 / negative / non-integer must be a blocking ERROR, never a silent 1."""
+    assert any("sim_channel_count" in e
+               for e in errors(validate_config(_bias_sim(sim_channel_count=bad))))
+
+
+def test_sim_channel_count_above_ceiling_is_error():
+    assert any("sim_channel_count" in e
+               for e in errors(validate_config(_bias_sim(sim_channel_count=17))))
+
+
+def test_sim_channel_count_at_ceiling_is_ok():
+    assert errors(validate_config(_bias_sim(sim_channel_count=16))) == []
+
+
+def test_sim_channel_count_on_real_backend_warns_as_ignored():
+    """It is a simulation-only knob: on a real backend (even simulation: true)
+    the channel count comes from the hardware, so the key is WARNED as ignored —
+    never silently obeyed, and never an error that blocks connecting."""
+    cfg = {"bias_supply": {"backend": "iseg", "simulation": True,
+                           "visa_address": "ASRL6::INSTR", "channel": 0,
+                           "sim_channel_count": 3}}
+    issues = validate_config(cfg)
+    assert errors(issues) == []
+    assert any("sim_channel_count" in w and "IGNORED" in w for w in warnings(issues))
+
+
+def test_primary_channel_outside_sim_channel_count_is_error():
+    """channel (primary INDEX) >= sim_channel_count addresses a channel the
+    supply does not expose — a hard config error, not a phantom extra tab."""
+    issues = validate_config(_bias_sim(channel=2, sim_channel_count=1))
+    assert any("channel" in e and "primary" in e.lower() for e in errors(issues))
+    # Same when no count is configured at all (implicit count of 1).
+    assert any("channel" in e
+               for e in errors(validate_config(_bias_sim(channel=2))))
+
+
+def test_primary_channel_inside_sim_channel_count_is_clean():
+    assert errors(validate_config(_bias_sim(channel=2, sim_channel_count=3))) == []
+
+
+@pytest.mark.parametrize("bad", [-1, 1.5, "0", True])
+def test_bad_primary_channel_index_is_error(bad):
+    assert any("channel" in e
+               for e in errors(validate_config(_bias_sim(channel=bad))))
+
+
+def test_real_backend_primary_channel_is_not_bounded_by_the_sim_key():
+    """A real module's channel count is hardware truth, unknowable here — so a
+    high primary index on a real backend must NOT be rejected by the sim key."""
+    cfg = {"bias_supply": {"backend": "iseg", "visa_address": "ASRL6::INSTR",
+                           "channel": 3}}
+    assert errors(validate_config(cfg)) == []

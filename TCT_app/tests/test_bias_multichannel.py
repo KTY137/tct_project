@@ -8,6 +8,7 @@ Every test is hardware-safe:
     no SCPI ever reaches a real instrument.
 """
 import pytest
+import yaml
 
 from devices.base import DeviceError
 from devices.bias_channel import BiasChannel
@@ -119,6 +120,34 @@ class TestDeviceManagerEnumeration:
         chans = dm.refresh_bias_channels()
         assert len(chans) == 1
         assert chans[0] is dm.bias_supply
+
+    def test_channel_count_comes_from_the_config_not_only_injection(self, tmp_path):
+        """``bias_supply.sim_channel_count`` is what makes the multi-channel path
+        reachable in simulation — the mode the app normally runs in.  The tests
+        above inject a driver; an OPERATOR only has devices.yaml, so pin that."""
+        cfg = {
+            "oscilloscope":      {"backend": "visa", "simulation": True},
+            "motor_stage":       {"backend": "simulated"},
+            "intensity_monitor": {"backend": "simulated"},
+            "camera":            {"simulation": True},
+            "waveform_generator": {"simulation": True},
+            "bias_supply":       {"backend": "simulated", "sim_channel_count": 2},
+            "output":            {"data_dir": str(tmp_path / "runs")},
+        }
+        path = tmp_path / "devices.yaml"
+        path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+        dm = DeviceManager(config_path=str(path))
+        assert dm.config_errors() == []
+        assert dm._bias_driver.channel_count() == 2
+        # Constructor does NO I/O and does not enumerate: still just the primary.
+        assert dm.bias_channels == [dm.bias_supply]
+
+        dm._bias_driver.connect()
+        try:
+            assert [c.channel for c in dm.refresh_bias_channels()] == [0, 1]
+        finally:
+            dm._bias_driver.disconnect()
 
 
 # --------------------------------------------------------------------------- #

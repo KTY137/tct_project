@@ -55,10 +55,22 @@ bias_supply:
   simulation: true
   compliance_A: 0.00039999999999999996
   visa_address: ASRL6::INSTR
+  # PRIMARY channel INDEX (0-based) — which HV channel the single-channel panel,
+  # the scan controller and the zero-arg driver calls address. NOT a count.
   channel: 0
   ramp_speed_V_s: 50.0
   voltage_range_V: 2000
   timeout_ms: 5000
+  # sim_channel_count: 1
+  #   SIMULATION ONLY (backend: simulated). How many HV channels the FAKE supply
+  #   reports, so the multi-channel path (one bias tab per channel, ALL OUTPUTS
+  #   OFF across all of them, plan safety.bias_channel) can be exercised with no
+  #   hardware attached. Absent -> 1 (unchanged single-channel behaviour).
+  #   It has NO effect on a real backend (iseg/keithley/e4control): there the
+  #   count is whatever the module reports (iseg: :READ:MODULE:CHANNELNUMBER?) —
+  #   including with simulation: true, whose no-I/O sim path reports 1. Setting
+  #   it on a non-simulated backend is therefore a config WARNING (ignored).
+  #   Valid: 1..16, and channel (the primary index) must be < sim_channel_count.
 waveform_generator:
   visa_address: TCPIP0::192.168.0.10::INSTR
   vendor: rigol

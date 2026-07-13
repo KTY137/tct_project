@@ -24,6 +24,9 @@ import yaml
 from controller.device_manager import DeviceManager
 from controller.state_machine import StateMachine, AppState
 from controller.scan_controller import ScanController, ScanConfig, VoltageScanConfig
+from controller.scan_plan import ActionBlock, ActionType, Axis, LoopBlock, ScanPlan
+from controller.scan_plan_validator import PlanLimits
+from controller.danger_gate import AutoConfirmGate
 from devices.bias_supply_simulated import SimulatedBiasSupply
 from devices.bias_channel import BiasChannel
 
@@ -31,14 +34,14 @@ from devices.bias_channel import BiasChannel
 # --------------------------------------------------------------------------- #
 # Fully-simulated 2-channel setup (no hardware)                                #
 # --------------------------------------------------------------------------- #
-def _sim_config_path(tmp_path):
+def _sim_config_path(tmp_path, bias_supply: dict | None = None):
     cfg = {
         "oscilloscope":      {"backend": "visa", "simulation": True},
         "motor_stage":       {"backend": "simulated"},
         "intensity_monitor": {"backend": "simulated"},
         "camera":            {"simulation": True},
         "waveform_generator":{"simulation": True},
-        "bias_supply":       {"backend": "simulated"},
+        "bias_supply":       bias_supply or {"backend": "simulated"},
         "output":            {"data_dir": str(tmp_path / "runs")},
     }
     path = tmp_path / "devices.yaml"
@@ -80,14 +83,68 @@ def sim(tmp_path):
         dm.disconnect_all()
 
 
+@pytest.fixture
+def sim3(tmp_path):
+    """Like ``sim``, but the 3 HV channels come from the CONFIG — no injection.
+
+    ``bias_supply.sim_channel_count: 3`` is the simulation-only knob that makes
+    the multi-channel path reachable with no hardware attached (before it, the
+    manager always built a 1-channel ``SimulatedBiasSupply()``).  This fixture
+    therefore exercises the whole chain the operator actually gets:
+    devices.yaml → DeviceManager → BiasChannel views → ScanController.
+    """
+    path = _sim_config_path(tmp_path, {"backend": "simulated",
+                                       "sim_channel_count": 3})
+    dm = DeviceManager(config_path=path)
+    assert dm.config_errors() == []
+
+    results = dm.connect_all()
+    assert all(v == "ok" for v in results.values()), results
+    assert [c.channel for c in dm.bias_channels] == [0, 1, 2]
+    assert dm.bias_channels[0] is dm.bias_supply
+
+    dm.motor.home()                     # real homing (sim: instant, at origin)
+
+    sm = StateMachine()
+    for st in (AppState.CONNECTED, AppState.HOMED, AppState.CONFIGURED, AppState.READY):
+        sm.transition(st)
+
+    ctrl = ScanController(dm, sm)
+    try:
+        yield dm, ctrl, sm
+    finally:
+        dm.disconnect_all()
+
+
+def _plan_limits(**over) -> PlanLimits:
+    d = dict(
+        x_min_mm=-50.0, x_max_mm=50.0,
+        y_min_mm=-50.0, y_max_mm=50.0,
+        z_min_mm=-10.0, z_max_mm=10.0,
+        voltage_range_V=1000.0, max_points=1_000_000,
+    )
+    d.update(over)
+    return PlanLimits(**d)
+
+
+def _bias_plan_on_channel(target: float, channel: int | None) -> ScanPlan:
+    """A one-setpoint HV plan whose ``safety['bias_channel']`` selects the channel."""
+    children = [ActionBlock(action=ActionType.ACQUIRE_WAVEFORM, params={}),
+                ActionBlock(action=ActionType.SAVE_POINT, params={})]
+    loop = LoopBlock(axis=Axis.BIAS_V, values=[float(target)], children=children)
+    return ScanPlan(name="bias_ch", root=[loop],
+                    safety={"require_hv_confirmation": True,
+                            "bias_channel": channel})
+
+
 def _spy_channels(dm):
-    """Wrap ramp_to/read/enable_output/output_off on both channels with call spies."""
+    """Wrap ramp_to/read/enable_output/output_off on every channel with call spies."""
     for ch in dm.bias_channels:
         ch.ramp_to       = mock.Mock(wraps=ch.ramp_to)
         ch.read          = mock.Mock(wraps=ch.read)
         ch.enable_output = mock.Mock(wraps=ch.enable_output)
         ch.output_off    = mock.Mock(wraps=ch.output_off)
-    return dm.bias_channels[0], dm.bias_channels[1]
+    return tuple(dm.bias_channels)
 
 
 def _fast_vscan(**kw):
@@ -220,3 +277,76 @@ class TestCurrentScanType:
         assert seen and all(t == "voltage_scan" for t in seen)
         # ...and reverted to None (idle) once the run finished.
         assert ctrl.current_scan_type is None
+
+
+# --------------------------------------------------------------------------- #
+# Config-driven multi-channel: bias_supply.sim_channel_count (simulation only)  #
+#                                                                              #
+# The channels here are NOT injected by the test — they come from devices.yaml, #
+# which is the point: before this key the simulated supply always reported 1    #
+# channel, so plan safety['bias_channel'] > 0 could not be reached in the mode  #
+# the app normally runs in.                                                     #
+# --------------------------------------------------------------------------- #
+class TestConfiguredChannelCount:
+    def test_third_channel_is_exposed_and_resolvable(self, sim3):
+        dm, ctrl, _ = sim3
+        assert len(dm.bias_channels) == 3
+        assert ctrl._resolve_bias(VoltageScanConfig(bias_channel=2)) is dm.bias_channels[2]
+        # ...and index 3 is still out of range (the count is a real bound).
+        with pytest.raises(ValueError, match="out of range"):
+            ctrl._resolve_bias(VoltageScanConfig(bias_channel=3))
+
+    def test_plan_safety_bias_channel_runs_against_the_third_channel(self, sim3):
+        dm, ctrl, sm = sim3
+        ch0, ch1, ch2 = _spy_channels(dm)
+
+        ctrl.arm_hv(True)
+        ctrl.start_plan(_bias_plan_on_channel(-100.0, 2),
+                        _plan_limits(), AutoConfirmGate())
+        ctrl._thread.join(timeout=20)
+
+        assert not ctrl._thread.is_alive()
+        assert sm.state is AppState.FINISHED
+        # ONLY channel 2 was driven; the other two were never touched.
+        assert ch2.ramp_to.called and ch2.read.called
+        for other in (ch0, ch1):
+            assert not other.ramp_to.called
+            assert not other.read.called
+            assert not other.enable_output.called
+        # The plan's HV target actually landed on channel 2...
+        assert -100.0 in [c.args[0] for c in ch2.ramp_to.call_args_list if c.args]
+        # ...and the run's fail-safe brought it back to 0 V + output OFF.
+        assert ch2.setpoint_V == 0.0
+        assert not dm._bias_driver.output_is_on_ch(2)
+        assert ctrl._writer._n_points == 1
+
+    def test_park_safe_covers_every_configured_channel(self, sim3):
+        """SAFETY: the between-entries park must de-energize ALL exposed
+        channels — a sequence may have armed any of them."""
+        dm, ctrl, _ = sim3
+        drv = dm._bias_driver
+        for idx in (0, 1, 2):
+            drv.set_voltage_ch(idx, -50.0 * (idx + 1))
+            drv.output_on_ch(idx)
+        assert all(drv.output_is_on_ch(i) for i in (0, 1, 2))
+
+        ctrl.park_safe()
+
+        for idx in (0, 1, 2):
+            assert dm.bias_channels[idx].setpoint_V == 0.0
+            assert not drv.output_is_on_ch(idx)
+
+    def test_disconnect_all_leaves_every_channel_off(self, sim3):
+        """Teardown through the PRIMARY proxy still parks every channel (the
+        proxies share one driver, whose disconnect() ramps them all down)."""
+        dm, _, _ = sim3
+        drv = dm._bias_driver
+        for idx in (0, 1, 2):
+            drv.set_voltage_ch(idx, -200.0)
+            drv.output_on_ch(idx)
+
+        dm.disconnect_all()                 # fixture's finally re-runs it: idempotent
+
+        for idx in (0, 1, 2):
+            assert not drv.output_is_on_ch(idx)
+            assert drv.setpoint_V_ch(idx) == 0.0

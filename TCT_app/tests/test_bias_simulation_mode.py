@@ -34,6 +34,7 @@ from controller.scan_plan_validator import PlanLimits
 from controller.danger_gate import DenyAllGate
 from devices.bias_supply_iseg import IsegBiasSupply
 from devices.bias_supply_simulated import SimulatedBiasSupply
+from gui.multi_bias_panel import MultiBiasPanel   # ALL-OFF is a pure staticmethod
 
 
 # --------------------------------------------------------------------------- #
@@ -136,6 +137,127 @@ def test_device_manager_simulated_backend(tmp_path):
     dm = DeviceManager(config_path=path)
     assert dm.config_errors() == []
     assert isinstance(dm._bias_driver, SimulatedBiasSupply)
+
+
+# --------------------------------------------------------------------------- #
+# 3b. bias_supply.sim_channel_count — the SIMULATION-ONLY channel count.       #
+#                                                                              #
+# Before this key, DeviceManager built a bare ``SimulatedBiasSupply()`` so the #
+# count was ALWAYS 1 in simulation: the whole multi-channel path (per-channel  #
+# BiasChannel views, one bias tab per channel, ALL OUTPUTS OFF across every    #
+# channel, plan ``safety['bias_channel']``) was unreachable in the mode the app#
+# normally runs in — and the mode every test runs in.                          #
+# --------------------------------------------------------------------------- #
+def test_sim_channel_count_absent_still_gives_one_channel(tmp_path):
+    """Byte-identical default: no key → exactly the historic single channel."""
+    path = _sim_config(tmp_path, {"backend": "simulated"})
+    dm = DeviceManager(config_path=path)
+    assert dm._bias_driver.channel_count() == 1
+    assert dm.bias_channels == [dm.bias_supply]
+    assert all(v == "ok" for v in dm.connect_all().values())
+    try:
+        assert [c.channel for c in dm.bias_channels] == [0]
+    finally:
+        dm.disconnect_all()
+
+
+def test_sim_channel_count_yields_n_channels_through_device_manager(tmp_path):
+    """N is reachable from the CONFIG alone — no test-side driver injection."""
+    path = _sim_config(tmp_path, {"backend": "simulated", "sim_channel_count": 3})
+    dm = DeviceManager(config_path=path)
+    assert dm.config_errors() == []
+    assert isinstance(dm._bias_driver, SimulatedBiasSupply)
+    # No hardware I/O in __init__: the list is still just the primary until the
+    # driver connects and refresh_bias_channels() enumerates it.
+    assert dm.bias_channels == [dm.bias_supply]
+
+    assert all(v == "ok" for v in dm.connect_all().values())
+    try:
+        assert [c.channel for c in dm.bias_channels] == [0, 1, 2]
+        assert dm.bias_channels[0] is dm.bias_supply     # primary proxy reused
+
+        # Each channel is independently settable through its own proxy.
+        for idx, ch in enumerate(dm.bias_channels):
+            ch.enable_output()
+            ch.set_voltage(-100.0 * (idx + 1))
+        assert [c.setpoint_V for c in dm.bias_channels] == [-100.0, -200.0, -300.0]
+        assert all(c.driver.output_is_on_ch(c.channel) for c in dm.bias_channels)
+
+        # SAFETY: the kill switch covers EVERY channel, not just the primary.
+        # (_do_all_off is the exact staticmethod the GUI's ALL OUTPUTS OFF runs.)
+        MultiBiasPanel._do_all_off(dm.bias_channels)
+        for ch in dm.bias_channels:
+            assert ch.setpoint_V == 0.0
+            assert not ch.driver.output_is_on_ch(ch.channel)
+    finally:
+        dm.disconnect_all()
+
+
+def test_sim_primary_channel_index_is_honoured(tmp_path):
+    """``channel`` is the PRIMARY INDEX in simulation too (as it is for iseg):
+    the zero-arg / primary proxy addresses THAT channel, not always CH0."""
+    path = _sim_config(tmp_path, {"backend": "simulated",
+                                  "channel": 2, "sim_channel_count": 3})
+    dm = DeviceManager(config_path=path)
+    assert dm.config_errors() == []
+    assert dm.bias_supply.channel == 2
+    assert all(v == "ok" for v in dm.connect_all().values())
+    try:
+        assert [c.channel for c in dm.bias_channels] == [0, 1, 2]
+        assert dm.bias_channels[2] is dm.bias_supply
+        # A zero-arg (primary) call lands on channel 2 and nowhere else.
+        dm.bias_supply.enable_output()
+        dm.bias_supply.set_voltage(-50.0)
+        drv = dm._bias_driver
+        assert drv.setpoint_V_ch(2) == -50.0
+        assert drv.setpoint_V_ch(0) == 0.0 and drv.setpoint_V_ch(1) == 0.0
+        assert not drv.output_is_on_ch(0) and not drv.output_is_on_ch(1)
+    finally:
+        dm.disconnect_all()
+
+
+def test_primary_channel_outside_the_sim_count_is_a_blocking_config_error(tmp_path):
+    """primary >= count is refused at the config gate — connect_all() raises
+    rather than exposing a phantom channel the supply does not have."""
+    path = _sim_config(tmp_path, {"backend": "simulated",
+                                  "channel": 2, "sim_channel_count": 1})
+    dm = DeviceManager(config_path=path)
+    assert any("channel" in e for e in dm.config_errors())
+    with pytest.raises(ValueError, match="configuration errors"):
+        dm.connect_all()
+
+
+# --------------------------------------------------------------------------- #
+# 3c. REAL backends under simulation: the count is hardware truth, never the   #
+#     sim key.  The iseg driver's channel_count() short-circuits to 1 with no  #
+#     session (no I/O), which is the correct, safe fallback.                   #
+# --------------------------------------------------------------------------- #
+def test_iseg_under_simulation_reports_one_channel_without_io(tmp_path):
+    sup = IsegBiasSupply(visa_address="ASRL6::INSTR", simulation=True)
+    sup.connect()
+    try:
+        assert sup._inst is None            # no session was ever opened
+        assert sup.channel_count() == 1     # fallback, not a hardware query
+    finally:
+        sup.disconnect()
+
+
+def test_sim_channel_count_does_not_leak_into_a_real_backend(tmp_path):
+    """Set on the iseg backend the key is IGNORED (warning, not error): the
+    module's own count stands.  A config file may never claim HV channels."""
+    path = _sim_config(tmp_path, {
+        "backend": "iseg", "simulation": True, "visa_address": "ASRL6::INSTR",
+        "channel": 0, "sim_channel_count": 3,
+    })
+    dm = DeviceManager(config_path=path)
+    assert dm.config_errors() == []                      # never blocks
+    assert any("sim_channel_count" in w for w in dm.config_warnings())
+    assert all(v == "ok" for v in dm.connect_all().values())
+    try:
+        assert dm._bias_driver.channel_count() == 1
+        assert [c.channel for c in dm.bias_channels] == [0]
+    finally:
+        dm.disconnect_all()
 
 
 # --------------------------------------------------------------------------- #

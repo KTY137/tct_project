@@ -28,6 +28,13 @@ class SimulatedBiasSupply(BiasSupplyBase):
       polarity_reversible — whether the polarity relay can be switched (default True)
       polarity            — initial polarity 'p'/'n' (default 'n')
       voltage_range_V     — nominal voltage; sets the discharge threshold
+      channel             — PRIMARY channel index (default 0), i.e. the one the
+                            zero-arg wrappers below address.  Named ``_ch``
+                            internally, exactly like the real iseg driver, so
+                            DeviceManager reads the primary index the same way
+                            from either backend.  It is an INDEX, not a count —
+                            valid values are 0 .. channel_count-1 (the config
+                            validator rejects channel >= sim_channel_count).
     """
 
     _LEAKAGE_A_PER_V = 1e-9    # 1 nA/V leakage
@@ -41,10 +48,14 @@ class SimulatedBiasSupply(BiasSupplyBase):
         polarity_reversible: bool = True,
         polarity: str = "n",
         voltage_range_V: float | None = None,
+        channel: int = 0,
     ) -> None:
         # Per-channel state store must exist before super().__init__() assigns
         # the base scalar state (which is a view of the primary channel below).
-        self._primary_ch = 0
+        # Both knobs are clamped rather than raised on: a constructor must not
+        # explode on a typo'd config (the validator is what reports it), and a
+        # clamped fake supply is still a SAFE fake supply.
+        self._ch = max(0, int(channel))
         self._channel_count = max(1, int(channel_count))
         self._polarity_reversible = bool(polarity_reversible)
         self._init_polarity = normalize_polarity(polarity)
@@ -76,35 +87,35 @@ class SimulatedBiasSupply(BiasSupplyBase):
     # The base scalar state is a live view of the PRIMARY channel.
     @property
     def _setpoint_V(self) -> float:
-        return self._scs(self._primary_ch)["setpoint_V"]
+        return self._scs(self._ch)["setpoint_V"]
 
     @_setpoint_V.setter
     def _setpoint_V(self, value: float) -> None:
-        self._scs(self._primary_ch)["setpoint_V"] = value
+        self._scs(self._ch)["setpoint_V"] = value
 
     @property
     def _output_on(self) -> bool:
-        return self._scs(self._primary_ch)["output_on"]
+        return self._scs(self._ch)["output_on"]
 
     @_output_on.setter
     def _output_on(self, value: bool) -> None:
-        self._scs(self._primary_ch)["output_on"] = bool(value)
+        self._scs(self._ch)["output_on"] = bool(value)
 
     @property
     def _compliance_A(self) -> float:
-        return self._scs(self._primary_ch)["compliance_A"]
+        return self._scs(self._ch)["compliance_A"]
 
     @_compliance_A.setter
     def _compliance_A(self, value: float) -> None:
-        self._scs(self._primary_ch)["compliance_A"] = value
+        self._scs(self._ch)["compliance_A"] = value
 
     @property
     def _measured_V(self) -> float:
-        return self._scs(self._primary_ch)["measured_V"]
+        return self._scs(self._ch)["measured_V"]
 
     @_measured_V.setter
     def _measured_V(self, value: float) -> None:
-        self._scs(self._primary_ch)["measured_V"] = value
+        self._scs(self._ch)["measured_V"] = value
 
     # ------------------------------------------------------------------ #
     # BaseDevice / BiasSupplyBase interface (primary-channel wrappers)     #
@@ -140,19 +151,19 @@ class SimulatedBiasSupply(BiasSupplyBase):
         self.logger.info("SimulatedBiasSupply disconnected")
 
     def set_voltage(self, voltage_V: float) -> None:
-        self.set_voltage_ch(self._primary_ch, voltage_V)
+        self.set_voltage_ch(self._ch, voltage_V)
 
     def set_compliance(self, current_A: float) -> None:
-        self.set_compliance_ch(self._primary_ch, current_A)
+        self.set_compliance_ch(self._ch, current_A)
 
     def enable_output(self) -> None:
-        self.output_on_ch(self._primary_ch)
+        self.output_on_ch(self._ch)
 
     def output_off(self) -> None:
-        self.output_off_ch(self._primary_ch)
+        self.output_off_ch(self._ch)
 
     def read(self) -> BiasReading:
-        return self.read_ch(self._primary_ch)
+        return self.read_ch(self._ch)
 
     # ------------------------------------------------------------------ #
     # Channel-aware implementations                                        #
@@ -214,13 +225,13 @@ class SimulatedBiasSupply(BiasSupplyBase):
     # ------------------------------------------------------------------ #
 
     def supports_polarity_switch(self) -> bool:
-        return self.supports_polarity_switch_ch(self._primary_ch)
+        return self.supports_polarity_switch_ch(self._ch)
 
     def get_polarity(self) -> str | None:
-        return self.get_polarity_ch(self._primary_ch)
+        return self.get_polarity_ch(self._ch)
 
     def set_polarity(self, polarity: str) -> None:
-        self.set_polarity_ch(self._primary_ch, polarity)
+        self.set_polarity_ch(self._ch, polarity)
 
     def supports_polarity_switch_ch(self, channel: int) -> bool:
         return self._polarity_reversible
