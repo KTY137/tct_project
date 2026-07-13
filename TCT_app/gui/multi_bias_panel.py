@@ -235,26 +235,40 @@ class MultiBiasPanel(QWidget):
         self._off_thread = QThread(self)
         self._off_worker.moveToThread(self._off_thread)
         self._off_thread.started.connect(self._off_worker.run)
-
-        def _finish(err: str) -> None:
-            thread = self._off_thread
-            self._off_thread = None
-            self._off_worker = None
-            if thread is not None:
-                thread.quit()
-                thread.wait(2000)
-            self._btn_all_off.setEnabled(True)
-            self._tabs.setEnabled(True)
-            if err:
-                self._chip_all_off.set_status("All-off error", "crit")
-                notify(f"ALL OUTPUTS OFF: {err}", "error")
-            else:
-                self._chip_all_off.set_status("All outputs off", "good")
-                notify("All HV outputs ramped to 0 V and disabled.", "info")
-            self._refresh_summary()
-
-        self._off_worker.done.connect(_finish)
+        # done → _on_all_off_done is a BOUND METHOD of this GUI-thread widget,
+        # so AutoConnection posts it to the GUI event loop (a QueuedConnection):
+        # the whole teardown — thread quit/wait AND the widget re-enable — runs
+        # on the GUI thread.  A bare closure here instead ran the slot IN the
+        # worker's own context (verified via QThread.currentThread()), which
+        # (a) made ``thread.wait()`` a wait-on-itself and (b) executed
+        # ``_tabs.setEnabled(True)`` off the GUI thread, racing the GUI thread's
+        # own enable/disable so a locked child tab's Ramp button stayed stuck
+        # disabled after the sequence unlock under load (the A5.1 bench-gate
+        # failure).  The full WorkerThread primitive is separate debt.
+        self._off_worker.done.connect(self._on_all_off_done)
         self._off_thread.start()
+
+    def _on_all_off_done(self, err: str) -> None:
+        """GUI-thread teardown for ALL OUTPUTS OFF, queued from the worker's
+        ``done`` signal.  Joins the worker thread, then re-enables the global
+        control + the tabs and refreshes the summary — every line on the GUI
+        thread, so it can never wait on its own thread and never races the GUI
+        thread's widget state (which is what left a locked child tab disabled)."""
+        thread = self._off_thread
+        self._off_thread = None
+        self._off_worker = None
+        if thread is not None:
+            thread.quit()
+            thread.wait(2000)
+        self._btn_all_off.setEnabled(True)
+        self._tabs.setEnabled(True)
+        if err:
+            self._chip_all_off.set_status("All-off error", "crit")
+            notify(f"ALL OUTPUTS OFF: {err}", "error")
+        else:
+            self._chip_all_off.set_status("All outputs off", "good")
+            notify("All HV outputs ramped to 0 V and disabled.", "info")
+        self._refresh_summary()
 
     @staticmethod
     def _do_all_off(channels: list[BiasChannel]) -> None:

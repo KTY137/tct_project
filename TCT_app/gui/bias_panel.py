@@ -222,6 +222,10 @@ class BiasPanel(QWidget):
         self._vscan_q: list[float] = []
         self._op_thread: QThread | None = None
         self._op_worker: _SupplyCallWorker | None = None
+        # Completion callback for the in-flight one-shot supply call, stashed so
+        # the GUI-thread teardown slot (_on_supply_call_done) can retrieve it —
+        # only one call runs at a time (guarded in _run_supply_call).
+        self._op_on_done: Callable[[str], None] | None = None
         self._io_busy = False
         # Manual-danger lock (A5.1): True while a Scan Sequencer run owns the
         # hardware (tct_gui._on_sequence_active).  It gates every HV-ENERGIZING
@@ -903,24 +907,39 @@ class BiasPanel(QWidget):
             return False
 
         self._set_io_busy(True)
+        self._op_on_done = on_done
         self._op_worker = _SupplyCallWorker(fn)
         self._op_thread = QThread(self)
         self._op_worker.moveToThread(self._op_thread)
         self._op_thread.started.connect(self._op_worker.run)
-
-        def _finish(err: str) -> None:
-            thread = self._op_thread
-            self._op_thread = None
-            self._op_worker = None
-            if thread is not None:
-                thread.quit()
-                thread.wait(2000)
-            self._set_io_busy(False)
-            on_done(err)
-
-        self._op_worker.done.connect(_finish)
+        # done → _on_supply_call_done is a BOUND METHOD of this GUI-thread
+        # widget, so AutoConnection posts it to the GUI event loop (a
+        # QueuedConnection): the teardown (thread quit/wait) AND the busy-clear
+        # (_set_io_busy(False)) run on the GUI thread.  A bare closure here
+        # instead ran the slot IN the worker's own context (verified via
+        # QThread.currentThread()) — a wait-on-itself, and a cross-thread
+        # busy-clear that could be lost/raced under load, leaving controls stuck.
+        self._op_worker.done.connect(self._on_supply_call_done)
         self._op_thread.start()
         return True
+
+    def _on_supply_call_done(self, err: str) -> None:
+        """GUI-thread teardown for a one-shot supply call, queued from the
+        worker's ``done`` signal: join the worker thread, clear the busy
+        interlock, then run the caller's completion — all on the GUI thread, so
+        it is never a wait-on-itself and the busy-clear is ordered against the
+        GUI thread's own enable/disable."""
+        thread = self._op_thread
+        self._op_thread = None
+        self._op_worker = None
+        on_done = self._op_on_done
+        self._op_on_done = None
+        if thread is not None:
+            thread.quit()
+            thread.wait(2000)
+        self._set_io_busy(False)
+        if on_done is not None:
+            on_done(err)
 
     def _set_io_busy(self, busy: bool) -> None:
         self._io_busy = busy

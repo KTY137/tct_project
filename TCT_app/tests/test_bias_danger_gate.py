@@ -605,7 +605,19 @@ def test_multi_bias_lock_forwards_to_children_and_keeps_all_off_live():
             app,
             lambda: not drv.output_is_on_ch(0) and not drv.output_is_on_ch(1),
         ), "ALL OUTPUTS OFF was blocked while the panel was locked"
-        assert _pump_until(app, lambda: panel._off_thread is None)   # fully settled
+        # Settle on the REAL invariant, not just a nulled handle: the all-off
+        # teardown must have fully landed ON THE GUI THREAD — worker joined
+        # (_off_thread is None) AND the tabs re-enabled (_on_all_off_done's
+        # _tabs.setEnabled(True) ran).  Nulling _off_thread happens first inside
+        # that slot, so waiting on it alone could unlock while the re-enable is
+        # still pending; if the teardown ran in the worker's context (the
+        # wait-on-itself bug) it could even re-enable the tabs off-thread and
+        # race the unlock below.  This stays a BOUNDED pump, so a genuinely
+        # lost/late re-enable times out and fails here instead of papering over.
+        assert _pump_until(
+            app,
+            lambda: panel._off_thread is None and panel._tabs.isEnabled(),
+        ), "ALL OUTPUTS OFF teardown never settled on the GUI thread"
 
         panel.set_manual_danger_locked(False)
         for child in panel._panels:
