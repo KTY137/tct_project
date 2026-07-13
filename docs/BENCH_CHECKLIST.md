@@ -436,6 +436,80 @@ Source: `docs/research/camera_optics_setup.md` (verified live 2026-07-10).
 
 ---
 
+## 8. Backdrop Eyeball Block (Windows 11 DWM Material Effects)
+
+**Last updated:** 2026-07-13
+
+**What to check:**
+- Launch TCT app with QML shell enabled (`TCT_QML_SHELL=1`).
+- Open **Settings → Theme**.
+- Locate the **Window Backdrop** combo (values: none | mica | acrylic).
+- Test all six scenarios below; observe for **visual correctness** (no crashes, no grey flash on real DWM compositor, smooth transitions):
+
+| Scenario | Check | Expected |
+|---|---|---|
+| A1 | Mica ↔ Acrylic toggle | Material change visible; no flicker or grey flash |
+| A2 | Opacity slider with Mica | Translucency changes smoothly; blur effect present |
+| A3 | Opacity slider with Acrylic | Translucency changes; acrylic effect consistent |
+| A4 | Backdrop → None | Grey disappears, window becomes opaque; clean transition |
+| B1 | Theme toggle (dark ↔ light) under active material | Material/opacity persist; theme colors update independently |
+| B2 | Window resize + DPI change + detach tab | Material/opacity survive; no reset to defaults; detached window inherits material |
+
+**Expected result:**
+- All six scenarios pass without visual artifacts or crashes.
+- Danger-chip (red) legibility under Mica+opacity is acceptable (4.5:1 contrast floor).
+- Settings auto-apply; no manual Apply click required (design-fix in progress 2026-07-13).
+
+**Closes:**
+- C1/C2 feature acceptance (backdrop.py + style.py integration + theme_editor UI).
+- Visual verification of DWM ctypes isolation and fail-safe fallback.
+
+---
+
+## 9. Camera Binning SpinView Check (FLIR Blackfly SN 19112408)
+
+**What to check:**
+- Connect to FLIR Blackfly camera via Acquisition Console or `pyspin` (real hardware).
+- Locate SpinView "Binning" node tree:
+  - **BinningMode** (dropdown: Horizontal | Vertical | Both)
+  - **BinningSelector** (if present: selects which binning to configure)
+  - **BinningHorizontal** / **BinningVertical** (spinners for bin factor)
+- Check the **WriteAccessibility** (IsWritable property) of each node:
+  - **While NOT acquiring (idle):** each node should be writable.
+  - **While acquiring (streaming):** record which nodes become read-only.
+
+**Expected result:**
+- Idle state: Binning nodes fully writable.
+- Streaming state: per-node write-state recorded (e.g., "BinningHorizontal is read-only during stream on SN 19112408").
+- This informs `gui/camera_panel.py::_set_node_if_writable()` safeguard: skip read-only nodes, warn on failure.
+
+**Closes:**
+- `docs/research/camera_optics_setup.md` open action 5 (ROI writeability) — extends to Binning.
+- Guards against silent "apply binning, then discover it's ignored mid-acquisition" trap.
+
+---
+
+## 10. Reference-Channel Baseline Window Pulse-Free (Real Timebase)
+
+**What to check:**
+- In TCT app, enable ref-channel monitoring (oscilloscope CH2 as intensity reference).
+- Acquire a waveform at real lab timebase (e.g., 1 µs/div, time-window capture the laser pulse + pre/post baseline).
+- In the Analysis panel (after run completion), export the ref-channel waveform (time, voltage).
+- **Inspect the pre-trigger baseline window** (before laser pulse):
+  - Is the voltage noise-only (zero mean, small RMS)?
+  - Or is there a visible DC offset / thermal drift / 50/60 Hz mains hum?
+
+**Expected result:**
+- Baseline is clean (noise-only, zero mean, RMS < 5 mV typ.).
+- No systematic DC offset that would bias all saved charge/CCE values.
+- `analysis/waveform_analysis.correct_baseline()` (D4, committed 2026-07-13) now corrects both DUT and ref channels identically; this check verifies the optical setup + acquisition are not introducing spurious baseline shifts.
+
+**Closes:**
+- Verification of D4 baseline-correction fix (Kings retro RISK row 85: latent DC-offset bias).
+- Confidence that ref-charge and CCE ratios are now unbiased.
+
+---
+
 ## Next Steps
 
 Once all checklist items are complete:

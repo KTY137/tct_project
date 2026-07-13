@@ -268,9 +268,23 @@ Charge calibration reference and output units.
 
 ---
 
+## QSettings Keys (GUI Persistence)
+
+Persisted via `QSettings("TCT", "TCTSetup")` — application state, theme/window, and user preferences.
+
+| Key | Type | Default | Validated by | Consumed by |
+|-----|------|---------|--------------|-------------|
+| `theme/window_opacity` | int (0–100) | 100 | — | `style.py`, `theme_editor.py` (slider) |
+| `theme/window_backdrop` | str (none\|mica\|acrylic) | none | garbage → none | `backdrop.py`, `style.py` (C2 integration) |
+| `theme/presets` | JSON dict | {} | — | `theme_editor.py` (user preset browser) |
+| `planner/arm_latch` | bool | False | — | `gui/arm_latch.py` (persist armed state) |
+| (other) | — | — | — | — |
+
+---
+
 ## Notes
 
-- Keys are listed in the order they appear in the shipped `devices.yaml`.
+- Devices.yaml keys are listed in the order they appear in the shipped `devices.yaml`.
 - Some keys have no explicit default if they are backend-conditional or obtained from a printer preset (motor stage).
 - Nested dicts like `software_limits`, `save`, `reference`, and `channels` are validated by their consuming modules, not the top-level typo checker, so they appear as single rows.
 - Opt-in unipolar keys (`level_low_V`/`level_high_V`) are shipped commented-out; the bipolar legacy path (amplitude + offset) is the default.

@@ -105,11 +105,13 @@ Core design rules (verified in code):
   `start()` / `start_voltage_scan()` retained for API stability but have no
   GUI callers since ScanPanel retirement. Read-only property `last_run_path: Path | None`
   (thread-safe, set after HDF5 write completes) allows the GUI to link to the just-written run file.
-  Design-system law 5: `execute_plan(plan, gate)` slot accepts a `DangerGate` and
-  runs it; `slow_control_manager` feeds channel WARN/ALARM thresholds into per-point
-  analysis status (scan continues; warnings are advisory). `_move_action` and
-  `_acquire_core` (shared by estimate + executor) ensure derived HV/motion bounds
-  for the `ArmedEnvelope` are byte-for-byte identical to live execution.
+  Public seam `park_safe()` halts motion, discharges HV (primary channel only),
+  and resets state for recovery. Design-system law 5: `execute_plan(plan, gate)`
+  slot accepts a `DangerGate` and runs it; `slow_control_manager` feeds channel
+  WARN/ALARM thresholds into per-point analysis status (scan continues; warnings
+  are advisory). `_move_action` and `_acquire_core` (shared by estimate + executor)
+  ensure derived HV/motion bounds for the `ArmedEnvelope` are byte-for-byte identical
+  to live execution.
 - `danger_gate.py` — danger action protocol and authorization gates. `DangerAction`
   dataclass (action kind, `requires_confirm: bool`); `DangerGate` protocol (async
   request/confirm workflow). `AutoConfirmGate` (auto-approves in simulation);
@@ -117,11 +119,12 @@ Core design rules (verified in code):
   fail-closed). Used by executor step 2 to gate HV ramps and moves.
 - `arm_envelope.py` — pure, hardware-free arm-envelope model (design-system law 5).
   `ArmedEnvelope` (frozen, enumerated authorization: bias channels, HV min/max V,
-  ramp shape, per-axis motion bounds, human-readable summary). `derive_envelope` /
-  `envelope_from_plan` (build from compiled plan, reusing executor's exact seams
-  so armed bounds match execution). `ArmedEnvelopeGate` (DangerGate impl:
-  auto-approves any live DangerAction provably inside envelope, denies outside
-  or after expiry; fail-closed, no side effects).
+  ramp shape, per-axis motion bounds, human-readable summary, `routine_names` for
+  multi-routine execution tracking). `derive_envelope` / `envelope_from_plan`
+  (build from compiled plan, reusing executor's exact seams so armed bounds match
+  execution; supports combined queue envelope for sequenced routines).
+  `ArmedEnvelopeGate` (DangerGate impl: auto-approves any live DangerAction
+  provably inside envelope, denies outside or after expiry; fail-closed, no side effects).
 - `scan_plan.py` — `ScanPlan` tree dataclass: fail-closed nested parameter loops
   (Axis, Bias, Delay loops), action leaves (Move, Settle, Acquire, Extract, Save),
   guard nodes, and danger nodes. YAML round-trip via `load()`/`save()`;
@@ -151,6 +154,10 @@ Core design rules (verified in code):
   now models per-`BiasStep` ramp shaping via `ceil(|dV|/step)*delay` for accurate
   ramp-duration ETA (sourced from device config defaults, loop overrides, or
   per-action overrides in `BiasStep.ramp_step_V` / `ramp_delay_s` fields).
+- `sequencer.py` (NEW) — Pure queue engine for executing scan plan steps. `SequenceRunner`
+  (executes compiled `Step` list, no hardware I/O, no Qt dependencies, fail-closed
+  halt on error). `PreflightHook` seam for custom pre-execution logic. YAML-serializable
+  plan persistence and recovery. Used by executor/planner for deterministic step replay.
 - `device_manager.py` — owns all device instances; single
   connect/disconnect/status interface for the GUI. Backend registries map
   `devices.yaml` keys to classes: `MOTOR_BACKENDS` (`pi`, `grbl`, `simulated`),
@@ -337,6 +344,16 @@ no FastFrame support), driven by the default `oscilloscope.py` VISA backend
 - `qml/ScanStatusStrip.qml` — Flow of 5 metric tiles (State/Progress/ETA/Elapsed/Scan) bound to the runState context property; pure view, 3-layer law; surfaced as the third chrome strip in Shell.qml. Chrome height increased 96 → 204 px; `qml_shell.py` setFixedHeight(204).
 - **Invariants:** Classic DetachableTabWidget is the sole tab/detach engine—QML shelf is a *view*; pyqtgraph plots are NEVER inside QQuickWidget; style.py remains the single token source (Theme singleton mirrors it); soft-reload (production config reload) releases old QML engine before building new one.
 
+**Backdrop & window chrome (Windows 11 DWM):**
+
+- `backdrop.py` (NEW, C1) — Win11 DWM Mica/Acrylic material effects. All ctypes
+  calls isolated; fail-safe DWM API version check + capability fallback (mica → acrylic
+  → none). Offscreen windows and test environments no-op safely. Persisted via
+  QSettings key `theme/window_backdrop` (values: none|mica|acrylic, default none,
+  garbage → none). Material is combined with `theme/window_opacity` slider
+  (0–100%). C2 integration: `style.py` backdrop trio (compute glass amount from
+  opacity, fetch material tokens), `theme_editor.py` combo for preset selection.
+
 **Core panels & support (all on `panel_kit` Cards):**
 
 Panels: `motor_panel`, `bias_panel`, `multi_bias_panel`, `scope_panel`,
@@ -456,8 +473,10 @@ every 500 ms and touches no hardware until the channel reports `connected`.
   `waveforms` + `positions` mandatory, `timestamp`/`analysis`/`bias`/
   `slow_control`/`camera_frame`/`run_metadata` optional. `/run_info` attrs hold
   scan config, `devices.yaml` snapshot (Influx token redacted), calibration,
-  software limits, timestamps. Extensible datasets, gzip, chunk 64.
-  **Full contract: `TCT_app/SCAN_DATA_FORMAT.md`** — the
+  software limits, timestamps. **Camera honesty contract:** (B1) `camera/frame_point_index`
+  dataset maps frame to point (no implicit drop on shape mismatch), `camera/frames`
+  never zero-padded, `n_frames_omitted` attribute counts silent drops. Extensible
+  datasets, gzip, chunk 64. **Full contract: `TCT_app/SCAN_DATA_FORMAT.md`** — the
   authoritative data-format doc; keep both in sync.
 - `influx_writer.py` — optional slow-control sink to InfluxDB.
 - `save_options.py` — which HDF5 groups are written; editable in Settings GUI.
@@ -465,10 +484,13 @@ every 500 ms and touches no hardware until the channel reports `connected`.
 ## analysis/
 
 `waveform_analysis.py` (`analyse_waveform`, `WaveformResult` — amplitude, charge,
-baseline RMS, drift/rise/CFD/onset times), `charge_calibration.py`
-(`ChargeCalibration`), `laser_normalization.py` (`normalise`),
-`efield_analysis.py` (`reconstruct_efield`, `compute_cce` — auto-reference
-bias-scan CCE, `estimate_depletion_voltage`).
+baseline RMS, drift/rise/CFD/onset times), `correct_baseline` (canonical baseline
+subtraction, mirrored in intensity_base for ref-channel parity — guard test ensures
+byte-for-byte equality), `charge_calibration.py` (`ChargeCalibration`),
+`laser_normalization.py` (`normalise`), `efield_analysis.py` (`reconstruct_efield`,
+`compute_cce` — auto-reference bias-scan CCE, `estimate_depletion_voltage`,
+`fit_depletion_voltage` (D1: threshold-crossing fit with quality, replaces bare estimate),
+`compute_cce_with_uncertainty` (D2: CCE ratios with confidence bounds)).
 
 - `scan_grid.py` — `points_to_grid(x_mm, y_mm, values, *, decimals=6) ->
   ScanGridResult`: the one canonical scattered-points → regular 2-D grid
@@ -546,6 +568,26 @@ The following files are autogenerated/maintained registries for fast O(1) lookup
 Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 ## Changelog
+
+- 2026-07-13 — **D4: Canonical baseline subtraction (00d53bc).** NEW `analysis/waveform_analysis.correct_baseline()` (DUT path baseline-corrected). Reference-channel baseline now also baseline-corrected via mirrored implementation in `devices/intensity_base.py` with pinned-equal guard test — fixes latent bias from DC offset on ref channel affecting all saved charge/CCE values. Closes RISK row 85 (Kings retro).
+
+- 2026-07-13 — **D2: CCE with uncertainty bounds (a3449be).** NEW `analysis/efield_analysis.compute_cce_with_uncertainty(charges, fit_result) -> CCEResult` (ratio + confidence); replaces bare CCE in GUI tiles. Closes RISK row 87 (Kings retro: V_dep fit-quality gap).
+
+- 2026-07-13 — **D1: Depletion voltage fit (95b27c7).** NEW `analysis/efield_analysis.DepletionFitResult` + `fit_depletion_voltage(v_bias, charge, threshold)` (2-point threshold crossing + quality metrics). Replaces bare estimate in `estimate_depletion_voltage`; fit-quality flag enables GUI conditional rendering. Closes RISK row 87 (Kings retro).
+
+- 2026-07-13 — **E1: Camera Mono16 autoscale + binning Average attempt (f1e1712 + 00abe9c).** `gui/camera_panel.py` Mono16 display autoscale (no uint8 wrap/alias); `set_binning()` now attempts Average mode per BFLY capability (`IsWritable` check). Classic BFLY SN 19112408 reports Sum-only (comment added, permanent skip-at-INFO). Closes RISK row 48 (Kings retro: display truncation-wrap + binning white-screen).
+
+- 2026-07-13 — **C2: Backdrop trio integration (c66ee05).** `style.py` backdrop trio (material + opacity → glass-amount tokens); `theme_editor.py` backend combo for preset selection; QSettings key `theme/window_backdrop` (none|mica|acrylic, default none, garbage→none). Persisted with `theme/window_opacity` slider. C1+C2 form complete backdrop feature.
+
+- 2026-07-13 — **C1: Win11 DWM Mica/Acrylic material (df43ca9).** NEW `gui/backdrop.py` (DWM capability API, all ctypes isolated, fail-safe version check + fallback, offscreen/test no-op). Material applied via QSS stylesheet + DWM calls. Persisted via QSettings key `theme/window_backdrop` (none|mica|acrylic, default none, garbage→none). Closes BLOCKER (pre-v5 ratification requirement).
+
+- 2026-07-13 — **B1: HDF5 camera honesty (06de0dc).** `data/hdf5_writer.py` NEW `camera/frame_point_index` dataset (frame→point map), `n_frames_omitted` attribute (count of silently-dropped shape-mismatched frames). `camera/frames` never zero-padded. Fixes RISK row 47 + 86 (Kings retro: silent camera-frame drops, untracked data gap).
+
+- 2026-07-13 — **A3: ScanController.park_safe() public seam (ba6128b).** Public API for safe shutdown: halts motion, discharges HV (primary channel only), resets state. Complements the executor's _bias_failsafe; callable from GUI danger-gate handlers. Controller-tier recovery seam.
+
+- 2026-07-13 — **A2: SequenceRunner queue engine (e2ba013).** NEW `controller/sequencer.py` (pure plan-step executor, no hardware I/O, no Qt, fail-closed halt on error). `SequenceRunner` processes compiled `Step` list; `PreflightHook` seam for custom pre-execution; YAML-serializable persistence. Decoupled from executor logic for reusability + testability. Closes design-law 5 (deterministic step replay).
+
+- 2026-07-13 — **A1: Combined-queue envelope (f83b184).** `controller/arm_envelope.py` `ArmedEnvelope.routine_names: list[str]` field (multi-routine tracking). `envelope_from_plan` now builds combined queue envelope from plans that use sequencer. Design-law 5 update: unified envelope scope for multi-routine scans.
 
 - 2026-07-13 — **StateMachine.transition() now atomic under RLock (26bcf95).** check-then-act race fixed: transition is now protected by RLock; callbacks invoked outside lock; ValueError-on-race is documented contract. Eliminates the reported terminal-state mislabel under xdist contention.
 
