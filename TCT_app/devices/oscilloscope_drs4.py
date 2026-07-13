@@ -127,21 +127,30 @@ class DRS4Oscilloscope(BaseDevice):
                 "Then copy drs.so / drs.pyd into the Python path."
             ) from exc
 
-        self._board = _drs.Board()
-        if not self._board.Init():
-            raise DeviceError(
-                "DRS4 board not found or initialisation failed. "
-                "Check USB connection and that no other process is using the board."
-            )
+        # One SDK board handle is shared by the acquisition thread and the
+        # scope monitor; serialise setup on io_lock so a concurrent reader can
+        # never land between Init() and the config push.
+        with self.io_lock:
+            self._board = _drs.Board()
+            if not self._board.Init():
+                raise DeviceError(
+                    "DRS4 board not found or initialisation failed. "
+                    "Check USB connection and that no other process is using the board."
+                )
 
-        self._apply_config()
-        sn = getattr(self._board, "GetBoardSerialNumber", lambda: "?")()
+            self._apply_config()
+            sn = getattr(self._board, "GetBoardSerialNumber", lambda: "?")()
         logger.info("DRS4 board connected — serial %s", sn)
         self._connected = True
 
     def disconnect(self) -> None:
-        self._board = None
-        self._connected = False
+        # Serialise teardown against an in-flight exchange: cross-thread nulling
+        # of the SDK handle while a domino read-out is running is undefined at
+        # the driver level.  io_lock is re-entrant, so a caller already holding
+        # it (e.g. a reservation) can disconnect without deadlock.
+        with self.io_lock:
+            self._board = None
+            self._connected = False
         logger.info("DRS4 disconnected")
 
     # ------------------------------------------------------------------ #
@@ -149,7 +158,11 @@ class DRS4Oscilloscope(BaseDevice):
     # ------------------------------------------------------------------ #
 
     def _apply_config(self) -> None:
-        """Push current settings to the board."""
+        """Push current settings to the board.
+
+        Called from connect() with io_lock already held; it performs board I/O
+        and must only ever run under that lock.
+        """
         b = self._board
         b.SetFrequency(self._freq_ghz, True)          # True → run time calibration
         b.SetInputRange(self._range)
@@ -160,14 +173,16 @@ class DRS4Oscilloscope(BaseDevice):
         b.SetTriggerPolarity(self._trig_edge == "FALL")
 
     def set_frequency(self, freq_ghz: float) -> None:
-        self._freq_ghz = freq_ghz
-        if self._board is not None:
-            self._board.SetFrequency(freq_ghz, True)
+        with self.io_lock:
+            self._freq_ghz = freq_ghz
+            if self._board is not None:
+                self._board.SetFrequency(freq_ghz, True)
 
     def set_voltage_range(self, range_idx: int) -> None:
-        self._range = range_idx
-        if self._board is not None:
-            self._board.SetInputRange(range_idx)
+        with self.io_lock:
+            self._range = range_idx
+            if self._board is not None:
+                self._board.SetInputRange(range_idx)
 
     def set_trigger(
         self,
@@ -175,17 +190,18 @@ class DRS4Oscilloscope(BaseDevice):
         level_V: float | None = None,
         edge: str | None = None,
     ) -> None:
-        if source is not None:
-            self._trig_source = source.upper()
-        if level_V is not None:
-            self._trig_level_V = level_V
-        if edge is not None:
-            self._trig_edge = edge.upper()
-        if self._board is not None:
-            b = self._board
-            b.SetTriggerSource(_TRIG_BITS.get(self._trig_source, _TRIG_BITS["EXT"]))
-            b.SetTriggerLevel(self._trig_level_V)
-            b.SetTriggerPolarity(self._trig_edge == "FALL")
+        with self.io_lock:
+            if source is not None:
+                self._trig_source = source.upper()
+            if level_V is not None:
+                self._trig_level_V = level_V
+            if edge is not None:
+                self._trig_edge = edge.upper()
+            if self._board is not None:
+                b = self._board
+                b.SetTriggerSource(_TRIG_BITS.get(self._trig_source, _TRIG_BITS["EXT"]))
+                b.SetTriggerLevel(self._trig_level_V)
+                b.SetTriggerPolarity(self._trig_edge == "FALL")
 
     # ------------------------------------------------------------------ #
     # Waveform acquisition                                                #
@@ -208,27 +224,35 @@ class DRS4Oscilloscope(BaseDevice):
         t_ref: np.ndarray | None = None
 
         for _ in range(self._n_averages):
-            b = self._board
-            b.StartDomino()
+            # One domino acquisition is a single, indivisible board exchange:
+            # StartDomino arms the chip, the IsBusy poll waits for the trigger,
+            # then TransferWaves/GetTime/GetWave read it out (and the jitter
+            # correction re-reads CH4).  Hold io_lock across that whole exchange
+            # so a monitor read or a settings change can never interleave inside
+            # it — but take it PER acquisition and release between averages, so
+            # the lock is never held across the multi-event averaging loop.
+            with self.io_lock:
+                b = self._board
+                b.StartDomino()
 
-            # Wait for hardware trigger
-            deadline = time.time() + self._timeout_s
-            while not b.IsBusy():
-                if time.time() > deadline:
-                    raise DeviceError(
-                        f"DRS4: no trigger received within {self._timeout_s:.1f} s. "
-                        "Check trigger source, level, and laser."
-                    )
-                time.sleep(0.001)
+                # Wait for hardware trigger
+                deadline = time.time() + self._timeout_s
+                while not b.IsBusy():
+                    if time.time() > deadline:
+                        raise DeviceError(
+                            f"DRS4: no trigger received within {self._timeout_s:.1f} s. "
+                            "Check trigger source, level, and laser."
+                        )
+                    time.sleep(0.001)
 
-            # Transfer all 8 ADC channels (4 differential pairs) to PC
-            b.TransferWaves(0, 7)
+                # Transfer all 8 ADC channels (4 differential pairs) to PC
+                b.TransferWaves(0, 7)
 
-            t_ns = np.array(b.GetTime(0, ch_idx))           # ns, length 1024
-            v_mV = np.array(b.GetWave(0, ch_idx, True))     # mV, calibrated
+                t_ns = np.array(b.GetTime(0, ch_idx))           # ns, length 1024
+                v_mV = np.array(b.GetWave(0, ch_idx, True))     # mV, calibrated
 
-            if self._time_correction:
-                t_ns = self._correct_jitter(b, t_ns)
+                if self._time_correction:
+                    t_ns = self._correct_jitter(b, t_ns)
 
             if t_ref is None:
                 t_ref = t_ns
