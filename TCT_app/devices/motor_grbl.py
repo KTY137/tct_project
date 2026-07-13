@@ -94,7 +94,13 @@ class GRBLMotorStage(MotorStageBase):
         # homing, so it parks at a safe, known, in-range location.
         self._home_to_center = home_to_center
         self._ser: _serial.Serial | None = None
-        self._lock = threading.Lock()
+        # Serialises the serial link.  RE-ENTRANT: a caller may hold the
+        # transport lock (see ``transport_lock``) across a sequence of driver
+        # calls, and those calls take it again on the same thread.  Everything
+        # else about it is unchanged — every acquisition is a plain
+        # ``with self._lock:`` around one exchange, and ``stop()`` still takes
+        # it NEVER (see the comment there).
+        self._lock = threading.RLock()
         # ``_pos`` is always stored in MACHINE coordinates (what GRBL's MPos
         # reports).  The GUI sees a *user* frame = machine - ``_offset()``.
         self._pos = Position(0.0, 0.0, 0.0)
@@ -167,6 +173,22 @@ class GRBLMotorStage(MotorStageBase):
     # ------------------------------------------------------------------ #
     # BaseDevice interface                                                 #
     # ------------------------------------------------------------------ #
+
+    @property
+    def transport_lock(self) -> "threading.RLock":
+        """The lock this driver's I/O actually takes — its serial-command lock.
+
+        NOT ``BaseDevice.io_lock``: every exchange here (``_send``,
+        ``_send_wait``, ``_collect``, ``_grbl_status``, the Marlin M114 paths)
+        is guarded by ``self._lock``, and ``io_lock`` is never touched.  A
+        caller that held ``io_lock`` instead would interleave with the driver
+        anyway, so the accessor must return the real one.
+
+        ``stop()`` deliberately does not take this lock and must never be made
+        to (see its comment): holding the transport lock therefore blocks
+        moves and status polls, but never the emergency stop.
+        """
+        return self._lock
 
     def connect(self) -> None:
         if self.simulation:

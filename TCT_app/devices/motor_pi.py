@@ -29,6 +29,7 @@ Config keys (from devices.yaml → motor_stage section):
 """
 from __future__ import annotations
 
+import threading  # noqa: F401  (used in the transport_lock annotation)
 import time
 import logging
 from typing import Any
@@ -47,7 +48,51 @@ class PIMotorStage(MotorStageBase):
     Replace this class with another MotorStageBase subclass to use a
     different motor system (e.g. Thorlabs APT, Newport SMC100,
     Standa 8SMC) without changing any other module.
+
+    Transport serialisation
+    -----------------------
+    One GCS session is shared by the GUI position poller and the scan thread.
+    Every method that talks to ``self._gcs`` therefore holds
+    ``BaseDevice.io_lock`` (== :attr:`transport_lock`) around each exchange, so
+    a ``qPOS`` from the poller can never land inside a ``MOV``/``IsMoving``
+    exchange from the mover.  The lock is taken PER EXCHANGE and released
+    between polls (see :meth:`_wait_on_target`), never held across a whole
+    move — otherwise the position display would freeze for the length of every
+    move and the stop path would queue behind it.  ``stop()`` is the one
+    deliberate exception; read its comment before changing anything here.
     """
+
+    # Emergency-stop lock policy — READ BEFORE CHANGING.
+    #
+    # An emergency stop must never be queued behind the move it is supposed to
+    # interrupt.  GRBLMotorStage gets that for free: its stop is a GRBL
+    # real-time byte (0x85) which the controller acts on straight out of the
+    # serial buffer, so it is written WITHOUT the transport lock.
+    #
+    # For PI/GCS that property is NOT established by anything in this repo:
+    # pipython issues ``STP`` through the same GCS message layer as every other
+    # command, and whether a C-663/C-884 executes it immediately when it arrives
+    # while another command's reply is still outstanding is a manual question,
+    # not a code question.  Guessing a different command here would be inventing
+    # instrument behaviour (safety rule 4) — so we do not.
+    #
+    # TODO(manual needed): PI GCS 2.0 command reference / pipython —
+    #   (a) is ``STP`` acted on immediately when it arrives mid-exchange (i.e. is
+    #       it real-time, like GRBL's 0x85), or is it queued behind the pending
+    #       command?
+    #   (b) does pipython expose the single-character stop (#24 / 0x18, "stop all
+    #       axes") — e.g. as ``GCSDevice.StopAll()`` — and is that the correct
+    #       emergency-stop primitive to use instead of ``STP``?
+    #   (c) after a stop, does the controller latch an error state that makes the
+    #       NEXT command raise until it is cleared, and what clears it?
+    #
+    # Until that is answered we take the least-bad option below: try to take the
+    # transport lock for a SHORT bounded time, and if a long move is holding it,
+    # send the stop ANYWAY without the lock.  Rationale: the worst case of an
+    # unguarded stop is that the mover's in-flight exchange is garbled, which
+    # surfaces as a DeviceError and fails safe; the worst case of a *late* stop
+    # is a crash.  Never invert that trade.
+    _STOP_LOCK_TIMEOUT_S = 0.25
 
     def __init__(
         self,
@@ -70,10 +115,24 @@ class PIMotorStage(MotorStageBase):
         self._ref_mode = str(ref_mode).upper()
         self._move_timeout = float(move_timeout_s)
         self._gcs: Any = None   # pipython GCSDevice instance
+        self._pitools: Any = None   # pipython.pitools module (set in connect)
 
     # ------------------------------------------------------------------ #
     # BaseDevice interface                                                 #
     # ------------------------------------------------------------------ #
+
+    @property
+    def transport_lock(self) -> "threading.RLock":
+        """The lock every GCS exchange in this driver takes.
+
+        This driver serialises on the inherited :attr:`BaseDevice.io_lock`, so
+        the default accessor would already be correct — it is spelled out here
+        only so the guarantee is explicit and cannot be silently lost if the
+        driver ever grows a private lock.  Re-entrant, so a caller may hold it
+        across a sequence of driver calls (each of which locks again).
+        ``stop()`` never blocks on it (see the class comment).
+        """
+        return self.io_lock
 
     def connect(self) -> None:
         if self._connected:
@@ -93,22 +152,32 @@ class PIMotorStage(MotorStageBase):
         except Exception as exc:
             raise DeviceError(f"PI connect failed: {exc}") from exc
 
-        self._gcs = dev
-        # Set default velocity on all axes
-        axis_ids = [str(a) for a in self._axes]
-        self._gcs.VEL(axis_ids, [self._velocity] * len(axis_ids))
-        self._connected = True
+        with self.io_lock:
+            self._gcs = dev
+            # Set default velocity on all axes
+            axis_ids = [str(a) for a in self._axes]
+            self._gcs.VEL(axis_ids, [self._velocity] * len(axis_ids))
+            self._connected = True
         logger.info("PI stage connected on %s", self._serial_port)
 
     def disconnect(self) -> None:
-        if self._gcs is not None:
-            try:
-                self._gcs.CloseConnection()
-            except Exception:
-                pass
-        self._gcs = None
+        gcs, self._gcs = self._gcs, None
+        # Mark disconnected first: a poller that is queued on the transport lock
+        # must not fire another exchange into a session we are tearing down.
         self._connected = False
         self._homed = False
+        if gcs is not None:
+            # Bounded acquire, not a blocking one: a disconnect that arrives
+            # while a long move holds the transport must still complete (and a
+            # blocking one would hang the shutdown path for the whole move).
+            got = self.io_lock.acquire(timeout=self._STOP_LOCK_TIMEOUT_S)
+            try:
+                gcs.CloseConnection()
+            except Exception:
+                pass
+            finally:
+                if got:
+                    self.io_lock.release()
         logger.info("PI stage disconnected")
 
     # ------------------------------------------------------------------ #
@@ -118,7 +187,10 @@ class PIMotorStage(MotorStageBase):
     def get_position(self) -> Position:
         self._require_connected()
         ids = self._axis_ids()
-        pos = self._gcs.qPOS(ids)
+        # One exchange, exclusive: the GUI poller calls this while the scan
+        # thread is inside MOV / IsMoving on the same GCS session.
+        with self.io_lock:
+            pos = self._gcs.qPOS(ids)
         # Index by the queried axis id (do NOT rely on dict value ordering, which
         # is not guaranteed to match the physical X/Y/Z axis assignment).
         def _ax(i: int) -> float:
@@ -132,7 +204,8 @@ class PIMotorStage(MotorStageBase):
         if not self._connected or self._gcs is None:
             return False
         try:
-            moving = self._gcs.IsMoving(self._axis_ids())
+            with self.io_lock:
+                moving = self._gcs.IsMoving(self._axis_ids())
             return any(moving.values())
         except Exception:
             return False
@@ -140,26 +213,37 @@ class PIMotorStage(MotorStageBase):
     def at_limit_switch(self) -> dict[str, bool]:
         self._require_connected()
         result: dict[str, bool] = {}
-        for i, label in zip(self._axes, ["x", "y", "z"]):
-            try:
-                lim = self._gcs.qLIM(str(i))
-                result[f"{label}_neg"] = bool(lim.get(f"{i}_1", False))
-                result[f"{label}_pos"] = bool(lim.get(f"{i}_2", False))
-            except Exception:
-                result[f"{label}_neg"] = False
-                result[f"{label}_pos"] = False
+        # Whole sweep under one acquisition → a coherent snapshot of the three
+        # axes, and no other thread's exchange lands between the qLIM queries.
+        with self.io_lock:
+            for i, label in zip(self._axes, ["x", "y", "z"]):
+                try:
+                    lim = self._gcs.qLIM(str(i))
+                    result[f"{label}_neg"] = bool(lim.get(f"{i}_1", False))
+                    result[f"{label}_pos"] = bool(lim.get(f"{i}_2", False))
+                except Exception:
+                    result[f"{label}_neg"] = False
+                    result[f"{label}_pos"] = False
         return result
 
     def home(self, axes: list[str] | None = None) -> None:
         self._require_connected()
         ids = self._axis_ids() if axes is None else axes
         try:
-            # startup() enables the servo where applicable and runs the reference
-            # move (FRF/FNL/FPL) for each axis, then waits until referenced.
-            self._pitools.startup(self._gcs, stages=None,
-                                  refmodes=[self._ref_mode] * len(ids), axes=ids)
-            # Re-apply the configured velocity — startup() can reset it.
-            self._gcs.VEL(ids, [self._velocity] * len(ids))
+            # pitools.startup() runs its own poll loop inside pipython, so the
+            # transport must be held EXCLUSIVELY for the whole referencing move —
+            # it cannot be sliced per exchange the way _wait_on_target is.  Cost:
+            # a concurrent get_position() blocks until homing finishes (the
+            # position display freezes, it does not garble).  stop() is unaffected
+            # (bounded acquire + fall-through), which is the property that matters.
+            with self.io_lock:
+                # startup() enables the servo where applicable and runs the
+                # reference move (FRF/FNL/FPL) for each axis, then waits until
+                # referenced.
+                self._pitools.startup(self._gcs, stages=None,
+                                      refmodes=[self._ref_mode] * len(ids), axes=ids)
+                # Re-apply the configured velocity — startup() can reset it.
+                self._gcs.VEL(ids, [self._velocity] * len(ids))
         except Exception as exc:
             raise MotorHomingError(f"Homing failed: {exc}") from exc
         self._homed = True
@@ -169,11 +253,15 @@ class PIMotorStage(MotorStageBase):
         self._require_connected()
         self._require_homed()
         pos = Position(x_mm, y_mm, z_mm)
-        self._check_limits(pos)
+        self._check_limits(pos)          # soft-limit gate, unchanged
         ids = self._axis_ids()
         targets = [x_mm, y_mm, z_mm][: len(ids)]
         try:
-            self._gcs.MOV(ids, targets)
+            # Only the MOV exchange is guarded — NOT the wait below it.  MOV is
+            # asynchronous (it returns as soon as the controller accepts it), so
+            # the lock is held for one short exchange, not for the whole move.
+            with self.io_lock:
+                self._gcs.MOV(ids, targets)
         except Exception as exc:
             raise DeviceError(f"PI MOV failed: {exc}") from exc
         # GCS MOV is asynchronous — block until the axes report on-target, else a
@@ -185,11 +273,31 @@ class PIMotorStage(MotorStageBase):
         self.move_to(cur.x_mm + dx_mm, cur.y_mm + dy_mm, cur.z_mm + dz_mm)
 
     def stop(self) -> None:
-        if self._gcs is not None:
-            try:
-                self._gcs.STP()
-            except Exception:
-                pass
+        # Emergency stop.  See the _STOP_LOCK_TIMEOUT_S comment on the class:
+        # this path may NEVER block for the length of a move, so it takes the
+        # transport lock only with a short timeout and sends STP regardless.
+        gcs = self._gcs
+        if gcs is None:
+            logger.warning("PI stage STOP requested while not connected — no-op")
+            return
+        # Re-entrant: a caller that already holds the transport lock (e.g. a
+        # fail-safe halt from inside a guarded exchange) re-acquires instantly.
+        got = self.io_lock.acquire(timeout=self._STOP_LOCK_TIMEOUT_S)
+        if not got:
+            logger.warning(
+                "PI STOP: transport busy for %.2f s (a move is holding it) — "
+                "sending STP UNGUARDED rather than queueing the emergency stop.",
+                self._STOP_LOCK_TIMEOUT_S,
+            )
+        try:
+            gcs.STP()
+        except Exception as exc:
+            # A stop path must never raise.  (Some GCS controllers also latch an
+            # error after a stop — see TODO(manual needed) (c) on the class.)
+            logger.debug("PI STP raised (swallowed on the stop path): %s", exc)
+        finally:
+            if got:
+                self.io_lock.release()
         logger.warning("PI stage STOP issued")
 
     def zero_position(self) -> None:
@@ -212,11 +320,12 @@ class PIMotorStage(MotorStageBase):
         """
         self._require_connected()
         if self._gcs is not None:
-            for ax in self._axis_ids():
-                try:
-                    self._gcs.DFH(ax)   # Define home position at current location
-                except Exception:
-                    pass
+            with self.io_lock:
+                for ax in self._axis_ids():
+                    try:
+                        self._gcs.DFH(ax)   # Define home at the current location
+                    except Exception:
+                        pass
         self._pos = Position(0.0, 0.0, 0.0)
         if not self._homed:
             logger.warning(
@@ -232,26 +341,37 @@ class PIMotorStage(MotorStageBase):
     def _wait_on_target(self, ids: list[str]) -> None:
         """Block until every axis in *ids* reports on-target (or timeout).
 
-        Prefers pitools.waitontarget (honours servo-on-target ``qONT?``); falls
-        back to polling ``IsMoving`` so it also works for open-loop steppers.
+        Polls ONE GCS exchange at a time, taking the transport lock per poll and
+        releasing it between polls — the same shape as ``GRBLMotorStage.
+        _grbl_wait_idle``.  The lock is deliberately NOT held across the whole
+        wait: that would freeze the GUI position poller for the length of every
+        move (up to ``move_timeout_s``) and put every other transport user
+        behind it.
+
+        ``pitools.waitontarget`` is no longer used here for exactly that reason:
+        it runs its own poll loop inside pipython, so serialising it correctly
+        would mean holding the transport for the entire move.  The checks below
+        are the ones this driver already used as its fallback — ``IsMoving``
+        first (works for the open-loop L-836 steppers), ``qONT`` when the
+        controller rejects it.
+        TODO(bench): on the real C-663 + L-836, confirm this IsMoving/qONT poll
+        reports on-target for a normal MOV exactly as pitools.waitontarget did
+        (watch for a controller that only answers qONT with a servo/encoder).
         """
         deadline = time.monotonic() + self._move_timeout
         time.sleep(0.02)   # let the move actually start before polling
-        waiton = getattr(self._pitools, "waitontarget", None)
-        if waiton is not None:
-            try:
-                waiton(self._gcs, axes=ids, timeout=self._move_timeout)
-                return
-            except Exception as exc:
-                logger.debug("waitontarget failed, polling IsMoving: %s", exc)
         while time.monotonic() < deadline:
             try:
-                if not any(self._gcs.IsMoving(ids).values()):
+                with self.io_lock:
+                    moving = self._gcs.IsMoving(ids)
+                if not any(moving.values()):
                     return
             except Exception:
                 # Some controllers reject IsMoving mid-move; try qONT? instead.
                 try:
-                    if all(self._gcs.qONT(ids).values()):
+                    with self.io_lock:
+                        on_target = self._gcs.qONT(ids)
+                    if all(on_target.values()):
                         return
                 except Exception:
                     return

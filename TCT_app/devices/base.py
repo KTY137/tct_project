@@ -21,6 +21,32 @@ class BaseDevice(ABC):
     def connected(self) -> bool:
         return self._connected
 
+    @property
+    def transport_lock(self) -> "threading.RLock":
+        """The one object a caller must hold for exclusive use of this
+        device's transport (serial port, VISA session, SDK handle).
+
+        Hold it to keep a *sequence* of driver calls free of interleaving —
+        e.g. a capability reservation, or a query whose reply must not be
+        picked up by another thread's read.  Per-exchange serialisation is
+        already the driver's own job; this exposes the same lock so an outside
+        caller can widen that guarantee without reaching into private state.
+
+        Default: :attr:`io_lock`, which is what every driver's I/O takes.
+        A driver that serialises its I/O on a *different* lock MUST override
+        this to return that very lock (``GRBLMotorStage`` returns its
+        ``_lock``).  A second, parallel lock over one transport is a lie: the
+        caller holds one, the driver takes the other, and the exchanges
+        interleave exactly as before.
+
+        Contract for overrides:
+          * ``is``-identical to the lock the driver's own I/O acquires,
+          * re-entrant (a holder may call driver methods that lock again),
+          * **never** acquired by an emergency-stop path — a locked ``stop()``
+            would be queued behind the very move it must interrupt.
+        """
+        return self.io_lock
+
     def is_alive(self) -> bool:
         """Cheap link-liveness check, polled by the DeviceManager monitor.
 

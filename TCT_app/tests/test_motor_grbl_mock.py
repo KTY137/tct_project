@@ -392,5 +392,18 @@ class TestMarlinConnectPrime:
 
         m = _marlin_stage_with(Boom([]))
         m._marlin_prime()                        # must NOT raise
-        assert m._lock.acquire(blocking=False)   # lock was released
-        m._lock.release()
+        # Probe the release from ANOTHER thread: _lock is an RLock (re-entrant,
+        # so a caller may hold the transport lock across a driver call), and a
+        # same-thread acquire() would succeed even if _marlin_prime had leaked
+        # the lock — the check would be vacuous.
+        acquired = []
+
+        def _probe():
+            if m._lock.acquire(blocking=False):
+                acquired.append(True)
+                m._lock.release()
+
+        t = threading.Thread(target=_probe, daemon=True)
+        t.start()
+        t.join(timeout=5.0)
+        assert acquired, "the command lock was not released after a failed prime"
