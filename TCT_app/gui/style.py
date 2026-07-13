@@ -2594,10 +2594,30 @@ def apply_theme(app, mode: str = "light") -> str:
 
     Also sets the app QPalette's canvas roles (``_apply_app_palette``) — the
     backstop for a widget shown as its own top-level window, now that the QSS
-    canvas rule names shells instead of blanket-painting every QWidget."""
+    canvas rule names shells instead of blanket-painting every QWidget.
+
+    Idempotent by design: ``QApplication.setStyleSheet`` unconditionally
+    re-polishes the ENTIRE live widget tree of every top-level window on every
+    call — even when handed the byte-identical stylesheet it already has
+    installed (measured: ~9 s for one such no-op set once ~13k widgets exist in
+    the process). ``apply_theme`` is deliberately called as a same-mode
+    *re-assert* in hot paths — once at boot after ``main.py`` already applied it,
+    and again on every ``_reload_config`` soft-reload inside ``_build_central`` —
+    where the resolved QSS is unchanged. So skip the set when the freshly-built
+    QSS equals what is already installed: a genuine theme change (mode toggle,
+    theme-editor override, glass/typography edit) always yields a *different*
+    QSS and still triggers the full repolish exactly as before, while a pure
+    re-assert costs only the (microsecond) string build+compare. Newly-built
+    panels are unaffected — an app-level stylesheet applies to descendants when
+    they are polished/shown regardless of whether ``setStyleSheet`` was re-called,
+    so no panel loses its styling. This turns the repeated-soft-reload path from
+    O(cumulative-tree) per cycle into O(new-subtree), the root fix for the
+    QML-shell repeated-reload regression (bench PHASE 0)."""
     palette = DARK if str(mode).lower() == "dark" else LIGHT
     _apply_app_font(app)
     _apply_app_palette(app, palette)
-    app.setStyleSheet(build_qss(palette))
+    qss = build_qss(palette)
+    if app.styleSheet() != qss:
+        app.setStyleSheet(qss)
     _apply_pyqtgraph(palette)
     return "dark" if palette is DARK else "light"

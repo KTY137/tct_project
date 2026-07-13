@@ -395,36 +395,35 @@ def test_qml_shell_fallback_on_bad_qml_source(monkeypatch, tmp_path):
 # ``QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)`` through   #
 # synchronously. Only the natural, deferred ``deleteLater()`` proved stable.   #
 #                                                                                #
-# Known, ACCEPTED cost of the safe fix (also root-caused this task): headless  #
-# ``processEvents()`` pumping (no real ``app.exec()``) never actually flushes  #
-# ``deleteLater()``, so each of THIS test's 4 back-to-back reload cycles       #
-# leaves the entire previous cycle's panel tree (not just the QML chrome)      #
-# alive and orphaned; ``_build_central``'s trailing ``apply_theme()`` repolishes#
-# every live widget, so its cost grows with each cycle (measured standalone:   #
-# ~9s/15s/17s/22s per cycle, ~64s total) — legitimately slow, not a hang or a   #
-# crash (a raw script run to completion with faulthandler attached shows no    #
-# fault at all). Under pytest's default 60s per-test budget                    #
-# (``timeout_method = thread`` — pytest.ini) that cumulative cost can exceed   #
-# the limit, and the watchdog's forceful whole-process ``os._exit()`` mid-Qt-  #
-# call is what LOOKS like an access violation in a pytest run — a test-harness #
-# timeout artifact, not a memory-safety bug. Production is unaffected: a soft  #
-# reload is only ever re-triggered by another user click — another real        #
-# event-loop turn — during which Qt's normal idle processing reclaims the      #
-# PREVIOUS cycle's garbage before the next reload can start (verified          #
-# separately with a ``QTimer``-driven swap-and-check under real ``exec()``).   #
-# Fix here: a generous per-test timeout override (not a shorter/weaker test)   #
-# so the real, if slow, 4-cycle pin Mary asked for still runs to completion.   #
-# This test does NOT force deferred deletes (deliberately plain ``_pump()``,   #
-# matching the proven-stable full-suite configuration) and does not assert an  #
-# exact live-``QQuickWidget`` count — that count is expected to grow across    #
-# back-to-back headless cycles for the reason above, and asserting on it would #
-# require the same unsafe forcing. What IS asserted, every cycle, through the  #
-# REAL production path: the reload completes without raising, a genuinely NEW  #
-# chrome is built (not reused/stale), it loads error-free, and the classic     #
-# toolbar/tab bar stay correctly hidden.                                       #
+# Headless leak (context, NOT the cost driver anymore): ``processEvents()``    #
+# pumping (no real ``app.exec()``) never actually flushes ``deleteLater()``,   #
+# so each of THIS test's 4 back-to-back reload cycles leaves the previous      #
+# cycle's whole panel tree alive and orphaned. That leak is a headless-only    #
+# artifact — production reclaims it on the next event-loop turn (a soft reload #
+# is only ever re-triggered by another user click) — and this test does NOT    #
+# force deferred deletes (plain ``_pump()``, the proven-stable configuration)  #
+# nor assert an exact live-``QQuickWidget`` count (it grows across cycles for  #
+# that reason).                                                                #
+#                                                                              #
+# PHASE 0 root-cause fix (2026-07-13): the leak used to be FATAL to this test  #
+# only because ``_build_central``'s trailing same-mode ``apply_theme()``       #
+# re-assert called ``QApplication.setStyleSheet`` unconditionally, and Qt      #
+# re-polishes the ENTIRE live widget tree on every such call even when handed  #
+# the byte-identical stylesheet already installed — so per-cycle cost grew     #
+# with the accumulating orphan tree (~9s/15s/17s/22s, ~64s total) and blew the #
+# per-test budget on the bench. ``gui.style.apply_theme`` now skips the set    #
+# when the QSS is unchanged (a genuine theme change still re-applies), making  #
+# the reload path O(new-subtree) instead of O(cumulative-tree). Measured after #
+# the fix: ~10s for all 4 cycles, and a 20x loop stays flat (~1.6-2.5s/cycle,  #
+# apply_theme 0.00s throughout). The timeout below is a generous contention    #
+# margin (CLAUDE.md test-lane note), no longer load-bearing for correctness.   #
+#                                                                              #
+# What IS asserted, every cycle, through the REAL production path: the reload  #
+# completes without raising, a genuinely NEW chrome is built (not reused/      #
+# stale), it loads error-free, and the classic toolbar/tab bar stay hidden.    #
 # --------------------------------------------------------------------------- #
 @pytest.mark.slow
-@pytest.mark.timeout(240)
+@pytest.mark.timeout(90)
 def test_qml_shell_survives_repeated_production_soft_reload(monkeypatch):
     from PySide6.QtWidgets import QMessageBox
     from PySide6.QtQuickWidgets import QQuickWidget
