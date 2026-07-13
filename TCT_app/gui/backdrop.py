@@ -73,6 +73,19 @@ DWMSBT_TRANSIENTWINDOW = 3  # Acrylic
 # DWMWA_SYSTEMBACKDROP_TYPE attribute id for DwmSetWindowAttribute.
 DWMWA_SYSTEMBACKDROP_TYPE = 38
 
+# DWMWA_USE_IMMERSIVE_DARK_MODE attribute id (dwmapi.h). A per-window BOOL that
+# tells DWM to tint the window's non-client frame AND its Mica/Acrylic material
+# DARK. It is NOT read from the system app-mode automatically: a window that
+# never sets it composes the material in the LIGHT tint by default — a bright,
+# near-white frosted pane regardless of the desktop or the app's own palette
+# ("komplett weiss"). Qt sets this implicitly during a stylesheet-driven
+# repolish when it detects a dark colour scheme, but that is a fragile side
+# effect (a same-QSS apply that skips the repolish — the Phase-0 perf guard in
+# gui.style.apply_theme — never re-triggers it). So the backdrop path asserts it
+# EXPLICITLY from the caller's theme mode (see apply_backdrop's ``dark`` arg),
+# and re-asserts it on every theme switch, instead of trusting the repolish.
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+
 _KIND_TO_DWMSBT = {
     "mica": DWMSBT_MAINWINDOW,
     "acrylic": DWMSBT_TRANSIENTWINDOW,
@@ -265,7 +278,7 @@ def _clear_window_canvas(window: QWidget) -> None:
 # Public API                                                                  #
 # --------------------------------------------------------------------------- #
 
-def apply_backdrop(window: QWidget, kind: str) -> bool:
+def apply_backdrop(window: QWidget, kind: str, *, dark: bool | None = None) -> bool:
     """Apply (or reset) a DWM system backdrop material on ``window``.
 
     ``kind`` must be one of :data:`BACKDROP_KINDS` — anything else raises
@@ -276,6 +289,19 @@ def apply_backdrop(window: QWidget, kind: str) -> bool:
 
     ``kind == "none"`` resets a previously-applied backdrop; on a window that
     never had one applied, it is a true no-op (no DWM calls at all).
+
+    ``dark`` — when not ``None``, asserts ``DWMWA_USE_IMMERSIVE_DARK_MODE``
+    (True → dark tint, False → light tint) on the HWND *before* the material
+    is attached, so Mica/Acrylic composes in the tint that matches the app
+    theme instead of DWM's light default ("komplett weiss" — see that
+    constant's comment). Set BEFORE the ``SYSTEMBACKDROP_TYPE`` attribute per
+    the documented recipes (order matters on some builds). ``None`` (the
+    default, and what every non-theme caller/test uses) leaves the flag
+    untouched — byte-identical to the pre-fix behaviour. The theme layer
+    (``gui.style.apply_window_backdrop_to``) passes the live mode; this module
+    stays theme-blind and only relays the boolean. A non-zero HRESULT here is
+    logged but does NOT abort the material (it is a tint refinement, not the
+    material itself).
     """
     if kind not in BACKDROP_KINDS:
         raise ValueError(
@@ -290,6 +316,19 @@ def apply_backdrop(window: QWidget, kind: str) -> bool:
     hwnd = _native_hwnd(window)
     if hwnd is None:
         return False
+
+    if dark is not None:
+        try:
+            immersive_hr = _dwm_set_window_attribute(
+                hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, 1 if dark else 0)
+        except Exception:
+            logger.exception("backdrop: immersive-dark-mode set raised")
+            immersive_hr = -1
+        if immersive_hr != 0:
+            logger.warning(
+                "backdrop: DwmSetWindowAttribute USE_IMMERSIVE_DARK_MODE=%s "
+                "failed (hr=%s) — material may render in the wrong tint",
+                1 if dark else 0, immersive_hr)
 
     try:
         extend_hr = _dwm_extend_frame(hwnd)
@@ -320,9 +359,10 @@ def apply_backdrop(window: QWidget, kind: str) -> bool:
     # *silent* rejection (S_OK returned but nothing renders) is still visible
     # in the log — the DWM path can return S_OK yet not composite the material.
     logger.info(
-        "backdrop: applied kind=%s (DwmExtendFrameIntoClientArea hr=%s, "
+        "backdrop: applied kind=%s tint=%s (DwmExtendFrameIntoClientArea hr=%s, "
         "DwmSetWindowAttribute SYSTEMBACKDROP_TYPE=%s hr=%s)",
-        kind, extend_hr, _KIND_TO_DWMSBT[kind], attr_hr)
+        kind, ("dark" if dark else "light") if dark is not None else "system",
+        extend_hr, _KIND_TO_DWMSBT[kind], attr_hr)
     _prepare_window_canvas(window)
     _backdrop_applied_windows.add(window)
     return True

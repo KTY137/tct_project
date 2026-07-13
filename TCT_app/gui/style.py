@@ -2025,6 +2025,12 @@ _window_opacity: float = DEFAULT_WINDOW_OPACITY
 # state only; whether it actually renders is decided at apply time by
 # backdrop.is_backdrop_supported(). "none" everywhere else in the module.
 _window_backdrop: str = "none"
+# The theme mode ("dark"/"light") of the last apply_theme call. Authoritative
+# after the first apply_theme (which always runs at startup, main.py). Read by
+# apply_window_backdrop_to so the DWM material's immersive-dark tint matches the
+# active theme (gui.backdrop.DWMWA_USE_IMMERSIVE_DARK_MODE) — the cockpit is
+# dark-first, so "dark" is the safe pre-first-apply fallback.
+_active_mode: str = "dark"
 _overrides: dict[str, dict[str, str]] = {"light": {}, "dark": {}}
 _typography: dict = {"sans": None, "mono": None, "hinting": None, "base_px": None}
 _radius_scale: str = "m"
@@ -2255,7 +2261,15 @@ def apply_window_backdrop_to(window, kind: str | None = None) -> str:
     touching the palette the DWM material needs to show through.
     """
     resolved = _window_backdrop if kind is None else kind
-    applied = backdrop.apply_backdrop(window, resolved)
+    # Assert the DWM material's immersive-dark tint from the live theme mode so
+    # Mica/Acrylic composes dark under the dark cockpit theme instead of DWM's
+    # light default ("komplett weiss"). backdrop.py stays theme-blind; this is
+    # where style.py — which owns the mode — relays it. Re-asserted on every
+    # theme switch (apply_window_backdrop's fan-out runs after apply_theme in
+    # _toggle_theme), so a dark<->light flip re-tints the material explicitly
+    # rather than relying on a stylesheet-repolish side effect the identical-QSS
+    # perf guard can skip.
+    applied = backdrop.apply_backdrop(window, resolved, dark=(_active_mode == "dark"))
     if resolved == "none":
         _reassert_window_palette(window)
         _repaint_central_widget(window)
@@ -2618,11 +2632,13 @@ def apply_theme(app, mode: str = "light") -> str:
     so no panel loses its styling. This turns the repeated-soft-reload path from
     O(cumulative-tree) per cycle into O(new-subtree), the root fix for the
     QML-shell repeated-reload regression (bench PHASE 0)."""
+    global _active_mode
     palette = DARK if str(mode).lower() == "dark" else LIGHT
+    _active_mode = "dark" if palette is DARK else "light"
     _apply_app_font(app)
     _apply_app_palette(app, palette)
     qss = build_qss(palette)
     if app.styleSheet() != qss:
         app.setStyleSheet(qss)
     _apply_pyqtgraph(palette)
-    return "dark" if palette is DARK else "light"
+    return _active_mode

@@ -894,6 +894,49 @@ def test_backdrop_combo_enabled_and_live_previewing_when_supported(tmp_path, mon
     style.reset_theme_customization()
 
 
+def test_immersive_dark_tint_tracks_theme_mode_and_survives_qss_skip(tmp_path, monkeypatch):
+    """The 'komplett weiss' regression fix: the DWM material's immersive-dark
+    tint (DWMWA_USE_IMMERSIVE_DARK_MODE) is asserted EXPLICITLY from the active
+    theme mode on every backdrop apply — so a dark<->light switch re-tints the
+    material, and, crucially, the tint is NOT lost when apply_theme skips its
+    setStyleSheet on an identical QSS (the Phase-0 perf guard, 26538a4). Qt only
+    sets that flag as a stylesheet-repolish side effect; the skip removes the
+    repolish, so the backdrop path must own the assertion. Without it, Mica
+    composes in DWM's LIGHT default -> the near-white frosted pane Kaya saw."""
+    _force_backdrop_supported(monkeypatch)
+    calls = _install_recording_dwm(monkeypatch)
+    app = _app()
+    style.set_window_backdrop("acrylic")
+    dlg = _dialog(tmp_path, mode="dark")
+    dlg.show()
+
+    IMM = backdrop.DWMWA_USE_IMMERSIVE_DARK_MODE
+
+    # dark theme -> dark tint
+    calls.clear()
+    style.apply_theme(app, "dark")
+    style.apply_window_backdrop(app)
+    assert ("set_attr", IMM, 1) in calls
+
+    # a SAME-MODE re-apply hits apply_theme's identical-QSS skip (setStyleSheet
+    # not called, no repolish) — yet the explicit backdrop re-assert still fires
+    # the dark tint. This is the exact interaction the perf guard could break.
+    qss_before = app.styleSheet()
+    calls.clear()
+    style.apply_theme(app, "dark")
+    assert app.styleSheet() == qss_before  # identical QSS -> the perf skip path
+    style.apply_window_backdrop(app)
+    assert ("set_attr", IMM, 1) in calls
+
+    # light theme -> light tint
+    calls.clear()
+    style.apply_theme(app, "light")
+    style.apply_window_backdrop(app)
+    assert ("set_attr", IMM, 0) in calls
+
+    style.reset_theme_customization()
+
+
 def test_backdrop_combo_defaults_to_none_and_lists_the_three_kinds(tmp_path):
     dlg = _dialog(tmp_path)
     items = [dlg._backdrop_combo.itemData(i) for i in range(dlg._backdrop_combo.count())]

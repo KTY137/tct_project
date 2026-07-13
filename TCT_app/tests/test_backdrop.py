@@ -127,6 +127,50 @@ def test_apply_acrylic_records_dwmsbt_transientwindow(monkeypatch):
     assert backdrop.DWMSBT_TRANSIENTWINDOW == 3
 
 
+# --------------------------------------------------------------------------- #
+# Immersive-dark-mode tint (the "komplett weiss" fix): Mica/Acrylic composes  #
+# LIGHT by default unless DWMWA_USE_IMMERSIVE_DARK_MODE(20) is asserted. The   #
+# backdrop path must set it explicitly from the caller's theme, BEFORE the     #
+# material attach, and must NOT touch it when the caller passes no tint.       #
+# --------------------------------------------------------------------------- #
+
+def test_dark_true_asserts_immersive_dark_before_backdrop(monkeypatch):
+    _force_supported(monkeypatch)
+    calls = _recording_dwm(monkeypatch)
+    w = _make_window()
+
+    assert backdrop.apply_backdrop(w, "mica", dark=True) is True
+    # value 1 = dark tint, on attribute 20
+    assert ("set_attr", backdrop.DWMWA_USE_IMMERSIVE_DARK_MODE, 1) in calls
+    assert backdrop.DWMWA_USE_IMMERSIVE_DARK_MODE == 20
+    # ORDER: immersive-dark (20) is set before the material (38) per the
+    # documented recipe — some builds ignore a post-attach flip.
+    set_attrs = [c for c in calls if c[0] == "set_attr"]
+    idx20 = next(i for i, c in enumerate(set_attrs) if c[1] == 20)
+    idx38 = next(i for i, c in enumerate(set_attrs) if c[1] == 38)
+    assert idx20 < idx38
+
+
+def test_dark_false_asserts_immersive_light(monkeypatch):
+    _force_supported(monkeypatch)
+    calls = _recording_dwm(monkeypatch)
+    w = _make_window()
+
+    assert backdrop.apply_backdrop(w, "acrylic", dark=False) is True
+    assert ("set_attr", backdrop.DWMWA_USE_IMMERSIVE_DARK_MODE, 0) in calls
+
+
+def test_dark_none_default_never_touches_immersive_flag(monkeypatch):
+    """The default (and every non-theme caller/test) must be byte-identical to
+    the pre-fix behaviour: attribute 20 is never written."""
+    _force_supported(monkeypatch)
+    calls = _recording_dwm(monkeypatch)
+    w = _make_window()
+
+    assert backdrop.apply_backdrop(w, "mica") is True
+    assert not any(c[0] == "set_attr" and c[1] == 20 for c in calls)
+
+
 def test_extend_frame_called_before_set_attribute(monkeypatch):
     _force_supported(monkeypatch)
     calls = _recording_dwm(monkeypatch)
