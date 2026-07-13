@@ -29,6 +29,7 @@ from controller.plan_compiler import compile_plan
 from controller.danger_gate import DangerAction
 from controller.arm_envelope import (
     ArmedEnvelope, ArmedEnvelopeGate, derive_envelope, envelope_from_plan,
+    envelope_from_plans,
 )
 
 
@@ -197,6 +198,108 @@ def test_on_deny_audit_hook_fires():
     gate = ArmedEnvelopeGate(env, on_deny=lambda a, r: seen.append((a.kind, r)))
     assert gate.confirm(_D("hv_ramp", {"channel": 0, "target_V": -999.0})) is False
     assert seen and seen[0][0] == "hv_ramp" and "outside armed range" in seen[0][1]
+
+
+# --------------------------------------------------------------------------- #
+# (6) combined SEQUENCE envelope — one arm over a routine QUEUE                 #
+#     (DECISIONS 2026-07-13: max HV, total travel, every routine named)         #
+# --------------------------------------------------------------------------- #
+def test_sequence_union_hv_and_motion_extremes():
+    """Union of two plans = the GLOBAL envelope of both: HV min/max are the
+    global extremes, per-axis bounds the global min/max, counts summed."""
+    a = _bias_xy_plan([-10.0, -20.0], [-1.0, 1.0])   # HV -20..-10, X -1..1
+    b = _bias_xy_plan([-30.0, -40.0], [2.0, 5.0])    # HV -40..-30, X 2..5
+    env = envelope_from_plans([a, b], channel=0)
+
+    assert env.channels == frozenset({0})
+    assert (env.hv_min_V, env.hv_max_V) == (-40.0, -10.0)   # global signed extremes
+    assert env.x_bounds == (-1.0, 5.0)                      # global travel
+    assert env.y_bounds is None and env.z_bounds is None    # never driven
+    # counts summed across both plans (2 + 2 setpoints, 4 + 4 moves)
+    single_a = envelope_from_plan(a, channel=0)
+    single_b = envelope_from_plan(b, channel=0)
+    assert env.n_bias_setpoints == single_a.n_bias_setpoints + single_b.n_bias_setpoints
+    assert env.n_moves == single_a.n_moves + single_b.n_moves
+
+
+def test_sequence_mixed_ramp_shape_is_none():
+    """Plans whose ramp shapes DIFFER collapse to None ("mixed") — safe because
+    the gate never re-validates ramp rate (only channel + target voltage)."""
+    a = _bias_xy_plan([-10.0], [0.0], ramp_step_V=5.0, ramp_delay_s=0.1)
+    b = _bias_xy_plan([-20.0], [0.0], ramp_step_V=10.0, ramp_delay_s=0.2)
+    env = envelope_from_plans([a, b], channel=0)
+    assert env.ramp_step_V is None and env.ramp_delay_s is None
+
+
+def test_sequence_uniform_ramp_shape_preserved():
+    """A ramp shape uniform across every plan is preserved in the union."""
+    a = _bias_xy_plan([-10.0], [0.0], ramp_step_V=5.0, ramp_delay_s=0.1)
+    b = _bias_xy_plan([-20.0], [0.0], ramp_step_V=5.0, ramp_delay_s=0.1)
+    env = envelope_from_plans([a, b], channel=0)
+    assert env.ramp_step_V == 5.0 and env.ramp_delay_s == 0.1
+
+
+def test_sequence_summary_names_every_routine_with_prefix():
+    """Every routine name appears in the arm text behind the SEQUENCE prefix
+    (ratified: the operator sees which routines the single hold-3s authorizes)."""
+    a = _bias_plan(-10.0)
+    b = _bias_xy_plan([-30.0], [-2.0, 2.0])
+    c = _stage_plan([0.0, 8.0])
+    env = envelope_from_plans([a, b, c], channel=0,
+                              plan_names=["warmup", "iv-sweep", "focus-map"])
+    s = env.summary
+    assert s.startswith("Arm SEQUENCE envelope (3 routines: "
+                        "warmup, iv-sweep, focus-map): ")
+    for name in ("warmup", "iv-sweep", "focus-map"):
+        assert name in s
+    assert env.routine_names == ("warmup", "iv-sweep", "focus-map")
+    # the union's real numbers still ride in the body
+    assert "-30" in s and "-10" in s
+
+
+def test_sequence_gate_approves_plan2_action_denies_outside_union():
+    """A gate built from the union APPROVES a DangerAction from plan 2 that
+    plan 1 alone would DENY, and DENIES an HV value outside the union."""
+    p1 = _bias_plan(-10.0)     # armed for -10 V only
+    p2 = _bias_plan(-100.0)    # extends the union down to -100 V
+
+    # plan 1 alone does NOT cover the -100 V ramp.
+    solo = ArmedEnvelopeGate(envelope_from_plan(p1, channel=0))
+    assert solo.confirm(_D("hv_ramp", {"channel": 0, "target_V": -100.0})) is False
+
+    union = ArmedEnvelopeGate(envelope_from_plans([p1, p2], channel=0))
+    assert union.confirm(_D("hv_ramp", {"channel": 0, "target_V": -100.0})) is True
+    assert union.confirm(_D("hv_ramp", {"channel": 0, "target_V": -10.0})) is True
+    # outside the union [-100, -10] → fail-closed.
+    assert union.confirm(_D("hv_ramp", {"channel": 0, "target_V": -200.0})) is False
+
+
+def test_sequence_single_plan_matches_envelope_from_plan():
+    """routine_names default keeps a plain result unchanged (backward compat):
+    a one-plan, un-named sequence equals the historic single-plan envelope."""
+    plan = _bias_xy_plan([-10.0, -30.0], [-1.0, 1.0], ramp_step_V=5.0)
+    solo = envelope_from_plan(plan, channel=0)
+    seq = envelope_from_plans([plan], channel=0)   # no plan_names
+    assert seq.routine_names == ()
+    assert seq.summary.startswith("Arm envelope:")
+    assert seq.summary == solo.summary
+    assert (seq.hv_min_V, seq.hv_max_V) == (solo.hv_min_V, solo.hv_max_V)
+    assert seq.x_bounds == solo.x_bounds
+    assert seq.ramp_step_V == solo.ramp_step_V
+
+
+def test_sequence_backward_compat_plain_envelope_unchanged():
+    """envelope_from_plan alone still yields the historic fields untouched."""
+    env = envelope_from_plan(_bias_plan(-10.0), channel=0)
+    assert env.routine_names == ()
+    assert env.summary.startswith("Arm envelope:")
+    assert "SEQUENCE" not in env.summary
+
+
+def test_sequence_empty_plans_raises():
+    """An empty queue can never be armed (fail-closed, no empty envelope)."""
+    with pytest.raises(ValueError):
+        envelope_from_plans([], channel=0)
 
 
 # --------------------------------------------------------------------------- #

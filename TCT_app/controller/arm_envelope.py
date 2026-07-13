@@ -39,7 +39,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence
 
 from controller.danger_gate import DangerAction
 from controller.plan_compiler import BiasStep, MoveStep, Step, compile_plan
@@ -87,6 +87,12 @@ class ArmedEnvelope:
       ``None`` == no expiry (the GUI arm→Execute latch timeout, design law 5, is
       a separate GUI concern — see the module note and the handoff).
     * ``summary`` — the human sentence shown over the Arm latch.
+    * ``routine_names`` — the ordered names of the routines this envelope was
+      armed over.  Empty ``()`` for a single-plan arm (the historic case);
+      non-empty only for a combined SEQUENCE envelope (a routine QUEUE armed
+      with ONE envelope, DECISIONS 2026-07-13).  Every name appears in
+      ``summary`` — the ratified requirement that the operator sees exactly
+      which routines the single hold-3s authorizes.
     """
     channels: frozenset[int]
     hv_min_V: Optional[float]
@@ -100,6 +106,7 @@ class ArmedEnvelope:
     n_bias_setpoints: int = 0
     n_moves: int = 0
     summary: str = ""
+    routine_names: tuple[str, ...] = ()
 
     # -- expiry --------------------------------------------------------------
     def is_expired(self, now: Optional[float] = None) -> bool:
@@ -245,6 +252,76 @@ def envelope_from_plan(
                            timeout_s=timeout_s, now=now)
 
 
+def envelope_from_plans(
+    plans: Sequence[ScanPlan],
+    channel: int,
+    *,
+    plan_names: Sequence[str] = (),
+    timeout_s: Optional[float] = None,
+    now: Optional[float] = None,
+) -> ArmedEnvelope:
+    """Derive ONE combined :class:`ArmedEnvelope` for a whole routine QUEUE.
+
+    Council-ratified (DECISIONS 2026-07-13): an armed queue carries a SINGLE
+    combined envelope — max HV, total travel, every routine named in the arm
+    text, one hold-3s for an unattended overnight run — while the executor
+    still re-validates every step at run time.  This is the pure derivation of
+    that envelope; the queue engine/coordinator arrive in later beats.
+
+    Each plan is compiled with the SAME :func:`compile_plan` the single-plan
+    path uses; the compiled step lists are CONCATENATED and fed to the existing
+    :func:`derive_envelope`, so the union falls straight out of the existing
+    logic: HV ``(min, max)`` = the global extremes across all plans, per-axis
+    motion bounds = the global ``(min, max)``, and the setpoint/move counts are
+    summed.  Ramp shape follows the same uniform-else-``None`` rule already
+    applied within a plan: a uniform shape across every plan is preserved, and
+    a mix of shapes collapses to ``None`` ("mixed").  That is safe because the
+    gate NEVER re-validates ramp rate — the HV branch of
+    :meth:`ArmedEnvelopeGate.confirm` checks only channel + target voltage, and
+    the executor applies each step's own shape at run time.
+
+    *plan_names* (optional) names the routines in queue order; when supplied,
+    every name is embedded in :attr:`ArmedEnvelope.summary` behind the
+    ``Arm SEQUENCE envelope (...)`` prefix (the ratified "operator sees which
+    routines the single hold authorizes" requirement).  Left empty, the result
+    is an ordinary combined envelope with the plain ``Arm envelope:`` summary.
+
+    *timeout_s* defaults to ``None`` (no expiry) DELIBERATELY: an overnight
+    queue must not have a hard wall-clock expiry that would strand a 2 a.m.
+    entry mid-run.  Runtime re-validation of every step is the safety backstop,
+    not a stale-arm timer.  A GUI-side Arm→Execute latch timeout (design law 5)
+    remains a separate concern and can still pass an explicit *timeout_s*.
+
+    Single-channel discipline: every plan must resolve to the given bias
+    *channel* (the caller is responsible for that resolution).  A multi-channel
+    union is OUT OF SCOPE here — the HV envelope is attributed to the one armed
+    *channel*, and the gate stays fail-closed for any un-armed channel.
+
+    Raises :class:`ValueError` on an empty *plans* sequence — fail-closed, so an
+    empty queue can never be armed with an empty (vacuously permissive-looking)
+    envelope.
+    """
+    plans = list(plans)
+    if not plans:
+        raise ValueError(
+            "envelope_from_plans requires at least one plan; refusing to arm "
+            "an empty routine sequence (fail-closed)."
+        )
+    all_steps: list[Step] = []
+    for plan in plans:
+        all_steps.extend(compile_plan(plan))
+
+    env = derive_envelope(all_steps, channel, timeout_s=timeout_s, now=now)
+
+    names = tuple(str(n) for n in plan_names)
+    if names:
+        # Frozen dataclass: attach the routine names, then rebuild the summary
+        # so the SEQUENCE prefix + every routine name appear in the arm text.
+        object.__setattr__(env, "routine_names", names)
+        object.__setattr__(env, "summary", _summarize(env, timeout_s))
+    return env
+
+
 def derive_envelope(
     steps: Iterable[Step],
     channel: int,
@@ -340,4 +417,13 @@ def _summarize(env: ArmedEnvelope, timeout_s: Optional[float]) -> str:
 
     if timeout_s is not None:
         parts.append(f"valid {timeout_s:g} s")
-    return "Arm envelope: " + " | ".join(parts)
+
+    body = " | ".join(parts)
+    # A combined SEQUENCE envelope names every routine the single hold-3s
+    # authorizes (ratified 2026-07-13); a single-plan arm keeps the historic
+    # "Arm envelope:" prefix byte-for-byte.
+    if env.routine_names:
+        names = ", ".join(env.routine_names)
+        return (f"Arm SEQUENCE envelope ({len(env.routine_names)} routines: "
+                f"{names}): {body}")
+    return "Arm envelope: " + body
