@@ -184,9 +184,14 @@ green.
 
 ## BENCH
 
-Last verified green: **`d091702`, 1192 passed, 42 s (`-n auto`)**. Everything
-since is NOT bench-verified as a set. Next bench run = beat 0.3 (after Noah
-lands + Mary signs off). Reachability:
+Green sets: `88907a4` (1349 passed) · `ee9f48d` (1372 passed; = origin HEAD,
+pushed). **RED GATE on `a68e289` (09:4x): 1 failed / 1690 passed** —
+`test_bias_danger_gate.py::test_multi_bias_lock_forwards_to_children_and_keeps_all_off_live`
+(A5.1's own test; `QThread::wait: Thread tried to wait on itself` — the
+hand-rolled thread-teardown bug class in the multi-bias ALL-OFF path; child
+busy-clear races thread cleanup under xdist load; local serial runs pass).
+Noah fix beat IN FLIGHT (root-cause teardown ordering + real settle
+condition). Do NOT push past ee9f48d until the gate is green. Reachability:
 `ssh -o BatchMode=yes Administrator@100.119.126.9 echo up`.
 
 ## PARKED — needs Kaya
