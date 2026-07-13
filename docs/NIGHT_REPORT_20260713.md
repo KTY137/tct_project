@@ -178,5 +178,17 @@ sollten denselben Audit bekommen.
 
 ## Addenda (nach Redaktionsschluss)
 
-- _Bench-Fix (Noah), E4-Retry (Jonathan), Codex S1: bei Redaktionsschluss in
-  flight — wird hier ergänzt._
+- **10:1x — DAS GATE IST GRÜN: `41a8ab2`, 1691 passed, 1 xfailed, 45 s. Branch
+  gepusht (origin = `41a8ab2`, 40 Commits diese Session).** Noahs Fix
+  root-causte das Race per `QThread.currentThread()`-Probe: das done-Signal
+  des ALL-OFF-Workers war an eine kontextlose Closure gebunden und lief auf
+  dem Worker-Thread (wait-on-self + Off-Thread-Widget-Enable im Rennen gegen
+  den Unlock). Fix: Bound-Methods ⇒ AutoConnection queued das komplette
+  Teardown auf den GUI-Thread; Schwester-Instanz in `bias_panel` gleich mit.
+  25x seriell + 30x Contention lokal sauber, dann Bench-xdist grün. Die
+  OUTPUT-OFF-Device-Writes selbst waren nie verzögert — nur GUI-Teardown.
+  Mary-Concurrency-Review des Fixes lief bei diesem Addendum noch (Verdict
+  folgt im Ledger; bei Findings folgt ein Fix-Commit — der Bench-Beweis
+  steht unabhängig davon).
+- E4-Retry (Affine-Mosaik) + Codex S1 (Style-Audit): weiterhin in flight —
+  Ergebnisse landen im Ledger und in der Tagschicht-Queue.

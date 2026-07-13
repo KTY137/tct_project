@@ -184,15 +184,14 @@ green.
 
 ## BENCH
 
-Green sets: `88907a4` (1349 passed) · `ee9f48d` (1372 passed; = origin HEAD,
-pushed). **RED GATE on `a68e289` (09:4x): 1 failed / 1690 passed** —
-`test_bias_danger_gate.py::test_multi_bias_lock_forwards_to_children_and_keeps_all_off_live`
-(A5.1's own test; `QThread::wait: Thread tried to wait on itself` — the
-hand-rolled thread-teardown bug class in the multi-bias ALL-OFF path; child
-busy-clear races thread cleanup under xdist load; local serial runs pass).
-Noah fix beat IN FLIGHT (root-cause teardown ordering + real settle
-condition). Do NOT push past ee9f48d until the gate is green. Reachability:
-`ssh -o BatchMode=yes Administrator@100.119.126.9 echo up`.
+Green sets: `88907a4` (1349) · `ee9f48d` (1372) · **`41a8ab2` (1691 passed,
+1 xfailed, 45 s) — FINAL NIGHT GATE GREEN, PUSHED (origin = 41a8ab2, 40
+commits this session).** The intermediate red on `a68e289` (ALL-OFF
+teardown race, wait-on-itself) was root-caused and fixed in `41a8ab2`
+(bound-method teardown → GUI-thread queued; sibling in bias_panel fixed
+too). Mary concurrency review of the fix was still in flight at push time —
+verdict lands here; findings (if any) become a follow-up commit.
+Reachability: `ssh -o BatchMode=yes Administrator@100.119.126.9 echo up`.
 
 ## PARKED — needs Kaya
 
