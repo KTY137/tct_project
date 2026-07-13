@@ -205,6 +205,23 @@ fuzzer (`tests/test_state_fuzz.py`) go to sophonone whenever it is up.**
 - If the bench is down, say so explicitly in the report — never silently
   substitute a laptop full-suite run and call it a green baseline.
 
+### Test economy (Kaya, 2026-07-13 — binding: "one execution per truth")
+
+- **The implementing agent's pasted pytest output tail IS the verification.**
+  Adam does not re-run green targeted results. Session-hygiene rule 4 demands
+  having SEEN real output — not personally re-executing it.
+- **Adam re-runs only when:** (a) the report is inconsistent with the diff,
+  (b) the diff touches paths outside the declared beat scope, or (c) as ONE
+  combined reconciliation run after several beats touched the same area —
+  never per-beat re-runs of the same files.
+- **Mary re-runs only to reproduce a specific concern** (existing rule),
+  never to re-establish a baseline someone already showed.
+- **Full suite only at phase/track gates and before merges** ("nach jedem
+  fetten Change die Suite ankurbeln") — on the bench, one run at a time.
+- **Never run cross-cutting suites while another beat holds file locks** on
+  modules they import (observed failure: a half-written abstract-method
+  rename broke unrelated fixtures and produced a false alarm).
+
 ## Session hygiene — countering orchestrator decay (Kaya-approved 2026-07-12)
 
 Long sessions do not degrade the crew: subagents are stateless, start cold,
