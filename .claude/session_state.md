@@ -189,8 +189,13 @@ Green sets: `88907a4` (1349) · `ee9f48d` (1372) · **`41a8ab2` (1691 passed,
 commits this session).** The intermediate red on `a68e289` (ALL-OFF
 teardown race, wait-on-itself) was root-caused and fixed in `41a8ab2`
 (bound-method teardown → GUI-thread queued; sibling in bias_panel fixed
-too). Mary concurrency review of the fix was still in flight at push time —
-verdict lands here; findings (if any) become a follow-up commit.
+too). **Mary verdict on 41a8ab2: APPROVE** (mechanism empirically verified
+via her own PySide6 probe; queued wait bounded + near-instant; on_done
+exactly-once; HV OUTPUT-OFF writes unmoved). Her two leftovers are
+PRE-EXISTING tracked debt → day-shift riders: (a) TECH_DEBT:111 line ref
+stale (:855 → :876); (b) shutdown() wait(2000) can abandon a still-ramping
+worker on REAL hardware + stopped parented QThreads accumulate — both fold
+into the WorkerThread-primitive beat.
 Reachability: `ssh -o BatchMode=yes Administrator@100.119.126.9 echo up`.
 
 ## PARKED — needs Kaya
