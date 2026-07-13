@@ -12,6 +12,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from analysis.camera_calibration import AffineFit
 from analysis.mosaic_stitch import (
     OVERLAP_FRAC_MAX,
     OVERLAP_FRAC_MIN,
@@ -148,6 +149,59 @@ class TestCanvasGeometry:
     def test_inverted_area_raises(self):
         with pytest.raises(ValueError):
             canvas_geometry((10, 0, 0, 10), 5.0)
+
+
+def _rotated_sheared_affine(scale=10.0, degrees=15.0, shear=0.1, offset_px=(5.0, -3.0)):
+    """A hand-built (not fitted) rotation+shear+scale AffineFit for tests --
+    no correspondence points needed, just a known, invertible matrix."""
+    theta = np.radians(degrees)
+    matrix = scale * np.array(
+        [
+            [np.cos(theta) + shear * np.sin(theta), -np.sin(theta)],
+            [np.sin(theta), np.cos(theta)],
+        ]
+    )
+    return AffineFit(
+        matrix_px_per_mm=matrix,
+        offset_px=np.array(offset_px, dtype=np.float64),
+        residuals_px=np.zeros((3, 2)),
+        rms_px=0.0,
+        max_abs_px=0.0,
+        rank=3,
+    )
+
+
+class TestCanvasGeometryAffine:
+    def test_affine_bounds_cover_all_four_projected_corners(self):
+        """Rotation means all FOUR area corners (not just the two diagonal
+        ones the scalar path uses) can extend the bounding box."""
+        affine = _rotated_sheared_affine()
+        area = (0.0, 0.0, 10.0, 8.0)
+        shape_px, origin_mm = canvas_geometry(area, 10.0, affine=affine)
+
+        corners_mm = np.array([[0, 0], [10, 0], [10, 8], [0, 8]], dtype=np.float64)
+        corners_px = affine.predict(corners_mm)
+        expect_w = corners_px[:, 0].max() - corners_px[:, 0].min()
+        expect_h = corners_px[:, 1].max() - corners_px[:, 1].min()
+
+        assert shape_px[0] == pytest.approx(expect_h, abs=1.0)
+        assert shape_px[1] == pytest.approx(expect_w, abs=1.0)
+
+        # origin_mm must map (via affine) back to the bounding box's own
+        # minimum-corner pixel -- "mm position of canvas pixel (0, 0)".
+        origin_px = affine.predict(np.array([[origin_mm[0], origin_mm[1]]]))[0]
+        assert origin_px[0] == pytest.approx(corners_px[:, 0].min(), abs=1e-6)
+        assert origin_px[1] == pytest.approx(corners_px[:, 1].min(), abs=1e-6)
+
+    def test_affine_none_matches_scalar_path(self):
+        """affine=None (default) is exactly the pre-existing scalar path."""
+        area = (0.0, 0.0, 12.0, 6.0)
+        assert canvas_geometry(area, 5.0) == canvas_geometry(area, 5.0, affine=None)
+
+    def test_affine_zero_extent_area_still_one_pixel(self):
+        affine = _rotated_sheared_affine()
+        shape_px, _ = canvas_geometry((5.0, 5.0, 5.0, 5.0), 10.0, affine=affine)
+        assert shape_px == (1, 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -327,6 +381,67 @@ class TestPlaceTilesBlendingAndNaN:
 
 
 # --------------------------------------------------------------------------- #
+# place_tiles(affine=...) placement                                          #
+# --------------------------------------------------------------------------- #
+
+class TestPlaceTilesAffine:
+    def test_known_center_lands_at_affine_predicted_canvas_px(self):
+        """A single-hot-pixel marker tile placed via *affine* must land at
+        exactly ``affine.predict(center_mm) - affine.predict(origin_mm)``
+        (rounded the same nearest-pixel way the scalar path rounds)."""
+        affine = _rotated_sheared_affine()
+        area = (0.0, 0.0, 10.0, 8.0)
+        shape_px, origin_mm = canvas_geometry(area, 10.0, affine=affine)
+
+        tile = np.zeros((4, 4))
+        tile[2, 2] = 9.0
+        center_mm = (5.0, 4.0)
+        canvas, weight_map = place_tiles(
+            shape_px, [(tile, center_mm)], 10.0, origin_mm, affine=affine
+        )
+        peak = np.unravel_index(int(np.nanargmax(canvas)), canvas.shape)
+
+        rel_px = affine.predict(np.array([center_mm])) - affine.predict(
+            np.array([[origin_mm[0], origin_mm[1]]])
+        )
+        col_px, row_px = float(rel_px[0, 0]), float(rel_px[0, 1])
+        expect_r0 = int(round(row_px - 4 / 2.0))
+        expect_c0 = int(round(col_px - 4 / 2.0))
+        assert peak == (expect_r0 + 2, expect_c0 + 2)
+        assert weight_map[peak] > 0.0
+
+    def test_affine_none_is_byte_identical_to_scalar_mm_to_px(self):
+        """affine=None (default) must reproduce the scalar path exactly --
+        no new rounding/branch differences sneak in."""
+        tiles = [(np.full((10, 10), 4.0), (5.0, 5.0)), (np.full((10, 10), 10.0), (11.0, 5.0))]
+        canvas_default, w_default = place_tiles((10, 16), tiles, 1.0, (0.0, 0.0))
+        canvas_explicit, w_explicit = place_tiles(
+            (10, 16), tiles, 1.0, (0.0, 0.0), affine=None
+        )
+        np.testing.assert_array_equal(canvas_default, canvas_explicit)
+        np.testing.assert_array_equal(w_default, w_explicit)
+
+
+class TestPlaceTilesDefaultApiUnchanged:
+    """Scalar-path regression marker: the pre-existing 47 tests above are
+    the real regression suite (unmodified); this class just pins the
+    *return shape* contract the new opt-in kwargs must not disturb."""
+
+    def test_default_call_returns_a_plain_2tuple(self):
+        tile = np.full((5, 5), 3.0)
+        result = place_tiles((10, 10), [(tile, (2.5, 2.5))], 1.0, (0.0, 0.0))
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+
+    def test_return_diagnostics_false_is_still_a_2tuple(self):
+        tile = np.full((5, 5), 3.0)
+        result = place_tiles(
+            (10, 10), [(tile, (2.5, 2.5))], 1.0, (0.0, 0.0), return_diagnostics=False
+        )
+        assert len(result) == 2
+
+
+# --------------------------------------------------------------------------- #
 # refine_offset (v2 hook)                                                     #
 # --------------------------------------------------------------------------- #
 
@@ -399,3 +514,133 @@ class TestRefineOffset:
         good = np.zeros((4, 4))
         with pytest.raises(ValueError):
             refine_offset(bad, good, (0.0, 0.0))
+
+
+# --------------------------------------------------------------------------- #
+# place_tiles(refine=True) -- pairwise seam refinement integration            #
+# --------------------------------------------------------------------------- #
+
+class TestPlaceTilesRefineRecovery:
+    def test_refine_recovers_injected_seam_shift_under_vignette(self):
+        """Two same-source-texture tiles nominally 30% overlapping (a
+        realistic mosaic stride), with a genuine 4px registration error
+        baked into tile_b's content on top of a shared synthetic vignette.
+        Both directions: refine=True measurably corrects it; refine=False
+        leaves it (the shift "persists")."""
+        rng = np.random.default_rng(11)
+        S = 80
+        tile_a = rng.standard_normal((S, S))
+        true_shift_dx = -20.0  # wrapped nominal (-24) + injected error (+4)
+        tile_b = np.roll(tile_a, shift=int(true_shift_dx), axis=1)
+
+        # Synthetic vignette: same smooth radial bump baked into both tiles
+        # (an optical vignette is a camera property, not scene content) --
+        # exercises prepare_metrology_roi's illumination stabilization
+        # inside place_tiles(refine=True).
+        yy, xx = np.mgrid[0:S, 0:S]
+        vignette = 25.0 * np.exp(
+            -(((xx - S / 2) ** 2 + (yy - S / 2) ** 2) / (2 * (S / 3.0) ** 2))
+        )
+        tile_a_v = tile_a + vignette
+        tile_b_v = tile_b + vignette
+
+        center_a = (40.0, 40.0)
+        center_b = (96.0, 40.0)  # nominal dx=56 -> 30% overlap, wraps to -24
+        tiles = [(tile_a_v, center_a), (tile_b_v, center_b)]
+
+        _, _, diag_refined = place_tiles(
+            (100, 200), tiles, 1.0, (0.0, 0.0), refine=True, return_diagnostics=True
+        )
+        _, _, diag_plain = place_tiles(
+            (100, 200), tiles, 1.0, (0.0, 0.0), refine=False, return_diagnostics=True
+        )
+
+        # Direction 1: refine=True measurably corrects the injected error
+        # (total pairwise correction ~4px, split in half onto each tile).
+        (dy_a, dx_a), (dy_b, dx_b) = diag_refined["applied_offset_px"]
+        assert dx_b - dx_a == pytest.approx(4.0, abs=0.5)
+        assert diag_refined["mean_abs_offset_px"] > 1.0
+
+        # Direction 2: refine=False leaves the injected error completely
+        # uncorrected -- the shift persists by construction (the API never
+        # looks at pixel content when refine=False).
+        assert diag_plain["applied_offset_px"] == [(0.0, 0.0), (0.0, 0.0)]
+        assert diag_plain["mean_abs_offset_px"] == 0.0
+
+
+class TestPlaceTilesRefineClamp:
+    def test_large_correction_on_thin_overlap_is_clamped_and_counted(self):
+        """A correction refine_offset itself trusts (comfortably inside its
+        own +-10%-of-tile accept window) can still be large RELATIVE to a
+        thin nominal overlap strip -- place_tiles' own +-25%-of-overlap
+        clamp exists exactly for that gap (a garbage correlation must not
+        throw a tile), and it is independent of refine_offset's own gate
+        (see place_tiles' "Seam refinement" docstring section)."""
+        rng = np.random.default_rng(3)
+        tile_a = rng.standard_normal((60, 60))
+        tile_b = np.roll(tile_a, shift=-7, axis=1)
+
+        center_a = (30.0, 30.0)
+        center_b = (78.0, 30.0)  # nominal dx=48 -> 20% overlap (12px), wraps to -12
+        tiles = [(tile_a, center_a), (tile_b, center_b)]
+
+        _, _, diag = place_tiles(
+            (100, 150), tiles, 1.0, (0.0, 0.0), refine=True, return_diagnostics=True
+        )
+
+        assert diag["n_clamped"] == 1
+        # Clamp limit is 25% of the 12px overlap = 3px total correction,
+        # split in half onto each tile -> +-1.5px each.
+        (dy_a, dx_a), (dy_b, dx_b) = diag["applied_offset_px"]
+        assert dx_a == pytest.approx(-1.5, abs=0.05)
+        assert dx_b == pytest.approx(1.5, abs=0.05)
+
+    def test_non_overlapping_tiles_are_never_refined(self):
+        """Two tiles with no nominal overlap at all -- refine=True must not
+        crash or fabricate a correction; nothing to clamp either."""
+        tile_a = np.zeros((10, 10))
+        tile_b = np.zeros((10, 10))
+        tiles = [(tile_a, (0.0, 0.0)), (tile_b, (500.0, 500.0))]
+
+        _, _, diag = place_tiles(
+            (20, 20), tiles, 1.0, (0.0, 0.0), refine=True, return_diagnostics=True
+        )
+        assert diag["applied_offset_px"] == [(0.0, 0.0), (0.0, 0.0)]
+        assert diag["n_clamped"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# place_tiles(return_diagnostics=True) shape contract                        #
+# --------------------------------------------------------------------------- #
+
+class TestPlaceTilesDiagnosticsShape:
+    def test_return_diagnostics_true_yields_3tuple_with_expected_keys(self):
+        tile_a = np.full((10, 10), 1.0)
+        tile_b = np.full((10, 10), 2.0)
+        tiles = [(tile_a, (5.0, 5.0)), (tile_b, (11.0, 5.0))]
+
+        result = place_tiles((10, 16), tiles, 1.0, (0.0, 0.0), return_diagnostics=True)
+
+        assert len(result) == 3
+        canvas, weight_map, diag = result
+        assert canvas.shape == (10, 16)
+        assert weight_map.shape == (10, 16)
+        assert set(diag.keys()) == {"applied_offset_px", "n_clamped", "mean_abs_offset_px"}
+        assert len(diag["applied_offset_px"]) == len(tiles)
+        assert isinstance(diag["n_clamped"], int)
+        assert isinstance(diag["mean_abs_offset_px"], float)
+
+    def test_diagnostics_default_refine_false_are_all_zero(self):
+        tile = np.full((10, 10), 1.0)
+        _, _, diag = place_tiles(
+            (10, 10), [(tile, (5.0, 5.0))], 1.0, (0.0, 0.0), return_diagnostics=True
+        )
+        assert diag["applied_offset_px"] == [(0.0, 0.0)]
+        assert diag["n_clamped"] == 0
+        assert diag["mean_abs_offset_px"] == 0.0
+
+    def test_diagnostics_empty_tiles_list(self):
+        _, _, diag = place_tiles((5, 5), [], 1.0, (0.0, 0.0), return_diagnostics=True)
+        assert diag["applied_offset_px"] == []
+        assert diag["n_clamped"] == 0
+        assert diag["mean_abs_offset_px"] == 0.0

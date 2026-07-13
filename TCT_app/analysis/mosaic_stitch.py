@@ -16,17 +16,22 @@ camera/motor plumbing, A4c procedure runner + UI), per CLAUDE.md's
 "analysis/" row: named/derived math lives here, panels and procedures call
 it.
 
-v1 contract
------------
+v1 contract (default) / seam refinement (opt-in)
+--------------------------------------------------
 Tile placement comes ONLY from the stage position each tile was grabbed at,
-converted to pixels via the camera's px→mm calibration — see
-:func:`plan_grid` (grid layout) and :func:`place_tiles` (calibrated
-placement + linear feather blending in overlap zones). There is **no
-global optimisation, no bundle adjustment, no seam search** in v1:
-:func:`refine_offset` is a *v2* building block (a per-pair sub-pixel
-correlation you can call yourself) and is **not** wired into
-:func:`place_tiles` here — a caller that wants refined seams computes
-corrected centres with it and passes THOSE into :func:`place_tiles`.
+converted to pixels via the camera's px→mm calibration, OR an
+:class:`~analysis.camera_calibration.AffineFit` (see :func:`place_tiles`'s
+``affine`` parameter) — see :func:`plan_grid` (grid layout) and
+:func:`place_tiles` (calibrated placement + linear feather blending in
+overlap zones). There is still **no global optimisation / bundle
+adjustment**: :func:`place_tiles`'s ``refine=True`` wires in
+:func:`refine_offset` strictly *pairwise* — each overlapping tile pair is
+corrected independently against its own nominal placement (see
+:func:`place_tiles`'s "Seam refinement" section). ``refine=False`` (the
+default) is byte-identical to the original v1 behaviour: nominal placement
+only, :func:`refine_offset` untouched — a caller that wants full manual
+control can still call it directly and pass corrected centres into
+:func:`place_tiles`.
 
 Units
 -----
@@ -82,7 +87,12 @@ numpy<2: only long-stable APIs are used (``ceil``, ``linspace``, ``arange``,
 """
 from __future__ import annotations
 
+from collections import namedtuple
+
 import numpy as np
+
+from analysis.camera_calibration import AffineFit
+from analysis.image_prep import prepare_metrology_roi
 
 __all__ = [
     "OVERLAP_FRAC_MIN",
@@ -94,6 +104,13 @@ __all__ = [
     "place_tiles",
     "refine_offset",
 ]
+
+#: One tile's nominal (pre-refinement) placement geometry, used internally
+#: by :func:`place_tiles` / :func:`_refine_tile_offsets` — *row_px*/*col_px*
+#: are the tile CENTRE's nominal canvas position (float, sub-pixel; from
+#: either :func:`mm_to_px` or :func:`_affine_mm_to_px`), *th*/*tw* its pixel
+#: shape (``img.shape``).
+_TileEntry = namedtuple("_TileEntry", "img row_px col_px th tw")
 
 # --------------------------------------------------------------------------- #
 # Grid planning                                                               #
@@ -208,6 +225,8 @@ def _axis_tile_centers(lo: float, hi: float, fov: float, n: int) -> list[float]:
 def canvas_geometry(
     area_mm: tuple[float, float, float, float],
     px_per_mm: float,
+    *,
+    affine: AffineFit | None = None,
 ) -> tuple[tuple[int, int], tuple[float, float]]:
     """Canvas pixel shape + mm origin for a stitched mosaic covering
     *area_mm* at *px_per_mm* — everything a caller needs to derive real mm
@@ -222,6 +241,22 @@ def canvas_geometry(
         The camera's pixel scale from self-calibration (see
         ``controller.repeatability.RepeatabilityTester.calibrate``) — must
         be positive; shared by the canvas and every tile placed into it.
+        Still validated (and still what the *scalar* path — ``affine=None``
+        — uses) even when *affine* is given, though the affine path itself
+        derives its own scale from ``affine.matrix_px_per_mm``.
+    affine : AffineFit, optional
+        When given, the canvas bounds come from projecting *area_mm*'s own
+        four corners through ``affine.predict`` (rotation/shear means all
+        four, not just the two diagonal corners the scalar path uses, can
+        extend the bounding box) instead of the isotropic *px_per_mm*
+        scale — see :func:`place_tiles`'s ``affine`` parameter for the
+        matching per-tile placement half of this. *origin_mm* is then the
+        mm point that maps (via *affine*) to the bounding box's own
+        minimum-corner pixel, found by ``affine.image_to_object`` — still
+        "the mm position of canvas pixel (row=0, col=0)", just no longer
+        equal to ``(x0_mm, y0_mm)`` in general once rotation/shear is
+        involved. ``affine=None`` (default) is the original scalar path,
+        unchanged.
 
     Returns
     -------
@@ -254,9 +289,23 @@ def canvas_geometry(
         raise ValueError(
             f"area_mm must have x1_mm >= x0_mm and y1_mm >= y0_mm; got {area_mm}"
         )
-    w_px = max(1, int(np.ceil(round((x1 - x0) * px_per_mm, 6))))
-    h_px = max(1, int(np.ceil(round((y1 - y0) * px_per_mm, 6))))
-    return (h_px, w_px), (x0, y0)
+    if affine is None:
+        w_px = max(1, int(np.ceil(round((x1 - x0) * px_per_mm, 6))))
+        h_px = max(1, int(np.ceil(round((y1 - y0) * px_per_mm, 6))))
+        return (h_px, w_px), (x0, y0)
+
+    corners_mm = np.array(
+        [[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.float64
+    )
+    corners_px = affine.predict(corners_mm)
+    col_min, row_min = corners_px[:, 0].min(), corners_px[:, 1].min()
+    col_max, row_max = corners_px[:, 0].max(), corners_px[:, 1].max()
+    w_px = max(1, int(np.ceil(round(float(col_max - col_min), 6))))
+    h_px = max(1, int(np.ceil(round(float(row_max - row_min), 6))))
+    origin_mm_pt = affine.image_to_object(
+        np.array([[col_min, row_min]], dtype=np.float64)
+    )[0]
+    return (h_px, w_px), (float(origin_mm_pt[0]), float(origin_mm_pt[1]))
 
 
 def mm_to_px(
@@ -293,6 +342,29 @@ def px_to_mm(
     return x_mm, y_mm
 
 
+def _affine_mm_to_px(
+    center_mm: tuple[float, float],
+    origin_mm: tuple[float, float],
+    affine: AffineFit,
+) -> tuple[float, float]:
+    """Affine-calibrated counterpart of :func:`mm_to_px`: stage
+    ``center_mm`` -> canvas ``(col_px, row_px)`` relative to *origin_mm*,
+    via *affine*. Translation-invariant by construction (both
+    ``affine.predict`` calls' ``offset_px`` terms cancel in the
+    subtraction), so any mm point works as *origin_mm* — matching the
+    "origin_mm is the mm position of canvas pixel (0, 0)" convention this
+    whole module uses.
+    """
+    pts = np.array(
+        [[center_mm[0], center_mm[1]], [origin_mm[0], origin_mm[1]]],
+        dtype=np.float64,
+    )
+    px = affine.predict(pts)
+    col_px = float(px[0, 0] - px[1, 0])
+    row_px = float(px[0, 1] - px[1, 1])
+    return col_px, row_px
+
+
 # --------------------------------------------------------------------------- #
 # Placement + linear feather blending                                        #
 # --------------------------------------------------------------------------- #
@@ -302,10 +374,14 @@ def place_tiles(
     tiles: list[tuple[np.ndarray, tuple[float, float]]],
     px_per_mm: float,
     origin_mm: tuple[float, float],
-) -> tuple[np.ndarray, np.ndarray]:
+    *,
+    affine: AffineFit | None = None,
+    refine: bool = False,
+    return_diagnostics: bool = False,
+) -> tuple[np.ndarray, np.ndarray] | tuple[np.ndarray, np.ndarray, dict[str, object]]:
     """Stitch *tiles* onto one canvas by calibrated placement + linear
-    feather blending (v1 contract — see module docstring: no seam search,
-    no global optimisation).
+    feather blending (v1 contract — see module docstring: no global
+    optimisation/bundle adjustment, even with ``refine=True``).
 
     Parameters
     ----------
@@ -327,7 +403,22 @@ def place_tiles(
         magnification for the whole mosaic run). Must be positive.
     origin_mm : (x0_mm, y0_mm)
         mm position of canvas pixel ``(row=0, col=0)`` — typically
-        ``canvas_geometry(area_mm, px_per_mm)[1]``.
+        ``canvas_geometry(area_mm, px_per_mm)[1]`` (or its affine
+        counterpart, see below).
+    affine : AffineFit, optional
+        When given, every tile centre is placed via
+        ``affine.predict`` instead of the isotropic *px_per_mm* scalar
+        (rotation/shear-aware placement) — see :func:`_affine_mm_to_px`.
+        *px_per_mm* is still validated but otherwise unused in this path.
+        ``affine=None`` (default) is the original scalar path, byte-for-byte
+        unchanged.
+    refine : bool
+        Opt-in seam refinement — see "Seam refinement" below. Default
+        ``False`` keeps the pure nominal-placement v1 behaviour.
+    return_diagnostics : bool
+        When ``True``, return a 3-tuple ``(canvas, weight_map, diag)``
+        instead of the default 2-tuple — see "Diagnostics" below. Default
+        ``False`` keeps the original 2-tuple return shape.
 
     Returns
     -------
@@ -364,8 +455,46 @@ def place_tiles(
     *added* into a shared numerator/denominator (never assigned), placement
     order never changes the result: **later tiles never hard-overwrite**
     earlier ones. Placement itself is nearest-pixel (each tile's centre is
-    rounded to the nearest integer canvas pixel) — v1 does no sub-pixel
-    resampling/interpolation of the source tile.
+    rounded to the nearest integer canvas pixel, AFTER any ``refine``
+    correction below is added) — v1 does no sub-pixel resampling/
+    interpolation of the source tile.
+
+    Seam refinement (``refine=True``)
+    ----------------------------------
+    For every pair of tiles whose NOMINAL placement rectangles overlap,
+    :func:`refine_offset` runs on each tile's full
+    :func:`~analysis.image_prep.prepare_metrology_roi` -stabilized image
+    (illumination/vignette-robust — see that module's docstring), with
+    ``nominal_shift_px`` set to the pair's actual nominal centre-to-centre
+    pixel delta (matching :func:`refine_offset`'s documented calling
+    convention). The measured correction (``measured - nominal``) is
+    CLAMPED, per axis, to ``±25%`` of THAT PAIR's nominal overlap extent in
+    pixels (deliberately tighter than — and independent of —
+    :func:`refine_offset`'s own internal ``±10%``-of-input-array rejection
+    gate, which is sized against the much larger full tile: a correlation
+    :func:`refine_offset` itself accepts as plausible can still be large
+    relative to a small overlap strip, which is exactly the "garbage
+    correlation must not throw a tile" case this clamp exists for). Each
+    clamped pair increments the returned diagnostics' ``n_clamped`` once
+    (per pair, not per axis). The (possibly clamped) pairwise correction is
+    split evenly between the two tiles (each moves half, in opposing
+    directions) and every tile's final applied offset is the mean of all
+    its pairwise corrections (zero if it has none) — a single averaging
+    pass, NOT an iterative/global bundle adjustment (see module docstring).
+    ``refine=False`` skips this entirely: nominal placement only.
+
+    Diagnostics (``return_diagnostics=True``)
+    --------------------------------------------
+    ``diag`` is a dict with:
+
+    - ``"applied_offset_px"``: ``list[(dy_px, dx_px)]``, one entry per tile
+      in *tiles* order — the ``(row, col)`` correction actually added to
+      that tile's nominal placement before rounding. All-zero when
+      ``refine=False``.
+    - ``"n_clamped"``: int count of overlapping PAIRS whose correction hit
+      the 25% clamp above (``0`` when ``refine=False``).
+    - ``"mean_abs_offset_px"``: float, the mean over tiles of
+      ``hypot(dy_px, dx_px)`` — ``0.0`` for an empty *tiles* list.
 
     Raises
     ------
@@ -379,9 +508,7 @@ def place_tiles(
     if px_per_mm <= 0.0:
         raise ValueError(f"px_per_mm must be positive; got {px_per_mm}")
 
-    numerator = np.zeros((h_px, w_px), dtype=np.float64)
-    weight_sum = np.zeros((h_px, w_px), dtype=np.float64)
-
+    entries: list[_TileEntry] = []
     for image2d, center_mm in tiles:
         img = np.asarray(image2d, dtype=np.float64)
         if img.ndim != 2 or img.size == 0:
@@ -389,8 +516,23 @@ def place_tiles(
                 f"tile image2d must be a non-empty 2-D array; got shape {img.shape}"
             )
         th, tw = img.shape
+        if affine is not None:
+            col_px, row_px = _affine_mm_to_px(center_mm, origin_mm, affine)
+        else:
+            col_px, row_px = mm_to_px(center_mm[0], center_mm[1], origin_mm, px_per_mm)
+        entries.append(_TileEntry(img=img, row_px=row_px, col_px=col_px, th=th, tw=tw))
 
-        col_px, row_px = mm_to_px(center_mm[0], center_mm[1], origin_mm, px_per_mm)
+    offsets, n_clamped = (
+        _refine_tile_offsets(entries) if refine else ([(0.0, 0.0)] * len(entries), 0)
+    )
+
+    numerator = np.zeros((h_px, w_px), dtype=np.float64)
+    weight_sum = np.zeros((h_px, w_px), dtype=np.float64)
+
+    for entry, (dy, dx) in zip(entries, offsets):
+        img, th, tw = entry.img, entry.th, entry.tw
+        row_px = entry.row_px + dy
+        col_px = entry.col_px + dx
         r0 = int(round(row_px - th / 2.0))
         c0 = int(round(col_px - tw / 2.0))
 
@@ -427,7 +569,17 @@ def place_tiles(
     canvas = np.full((h_px, w_px), np.nan, dtype=np.float64)
     covered = weight_sum > 0.0
     canvas[covered] = numerator[covered] / weight_sum[covered]
-    return canvas, weight_sum
+
+    if not return_diagnostics:
+        return canvas, weight_sum
+
+    mags = [float(np.hypot(dy, dx)) for dy, dx in offsets]
+    diag: dict[str, object] = {
+        "applied_offset_px": [(float(dy), float(dx)) for dy, dx in offsets],
+        "n_clamped": int(n_clamped),
+        "mean_abs_offset_px": float(np.mean(mags)) if mags else 0.0,
+    }
+    return canvas, weight_sum, diag
 
 
 def _axis_ramp(n: int) -> np.ndarray:
@@ -451,7 +603,107 @@ def _feather_weight(h: int, w: int) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------- #
-# v2 hook: sub-pixel seam refinement (NOT wired into place_tiles here)       #
+# place_tiles(refine=True) pairwise seam-refinement helpers                   #
+# --------------------------------------------------------------------------- #
+
+#: Per-pair clamp on the seam-refinement correction, as a fraction of that
+#: pair's own nominal overlap extent (px) -- see :func:`place_tiles`'s "Seam
+#: refinement" docstring section for why this is deliberately independent of
+#: (and, on a typical overlap, tighter than) :func:`refine_offset`'s own
+#: internal ``_REFINE_MAX_CORRECTION_FRAC`` gate below.
+_REFINE_CLAMP_FRAC = 0.25
+
+
+def _nominal_overlap_extent(
+    a: "_TileEntry", b: "_TileEntry"
+) -> tuple[float, float] | None:
+    """Nominal ``(overlap_h_px, overlap_w_px)`` of two tiles' NOMINAL
+    placement rectangles (centre +/- half extent), or ``None`` if they do
+    not overlap on both axes."""
+    a_r0, a_r1 = a.row_px - a.th / 2.0, a.row_px + a.th / 2.0
+    a_c0, a_c1 = a.col_px - a.tw / 2.0, a.col_px + a.tw / 2.0
+    b_r0, b_r1 = b.row_px - b.th / 2.0, b.row_px + b.th / 2.0
+    b_c0, b_c1 = b.col_px - b.tw / 2.0, b.col_px + b.tw / 2.0
+    ov_h = min(a_r1, b_r1) - max(a_r0, b_r0)
+    ov_w = min(a_c1, b_c1) - max(a_c0, b_c0)
+    if ov_h <= 0.0 or ov_w <= 0.0:
+        return None
+    return ov_h, ov_w
+
+
+def _wrap_to_tile_range(delta: float, size: float) -> float:
+    """Wrap *delta* into ``(-size/2, size/2]``.
+
+    :func:`refine_offset`'s FFT circular correlator can only ever report a
+    shift modulo the array size it is given (see
+    ``_phase_correlation_shift``'s own ``if dy > H/2: dy -= H`` unwrap) --
+    it fundamentally cannot represent an offset bigger than half the tile.
+    A raw tile-centre-to-centre nominal delta between two ADJACENT mosaic
+    tiles is typically comparable to the tile stride (most of the tile,
+    for a realistic low overlap fraction), so it must be folded into this
+    range before being compared against a measurement, or every genuine
+    small registration error looks like a huge, rejectable discrepancy.
+    ``size <= 0`` returns *delta* unchanged (degenerate, should not occur
+    given :func:`_nominal_overlap_extent` already rejected non-overlapping
+    pairs upstream).
+    """
+    if size <= 0.0:
+        return delta
+    return ((delta + size / 2.0) % size) - size / 2.0
+
+
+def _refine_tile_offsets(
+    entries: list["_TileEntry"],
+) -> tuple[list[tuple[float, float]], int]:
+    """Pairwise seam-refinement pass for :func:`place_tiles`'s
+    ``refine=True`` -- see its "Seam refinement" docstring section for the
+    full algorithm. Returns ``(offsets, n_clamped)``: *offsets* is one
+    ``(dy_px, dx_px)`` per entry (same order/length as *entries*, all-zero
+    for a tile with no overlapping neighbour); *n_clamped* counts pairs
+    whose correction hit the :data:`_REFINE_CLAMP_FRAC` clamp on either
+    axis.
+    """
+    n = len(entries)
+    preps = [prepare_metrology_roi(e.img).image for e in entries]
+    votes: list[list[tuple[float, float]]] = [[] for _ in range(n)]
+    n_clamped = 0
+
+    for i in range(n):
+        for j in range(i + 1, n):
+            a, b = entries[i], entries[j]
+            overlap = _nominal_overlap_extent(a, b)
+            if overlap is None:
+                continue
+            ov_h, ov_w = overlap
+
+            nominal_dy = _wrap_to_tile_range(b.row_px - a.row_px, min(a.th, b.th))
+            nominal_dx = _wrap_to_tile_range(b.col_px - a.col_px, min(a.tw, b.tw))
+            dy, dx = refine_offset(
+                preps[i], preps[j], nominal_shift_px=(nominal_dy, nominal_dx)
+            )
+            corr_dy = dy - nominal_dy
+            corr_dx = dx - nominal_dx
+
+            limit_dy = _REFINE_CLAMP_FRAC * ov_h
+            limit_dx = _REFINE_CLAMP_FRAC * ov_w
+            clamped_dy = float(np.clip(corr_dy, -limit_dy, limit_dy))
+            clamped_dx = float(np.clip(corr_dx, -limit_dx, limit_dx))
+            if clamped_dy != corr_dy or clamped_dx != corr_dx:
+                n_clamped += 1
+
+            votes[i].append((-clamped_dy / 2.0, -clamped_dx / 2.0))
+            votes[j].append((clamped_dy / 2.0, clamped_dx / 2.0))
+
+    offsets = [
+        (float(np.mean([v[0] for v in vs])), float(np.mean([v[1] for v in vs])))
+        if vs else (0.0, 0.0)
+        for vs in votes
+    ]
+    return offsets, n_clamped
+
+
+# --------------------------------------------------------------------------- #
+# v2 hook: sub-pixel seam refinement (also used by place_tiles(refine=True)) #
 # --------------------------------------------------------------------------- #
 
 #: A measured correction larger than this fraction of either tile dimension
@@ -469,13 +721,14 @@ def refine_offset(
     tile_b: np.ndarray,
     nominal_shift_px: tuple[float, float],
 ) -> tuple[float, float]:
-    """v2 seam-refinement hook: sub-pixel phase-correlation shift of
-    *tile_b* relative to *tile_a*, sanity-gated against *nominal_shift_px*.
+    """Seam-refinement hook: sub-pixel phase-correlation shift of *tile_b*
+    relative to *tile_a*, sanity-gated against *nominal_shift_px*.
 
-    NOT wired into :func:`place_tiles` in v1 (see module docstring) — a
-    caller that wants refined seams calls this per adjacent tile pair and
-    folds the corrected centre into its own *tiles* list before calling
-    :func:`place_tiles`.
+    Used internally by :func:`place_tiles`'s ``refine=True`` path (see its
+    "Seam refinement" docstring section) via ``_refine_tile_offsets``, and
+    also directly callable standalone: a caller that wants to fold a
+    correction into its own *tiles* list before calling :func:`place_tiles`
+    (``refine=False``, the default) still can.
 
     Re-implementation note
     -----------------------
