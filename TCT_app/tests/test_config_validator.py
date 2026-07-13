@@ -330,3 +330,121 @@ def test_real_backend_primary_channel_is_not_bounded_by_the_sim_key():
     cfg = {"bias_supply": {"backend": "iseg", "visa_address": "ASRL6::INSTR",
                            "channel": 3}}
     assert errors(validate_config(cfg)) == []
+
+
+# --------------------------------------------------------------------------- #
+# slow_control channel NAMES → permanent capability_id (§5.1.1).                #
+#                                                                              #
+# The naming truth lives in capabilities/model.py::slow_control_capability_id; #
+# the validator IMPORTS and CALLS it (controller/ may import capabilities/,    #
+# spec §2), so there is ONE source and nothing to keep in sync — pinned by     #
+# test_validator_shares_model_capability_id below. Four names are grandfathered #
+# forever; any NEW name must be lowercase [a-z][a-z0-9_]* and must not collide  #
+# with a grandfathered alias target; two channels may never share one id.       #
+# --------------------------------------------------------------------------- #
+
+_SHIPPED_SLOW_CONTROL_NAMES = [
+    "temperature_C", "humidity_pct", "bias_voltage_V", "leakage_current_nA",
+]
+
+
+def _sc_names(*names):
+    """A slow_control block whose channels carry only the given names."""
+    return {"slow_control": {"channels": [{"name": n} for n in names]}}
+
+
+def test_shipped_slow_control_names_validate_clean():
+    """Each grandfathered shipped channel name is accepted, alone and together."""
+    for name in _SHIPPED_SLOW_CONTROL_NAMES:
+        assert errors(validate_config(_sc_names(name))) == [], name
+    assert errors(validate_config(_sc_names(*_SHIPPED_SLOW_CONTROL_NAMES))) == []
+
+
+def test_conforming_new_slow_control_name_is_clean():
+    """A brand-new lowercase name that does not collide validates clean."""
+    assert errors(validate_config(_sc_names("dew_point_c"))) == []
+
+
+@pytest.mark.parametrize("bad", [
+    "Temperature",   # uppercase
+    "temp-c",        # hyphen
+    "1temp",         # leading digit
+    "temp c",        # space
+    "_temp",         # leading underscore
+    "temp.c",        # dot
+])
+def test_bad_charset_slow_control_name_is_error(bad):
+    """A name that is neither grandfathered nor [a-z][a-z0-9_]* is refused,
+    because it would otherwise become a PERMANENT capability_id."""
+    errs = errors(validate_config(_sc_names(bad)))
+    assert any(bad in e for e in errs), errs
+    assert any("capability_id" in e for e in errs), errs
+
+
+def test_new_name_colliding_with_alias_target_is_error():
+    """Direction 1: a NEW channel literally named 'temperature' collides with the
+    permanent alias target of grandfathered 'temperature_C' — even when the
+    grandfathered sibling is absent (the id is reserved forever)."""
+    errs = errors(validate_config(_sc_names("temperature")))
+    assert any("temperature" in e and "slow_control.temperature" in e
+               for e in errs), errs
+
+
+def test_grandfathered_plus_colliding_new_name_is_error():
+    """Direction 2: both 'temperature_C' (→ slow_control.temperature) and a new
+    'temperature' present — still an ERROR, order-independent."""
+    for names in (("temperature_C", "temperature"),
+                  ("temperature", "temperature_C")):
+        errs = errors(validate_config(_sc_names(*names)))
+        assert any("temperature" in e for e in errs), (names, errs)
+
+
+def test_duplicate_slow_control_name_is_error():
+    """Two channels with the SAME name map to one id — a hard ERROR (each name
+    is a permanent capability_id, and connect_all keys results by name)."""
+    errs = errors(validate_config(_sc_names("dew_point_c", "dew_point_c")))
+    assert any("dew_point_c" in e and "once" in e.lower() for e in errs), errs
+    # Duplicate GRANDFATHERED names collide the same way (both → one alias id).
+    errs2 = errors(validate_config(_sc_names("temperature_C", "temperature_C")))
+    assert any("temperature_C" in e for e in errs2), errs2
+
+
+def test_two_distinct_valid_names_do_not_collide():
+    """Distinct conforming names map to distinct ids → no collision."""
+    assert errors(validate_config(_sc_names("sensor_a", "sensor_b"))) == []
+
+
+def test_validator_shares_model_capability_id():
+    """The single-source guarantee: the validator holds the SAME function object
+    as capabilities/model.py (imported, not duplicated) — so the naming rule can
+    never drift between the two halves. Whatever the model refuses, the validator
+    errors on; whatever it accepts, validates clean."""
+    from capabilities.model import slow_control_capability_id as model_fn
+    from controller import config_validator
+    assert config_validator.slow_control_capability_id is model_fn
+    # Accepted by the model → clean in the validator.
+    model_fn("my_new_sensor")  # does not raise
+    assert errors(validate_config(_sc_names("my_new_sensor"))) == []
+    # Refused by the model → error in the validator.
+    with pytest.raises(ValueError):
+        model_fn("Bad Name")
+    assert errors(validate_config(_sc_names("Bad Name")))
+
+
+def test_non_string_slow_control_name_is_not_a_naming_error():
+    """A missing/non-string name is out of this check's scope (the capability
+    layer/manager owns it) — it must not raise or emit a naming ERROR here."""
+    issues = validate_config({"slow_control": {"channels": [{"unit": "C"}]}})
+    assert not any("capability_id" in str(i) for i in issues)
+    issues2 = validate_config({"slow_control": {"channels": [{"name": 123}]}})
+    assert not any("capability_id" in str(i) for i in issues2)
+
+
+def test_shipped_yaml_slow_control_names_are_clean():
+    """The live devices.yaml's four slow-control channel names validate clean."""
+    from pathlib import Path
+    import yaml
+    path = Path(__file__).resolve().parent.parent / "configs" / "devices.yaml"
+    cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
+    sc_errs = [e for e in errors(validate_config(cfg)) if e.startswith("[slow_control]")]
+    assert sc_errs == [], sc_errs

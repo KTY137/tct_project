@@ -16,6 +16,14 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
+# Single source of truth for the slow-control channel-name → capability_id
+# mapping is capabilities/model.py (§5.1.1); we CALL it, never re-derive it.
+# Layer ruling: capabilities/ is a pure stdlib-only leaf and the spec (§2,
+# capabilities/__init__.py) states "controller/ may import capabilities/, never
+# the reverse" — so this downward import is sanctioned; test_layer_contracts.py
+# does not track capabilities/ as a layer, so nothing forbids it either.
+from capabilities.model import slow_control_capability_id
+
 ERROR = "error"
 WARNING = "warning"
 
@@ -462,13 +470,21 @@ _SLOW_CONTROL_THRESHOLD_KEYS = ("warn_low", "warn_high", "alarm_low", "alarm_hig
 
 
 def _check_slow_control(sc: dict[str, Any], issues: list[ConfigIssue]) -> None:
-    """Validate per-channel slow-control alarm thresholds.
+    """Validate per-channel slow-control alarm thresholds AND channel names.
 
     Thresholds are all OPTIONAL, but when present they must be numeric and
     correctly ORDERED so the alarm band sits OUTSIDE the warn band — otherwise
     ``AlarmThresholds.evaluate`` (which checks alarm before warn) would fire an
     ALARM before the value ever reads WARN, so the excursion policy would abort
     where it should only safe-hold.  Fail closed on a contradiction (ERROR).
+
+    Channel NAMES (§5.1.1): every ``name`` becomes a PERMANENT capability_id via
+    :func:`capabilities.model.slow_control_capability_id` (the shared source of
+    truth).  A name that is neither one of the four grandfathered shipped names
+    nor charset-conforming (``[a-z][a-z0-9_]*``), or that collides with a
+    grandfathered alias target, is refused there (``ValueError``) → ERROR here.
+    Two channels that would map to the SAME id (including a literal duplicate
+    name) are also an ERROR — one id must never be claimed by two channels.
     """
     if not sc:
         return
@@ -481,13 +497,15 @@ def _check_slow_control(sc: dict[str, Any], issues: list[ConfigIssue]) -> None:
             ERROR, sec, f"channels must be a list (got {type(channels).__name__})"))
         return
 
+    seen_ids: dict[str, str] = {}  # capability_id → the channel name that claimed it
     for i, ch in enumerate(channels):
         if not isinstance(ch, dict):
             issues.append(ConfigIssue(
                 ERROR, sec, f"channel[{i}] must be a mapping (got "
                             f"{type(ch).__name__})"))
             continue
-        name = ch.get("name", f"[{i}]")
+        raw_name = ch.get("name")
+        name = raw_name if isinstance(raw_name, str) else f"[{i}]"
 
         # Typo detection on per-channel keys (the top-level section is covered by
         # _check_unknown_keys; the per-channel dict is validated here).
@@ -497,6 +515,36 @@ def _check_slow_control(sc: dict[str, Any], issues: list[ConfigIssue]) -> None:
                     WARNING, sec,
                     f"channel '{name}': unknown key '{key}' — typo? It is ignored "
                     "by the code."))
+
+        # Channel-name → permanent capability_id (§5.1.1). Only string names are
+        # checked here; a missing/non-string name is a separate concern the
+        # capability layer/manager surfaces, not a naming-grammar violation.
+        if isinstance(raw_name, str):
+            try:
+                cap_id = slow_control_capability_id(raw_name)
+            except ValueError as exc:
+                # str(exc) already names the channel, the rule, cites the
+                # PERMANENT capability_id and spec §5.1.1 (charset failure) or
+                # the alias-target collision — reuse it verbatim (one source).
+                issues.append(ConfigIssue(ERROR, sec, str(exc)))
+            else:
+                prior = seen_ids.get(cap_id)
+                if prior is None:
+                    seen_ids[cap_id] = raw_name
+                elif prior == raw_name:
+                    issues.append(ConfigIssue(
+                        ERROR, sec,
+                        f"channel '{raw_name}' is declared more than once — "
+                        "slow-control channel names must be UNIQUE (each becomes "
+                        f"the permanent capability_id {cap_id!r}, spec §5.1.1). "
+                        "Remove or rename the duplicate."))
+                else:
+                    issues.append(ConfigIssue(
+                        ERROR, sec,
+                        f"channel '{raw_name}' maps to capability_id {cap_id!r}, "
+                        f"already claimed by channel '{prior}' — two slow-control "
+                        "channels must never share one permanent capability_id "
+                        "(spec §5.1.1). Rename one of them."))
 
         thr: dict[str, float] = {}
         for key in _SLOW_CONTROL_THRESHOLD_KEYS:
