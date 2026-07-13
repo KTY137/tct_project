@@ -211,3 +211,22 @@ under Kaya's explicit delegation (2026-07-13).
 Affects: gui/qml_shell.py, gui/qml/Shell.qml (design target), style.py QSS
 (fallback, frozen), review routing for shell beats.
 Status: APPROVED — boundary in force; shell default pending probe.
+
+## 2026-07-13 — Orchestration upgrade after plan change RATIFIED
+
+Kaya upgraded to an effectively unconstrained token plan; the scarcity-era
+routing rules were retuned (Kaya: "ratifiziert", 2026-07-13 evening).
+Changes: (1) review cadence — safety/concurrency beats get an immediate
+per-beat Mary review, remaining beats in thematic parallel per-wave
+batches; Mamoru wave-boundary standups become standard. (2) Shiori
+brief-check before every non-trivial dispatch (two brief bugs landed
+today that it would have caught). (3) Judgment-beat Opus override:
+discretionary design/contract beats run Opus regardless of agent default.
+(4) Report caps: findings/risks/handoff fields widened to ~1200 chars.
+(5) Free-lane-first (2026-07-12) superseded: free lanes are parallel
+value (second opinions, sweeps, mechanical chores), not a dispatch
+precondition. Explicitly unchanged: test economy, test-lane policy,
+session hygiene 1-4, hardware safety rules (PROTECTED). Rationale: the
+binding constraints are now orchestrator context and file locks, not
+tokens — spend goes into per-beat verification depth, not agent count.
+Affects: CLAUDE.md orchestrator sections. Status: APPROVED — in force.

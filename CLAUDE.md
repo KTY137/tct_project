@@ -87,10 +87,28 @@ python -m pytest tests/ -q   # tests — must pass headless, no hardware
   timeout-guarded), Mary gets the changed-file list, the pre-run result, and
   specific concerns (template in `.claude/AGENT_PROTOCOL.md` §"Review briefs").
   Mary re-runs tests only to reproduce a concern, never to establish a baseline.
+- **Review cadence (Kaya-ratified 2026-07-13, post plan-upgrade):**
+  safety- and concurrency-class beats get their Mary review **immediately
+  after landing** (never day-batched); remaining beats collect into
+  *thematic* per-wave batches, run as parallel focused Mary instances
+  rather than one monolithic set. **Mamoru standup at every wave
+  boundary is standard** (claims-vs-git audit + lock/tree cross-check),
+  no longer opt-in.
+- **Brief-check (Kaya-ratified 2026-07-13):** before dispatching a
+  non-trivial brief, Adam has **Shiori** verify its factual assumptions
+  against the repo (target paths free/existing, named APIs real, test
+  files owned by the beat). Cheap insurance against brief bugs — two
+  landed on 2026-07-13 alone (`gui/motion.py` name collision; a
+  verification run scoped into another beat's file lock).
 - **Noah model override:** for Qt threading, worker lifecycle/teardown, or
   danger-gate/confirmation work, dispatch `ui-ux-dev` with `model: opus`
   (his real bug class is concurrency); Sonnet stays his default for
   layout/theming/panels.
+- **Judgment-beat override (Kaya-ratified 2026-07-13):** any beat that
+  carries real discretion — design-system decisions, data-format/contract
+  changes, "entscheide im Zweifel selbst" briefs — runs on **Opus**
+  regardless of the agent's default tier; purely mechanical beats stay on
+  the agent default or a free lane.
 - When a task needs an instrument manual, protocol spec, library behavior, or physics
   reference that is not already in the repo, dispatch **`researcher`** *first* and pass
   its notes (saved under `docs/research/`) to the implementing agent. Subagents cannot
@@ -130,9 +148,10 @@ them by default** rather than doing it inline or waking an Opus specialist:
 - Made a structural change? → **Kiroku** updates the index/changelog in the same beat.
 - Want a health/drift check? → **Mamoru** sweeps and the pytest suite.
 Reserve the senior crew (Opus/Sonnet) for judgment: drivers, GUI, safety review,
-external research. A true timer-based cadence is opt-in via the **Coffee Break /
-Standup protocol** in `.claude/AGENT_PROTOCOL.md` (token cost is real — prefer
-boundary-triggered standups over a tight clock).
+external research. **Wave-boundary Mamoru standups are standard**
+(Kaya-ratified 2026-07-13; the opt-in-only clause is retired). A true
+timer-based clock cadence remains opt-in via the **Coffee Break / Standup
+protocol** in `.claude/AGENT_PROTOCOL.md` — boundaries beat clocks.
 
 ## Institutional knowledge (learned facts — do not rediscover)
 
@@ -181,11 +200,13 @@ boundary-triggered standups over a tight clock).
   `AGENT_PROTOCOL.md`, `agents/*.md`) are tuned via Mamoru's diff
   *proposals* at phase gates — never live edits. Evidence first: two good
   sweeps before any widening of scope.
-- **Report discipline (token efficiency)**: subagent briefs state only
-  objective, paths, constraints, and the exact report shape; reports are
-  structured, capped (~500 chars per field unless the field IS the
-  deliverable), and never restate the brief. Adam prunes history from
-  handoffs — repo files are the shared memory, not transcripts.
+- **Report discipline**: subagent briefs state only objective, paths,
+  constraints, and the exact report shape; reports are structured, capped
+  (~500 chars per field; **findings/risks/handoff fields may run to
+  ~1200 chars** — Kaya-ratified 2026-07-13, substance was hitting the old
+  cap — and a field that IS the deliverable is uncapped), and never
+  restate the brief. Adam prunes history from handoffs — repo files are
+  the shared memory, not transcripts.
 
 ## Test-lane policy (Kaya, 2026-07-13) — heavy suites belong on the bench
 
@@ -325,14 +346,16 @@ Rules:
     AGENTS.md) for the VS Code extension flow. Kaya's account, logged in.
   - Safety-critical code (devices/, HV, motion, scan logic) stays with the
     Claude crew and always gets a Mary review.
-  - **Free-lane-first routing (Kaya, 2026-07-12):** before waking an
-    Opus/Sonnet specialist, Adam routes mechanical/draft beats to the GPU
-    lane (`--lane local_only`, zero Claude tokens) and medium
-    GUI-mechanical beats to `--lane codex`. Free-lane output is always
-    reviewed by Adam (the diff on disk is the truth, not the report) and
-    committed by the crew; verify-gate escalations go back to specialists.
-    Codex real-task budget is 8-20 min (provider timeout 1500 s; lane
-    fixes: agent_env 3c13d89/6a7e6bd/8022213).
+  - **Free lanes as parallel value, not a gate (Kaya-ratified 2026-07-13,
+    supersedes free-lane-first of 2026-07-12):** free lanes are no longer
+    a precondition before waking a specialist — with the upgraded plan,
+    latency costs more than tokens. Route to Codex/Ollama for *parallel*
+    work: second-opinion reviews, sweeps, bookkeeping, mechanical chores
+    that would otherwise queue behind the crew. Free-lane output is still
+    always reviewed by Adam (the diff on disk is the truth, not the
+    report) and committed by the crew; verify-gate escalations go back to
+    specialists. Codex real-task budget 8-20 min (provider timeout
+    1500 s). Safety-critical code never rides a free lane.
   - **Free lanes never idle (Kaya, 2026-07-12):** Codex and Ollama are
     standing crew, not occasional tools. Whenever the Claude crew is busy
     or the session is waiting, Adam keeps at least one free-lane task in
