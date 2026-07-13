@@ -1570,6 +1570,20 @@ class ScanController:
 
         Records the COMMANDED values (never a measured read-back) into
         :attr:`_wavegen_trace` for the run-metadata honesty stopgap.
+
+        Contracts:
+
+        * ``acq_index`` is the acquire-ATTEMPT index (incremented before this
+          call), NOT a saved-point index.  This method runs BEFORE
+          :meth:`_acquire_core`, so a setter-success followed by an acquire
+          failure leaves a trace entry with no corresponding ``SAVE_POINT`` — a
+          trace entry does not imply a saved point.
+        * There is deliberately NO plan-controllable settle between applying the
+          wavegen setting and acquiring today: the only dwell is the incidental
+          oscilloscope-arm sleep inside :meth:`_acquire_core`.  This is adequate
+          for the fixed-frequency duty ramp it serves; a proper
+          apply -> wait_settled -> acquire lifecycle is the P1 capability
+          spine's to add, not this stopgap's.
         """
         if not settings:
             return
@@ -1613,6 +1627,12 @@ class ScanController:
         without wavegen params writes no attr and stays byte-identical.
         Best-effort: a metadata-write failure must never mask the original run
         error or the fail-safe cleanup that already ran.
+
+        Contract: each entry's ``point_index`` is the acquire-ATTEMPT index (see
+        :meth:`_apply_wavegen_settings`), NOT a saved-point row.  A setter-success
+        + acquire-failure leaves an entry whose point was never saved, so the
+        trace length may exceed ``points`` — it records what was COMMANDED, not
+        what was persisted.
         """
         if not self._wavegen_trace:
             return

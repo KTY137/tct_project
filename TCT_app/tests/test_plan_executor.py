@@ -871,12 +871,34 @@ def test_no_wavegen_params_is_byte_identical(sim):
 def test_wavegen_setter_error_fails_safe_and_preserves_data(sim):
     """A wavegen setter that raises mid-plan is NOT swallowed: the run ERRORs,
     the wavegen output-off fail-safe runs, and the point(s) taken before the
-    fault are preserved (safety rule 5)."""
+    fault are preserved (safety rule 5).
+
+    The output-off assertion is guarded: the first (good) point's normal
+    output_on->acquire->output_off bracket would satisfy a bare ``wf_off.called``,
+    so we RESET the output_off counter after that point saves and snapshot it when
+    on_error fires — proving the finally fail-safe's output_off is a DISTINCT call
+    that lands AFTER the fault surfaces, not the first point's bracket."""
     dm, ctrl, sm = sim
     wf_off = mock.Mock(wraps=dm.waveform_generator.output_off)
     dm.waveform_generator.output_off = wf_off
+    # Spy the bias channel drivers: this is a non-bias plan, so NONE may fire.
+    ch = dm.bias_supply
+    ch.ramp_to = mock.Mock(wraps=ch.ramp_to)
+    ch.enable_output = mock.Mock(wraps=ch.enable_output)
+    ch.output_off = mock.Mock(wraps=ch.output_off)
+
     errs: list = []
-    ctrl.on_error = lambda m: errs.append(m)
+    off_at_error: list = []
+
+    def on_err(m):
+        errs.append(m)
+        off_at_error.append(wf_off.call_count)   # snapshot when the fault surfaces
+    ctrl.on_error = on_err
+
+    # After the first (good) point saves, zero the output_off counter so the
+    # first point's normal bracket can no longer satisfy the fail-safe assertion
+    # — only the finally fail-safe can bump it now.
+    ctrl.on_point_done = lambda r: wf_off.reset_mock()
 
     calls = {"n": 0}
     real_duty = dm.waveform_generator.set_duty_cycle
@@ -894,8 +916,15 @@ def test_wavegen_setter_error_fails_safe_and_preserves_data(sim):
 
     assert sm.state is AppState.ERROR
     assert any("wavegen link lost" in m for m in errs)   # surfaced, not swallowed
-    assert wf_off.called                                 # fail-safe still ran
     assert ctrl._writer._n_points == 1                   # first point preserved
+    # The fail-safe output_off is guarded: nothing was off-ed at the moment the
+    # fault surfaced (counter was reset after point 1), and it fired afterwards.
+    assert off_at_error == [0]                            # on_error saw a clean counter
+    assert wf_off.call_count >= 1                         # the finally fail-safe ran
+    # Non-bias plan: the bias channel was never driven on any path.
+    assert not ch.ramp_to.called
+    assert not ch.enable_output.called
+    assert not ch.output_off.called
 
 
 # --------------------------------------------------------------------------- #

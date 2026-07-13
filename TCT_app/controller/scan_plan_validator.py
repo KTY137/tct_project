@@ -320,7 +320,9 @@ def _check_stage_values(
 def _check_action_params(
     action: ActionBlock, path: str, issues: list[PlanIssue]
 ) -> None:
-    """(h) WAIT seconds >= 0, ACQUIRE n_averages >= 1; unknown keys → WARNING."""
+    """(h) WAIT seconds >= 0, ACQUIRE n_averages >= 1; unknown outer keys →
+    WARNING, except ACQUIRE_WAVEFORM where they are an ERROR (an unknown key
+    there silently drops the executor's per-point wavegen payload)."""
     params = action.params or {}
     if action.action == ActionType.WAIT:
         secs = params.get("seconds")
@@ -343,10 +345,25 @@ def _check_action_params(
     known = _KNOWN_ACTION_PARAMS.get(action.action, frozenset())
     for key in params:
         if key not in known:
-            issues.append(PlanIssue(
-                WARNING, path,
-                f"unknown param '{key}' for {action.action.value} — typo? "
-                "It is ignored by the executor."))
+            # ACQUIRE_WAVEFORM is action-scoped ERROR, not WARNING: its outer
+            # params carry the executor's per-point payload (params['wavegen']),
+            # and an unknown outer key there is not an inert typo but a SILENTLY
+            # DROPPED instruction — a mistyped 'wavgen' means the whole wavegen
+            # dict never reaches _apply_wavegen_settings, defeating the nested
+            # _KNOWN_WAVEGEN_KEYS ERROR one level down.  Every other action keeps
+            # the generic WARNING (an unknown key there is merely ignored).
+            if action.action == ActionType.ACQUIRE_WAVEFORM:
+                issues.append(PlanIssue(
+                    ERROR, path,
+                    f"unknown param '{key}' for ACQUIRE_WAVEFORM — typo? Valid "
+                    f"params are: {', '.join(sorted(known))}. Refusing (an "
+                    "unknown outer key here is silently dropped by the executor; "
+                    "a mistyped 'wavegen' would drop the entire wavegen payload)."))
+            else:
+                issues.append(PlanIssue(
+                    WARNING, path,
+                    f"unknown param '{key}' for {action.action.value} — typo? "
+                    "It is ignored by the executor."))
 
 
 def _check_wavegen_params(

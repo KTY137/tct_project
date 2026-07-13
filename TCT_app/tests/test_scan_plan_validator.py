@@ -174,10 +174,38 @@ def test_unknown_reduce_warns():
 
 
 def test_unknown_param_key_warns():
+    # Unknown OUTER params stay a WARNING for non-ACQUIRE actions (ACQUIRE_WAVEFORM
+    # elevates them to ERROR — see test_acquire_unknown_outer_param_is_error).
     loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0],
-                     children=[_acq(nonsense_key=1), _save()])
+                     children=[_acq(), _save(nonsense_key=1)])
     plan = ScanPlan(root=[loop])
     assert any("nonsense_key" in w for w in warnings(validate_plan(plan, limits())))
+
+
+def test_acquire_unknown_outer_param_is_error():
+    # A mistyped OUTER key ('wavgen' for 'wavegen') would silently DROP the whole
+    # wavegen payload at execution, defeating the nested _KNOWN_WAVEGEN_KEYS ERROR
+    # one level down.  On ACQUIRE_WAVEFORM the unknown outer key is an ERROR that
+    # names the offending key — never a WARNING that rides along inert.
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0],
+                     children=[_acq(wavgen={"duty_cycle_pct": 0.3}), _save()])
+    plan = ScanPlan(root=[loop])
+    issues = validate_plan(plan, limits())
+    assert any("wavgen" in e for e in errors(issues))
+    assert not any("wavgen" in w for w in warnings(issues))
+
+
+def test_acquire_legitimate_outer_params_no_error():
+    # The full legitimate ACQUIRE_WAVEFORM param set validates with 0 ERROR: the
+    # action-scoped ERROR must fire only on UNKNOWN outer keys, never on these.
+    loop = LoopBlock(
+        axis=Axis.STAGE_X, values=[0.0],
+        children=[_acq(wavegen={"frequency_hz": 1000.0}, n_averages=4,
+                       channels=[1], record_length=1000, timeout_s=5.0,
+                       label="pt"),
+                  _save()])
+    plan = ScanPlan(root=[loop])
+    assert errors(validate_plan(plan, limits())) == []
 
 
 def test_acquire_param_n_averages_below_one_is_error():
