@@ -4,7 +4,7 @@
 |---|---|
 | **Version** | v0.3 |
 | **Date** | 2026-07-13 |
-| **Status** | Mary S1 (12) + Codex C11 (6) closed → Mary re-review → Kaya ratification (D1 gate) |
+| **Status** | v1.0-rc — Mary RATIFY-READY (amendments applied) · Kaya-ratified §14.1(c)+§14.2 2026-07-13 · D1 gate OPEN |
 | **Owner** | Paul (driver contract) — plumbing halves (validator/config wiring) are Abel's |
 | **Normative for** | roadmap stage D1a (`capabilities/model.py`) and D1b (`capabilities/adapters.py`, registry) |
 | **Inputs (binding)** | `docs/ROADMAP_MASTERPLAN.md` Part I incl. bounce corrections F1/F2/F3, Codex BLOCKER-1 / MAJOR-1, the Völundr contract addenda in Part III, Mary's S1 taxonomy review (REQUEST-CHANGES, 2026-07-13), and the Codex C11 adversarial review (2026-07-13) — dispositions in §17 |
@@ -222,9 +222,9 @@ Field-by-field live consumers (rule of economy, §3):
   `camera.frame` (FrameSource), `intensity.amplitude` + `intensity.charge`
   (ReadableChannels, §5.4), `slow_control.<channel>` (ReadableChannel, one
   per configured channel, named per §5.1.1).
-- ⚑ Multi-channel HV naming is now **specified** in §14.2 (Codex MAJOR-E:
-  the deferral was unsound); the ⚑ marks it for Kaya's explicit nod inside
-  the D1-gate ratification of this document.
+- Multi-channel HV naming is **specified** in §14.2 (Codex MAJOR-E: the
+  deferral was unsound) and **Kaya-ratified 2026-07-13** ("ja nick ich ab")
+  inside the D1-gate ratification of this document — the ⚑ is cleared.
 
 ### 5.1.1 Slow-control channel names — config→id mapping (decided)
 
@@ -474,8 +474,10 @@ v0.1 declared `io_lock` *itself* the reservation unit. **That was factually
 wrong for motion** (Mary BLOCKER-1): `devices/motor_grbl.py::GRBLMotorStage`
 serialises its serial link on a **private `self._lock`** (taken in `_send`,
 `_send_wait`, `_grbl_status`) and never touches `io_lock`, and
-`devices/motor_pi.py::PIMotorStage` serialises **nothing at all**. Reserving
-`motor.io_lock` would therefore have been exactly the forbidden second lock:
+`devices/motor_pi.py::PIMotorStage` serialised **nothing at all** at v0.1
+authoring (fixed since in `4a89647` — it now guards on `io_lock`). Reserving
+`motor.io_lock` would therefore have been, for GRBL, exactly the forbidden
+second lock:
 it excludes other bindings but NOT the GUI position poller, leaving the
 interleave hazard alive on the one device class where it moves hardware.
 
@@ -497,12 +499,14 @@ The v0.2 contract is an **accessor**, not a fixed lock:
     only behavioural change; cross-thread exclusion is untouched, and the
     deliberately lock-free `stop()` is unaffected. **Named driver work,
     §11.4.**
-  - `PIMotorStage` MUST **gain** a transport lock: today its GCS calls
-    (`qPOS`, `MOV`, `IsMoving`, homing) run unserialised, so a GUI poller
-    and the scan thread can already interleave on the shared GCS session —
-    a pre-existing driver gap this contract surfaces. It acquires the new
-    re-entrant lock in every GCS-touching method and exposes it as
-    `transport_lock`. **Named driver work, §11.4.**
+  - `PIMotorStage` MUST serialise its GCS calls (`qPOS`, `MOV`, `IsMoving`,
+    homing): before `4a89647` they ran unserialised, so a GUI poller and the
+    scan thread could interleave on the shared GCS session — a pre-existing
+    driver gap this contract surfaced. **Landed** (`4a89647`): every
+    GCS-touching method acquires the transport lock, and PI meets the contract
+    via `io_lock` — its `transport_lock` returns `io_lock` (the `BaseDevice`
+    default, re-declared only for explicitness), **not a new dedicated lock**.
+    **Named driver work, §11.4.**
 - **MUST** reserve via `transport_lock` — never a parallel second lock over
   the same transport (two locks = the interleave hazard returns).
 - **`device_id` is identity; `transport_id` is the lock key — they are
@@ -1037,7 +1041,7 @@ needing tests (and the driver items a Mary review, safety class):
 |---|---|---|---|
 | 1 | `transport_lock` default accessor (returns `self.io_lock`) — concrete attribute/property, not abstract | `devices/base.py::BaseDevice` | Paul |
 | 2 | `GRBLMotorStage._lock`: `threading.Lock` → `threading.RLock`, plus `transport_lock` override returning it. Same-thread re-entrancy only; `stop()` stays lock-free | `devices/motor_grbl.py` | Paul |
-| 3 | `PIMotorStage` gains transport serialisation: a re-entrant lock acquired in every GCS-touching method (`get_position`, `move_to`, `is_moving`, homing), exposed as `transport_lock`. Fixes a pre-existing unserialised-transport gap, capability layer or not | `devices/motor_pi.py` | Paul |
+| 3 | `PIMotorStage` transport serialisation: every GCS-touching method (`get_position`, `is_moving`, `at_limit_switch`, `move_to`, `home`, `_wait_on_target`) guarded on `io_lock`; `transport_lock` returns `io_lock` (the `BaseDevice` default, no new dedicated lock). **Landed** `4a89647` (+ disconnect-stops-first `fbf94d8`, lock-free `stop()` `7a55d03`). Fixed a pre-existing unserialised-transport gap, capability layer or not | `devices/motor_pi.py` | Paul |
 | 4 | Slow-control channel-name charset check: ERROR on a `name` outside `[a-z][a-z0-9_]*` that is not one of the four §5.1.1 grandfathered names; ERROR on collision with an alias target | `controller/config_validator.py::_check_slow_control` | Abel (validator half — dispatch in the same beat wave as D1a) |
 | 5 | Registry fail-closed on unmappable slow-control names + the §5.1.1 static alias table | `capabilities/` registry (D1b) | Paul |
 | 6 | `CapabilityRegistry.transport_lock_for` — the §6.1 transport map/resolver (`bias_supply` → `BiasChannel.driver`); `KeyError` at build on unknown `transport_id` | `capabilities/` registry (D1b) | Paul |
@@ -1045,11 +1049,15 @@ needing tests (and the driver items a Mary review, safety class):
 
 Items 1–3 are the **driver-side follow-up of the §6.1 accessor contract**
 (Mary BLOCKER-1) — real work, recorded here so it is scheduled, not
-discovered. Status at v0.3 authoring (verified in the working tree): items
-**1–2 have landed** (`BaseDevice.transport_lock` and the GRBL
-`RLock`+override exist); item **3 is outstanding** — a live hazard today:
-the PI stage's GCS session has no serialisation between the GUI poller and
-the scan thread. Items 6–7 are new in v0.3 (Codex BLOCKER-A / MAJOR-E).
+discovered. Status (verified in the working tree): items **1–3 have LANDED** —
+`BaseDevice.transport_lock` and the GRBL `RLock`+override exist, and `4a89647`
+guards every PI GCS exchange (`get_position`, `is_moving`, `at_limit_switch`,
+`move_to`, `home`, `_wait_on_target`) on `io_lock` (which `transport_lock`
+returns), `fbf94d8` made PI `disconnect()` stop the stage first, and `7a55d03`
+made PI `stop()` lock-free (`#24`/StopAll). Only the later items remain
+**outstanding**: validator charset (**4**), registry fail-closed (**5**), the
+transport resolver (**6**), and `bias.ch{n}` publication (**7**). Items 6–7
+are new in v0.3 (Codex BLOCKER-A / MAJOR-E).
 
 Beyond D1, this contract also gates (scheduled at their own stages, listed
 here so the schedulable list is complete):
@@ -1103,11 +1111,13 @@ Declaring them here reserves the concepts so nobody wedges them into
 4. **Bucket-A gate.** The bucket-A suite green UNMODIFIED gates every stage.
 5. **No descriptor field without a live consumer** (§3, table in §5).
 
-## 14. ⚑ Open questions for Kaya
+## 14. Open questions for Kaya — both RATIFIED 2026-07-13
 
-1. **⚑ Per-operation routing SHAPE** (Codex MAJOR-1 — Kaya's personal gate;
-   he ratifies the shape. The menu below is honest about safety after Mary's
-   S1 taxonomy review — it is no longer three neutral options):
+1. **Per-operation routing SHAPE — RATIFIED: option (c)** (Codex MAJOR-1 —
+   Kaya's personal gate; ratified 2026-07-13, Kaya verbatim: "ich bestätige").
+   The menu below is preserved for the record; (c) is the ratified shape, and
+   it was honest about safety after Mary's S1 taxonomy review — not three
+   neutral options:
    - **(c) Class floor + monotone add-only override — the crew's
      RECOMMENDATION, and the only shape Mary signs.** The class provides
      default routing (§7.2 table); a descriptor MAY override per operation,
@@ -1132,9 +1142,10 @@ Declaring them here reserves the concepts so nobody wedges them into
    Whatever the shape, the §7.1/§7.2 LAWs (STOP never gated; tighten-only;
    `>=` never derives gate sets; max-hazard class; union routing; generated
    UI never a safety control) hold.
-2. **⚑ Multi-channel HV `capability_id` naming — SPECIFIED in v0.3, pending
-   Kaya's ratification (Codex MAJOR-E).** v0.2 deferred this behind a Kaya
-   flag, but the deferral was unsound: `ScanController._resolve_bias` +
+2. **Multi-channel HV `capability_id` naming — SPECIFIED in v0.3, RATIFIED
+   2026-07-13 (Codex MAJOR-E; Kaya verbatim: "ja nick ich ab").** v0.2 deferred
+   this behind a Kaya flag, but the deferral was unsound:
+   `ScanController._resolve_bias` +
    `DeviceManager.refresh_bias_channels` already execute non-primary
    `BiasChannel`s today (`safety["bias_channel"]=1` is a runnable saved
    plan), so a D1 without the naming either serialises such a run as plain
@@ -1169,11 +1180,11 @@ Declaring them here reserves the concepts so nobody wedges them into
      bookkeeping, not hazard) or lets DA1 write channel-1 provenance
      labelled as the primary — the exact dishonesty MAJOR-E names.
      Fail-closed is for hazards; this one we know how to record honestly.
-   The ⚑ stays because published ids are permanent (§5.2): Kaya's nod on
-   this naming is part of the D1-gate ratification of this document, and no
-   multi-channel descriptor is published before that ratification. D1 is no
-   longer left with an unrunnable case — the spec is complete either way he
-   rules.
+   Published ids are permanent (§5.2), so this naming needed Kaya's explicit
+   nod: **given 2026-07-13** ("ja nick ich ab") as part of the D1-gate
+   ratification of this document. Multi-channel descriptors MAY now be
+   published. D1 was never left with an unrunnable case — the spec was
+   complete either way he ruled.
 
 ## 15. TCT will NEVER guarantee
 
@@ -1264,3 +1275,15 @@ dispositioned on disk truth, verified, never assumed):
 | MAJOR-E multi-channel HV cannot be deferred | §14.2 rewritten — naming SPECIFIED (option a): `bias.voltage` = primary-channel ROLE (never a ch0 alias — the primary index is config-chosen), `bias.ch{n}.voltage` = physical channel *n*, physical identity wins the mapping, one shared `transport_id="bias_supply"`; `HVSource.channel` field + `swept/` `channel` attr disambiguate provenance; alternative (b) fail-closed block REJECTED (breaks a runnable plan or writes dishonest provenance); ⚑ retained for Kaya's D1-gate nod |
 | MAJOR-F §7.2 vs §7.4 contradict for EMITTING SET | §7.4 rewritten OPERATION-aware: the gate law binds per (capability, operation) via the §7.2 route table; empty route set ⇒ ungated generated control (wavegen `SET` — safe because setters never touch output state; ARMING is the gated operation, stated normatively); RESERVED route ⇒ DISABLED until P3; D4b route-table conformance test required (§11.4 beyond-D1 table) |
 | Confirm-clean §5.1.1 alias table | No action — Codex verified the slow-control permanence trap closed; recorded |
+
+Mary's re-review of v0.3 (**RATIFY-READY-WITH-AMENDMENTS**, 2026-07-13): the
+taxonomy and contract pass; the ratification-blocking amendments were
+mechanical staleness fixes, all applied in this revision:
+
+| Amendment | Disposition |
+|---|---|
+| §11.4 item 3 + §6.1 misclassify PI serialisation as outstanding | Reclassified **LANDED**: `4a89647` guards every PI GCS exchange on `io_lock` (`transport_lock` returns it — no new dedicated lock), `fbf94d8` disconnect-stops-first, `7a55d03` `stop()` lock-free `#24`; only items 4–7 (validator charset, registry fail-closed, resolver, `ch{n}` publication) remain outstanding |
+| §14.1 / §14.2 ⚑ flags + §5.1 pending-nod note | Cleared: Kaya **ratified** §14.1 option (c) ("ich bestätige") and §14.2 multi-channel naming ("ja nick ich ab") 2026-07-13; D1 gate OPEN |
+
+Same-beat sibling: `docs/design/guarded_exchange.md` staleness swept (PI stop →
+T2-RT per `7a55d03`; DRS4 → conventionally guarded per `3930f58`).

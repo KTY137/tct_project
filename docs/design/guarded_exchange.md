@@ -32,11 +32,12 @@ evidence that conventions decay:
    caller reserving `motor.io_lock` would have held a lock that guards
    nothing (Mary BLOCKER-1 in the capability spec; also fixed in `4a89647`
    via the `transport_lock` accessor).
-3. **`DRS4Oscilloscope` is forgetting right now.** Found while writing this
-   note: `oscilloscope_drs4.py::DRS4Oscilloscope.read_channel` performs board
-   I/O (`StartDomino`, `TransferWaves`, `GetTime`, `GetWave`) with **zero
-   locking** — same class of gap as pre-fix PI, still live on disk. (Flagged
-   to Adam as its own fix beat; this note does not fix it.)
+3. **`DRS4Oscilloscope` forgot too — found while writing this note.**
+   `oscilloscope_drs4.py::DRS4Oscilloscope.read_channel` performed board I/O
+   (`StartDomino`, `TransferWaves`, `GetTime`, `GetWave`) with **zero
+   locking** — the same class of gap as pre-fix PI. Fixed conventionally in
+   `3930f58` (per-exchange `io_lock`, released between averages); the G-track
+   folds it into the T1 template at D2.
 
 And locking is only one of several per-driver remember-rules. A motor
 driver's `move_to` must remember, in order: `_require_connected()`,
@@ -97,9 +98,10 @@ are load-bearing safety behaviour:
   by `test_stop_is_not_queued_behind_a_held_transport_lock`).
 - `BaseDevice.is_alive` must "never block on the io_lock"; the scope, wavegen
   and camera implement it with `io_lock.acquire(blocking=False)`.
-- `PIMotorStage.stop()` does a bounded 0.25 s acquire, then sends `STP`
-  regardless — because PI's real-time semantics are not established
-  (`TODO(manual needed)` on the class; researcher dispatched).
+- `PIMotorStage.stop()` was the in-band case — a bounded 0.25 s acquire then
+  send `STP` regardless — until `7a55d03` established `#24`/`StopAll` as a
+  real-time primitive (`docs/research/pi_gcs_stop_semantics.md`), upgrading it
+  to lock-free T2-RT; T2-B is now reserved for future in-band-only devices.
 - `BiasSupplyBase.ramp_to` releases the lock **between steps**, which is the
   only reason an ALL-OFF can interleave mid-ramp (Mary BLOCKER-2 /
   CAPABILITY_MODEL §6.2).
@@ -250,7 +252,7 @@ Method names below were read from the actual files; none are invented.
 | `move_to` | T4 | `_do_issue_move(Position)` + `_do_poll_motion()` | connected, homed, **user-frame limits via `limits_user_frame()`**; fail-safe halt (base calls `stop()`) on error |
 | `move_relative` | T4 | same primitives | same |
 | `home` | T4 / monolithic (both drivers today) | `_do_home(axes)` | connected; sets `_homed` on success only; fail-safe halt on error |
-| `stop` | **T2** (GRBL: T2-RT 0x85/M410; PI: T2-B `STP`; Sim: flag) | `_do_stop_realtime()` | **none — LAW** |
+| `stop` | **T2** (GRBL: T2-RT 0x85/M410; PI: T2-RT `#24`/StopAll per `7a55d03`; Sim: flag) | `_do_stop_realtime()` | **none — LAW** |
 | `zero_position` | T1 | `_do_zero_position()` | connected; the un-homed warning moves to the base (currently duplicated in both drivers) |
 | `test_connection` | T1/T1g | `_do_identify() -> str` | none (returns strings, never raises to GUI) |
 | `wait_until_ready` | T4 | loops `is_moving` (already base-owned) | — |
@@ -311,7 +313,8 @@ born. **Write the D2 ABC guarded from birth** instead of retrofitting first.
   `set_probe_attenuation`, `set_coupling`, `set_bandwidth_limit`,
   `set_timebase`, `set_channel_display`, `set_averaging`, `read_settings`,
   `configure_tct_trigger`, `test_connection` → `_do_*` (the VISA driver
-  already locks every one of these; DRS4 locks **none** — the live gap).
+  already locks every one of these; DRS4 gained a conventional lock on all of
+  them in `3930f58` — the G-track folds it into the T1 template at D2).
 - T1g: `_recover_session` (device clear + drain — a control-transfer group,
   already held under `io_lock` re-entrantly).
 - T2: none — a passive digitiser has nothing to stop; honesty: do not
@@ -457,8 +460,9 @@ every unconverted concrete driver un-instantiable — a hard break).
 - **G3 — inside D2, not before it.** Scope/wavegen/camera get their ABCs in
   D2; write those ABCs guarded-from-birth (S each, incremental on D2's M).
   Retrofitting the concrete classes pre-D2 would churn the same methods
-  twice. Exception: DRS4's unguarded `read_channel` is a live bug and gets a
-  *conventional* lock fix in its own beat now, structural conversion at D2.
+  twice. Exception: DRS4's `read_channel` was a live bug; it got its
+  *conventional* lock fix in its own beat (`3930f58`), structural conversion
+  at D2.
 - **G4 — flip the detector.** Per family, once every in-tree backend is
   converted: `__init_subclass__` WARNING → raise, and `_do_*` defaults →
   `@abstractmethod`. From this point a new driver that overrides a public
@@ -570,7 +574,7 @@ and driver tests that call internals follow.
 | `bias_supply_keithley.py` / `_e4control.py` / `_simulated.py` | **S / S–M / S** | simulated currently beat-locked |
 | slow-control + intensity family | **S** | `read_with_status` already template |
 | D2-born ABCs (scope/wavegen/camera) | **S each, incremental** | on top of D2's own M |
-| DRS4 conventional lock hotfix (now) | **S** | separate beat, not this design |
+| DRS4 conventional lock hotfix (landed `3930f58`) | **S** | separate beat, not this design |
 
 Total: two L/M-heavy beats (GRBL, bias family) plus ~6–8 S/M beats ≈ a
 multi-wave track, comfortably parallel to D1. Placement: **G0 anytime; G1
@@ -582,8 +586,8 @@ D3; G3 inside D2.** Not on the seed critical path and should not block it.
 **Do it — staged, not big-bang, and not everywhere at once.**
 
 - **Do now (G0):** the base tier helpers + override detector (S, additive,
-  zero behaviour change) and the DRS4 conventional lock hotfix (separate
-  beat — it is a live bug regardless of this design).
+  zero behaviour change). The DRS4 conventional lock hotfix has **landed**
+  (`3930f58`, its own beat — it was a live bug regardless of this design).
 - **Do as a track (G1, G2):** motors and bias supplies — the two families
   with genuine safety gates that are currently conventions
   (`_require_homed`, limits, `check_voltage_in_range`), and the two with a
@@ -601,5 +605,6 @@ defer the full template anyway, the minimum honest fallback is: (a) G0's
 detector in WARNING mode (it costs an afternoon and names every unconverted
 public override at import time), (b) the recorder-test template promoted to
 a required checklist item for every new driver in `docs/ARCHITECTURE.md`'s
-devices section, and (c) the DRS4 hotfix regardless. But the fallback still
+devices section, and (c) the DRS4 hotfix regardless (already landed,
+`3930f58`). But the fallback still
 relies on remembering — the recommendation is the structure.
