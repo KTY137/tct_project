@@ -49,6 +49,8 @@ from gui.status_widgets import StatusChip, StatusPill
 from gui.planner_panel import PlannerPanel
 from gui.qt_danger_gate import QtDangerGate
 from gui.scan_coordinator import ScanCoordinator
+from gui.sequence_coordinator import SequenceCoordinator
+from gui.sequencer_panel import SequencerPanel
 from controller.scan_plan_validator import PlanLimits
 
 logger = logging.getLogger(__name__)
@@ -206,6 +208,13 @@ class TCTMainWindow(QMainWindow):
         # dict is no longer at fault) and cleared on an explicit disconnect —
         # see _on_connect_done / _on_disconnect_done.
         self._connect_faults: dict[str, str] = {}
+        # True only while the Scan Sequencer (unattended queue) is driving a run.
+        # Read by the coordinator's modal error/warn shims to reroute to the
+        # non-blocking status bus (an overnight run must never wedge on a message
+        # box), and set by _on_sequence_active (which also locks the manual HV/
+        # motion danger panels).  A plain flag, so both the shim guard and the
+        # panel lock read one source of truth.
+        self._sequence_active = False
         # The ScanController allocates a fresh per-run HDF5Writer itself
         # (_begin_run); no writer is created here.
         self._scanner = ScanController(self._devices, self._sm)
@@ -399,6 +408,9 @@ class TCTMainWindow(QMainWindow):
         self._tabs.addTab(_scrollable(self._laser_panel), "Laser / Trigger")
         self._tabs.addTab(_scrollable(self._scan_viewer), "Scan Viewer")
         self._tabs.addTab(_scrollable(self._planner_panel), "Scan Planner")
+        # The Scan Sequencer tab is inserted right after the Planner once its
+        # SequenceCoordinator exists (it needs the ScanCoordinator built below).
+        _planner_tab_index = self._tabs.count() - 1
         self._tabs.addTab(_scrollable(self._bias_panel), "Bias Supply")
         self._tabs.addTab(_scrollable(self._calib_panel), "Calibration")
         self._tabs.addTab(_scrollable(self._monitor_panel), "Monitor")
@@ -600,6 +612,30 @@ class TCTMainWindow(QMainWindow):
         self._scan_viewer.best_z_apply_requested.connect(
             self._planner_panel.set_focus_z
         )
+
+        # ── Scan Sequencer (unattended overnight routine queue) ───────────
+        # The SequenceCoordinator drives the queue off the ScanCoordinator's
+        # plan terminals and parks hardware safe between entries; park_safe is
+        # the ScanController's own safe-park (reached through the public method,
+        # NOT ScanCoordinator's private _scanner).  Held only by this attribute
+        # (like the ScanCoordinator) so a soft-reload's reassignment collects the
+        # previous one; NOT parented, preflight defaults (NullPreflight).
+        self._sequence_active = False
+        self._seq_coordinator = SequenceCoordinator(
+            self._coordinator, self._sm, park_safe=self._scanner.park_safe,
+        )
+        # sequence_active(True) at arm (before the first entry energizes HV),
+        # (False) at every terminal — locks the manual HV/motion danger panels
+        # for the duration and reroutes the coordinator's modal dialogs to the
+        # status bus so an unattended run never wedges (Mary req 2/3; A4 finding).
+        self._seq_coordinator.sequence_active.connect(self._on_sequence_active)
+        self._seq_panel = SequencerPanel(
+            self._seq_coordinator,
+            channel_provider=self._sequencer_channel,
+            theme_mode=self._theme_mode,
+        )
+        self._tabs.insertTab(
+            _planner_tab_index + 1, _scrollable(self._seq_panel), "Scan Sequencer")
 
         # ── Live bias readout (dedicated thread — instrument I/O must never
         #    run on the GUI thread; a hung GPIB read froze the window) ─────
@@ -865,6 +901,7 @@ class TCTMainWindow(QMainWindow):
         for panel in (getattr(self, "_motor_panel", None),
                       getattr(self, "_bias_panel", None),
                       getattr(self, "_planner_panel", None),
+                      getattr(self, "_seq_panel", None),
                       getattr(self, "_scan_viewer", None),
                       getattr(self, "_scope_panel", None),
                       getattr(self, "_laser_panel", None),
@@ -1298,6 +1335,18 @@ class TCTMainWindow(QMainWindow):
             self._liveness_thread.wait(4000)
             self._liveness_thread = None
             self._liveness = None
+        # Cancel any unattended sequence FIRST (its own fail-safe cancels the
+        # queue, aborts the live run and parks safe) before the blanket
+        # scanner.abort() below; a no-op when no sequence is active.  Then drop
+        # the coordinator so a soft-reload's reassignment collects it.
+        seq = getattr(self, "_seq_coordinator", None)
+        if seq is not None:
+            try:
+                seq.abort_sequence()
+            except Exception:
+                pass
+            self._seq_coordinator = None
+        self._sequence_active = False
         # Release any gate.confirm() blocked in the scan thread FIRST, so a
         # pending danger dialog can never hold up abort/teardown.
         if getattr(self, "_danger_gate", None) is not None:
@@ -1310,6 +1359,7 @@ class TCTMainWindow(QMainWindow):
         except Exception:
             pass
         for panel, method in ((getattr(self, "_motor_panel", None),   "shutdown"),
+                      (getattr(self, "_seq_panel", None),     "shutdown"),
                       (getattr(self, "_bias_panel", None),    "shutdown"),
                       (getattr(self, "_intensity_panel", None), "shutdown"),
                               (getattr(self, "_scope_panel", None),   "shutdown"),
@@ -1510,13 +1560,70 @@ class TCTMainWindow(QMainWindow):
 
     @Slot(str, str)
     def _show_warn_dialog(self, title: str, message: str) -> None:
-        """Coordinator asked for a warning box (e.g. a refused start)."""
+        """Coordinator asked for a warning box (e.g. a refused start).
+
+        MODAL SUPPRESSION (A4 finding / Mary req 3): while the Scan Sequencer is
+        driving an unattended run, a blocking ``QMessageBox`` would wedge the
+        whole night waiting on a human who is not there — reroute to the
+        non-blocking status bus + log instead.  The reroute is undone the instant
+        the sequence ends (``_on_sequence_active`` clears the flag)."""
+        if self._sequence_active:
+            notify(f"{title}: {message}", "warn")
+            return
         QMessageBox.warning(self, title, message)
 
     @Slot(str, str)
     def _show_error_dialog(self, title: str, message: str) -> None:
-        """Coordinator asked for a critical box (scan error / plan refused)."""
+        """Coordinator asked for a critical box (scan error / plan refused).
+
+        See :meth:`_show_warn_dialog` — the same modal-suppression guard applies
+        (an unattended run reroutes to the status bus; the other, non-blocking
+        ``error_dialog`` consumers — the Scan Viewer's FAULTED repaint, the
+        run-state facade — still fire, so the error is never lost)."""
+        if self._sequence_active:
+            notify(f"{title}: {message}", "error")
+            return
         QMessageBox.critical(self, title, message)
+
+    @Slot(bool)
+    def _on_sequence_active(self, active: bool) -> None:
+        """A Scan Sequencer run armed (True) / ended (False).
+
+        Mary req 2: the manual HV (bias) and motion (motor) danger panels are
+        locked for the duration so an unattended run owns the hardware — jog is
+        RATIFIED-ungated but jogging (or any manual ramp / move / home) during an
+        unattended sequence contends for the same axis / HV channel (Mary's
+        concurrency hazard), so the whole panel is disabled at the composition
+        root.  The sequence's own always-live Abort is the single stop while it
+        runs (the manual OFF/STOP would only contend), and the coordinator fails
+        closed + parks safe on any error regardless.
+
+        Mary req 3: the flag also flips the coordinator's modal error/warn shims
+        to the non-blocking status bus (see :meth:`_show_error_dialog`).
+
+        Re-enable / un-suppress on ``False`` is UNCONDITIONAL and driven by
+        ``sequence_active(False)``, which the coordinator emits at EVERY terminal
+        (finish / halt / cancel / fail-closed) — so there is never a stuck-locked
+        panel or a permanently-suppressed dialog after a failure path."""
+        self._sequence_active = bool(active)
+        locked = self._sequence_active
+        bias = getattr(self, "_bias_panel", None)
+        if bias is not None:
+            bias.setEnabled(not locked)
+        motor = getattr(self, "_motor_panel", None)
+        if motor is not None:
+            motor.setEnabled(not locked)
+
+    def _sequencer_channel(self) -> int:
+        """Primary bias-supply channel index the combined sequence HV envelope is
+        attributed to (single-channel discipline — see
+        ``controller.arm_envelope.envelope_from_plans``).  Best-effort; defaults
+        to 0 (the single-primary / simulation case)."""
+        ch = getattr(getattr(self._devices, "bias_supply", None), "channel", 0)
+        try:
+            return int(ch)
+        except (TypeError, ValueError):
+            return 0
 
     # ------------------------------------------------------------------ #
     # Scan-routine planner wiring                                          #
@@ -1548,6 +1655,11 @@ class TCTMainWindow(QMainWindow):
             rng = self._devices.bias_supply.voltage_range_V
         except Exception:
             rng = None
+        # camera_available: a CAPTURE_PHOTO step validation-rejects unless a
+        # camera backend is present.  The DeviceManager always constructs one
+        # (real or simulated), so presence of the ``camera`` attribute is the
+        # honest signal — without this, every capture_photo plan is rejected.
+        camera_available = getattr(self._devices, "camera", None) is not None
         return PlanLimits(
             x_min_mm=lim.x_min if lim else -5.0,
             x_max_mm=lim.x_max if lim else 5.0,
@@ -1557,6 +1669,7 @@ class TCTMainWindow(QMainWindow):
             z_max_mm=lim.z_max if lim else 5.0,
             voltage_range_V=float(rng) if rng else 3000.0,
             max_points=250_000,
+            camera_available=camera_available,
         )
 
     @Slot()

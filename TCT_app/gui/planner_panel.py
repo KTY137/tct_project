@@ -178,6 +178,8 @@ def _new_action_defaults(action: ActionType) -> ActionBlock:
         return ActionBlock(action=action, params={"n_averages": 64})
     if action == ActionType.WAIT:
         return ActionBlock(action=action, params={"seconds": 1.0})
+    if action == ActionType.CAPTURE_PHOTO:
+        return ActionBlock(action=action, params={"settle_s": 0.2})
     return ActionBlock(action=action, params={})
 
 
@@ -198,6 +200,7 @@ _ACTION_UI: dict[ActionType, tuple[str, str]] = {
     ActionType.WAIT: ("⏱", "Wait"),
     ActionType.MANUAL_PAUSE: ("✋", "Manual pause"),
     ActionType.READ_SLOW_CONTROL: ("\U0001f321", "Read slow control"),
+    ActionType.CAPTURE_PHOTO: ("\U0001f4f7", "Capture photo"),
 }
 
 
@@ -500,6 +503,10 @@ class PlannerPanel(QWidget):
         y_min_mm=-5.0, y_max_mm=5.0,
         z_min_mm=-5.0, z_max_mm=5.0,
         voltage_range_V=3000.0, max_points=250_000,
+        # A camera is assumed available for the standalone planner (the app
+        # always constructs a camera backend — real or simulated); without this
+        # every CAPTURE_PHOTO plan would validation-reject (fail-closed default).
+        camera_available=True,
     )
 
     def __init__(self, parent: QWidget | None = None,
@@ -908,6 +915,7 @@ class PlannerPanel(QWidget):
         for action in (
             ActionType.ACQUIRE_WAVEFORM, ActionType.SAVE_POINT, ActionType.WAIT,
             ActionType.MANUAL_PAUSE, ActionType.READ_SLOW_CONTROL,
+            ActionType.CAPTURE_PHOTO,
         ):
             block = _new_action_defaults(action)
             glyph, label = _ACTION_UI[action]
@@ -1234,6 +1242,8 @@ class PlannerPanel(QWidget):
             return "→ HDF5"
         if action.action == ActionType.WAIT:
             return f"{params.get('seconds', 0)} s"
+        if action.action == ActionType.CAPTURE_PHOTO:
+            return f"{params.get('settle_s', 0)} s"
         if action.action == ActionType.MANUAL_PAUSE:
             return str(params.get("prompt") or params.get("message") or "")
         if action.action == ActionType.READ_SLOW_CONTROL:

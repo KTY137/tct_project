@@ -12,11 +12,12 @@ import json
 import os
 import threading
 import time
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtCore import QByteArray, QCoreApplication, QMimeData
+from PySide6.QtCore import QByteArray, QCoreApplication, QMimeData, Qt
 from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 
 from controller.danger_gate import DangerAction
@@ -1648,3 +1649,69 @@ def test_qt_danger_gate_abort_denies_pending_but_stays_usable():
     # abort() does not permanently close the gate — a later confirm on the
     # GUI thread still shows the (stubbed) dialog and can succeed.
     assert gate.confirm(action) is True
+
+
+# --------------------------------------------------------------------------- #
+# CAPTURE_PHOTO palette rider (B2) + camera_available wiring                    #
+# --------------------------------------------------------------------------- #
+def _limits(camera_available: bool) -> PlanLimits:
+    return PlanLimits(
+        x_min_mm=-5.0, x_max_mm=5.0, y_min_mm=-5.0, y_max_mm=5.0,
+        z_min_mm=-5.0, z_max_mm=5.0, voltage_range_V=3000.0, max_points=250_000,
+        camera_available=camera_available,
+    )
+
+
+def _capture_photo_plan() -> ScanPlan:
+    return ScanPlan(
+        name="photo",
+        root=[LoopBlock(
+            axis=Axis.STAGE_X, values=[0.0, 1.0],
+            children=[ActionBlock(action=ActionType.CAPTURE_PHOTO,
+                                  params={"settle_s": 0.1})])],
+    )
+
+
+def test_palette_has_capture_photo_block():
+    """The Add-blocks palette carries a CAPTURE_PHOTO entry (mechanical mirror of
+    the WAIT row) whose drop payload is a real capture_photo action block."""
+    _app()
+    panel = PlannerPanel()
+    idxs = [i for i in range(panel._palette.count())
+            if "Capture photo" in panel._palette.item(i).text()]
+    assert idxs, "no 'Capture photo' palette entry"
+    payload = panel._palette.item(idxs[0]).data(Qt.ItemDataRole.UserRole)
+    assert payload["op"] == "new"
+    assert payload["block"]["action"] == "capture_photo"
+    assert "settle_s" in payload["block"]["params"]
+
+
+def test_capture_photo_validates_with_camera_and_rejects_without():
+    """A capture_photo plan validates when a camera is configured and
+    ERROR-rejects when not (fail-closed) — the two ends of the wired flag."""
+    plan = _capture_photo_plan()
+    ok = validate_plan(plan, _limits(camera_available=True))
+    assert not any(
+        "camera" in i.message.lower() and i.severity == "ERROR" for i in ok)
+    rejected = validate_plan(plan, _limits(camera_available=False))
+    assert any(
+        "camera" in i.message.lower() and i.severity == "ERROR" for i in rejected)
+
+
+def test_default_planner_limits_enable_camera():
+    """Planner construction site: the standalone default admits capture_photo."""
+    assert PlannerPanel._DEFAULT_LIMITS.camera_available is True
+
+
+def test_plan_limits_camera_available_from_devices():
+    """tct_gui construction site: camera_available tracks a configured camera
+    backend (present → True; absent → False, fail-closed)."""
+    from tct_gui import TCTMainWindow
+    with_cam = SimpleNamespace(
+        _devices=SimpleNamespace(camera=object(), motor=None,
+                                 bias_supply=SimpleNamespace(voltage_range_V=1000.0)))
+    assert TCTMainWindow._plan_limits(with_cam).camera_available is True
+    without_cam = SimpleNamespace(
+        _devices=SimpleNamespace(camera=None, motor=None,
+                                 bias_supply=SimpleNamespace(voltage_range_V=1000.0)))
+    assert TCTMainWindow._plan_limits(without_cam).camera_available is False
