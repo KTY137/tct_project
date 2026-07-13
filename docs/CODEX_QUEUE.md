@@ -370,6 +370,43 @@ duplicated across `gui/` and `tct_gui.py`. Centralize them.
 - Requested pytest from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_app_settings.py tests/test_apply_theme_lifetime.py` executed 0 tests because the venv launcher failed before Python start: `.venv\pyvenv.cfg` still points to missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`. `--collect-only`, bare `python --version`, and `py -0p` were also unavailable locally.
 - Risk: runtime pytest verification remains blocked until the local Python/venv interpreter is repaired; `gui/style.py` still owns its old theme/* persistence lines until the style-token beat releases that file.
 
+## C8 — scan_map_view: coalesce per-point redraws (throttle before giga-scans)
+
+**Status: DONE — Coalesced scan-map live redraws; pytest blocked by broken venv interpreter.** · Effort: S-M · Source: Adam, day-shift wave 2 (2026-07-13); Wave-1/4 leftover
+
+`TCT_app/gui/scan_map_view.py` redraws on every incoming scan point; at
+giga-scan rates that floods the GUI thread. Coalesce redraws with a timer.
+
+- Read the file first and identify the actual per-point update path (how
+  new points arrive and what triggers the repaint/rebuild) — describe it in
+  findings before changing it.
+- Task: add a QTimer-based coalescing throttle (target ≤ ~15 Hz): new data
+  marks the view dirty and arms/keeps the timer; the timer tick performs ONE
+  rebuild with all accumulated points. A final/explicit flush (scan end,
+  widget hide/close, `set_data`-style full refresh) must render immediately
+  so the last point is never dropped or delayed indefinitely. No data loss,
+  no reordering, no API change for callers; detach/theme behavior untouched.
+- Tests (`TCT_app/tests/test_scan_map_view.py`): spy the rebuild/repaint
+  method; N rapid point-adds ⇒ far fewer rebuilds than N (drive the timer
+  deterministically, e.g. force-fire or zero-interval + processEvents);
+  final state contains all N points; explicit flush renders immediately.
+  Keep existing tests passing unmodified unless they pin per-point redraw
+  counts — then update ONLY those assertions and say so.
+- Verify headless: that test file. Known sandbox venv-launch issue (C1-C7
+  findings): if pytest cannot start, verify statically, say so explicitly,
+  and Adam runs the tests after.
+- Do NOT commit; set C8 DONE with findings per Handback.
+
+**Codex findings (2026-07-13):**
+- Files touched: `TCT_app/gui/scan_map_view.py`, `TCT_app/gui/scan_viewer_panel.py`, `TCT_app/tests/test_scan_map_view.py`, `docs/CODEX_QUEUE.md`.
+- Actual pre-change per-point path: `ScanViewerPanel.on_point_done()` called `ScanMapView.update_point(result)`, which rounded/stored the point in `_points` and immediately called `_redraw()`; `_redraw()` rebuilt the dense grid with `points_to_grid(...)` and pushed it into `pyqtgraph.ImageView.setImage(...)` on every incoming point.
+- `ScanMapView.update_point()` now only stores the point, marks the view dirty, and arms a single-shot `QTimer` at 67 ms (~15 Hz). The timer flush performs one `_redraw()` for all accumulated points; direct batch/full refresh paths (`set_points`, `clear`, quantity/freeze changes) still render immediately.
+- Added `flush_pending()` for terminal/read paths and wired it into scan finish/error, widget hide/close, PNG export, cursor/grid/image access, so the final point is rendered without waiting on the coalescing timer.
+- Added `test_update_point_coalesces_rebuilds_until_timer_tick` and `test_flush_pending_redraw_renders_immediately` to spy `_redraw`, force the timer deterministically, assert N rapid points produce one rebuild, and confirm explicit flush renders all pending points immediately. Existing tests were left otherwise unchanged.
+- Verification: `git diff --check -- TCT_app/gui/scan_map_view.py TCT_app/gui/scan_viewer_panel.py TCT_app/tests/test_scan_map_view.py` passed.
+- Requested pytest from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_scan_map_view.py` executed 0 tests because the venv launcher failed before Python start: `.venv\pyvenv.cfg` still points to missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`.
+- Risk: runtime pytest verification remains blocked until the local Python/venv interpreter is repaired; scan-end flushing depends on the existing `ScanViewerPanel.on_scan_finished()` / `on_scan_error()` lifecycle slots being delivered.
+
 ## S1 — Visual style audit from rendered panels (advisory, no code edits)
 
 **Status: DONE - Wrote rendered-panel style audit; fresh capture blocked by broken venv.** · Effort: M · Source: Kaya request 2026-07-13 (night shift)

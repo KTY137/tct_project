@@ -103,6 +103,67 @@ def test_update_point_last_write_wins_on_revisit():
     assert result.grid[0, 0] == pytest.approx(99.0)
 
 
+def test_update_point_coalesces_rebuilds_until_timer_tick(monkeypatch):
+    app = _app()
+    view = ScanMapView()
+    if view.image_view() is None:
+        pytest.skip("pyqtgraph not installed")
+
+    view._redraw_timer.setInterval(0)
+    calls: list[int] = []
+    original_redraw = view._redraw
+
+    def spy_redraw():
+        calls.append(view.point_count())
+        original_redraw()
+
+    monkeypatch.setattr(view, "_redraw", spy_redraw)
+
+    for idx in range(25):
+        view.update_point(_result(float(idx), 0.0, charge=float(idx), index=idx))
+
+    assert calls == []
+    assert view.point_count() == 25
+    assert view._redraw_timer.isActive()
+
+    app.processEvents()
+
+    assert calls == [25]
+    assert not view._redraw_timer.isActive()
+    result = view.grid_result()
+    assert result is not None
+    assert result.grid.shape == (25, 1)
+    assert view.point_count() == 25
+
+
+def test_flush_pending_redraw_renders_immediately(monkeypatch):
+    _app()
+    view = ScanMapView()
+    if view.image_view() is None:
+        pytest.skip("pyqtgraph not installed")
+
+    calls: list[int] = []
+    original_redraw = view._redraw
+
+    def spy_redraw():
+        calls.append(view.point_count())
+        original_redraw()
+
+    monkeypatch.setattr(view, "_redraw", spy_redraw)
+
+    for idx in range(10):
+        view.update_point(_result(float(idx), 0.0, charge=float(idx), index=idx))
+
+    assert calls == []
+    view.flush_pending()
+
+    assert calls == [10]
+    assert not view._redraw_timer.isActive()
+    result = view.grid_result()
+    assert result is not None
+    assert result.grid.shape == (10, 1)
+
+
 # --------------------------------------------------------------------------- #
 # Quantity switch                                                             #
 # --------------------------------------------------------------------------- #
@@ -453,6 +514,7 @@ def test_colorbar_unit_bound_to_selected_quantity():
     if view.image_view() is None:
         pytest.skip("pyqtgraph not installed")
     view.update_point(_result(0.0, 0.0, charge=1.0))
+    view.flush_pending()  # _hist_axis is read directly, bypassing the flushing accessors
 
     assert view._hist_axis.labelUnits == "pC"
     view.set_quantity("dut_amplitude_V")

@@ -17,7 +17,8 @@ Public API
 ----------
 ``update_point(result)``
     Live streaming: accumulate one ``controller.scan_controller.ScanResult``
-    (keyed by rounded ``(x_mm, y_mm)``, last-write-wins) and re-render.
+    (keyed by rounded ``(x_mm, y_mm)``, last-write-wins) and schedule a
+    coalesced re-render.
 ``set_points(mapping_or_iterable)``
     Batch load: replace all accumulated points at once, from either a
     ``{(x_mm, y_mm): ScanResult}`` mapping (this widget's own storage shape,
@@ -46,6 +47,7 @@ from __future__ import annotations
 import csv
 
 import numpy as np
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QComboBox, QFileDialog, QHBoxLayout, QLabel, QMessageBox, QStackedWidget,
     QToolButton, QVBoxLayout, QWidget,
@@ -89,6 +91,11 @@ QUANTITY_UNITS: dict[str, str] = {
     "rise_time_s": "s",
     "cfd_time_s": "s",
 }
+
+# Live scan points can arrive much faster than the GUI can rebuild the dense
+# grid and push a new ImageView frame. Keep live paints near 15 Hz while batch
+# loads, exports, lifecycle terminal states, and explicit reads can still flush.
+SCAN_MAP_REDRAW_INTERVAL_MS = 67
 
 
 def _extract_values(entry) -> dict[str, float]:
@@ -142,6 +149,11 @@ class ScanMapView(QWidget):
         # dedup; analysis.scan_grid's own n_duplicate_points can never see
         # them through this widget.
         self._n_duplicates = 0
+        self._redraw_dirty = False
+        self._redraw_timer = QTimer(self)
+        self._redraw_timer.setSingleShot(True)
+        self._redraw_timer.setInterval(SCAN_MAP_REDRAW_INTERVAL_MS)
+        self._redraw_timer.timeout.connect(self._flush_pending_redraw)
         self._build_ui()
 
     # ------------------------------------------------------------------ #
@@ -253,13 +265,13 @@ class ScanMapView(QWidget):
 
     def update_point(self, result) -> None:
         """Accept one live ``controller.scan_controller.ScanResult`` and
-        re-render — the incremental streaming path."""
+        schedule a coalesced re-render — the incremental streaming path."""
         x = round(float(result.point.x_mm), 6)
         y = round(float(result.point.y_mm), 6)
         if (x, y) in self._points:
             self._n_duplicates += 1
         self._points[(x, y)] = _extract_values(result)
-        self._redraw()
+        self._schedule_redraw()
 
     def set_points(self, mapping_or_iterable) -> None:
         """Batch-load points, replacing any accumulated state.
@@ -314,6 +326,7 @@ class ScanMapView(QWidget):
         """How many arriving points revisited an already-sampled (rounded)
         cell since the last ``clear()``/``set_points()`` reset — surfaced,
         never silently absorbed (design system §4)."""
+        self.flush_pending()
         return self._n_duplicates
 
     def points(self) -> dict[tuple[float, float], dict[str, float]]:
@@ -327,11 +340,13 @@ class ScanMapView(QWidget):
         not installed) — for a caller that needs the raw plot item rather than
         going through this widget's own API (e.g. this widget's own PNG
         export)."""
+        self.flush_pending()
         return self._image_view if _HAS_PG else None
 
     def grid_result(self) -> ScanGridResult | None:
         """The most recent :class:`~analysis.scan_grid.ScanGridResult` (for
         the currently selected quantity), or ``None`` before any data."""
+        self.flush_pending()
         return self._grid_result
 
     def set_empty_state_text(self, label: str, hint: str | None = None) -> None:
@@ -347,7 +362,17 @@ class ScanMapView(QWidget):
 
     def is_showing_map(self) -> bool:
         """True once the map page (vs the empty placeholder) is current."""
+        self.flush_pending()
         return bool(self._stack is not None and self._stack.currentIndex() == 1)
+
+    def flush_pending(self) -> None:
+        """Render any dirty live points immediately.
+
+        Call this for explicit terminal/read paths (scan finish, export,
+        hide/close, tests) where the current accumulated point set must be
+        visible without waiting for the coalescing timer.
+        """
+        self._flush_pending_redraw()
 
     def refresh_theme(self, mode: str | None = None) -> None:
         """Re-resolve the cached canvas/axis pens after a light/dark switch.
@@ -371,11 +396,34 @@ class ScanMapView(QWidget):
             axis.setPen(text_pen)
             axis.setTextPen(text_pen)
 
+    def hideEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self.flush_pending()
+        super().hideEvent(event)
+
+    def closeEvent(self, event) -> None:  # noqa: N802 - Qt override
+        self.flush_pending()
+        super().closeEvent(event)
+
     # ------------------------------------------------------------------ #
     # Internal                                                            #
     # ------------------------------------------------------------------ #
 
+    def _schedule_redraw(self) -> None:
+        self._redraw_dirty = True
+        if not self._redraw_timer.isActive():
+            self._redraw_timer.start()
+
+    def _flush_pending_redraw(self) -> None:
+        if self._redraw_timer.isActive():
+            self._redraw_timer.stop()
+        if not self._redraw_dirty:
+            return
+        self._redraw()
+
     def _redraw(self) -> None:
+        self._redraw_dirty = False
+        if self._redraw_timer.isActive():
+            self._redraw_timer.stop()
         if not _HAS_PG:
             return
         qty = self._combo_qty.currentText()
@@ -508,6 +556,7 @@ class ScanMapView(QWidget):
         ``ImageExporter`` — the write half of the toolbar PNG export button,
         split out so a caller (including a headless test) can drive it
         without a ``QFileDialog``."""
+        self.flush_pending()
         if not _HAS_PG:
             raise RuntimeError("pyqtgraph is not installed — cannot export PNG")
         if self._image_view is None:
@@ -529,6 +578,7 @@ class ScanMapView(QWidget):
                 writer.writerow([f"{x:.6f}", f"{y:.6f}", f"{val:.8g}"])
 
     def _update_cursor_readout(self, x_mm: float | None = None, y_mm: float | None = None) -> None:
+        self.flush_pending()
         if x_mm is None or y_mm is None:
             self._lbl_cursor.setText("x: -- mm   y: -- mm   value: --")
             return

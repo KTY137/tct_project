@@ -362,6 +362,7 @@ class ScanViewerPanel(QWidget):
         self._metric_elapsed.set_stale(False, "")
 
     def on_scan_finished(self) -> None:
+        self._map_view.flush_pending()
         self._run_active = False
         self._btn_pause.setEnabled(False)
         self._btn_pause.setChecked(False)
@@ -386,6 +387,7 @@ class ScanViewerPanel(QWidget):
         rather than a mere flag. Law 8: a trip must never be reported to the
         operator as a clean green "Scan finished".
         """
+        self._map_view.flush_pending()
         self._fault_pending = True
         self._fault_reason = (msg or title or "").strip()
         # A fault always ends the run; if the finish has not arrived yet the
