@@ -155,7 +155,7 @@ def test_manual_ramp_refused_when_gate_declines():
         assert supply.ramp_calls == [], "HV was ramped without confirmation"
         assert supply.output_off_calls == 0
         # No stuck busy state: no worker thread, buttons live, tile not armed.
-        assert panel._op_thread is None
+        assert panel._op_run is None
         assert panel._hv_ramping is False
         assert panel._btn_apply.isEnabled()
         assert not panel._tile_hv.value().startswith("RAMPING")
@@ -229,7 +229,7 @@ def test_iv_sweep_refused_when_gate_declines():
 
         assert supply.ramp_calls == [], "IV sweep energized HV without confirmation"
         assert supply.compliance_calls == []
-        assert getattr(panel, "_iv_thread", None) is None, "worker thread started anyway"
+        assert panel._iv_run is None, "worker thread started anyway"
         assert panel._btn_iv.isEnabled()
         assert panel._hv_scan_stepping is False
     finally:
@@ -277,6 +277,37 @@ def test_iv_sweep_starts_once_confirmed():
         assert panel._hv_scan_stepping is True
     finally:
         _dispose(panel)          # aborts the worker + joins its thread
+
+
+def test_iv_sweep_completion_reenables_trigger_on_gui_thread():
+    """End-to-end proof of the epicenter fix (Mary rider a): a completed IV
+    sweep re-enables the trigger and clears the stepping flag.  The old code did
+    this re-enable in a context-less lambda on ``_IVWorker.finished``, which ran
+    ON the worker thread — a cross-thread ``setEnabled``.  It now runs in
+    ``_on_iv_done``, delivered by the WorkerThread handle on the GUI thread, so
+    the button settles enabled and the sweep is reaped (``_iv_run`` joined)."""
+    app = _app()
+    supply = _SpySupply()
+    panel = BiasPanel(supply, gate=AutoConfirmGate())
+    try:
+        _expand_sweeps(panel)
+        panel._spin_iv_start.setValue(0.0)
+        panel._spin_iv_stop.setValue(-20.0)   # 3 points: 0, -10, -20
+        panel._spin_iv_step.setValue(10.0)
+        panel._spin_iv_delay.setValue(0.02)
+        panel._btn_iv.click()
+
+        # The sweep is disabled while running, then re-enabled on completion.
+        assert _pump_until(app, lambda: not panel._btn_iv.isEnabled()), \
+            "trigger never disabled while the sweep ran"
+        assert _pump_until(
+            app,
+            lambda: panel._btn_iv.isEnabled() and panel._hv_scan_stepping is False,
+        ), "IV completion never re-enabled the trigger on the GUI thread"
+        # All three points were recorded (worker→GUI queued signals delivered).
+        assert len(panel._iv_v) == 3
+    finally:
+        _dispose(panel)
 
 
 # --------------------------------------------------------------------------- #
@@ -449,7 +480,7 @@ def test_no_gate_refuses_every_hv_path_and_surfaces_it(monkeypatch):
         assert supply.polarity_calls == []
         assert seen == []
         assert panel._hv_ramping is False
-        assert panel._op_thread is None
+        assert panel._op_run is None
         # ...and the operator is told why, rather than facing a dead button.
         assert len(shown) == 4, shown
         assert all("Confirmation unavailable" in s for s in shown)

@@ -48,6 +48,7 @@ from gui.panel_kit import Card, CheckableCard, MetricGrid, MetricTile, section_h
 from gui.status_bus import notify
 from gui.style import PLOT_BG, WARN_RED, axis_color
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
+from gui.worker import ShutdownKind, WorkerThread
 
 
 # ---------------------------------------------------------------------------
@@ -221,8 +222,14 @@ class BiasPanel(QWidget):
         self._iv_i: list[float] = []
         self._vscan_v: list[float] = []
         self._vscan_q: list[float] = []
-        self._op_thread: QThread | None = None
-        self._op_worker: _SupplyCallWorker | None = None
+        # One-shot worker handles (gui.worker.WorkerThread) — each owns its own
+        # QThread + worker and reaps them on the GUI thread, so there is no
+        # hand-rolled moveToThread/quit/wait here and no context-less teardown
+        # closure (the 41a8ab2 bug class).  IV sweep is ABANDON (abort() just
+        # stops stepping); a supply call is MUST_COMPLETE (HV-facing — never
+        # orphan a ramp silently).
+        self._iv_run: WorkerThread | None = None
+        self._op_run: WorkerThread | None = None
         # Completion callback for the in-flight one-shot supply call, stashed so
         # the GUI-thread teardown slot (_on_supply_call_done) can retrieve it —
         # only one call runs at a time (guarded in _run_supply_call).
@@ -866,31 +873,57 @@ class BiasPanel(QWidget):
             delay_s=delay,
             ramp_step_V=step,
         )
-        self._iv_thread = QThread(self)
-        self._iv_worker.moveToThread(self._iv_thread)
-
-        # Connect worker signals
-        self._iv_thread.started.connect(self._iv_worker.run)
+        # Intermediate signals stay wired to the worker — but to BOUND METHODS
+        # of this GUI-thread widget (never lambdas), so AutoConnection queues
+        # them to the GUI thread.  The old code connected the `finished` and
+        # `stopped`/`error` handlers as context-less lambdas, which Qt ran on the
+        # WORKER thread: `finished → setEnabled(True)` was a cross-thread widget
+        # touch (Mary rider a).
         self._iv_worker.point.connect(self._on_iv_point)
         self._iv_worker.progress.connect(self._iv_progress.setValue)
-        self._iv_worker.finished.connect(self._iv_thread.quit)
-        self._iv_worker.finished.connect(lambda: self._btn_iv.setEnabled(True))
-        self._iv_worker.finished.connect(self._on_iv_finished_chip)
-        # Surface WHY a sweep stopped early (trip vs compliance) to the operator.
-        self._iv_worker.stopped.connect(lambda msg: notify(msg, "warn"))
-        self._iv_worker.error.connect(
-            lambda msg: notify(f"IV scan error: {msg}", "error")
-        )
-        # Clean up thread object when done
-        self._iv_thread.finished.connect(self._iv_thread.deleteLater)
+        self._iv_worker.stopped.connect(self._on_iv_stopped)
+        self._iv_worker.error.connect(self._on_iv_error)
 
-        self._iv_thread.start()
+        # The WorkerThread handle owns the thread lifecycle: it moves the worker
+        # off-thread, joins + reaps on completion, and re-emits `finished` ON THE
+        # GUI THREAD.  ABANDON: on shutdown, abort() stops the stepping loop; the
+        # output is left where the sweep reached it and the next readout re-derives
+        # its state.
+        self._iv_run = WorkerThread(
+            self._iv_worker,
+            self._iv_worker.finished,
+            kind=ShutdownKind.ABANDON,
+            stop_hook=self._iv_worker.abort,
+            name="IV sweep",
+            parent=self,
+        )
+        self._iv_run.finished.connect(self._on_iv_done)
+        self._iv_run.start()
 
     def _on_iv_point(self, v: float, i: float) -> None:
         self._iv_v.append(v)
         self._iv_i.append(i)
         if _HAS_PG and self._iv_curve is not None:
             self._iv_curve.setData(self._iv_v, self._iv_i)
+
+    def _on_iv_done(self, _payload) -> None:
+        """GUI-thread terminal for the IV sweep, queued by the WorkerThread
+        handle (never the worker thread).  Re-enables the trigger and refreshes
+        the HV tile.  The old code did the re-enable in a context-less lambda on
+        ``_IVWorker.finished``, which Qt ran ON the worker thread — a cross-thread
+        ``setEnabled`` that could race the GUI thread's own state (Mary rider a).
+        """
+        self._btn_iv.setEnabled(True)
+        self._on_iv_finished_chip()
+        self._iv_worker = None   # drop the panel's ref → reaped on the GUI thread
+
+    def _on_iv_stopped(self, msg: str) -> None:
+        """Early-stop reason (trip vs compliance).  Bound method, not a lambda,
+        so it is queued to the GUI thread rather than run on the worker thread."""
+        notify(msg, "warn")
+
+    def _on_iv_error(self, msg: str) -> None:
+        notify(f"IV scan error: {msg}", "error")
 
     def _on_iv_finished_chip(self) -> None:
         """Best-effort HV-tile refresh once an IV scan stops.
@@ -903,44 +936,52 @@ class BiasPanel(QWidget):
         self._hv_scan_stepping = False
 
     def _run_supply_call(self, fn: Callable[[], None], on_done) -> bool:
-        if self._op_thread is not None and self._op_thread.isRunning():
+        if self._op_run is not None and self._op_run.is_running():
             self._lbl_comp_warn.setText("Another bias operation is still running.")
             return False
 
         self._set_io_busy(True)
         self._op_on_done = on_done
-        self._op_worker = _SupplyCallWorker(fn)
-        self._op_thread = QThread(self)
-        self._op_worker.moveToThread(self._op_thread)
-        self._op_thread.started.connect(self._op_worker.run)
-        # done → _on_supply_call_done is a BOUND METHOD of this GUI-thread
-        # widget, so AutoConnection posts it to the GUI event loop (a
-        # QueuedConnection): the teardown (thread quit/wait) AND the busy-clear
-        # (_set_io_busy(False)) run on the GUI thread.  A bare closure here
-        # instead ran the slot IN the worker's own context (verified via
-        # QThread.currentThread()) — a wait-on-itself, and a cross-thread
-        # busy-clear that could be lost/raced under load, leaving controls stuck.
-        self._op_worker.done.connect(self._on_supply_call_done)
-        self._op_thread.start()
+        worker = _SupplyCallWorker(fn)
+        # MUST_COMPLETE: a supply call is HV-facing (a ramp / output-off).  The
+        # WorkerThread handle joins + reaps on the GUI thread and, at shutdown,
+        # never abandons a still-running ramp silently — it surfaces `orphaned`
+        # (loud) instead (Mary rider b).  The `done` terminal is delivered to a
+        # BOUND METHOD, so the busy-clear runs on the GUI thread, ordered against
+        # the GUI thread's own enable/disable (the 41a8ab2 invariant).
+        self._op_run = WorkerThread(
+            worker,
+            worker.done,
+            kind=ShutdownKind.MUST_COMPLETE,
+            name="bias supply call",
+            parent=self,
+        )
+        self._op_run.finished.connect(self._on_supply_call_done)
+        self._op_run.orphaned.connect(self._on_supply_call_orphaned)
+        self._op_run.start()
         return True
 
-    def _on_supply_call_done(self, err: str) -> None:
-        """GUI-thread teardown for a one-shot supply call, queued from the
-        worker's ``done`` signal: join the worker thread, clear the busy
-        interlock, then run the caller's completion — all on the GUI thread, so
-        it is never a wait-on-itself and the busy-clear is ordered against the
-        GUI thread's own enable/disable."""
-        thread = self._op_thread
-        self._op_thread = None
-        self._op_worker = None
+    def _on_supply_call_done(self, err) -> None:
+        """GUI-thread completion for a one-shot supply call, delivered by the
+        WorkerThread handle after it has already joined + reaped the worker
+        thread.  Clears the busy interlock, then runs the caller's completion —
+        all on the GUI thread, so the busy-clear is ordered against the GUI
+        thread's own enable/disable and it is never a wait-on-itself."""
+        self._op_run = None
         on_done = self._op_on_done
         self._op_on_done = None
-        if thread is not None:
-            thread.quit()
-            thread.wait(2000)
         self._set_io_busy(False)
         if on_done is not None:
-            on_done(err)
+            on_done(err or "")
+
+    def _on_supply_call_orphaned(self, msg: str) -> None:
+        """A MUST_COMPLETE supply call could not be joined at shutdown — surface
+        it loudly (HV work may be incomplete) rather than swallowing it.  The
+        busy interlock is cleared so a rebuilt panel is not left stuck."""
+        self._op_run = None
+        self._op_on_done = None
+        self._set_io_busy(False)
+        notify(f"Bias supply operation did not complete: {msg}", "error")
 
     def _set_io_busy(self, busy: bool) -> None:
         self._io_busy = busy
@@ -1082,23 +1123,18 @@ class BiasPanel(QWidget):
             flash_button(self._btn_off, "good", "Off")
 
     def shutdown(self) -> None:
+        # IV sweep (ABANDON): the handle's shutdown() requests abort() then joins,
+        # dropping it best-effort if it will not stop.  Supply call (MUST_COMPLETE):
+        # the handle joins and, on timeout, emits `orphaned` + logs at ERROR so an
+        # incomplete HV ramp is never silently abandoned (Mary rider b).
         try:
-            worker = getattr(self, "_iv_worker", None)
-            if worker is not None:
-                worker.abort()
+            if self._iv_run is not None:
+                self._iv_run.shutdown()
         except Exception:
             pass
         try:
-            thread = getattr(self, "_iv_thread", None)
-            if thread is not None and thread.isRunning():
-                thread.quit()
-                thread.wait(2000)
-        except Exception:
-            pass
-        try:
-            if self._op_thread is not None and self._op_thread.isRunning():
-                self._op_thread.quit()
-                self._op_thread.wait(2000)
+            if self._op_run is not None:
+                self._op_run.shutdown()
         except Exception:
             pass
         try:
