@@ -1,102 +1,121 @@
 # Session state — Adam's externalized working memory
 
-**Purpose:** this file holds the state that would otherwise live ONLY in the
-orchestrator's context — and is therefore the state that a context compaction
-silently corrupts. Adam updates it on every dispatch and every landing.
-A fresh session reads this file and is immediately as informed as the old one.
+**Purpose:** the state that would otherwise live ONLY in the orchestrator's
+context — and is therefore exactly what a compaction or a killed session
+destroys. A fresh session reads this file and is as informed as the old one.
+Updated on every dispatch and every landing. Run `.claude/beat_status.ps1`
+before every commit.
 
-**The one thing it exists for:** knowing which beat holds which file. Getting
-that wrong means a commit that sweeps another agent's in-flight work.
-
-Updated: 2026-07-12 night shift.
+Updated: 2026-07-13 ~02:00, **after the session hit its token limit and killed
+two agents mid-write.** Read the WARNING section before touching anything.
 
 ## HEAD
 
-`design/cockpit-v5 @ 3f6e2b7` (pushed).
+`design/cockpit-v5 @ f4f8e7b` (pushed).
 
-## IN FLIGHT — file locks (do NOT stage these paths)
+## 🚨 OPEN SAFETY FINDINGS — the branch is NOT bench-trustworthy for real HV
 
-| Beat | Agent | Locked paths |
+Mary re-reviewed `f4f8e7b` + `c966819` and returned **REQUEST-CHANGES**. Her
+BLOCKER (auto-energize on ramp-to-zero) is genuinely CLOSED and independently
+verified on all four backends. But she reproduced **three MAJORs that are still
+open**, all on the fail-safe path, all of the same shape:
+
+> **The HV DISABLE command can be silently skipped whenever a preceding
+> voltage write fails.**
+
+1. `bias_supply_iseg.py:437`, `bias_supply_keithley.py:291`,
+   `bias_supply_e4control.py:283` — `output_off()/output_off_ch()` issue the
+   cosmetic zero-volt write AND the actual HV-disable write inside ONE `try`,
+   with an early `return` on failure. A transient failure of the FIRST write
+   suppresses the SECOND: `:VOLT OFF` / `:OUTP OFF` / `setOutput(False)` — the
+   single most safety-critical command in the app — is never sent. Paul's own
+   comments note dropped frames are "common on the USB-VCP transport".
+   *Fix:* the disable write gets its OWN try, never gated on the zero write.
+2. `bias_supply_iseg.py:334` `_shutdown_channel` (+ the Keithley/e4control
+   twins) — the ramp runs in the SAME try as the `:VOLT 0` / `:VOLT OFF`
+   writes, so a raising ramp skips the disable on BOTH retry attempts.
+   Reproduced: output ON at −300 V, transport rejects value writes but would
+   accept `:VOLT OFF` → disconnect() emits two rejected writes, `:VOLT OFF` is
+   NEVER issued, channel left believed-ON, disconnect raises.
+   *Fix:* ramp in its own try inside each attempt, or move the OFF writes into
+   a `finally`.
+3. `tct_gui.py:1112` `_safe_bias_shutdown()` — `ramp_to(0.0)` and
+   `output_off()` in the SAME try/except; a raising ramp skips the output-off.
+   This falsifies Paul's claim that "every fail-safe caller guards the ramp
+   separately". Called from closeEvent, _teardown and the Disconnect button.
+   *Fix:* split into two try blocks, exactly like
+   `scan_controller._bias_failsafe:1679-1686`.
+
+Plus two MINORs she found in the same pass:
+- `gui/bias_panel.py:649` — the HV STATE tile derives its state from
+  `reading.compliant` ONLY. During a MANUAL HV session a latched hardware trip
+  (arc, external inhibit, current trip) shows a healthy **SETTLED** tile. Abel
+  wired the trip into the scan controller; nobody wired it into the operator's
+  own HV panel.
+- `gui/bias_panel.py:102` — the panel's own IV-sweep worker breaks on
+  `r.compliant` but ignores `r.tripped`: on an iseg it keeps stepping HV and
+  emitting points straight through a latched trip. (Same bug Abel fixed in
+  `_run_voltage_scan`, in a second unflagged place.)
+
+Her verdict, verbatim: *"close those three small fixes and this branch is
+bench-ready for real HV."* Owners: Paul (1, 2), Noah (3, + the two bias_panel
+MINORs).
+
+## ⚠️ DIRTY TREE — two agents were killed mid-write; VERIFY, do not trust
+
+The session hit its token limit and terminated two agents while they were
+writing. Their partial work is on disk, **unverified and uncommitted**. Do NOT
+commit any of it without reading the diff and running its tests.
+
+| Dirty paths | Whose | State at death |
 |---|---|---|
-| auto-enable sweep (Mary BLOCKER) | Paul | `TCT_app/devices/`, `TCT_app/tests/test_driver_truth.py`, `test_bias_multichannel.py`, `test_bias_all_off.py`, `test_bias_polarity.py`, `test_bias_and_calibration.py`, `test_bias_simulation_mode.py` |
-| latched-trip detection (Mary MAJOR) | Abel | `TCT_app/controller/scan_controller.py`, `TCT_app/tests/test_trip_detection.py` |
-| wiring debt + black box + theme r2 | Noah | `TCT_app/gui/style.py`, `gui/theme_editor.py`, `gui/status_widgets.py`, `tct_gui.py`, `TCT_app/tests/test_theme_editor.py`, `test_scan_viewer_wiring.py`, `tests/conftest.py` |
-
-## NEXT BEAT (queued, do not forget)
-
-**StateMachine.transition() is unlocked check-then-act** (Abel's Kings-retro
-gripe #2, TECH_DEBT RISK row). Noah proved the parallel lane now SURFACES it:
-`test_fault_injection_legacy::test_voltage_scan_compliance_trip_failsafe`
-mislabels the terminal state in ~4/6 parallel runs under CPU contention. Our
-one green parallel run was a single sample. This is a terminal-state REPORTING
-defect, not a flake — fix the race (lock or SM-level invariant), do not
-quarantine the test. **Owner: Abel.** Must land before `-n auto` becomes the
-bench default.
-
-Also queued: `gui/app_settings.py` accessor so QSettings isolation is
-structural rather than a conftest shim (the app names `QSettings("TCT",
-"TCTSetup")` in ~6 places; the test suite was writing into the developer's
-REAL registry until 2d4684b). **Owner: Noah.**
-Also: `pytest-xdist` is installed on the bench venv only — add to
-`TCT_app/requirements.txt` if `-n auto` should work on the laptop too.
+| `data/hdf5_writer.py`, `SCAN_DATA_FORMAT.md`, `controller/scan_controller.py`, `gui/analysis_panel.py`, `tests/test_run_outcome.py` (new) | **Jonathan** — run-outcome in HDF5 (a trip-aborted run was byte-identical to a clean short one) | killed at "Now let's update SCAN_DATA_FORMAT.md" — probably near-complete, tests unrun |
+| `gui/style.py`, `gui/theme_editor.py`, `tct_gui.py`, `gui/detachable_tabs.py`, `tests/test_theme_editor.py` | **Noah** — theme round 2 (real window-opacity slider 0.80–1.00, rename Glass→Surface tint, 5 built-in presets) | killed mid-verification; his first two commits DID land (see below) |
+| `analysis/camera_calibration.py`, `tests/test_camera_calibration.py`, `artifacts_codex/` (new) | **Codex** (Kaya's parallel session) | complete; 12 tests pass. Pure-numpy affine + distortion calibration, printable metrology target PDF. No conflict with the above. |
 
 ## LANDED tonight (all pushed)
 
-| Commit | What |
-|---|---|
-| `5730644` | fail-closed guard on all four scan start paths (Mary REQUEST-CHANGES on dac5b67) |
-| `9b91ed1` | 1D map slicer (Jonathan) |
-| `c12a6a1` | theme editor + glass_amount override layer (Noah) |
-| `7663d74` | z-focus/voltage coordinator slots fail closed (Mary standup find) |
-| `8d302fc` | mosaic stitch math A4a (Jonathan) |
-| `e3d323f` | bench checklist arm-latch flow + docs index (Samantha) |
-| `5e70b10` | UI monkey harness v1 (Abel) — found 2 real GUI bugs |
-| `7892a26` | slicer stale-run provenance fix (Mary REQUEST-CHANGES) |
-| `c1d552d` | Codex D5 review + monkey findings ledgered |
-| `a4d05f6` | **HV ramp behind DangerGate** (rule-2 violation, found by Samantha) |
-| `f2b9acc` | RATIFIED: danger-gate boundary, jog stays ungated (Kaya) |
-| `3f6e2b7` | **z-focus/voltage arm Pause/Abort — and Pause actually pauses** (Codex find → Abel found the wedge) |
-| `9cc14dd` | Coffee Break of Kings: 17 findings → TECH_DEBT |
-| `81d1f6a` | orchestrator state externalized (this ledger + `beat_status.ps1`) |
-| `99c527e` | CLAUDE.md session-hygiene rules (Kaya-approved) |
-| `bf9e009` | **homing / absolute move / centre / zero-here behind DangerGate** (new kind `zero_here`) |
+`5730644` four-start-path guard · `9b91ed1` 1D slicer · `c12a6a1` theme editor ·
+`7663d74` coordinator fail-closed · `8d302fc` mosaic stitch math · `e3d323f`
+docs/bench-checklist · `5e70b10` UI monkey harness · `7892a26` slicer
+stale-run provenance fix · `a4d05f6` **HV ramp behind DangerGate** · `f2b9acc`
+RATIFIED jog-ungated · `3f6e2b7` z-focus/voltage arm Pause+Abort · `81d1f6a`
+orchestrator ledger · `99c527e` session-hygiene rules · `bf9e009` **motion
+DangerGate** · `b4896d3` test-lane policy · `2d4684b` **xdist isolation leak
+killed (tests were writing the REAL registry)** · `9c207a1` **classic loops had
+NO slow-control interlock** · `c269e93` driver-truth batch · `56da3da`+`d091702`
+stale-pin fixes · `c1346c7` **trip wired into the viewer** · `c966819`
+**latched trip aborts the scan** · `b958bc4` **black box behind every label
+killed** · `b7e9b6b` debt · `f4f8e7b` **ramp-to-zero never energizes**
 
-## ONE-LINE DEBT — must land before the app is trusted on a bench
+## BENCH
 
-`9c207a1` fixed the controller (a compliance trip now settles ABORTED), but
-the VIEWER still paints the green "Scan finished" banner on a trip until one
-line exists in `tct_gui.py`:
+Last verified green: **`d091702`, 1192 passed, 42 s parallel** (`-n auto`).
+Five commits have landed SINCE that run (`c1346c7`, `c966819`, `b958bc4`,
+`b7e9b6b`, `f4f8e7b`) and are **not yet bench-verified as a set**. First action
+after the tree is clean:
+`powershell -File C:\Users\nukei\Desktop\agent_env\bench_run.ps1 -Branch design/cockpit-v5 -Xdist`
 
-    coord.error_dialog.connect(self._scan_viewer.on_scan_error)
+## NEXT BEATS (queued)
 
-`ScanViewerPanel.on_scan_error(title, msg)` exists and is test-proven; Abel
-could not wire it (tct_gui.py was outside his locks). Mirror it in
-`tests/test_scan_viewer_wiring.py::_wire_like_tct_gui` — that helper is the
-declared lock-step contract with the composition root. **Owner: Noah.**
-
-## PENDING REVIEWS (Mary)
-
-- theme editor `c12a6a1` — standalone (never stack with another feature).
-- Paul's driver-truth batch — safety class, mandatory, when it lands.
-- Abel's pause-parking semantics in `3f6e2b7` (he flagged it himself:
-  PAUSED→RUNNING→FINISHED promotion + HV holds last voltage while paused).
-- Noah's motion gate — when it lands.
-
-## NEXT QUEUED (full list: docs/NIGHT_SHIFT_20260712.md)
-
-1. **A2 QML shell default** (Noah, Kaya-ratified) — unblocked, but must wait
-   for Noah's motion gate to land (both hold `tct_gui.py`).
-2. Abel safety beats from the Kings retro: unify controller-tier danger-gating
-   across all 4 start paths · `StateMachine.transition()` lock · slow-control
-   UNAVAILABLE escalation · fuzzer covering voltage/z-focus loops.
-3. Jonathan data beats: ref-channel baseline subtraction (biases every saved
-   charge today) · silent camera-frame drops · `*_ns` vs `*_s` quantity-name
-   mismatch · V_dep fit quality.
-4. Noah GUI beats: W1 taxonomy sweep per `docs/design/state_color_census.md` ·
-   `scan_map_view` redraw throttle · the 2 monkey-found bugs.
+1. **Mary's three MAJORs above** — the HV disable must never be skippable.
+   This gates real-hardware use. Do this first.
+2. **StateMachine.transition() is unlocked check-then-act** — the parallel lane
+   surfaces it (~4/6 runs mislabel a terminal state). A REPORTING defect, not a
+   flake; do not quarantine the test. Must land before `-n auto` becomes the
+   bench default. *Owner: Abel.*
+3. `gui/app_settings.py` accessor so QSettings isolation is structural, not a
+   conftest shim (the app names `QSettings("TCT","TCTSetup")` in ~6 places).
+   *Owner: Noah.*
+4. `BiasChannel.output_on` is a METHOD that switches HV ON — a bound method is
+   always truthy, so `if bias.output_on:` is both wrong and one typo from
+   energizing the supply. Rename + guard test. *Owner: Paul.*
+5. Finish/verify the two killed beats (see DIRTY TREE).
 
 ## PARKED — needs Kaya
 
 v5 ratification (14 artifacts) · sequencer envelope semantics · Ollama watcher
 restart with GPU env · command-palette allow-list · hover/lag verdict on the
-real display.
+real display · the camera-metrology roadmap Codex started (affine + distortion
+calibration is built; closed-loop correction is NOT, and must be
+DangerGate-gated + bounded before it ever commands a motor).
