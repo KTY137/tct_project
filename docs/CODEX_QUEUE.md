@@ -454,7 +454,7 @@ sandbox-environment-specific — and only you can observe it from inside.
 
 ## S2 — Adversarial review of the master roadmap (round 1 of 2; advisory, no code edits)
 
-**Status: OPEN** · Effort: M · Source: Kaya finalization protocol (2026-07-13); model request: Codex 5.6 Sol (use it if your CLI can pin models; otherwise note which model ran)
+**Status: DONE — Wrote Codex round-1 masterplan review.** · Effort: M · Source: Kaya finalization protocol (2026-07-13); model request: Codex 5.6 Sol (use it if your CLI can pin models; otherwise note which model ran)
 
 Read `docs/ROADMAP_MASTERPLAN.md` in full — the Kaya-approved master plan
 (capability spine, 8-domain staged roadmap, UI migration, seed strategy).
@@ -476,6 +476,41 @@ in its own bounce ledger — read that section so you do NOT repeat them).
   valid verdict per section if you name what you checked.
 - No app-code edits. No commit. Set S2 DONE with findings per Handback.
   (Round 2 will review the integrated delta as task S3.)
+
+**Codex findings (2026-07-13):**
+- Files touched: `docs/design/codex_masterplan_review_r1.md`, `docs/CODEX_QUEUE.md`.
+- Wrote a 41-line advisory review with 2 BLOCKER, 5 MAJOR, and 2 MINOR findings against the master plan, plus short "holds" notes for the parts that looked executable.
+- Findings focused on blind spots not already absorbed by the internal ledger: capability execution lifecycle/transport reservation, QML safety-control event authority, multi-facet safety policy, P0' as a weak wavegen equivalence oracle, timing/atomic provenance, dual-shell QSettings persistence, Linux offscreen/QML fragility, effort sizing, and residual e4control licensing risk.
+- Model note: this lane could not pin the requested "Codex 5.6 Sol"; the review ran with the available Codex model and records that in the artifact.
+- Verification: read all 428 lines of `docs/ROADMAP_MASTERPLAN.md`, including the four-round bounce ledger; no pytest was run because S2 is documentation-only and requests no app-code edits.
+- Risk: review is static/advisory only; it challenges the roadmap text but does not reproduce runtime Qt, instrument, or Linux behavior.
+
+## S3 — Master-roadmap review round 2: the integrated delta (advisory, no code edits)
+
+**Status: OPEN** · Effort: S · Source: Kaya finalization protocol round 2 (2026-07-13)
+
+Your R1 findings (docs/design/codex_masterplan_review_r1.md) were
+integrated into `docs/ROADMAP_MASTERPLAN.md` — see the new
+"Codex-R1 corrections" block in PART I and the Bounce-5 ledger entry.
+Two items are ⚑-flagged for Kaya rather than fully resolved
+(per-operation safety routing; seed cleanliness of the e4control
+pattern).
+
+- Task: review ONLY the integrated delta (git diff of
+  docs/ROADMAP_MASTERPLAN.md between the commit that added it and
+  HEAD, or read the two named sections): (1) does each integration
+  faithfully capture your R1 amendment, or did meaning get lost/
+  weakened in translation? (2) do the integrations introduce NEW
+  contradictions with the rest of the plan (e.g. the binding lifecycle
+  vs the F1 pure-data split; the per-operation routing vs Völundr's
+  total ordering)? (3) are the two ⚑ items correctly scoped as
+  Kaya-decisions, or is one of them actually forced (only one sound
+  option)?
+- Write ONE file: `docs/design/codex_masterplan_review_r2.md` (~50
+  lines): per R1 finding — FAITHFUL / WEAKENED (how) / CONTRADICTS
+  (what), plus a final verdict: plan ready for execution as integrated,
+  or name the remaining edit.
+- No app-code edits. No commit. Set S3 DONE with findings per Handback.
 
 ## S1 — Visual style audit from rendered panels (advisory, no code edits)
 

@@ -76,6 +76,54 @@ class Motion3D(CapabilityDescriptor): axes: tuple[SweepableParameter,...]
   unit/safety_class attrs (ophyd describe() shape); fixed columns stay;
   SCAN_DATA_FORMAT version bump; descriptor **snapshots** serialize into
   scan_config.
+- **Codex-R1 corrections (folded in 2026-07-13 night; two items ⚑
+  flagged for Kaya re-ratification):**
+  - **Binding lifecycle (Codex BLOCKER-1):** `CapabilityBinding` is not
+    a bare setter — it carries the staged lifecycle
+    `reserve → prepare → apply → wait_settled → verify_or_skip → abort`
+    with per-transport reservation/locking, so acquisition can never
+    start against an un-applied setpoint on a shared VISA/serial line.
+    D1 exit includes a simulated delayed-apply test proving the
+    executor waits for `wait_settled` before acquiring.
+  - **⚑ Safety routing per OPERATION, not one ladder (Codex MAJOR-1):**
+    `SafetyClass` stays the coarse display tier, but gate ROUTING is
+    declared per operation (`read`/`set`/`arm`/`start`/`stop`) via
+    explicit route names (`danger_gate`, `motion_envelope`, `hv_lock`,
+    `emission_interlock`) — a capability can be motion-adjacent AND
+    emitting; mixed-hazard capabilities get tests before any generated
+    UI. CAPABILITY_MODEL.md defines this; Mary's taxonomy review covers
+    it. (Touches the Völundr total-ordering decision → Kaya nod needed.)
+  - **P0' as equality oracle (Codex MAJOR-2):** P0' supports the
+    PER-POINT duty variation (the grammar already attaches wavegen
+    params per ACQUIRE action) and records a per-point command trace;
+    P1's equality gate compares command order + point index + final
+    `swept/` rows — never just a run-level setting.
+  - **Timing + atomic completion (Codex MAJOR-3):** DA1/DA2 include a
+    minimal per-point timing/status contract (command-issued, settled,
+    acquisition start/end, monotonic clock) and an ATOMIC completion
+    marker written only after HDF5 close — a crash can never leave a
+    complete-looking file.
+  - **Dual-shell settings (Codex MAJOR-4):** shell-specific QSettings
+    keys are NAMESPACED; shared keys frozen in app_settings; the
+    U-stage gate adds a dirty-settings round-trip (classic writes → qml
+    boots → qml writes → classic boots).
+  - **Safety event authority under QML (Codex BLOCKER-2):** every
+    U-stage merge gate includes: QML-focused key injection reaches
+    emergency shortcuts, mouse-hit tests at STOP/Abort coordinates,
+    z-order assertions; emergency shortcuts are owned by the top-level
+    QWidget path, never the QML scene.
+  - **PORT1 re-rated M/L (Codex MAJOR-5):** explicit Linux graphics
+    recipe (Xvfb/EGL/Mesa), QSG_INFO=1 log parser rejecting silent
+    software fallback, pixel-smoke captures for QML AND pyqtgraph/GL,
+    separate AlmaLinux sim-only verdict.
+  - **Effort honesty (Codex MINOR-1):** D1 split into D1a
+    (contract/model) + D1b (adapters/registry); D4 rated L unless a
+    prior spike proves the panel lifecycle needs no special cases.
+  - **⚑ Seed cleanliness (Codex MINOR-2):** the e4control adapter
+    PATTERN ships in the public seed only if an upstream license/grant
+    exists by tag time; otherwise it moves to a TCT-private appendix —
+    Kaya's informal authorization covers tct_app, not third-party
+    redistribution. (Kaya nod needed.)
 - **Bounce-1 corrections (Prometheus, folded in):**
   - **Data/binding split (F1):** descriptors are PURE DATA (JSON-safe by
     construction, no callables, no auto-hash traps); the registry returns
@@ -456,6 +504,20 @@ Internal rounds (honest ledger):
   safety_class total ordering; 14-item contract checklist; manifest/
   audit/policy-query declared post-seed. Verdict: withhold sign-off
   until the three named items are in — all three are in.
+- Bounce 5 — Codex R1 (external lane; NOTE: lane could not pin
+  "Codex 5.6 Sol", ran with the available Codex model): DONE,
+  INTEGRATED (2026-07-13 night) — 2 BLOCKER (CapabilityBinding staged
+  lifecycle + transport reservation; QML safety EVENT-AUTHORITY gate),
+  5 MAJOR (per-operation safety routing ⚑Kaya; P0' per-point oracle;
+  per-point timing + atomic completion marker; dual-shell QSettings
+  namespacing + round-trip; PORT1 re-rated M/L with graphics recipe),
+  2 MINOR (D1a/D1b split + D4→L; seed cleanliness for the e4control
+  pattern ⚑Kaya). Explicit holds: trunk/gate repair and the metrology
+  stream confirmed sound. Full review:
+  docs/design/codex_masterplan_review_r1.md. The two ⚑ items await
+  Kaya's nod (they touch his prior decisions); everything else is
+  design-hardening consistent with plan intent, integrated under the
+  autonomy mandate.
 
 **Finalization protocol (Kaya directive): after Kaya approves this
 plan, TWO Codex-lane bounces run as the FIRST execution steps** (queue-
