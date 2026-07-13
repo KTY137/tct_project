@@ -214,3 +214,67 @@ def test_camera_disabled_run_has_no_camera_group_and_no_attrs(tmp_path):
 
     with h5py.File(tmp_path / "run_00014" / "waveforms.h5", "r") as f:
         assert "camera" not in f
+
+
+# =========================================================================== #
+# save_camera_frame (B2 deviation sign-off): standalone CAPTURE_PHOTO path.
+# Reuses B1's _save_camera_frame honesty primitive, but tags the frame with
+# the writer's CURRENT point index and never advances _n_points itself.
+# =========================================================================== #
+
+def test_save_camera_frame_tags_current_point_index_and_never_advances_points(tmp_path):
+    """A standalone frame is tagged with the point row it WILL belong to (the
+    writer's current _n_points at call time); save_camera_frame itself never
+    advances that counter -- only a real save_point() call occupies a row.
+    Also proves an explicit capture persists even though camera_frame defaults
+    to off (it does not gate on save_options, per the method's docstring)."""
+    frame_a = np.full((3, 3), 10, dtype=np.uint16)
+    frame_b = np.full((3, 3), 20, dtype=np.uint16)
+
+    writer = HDF5Writer(tmp_path / "run_00020", save_options=SaveOptions())  # camera_frame off
+    writer.open()
+
+    writer.save_camera_frame(frame_a)
+    assert writer._n_points == 0, "a standalone frame must never advance _n_points"
+    writer.save_point(_make_result(x_mm=0.0))            # occupies points row 0
+    writer.save_camera_frame(frame_b)
+    writer.save_point(_make_result(x_mm=1.0))            # occupies points row 1
+    writer.close()
+
+    with h5py.File(tmp_path / "run_00020" / "waveforms.h5", "r") as f:
+        assert f["camera/frames"].shape == (2, 3, 3)
+        assert list(f["camera/frame_point_index"][:]) == [0, 1]
+        assert f["points/x_mm"].shape == (2,)
+        np.testing.assert_array_equal(f["camera/frames"][0], frame_a)
+        np.testing.assert_array_equal(f["camera/frames"][1], frame_b)
+
+
+def test_save_camera_frame_shares_drop_counter_and_index_space_with_save_point(tmp_path, caplog):
+    """save_camera_frame() and save_point()'s implicit per-point grab both
+    route through the SAME B1 primitive (_save_camera_frame), so interleaving
+    them must share ONE n_frames_omitted counter and ONE contiguous
+    camera/frames index space -- not two independent tallies that could
+    silently disagree with each other."""
+    good = np.full((4, 4), 1, dtype=np.uint16)
+    bad_ndim = np.ones(4, dtype=np.uint16)  # ndim < 2 -> dropped
+
+    writer = HDF5Writer(tmp_path / "run_00021", save_options=SaveOptions(camera_frame=True))
+    writer.open()
+    with caplog.at_level("WARNING"):
+        writer.save_point(_make_result(x_mm=0.0, camera_frame=good))  # frame 0 -> point 0
+        writer.save_camera_frame(good)                                # frame 1 -> point 1 (tag)
+        writer.save_camera_frame(bad_ndim)                            # dropped, standalone path
+        writer.save_point(_make_result(x_mm=1.0, camera_frame=None))  # dropped, per-point path
+        writer.save_camera_frame(good)                                # frame 2 -> point 2 (tag)
+    writer.close()
+
+    with h5py.File(tmp_path / "run_00021" / "waveforms.h5", "r") as f:
+        assert f["camera/frames"].shape == (3, 4, 4)
+        assert list(f["camera/frame_point_index"][:]) == [0, 1, 2]
+        assert f["points/x_mm"].shape == (2,)
+        # Both drop paths (standalone bad_ndim + per-point None) land in the
+        # SAME counter -- this is the crux of the sign-off: one honesty
+        # contract, not two.
+        assert f["camera"].attrs["n_frames_omitted"] == 2
+    assert any("ndim" in r.message for r in caplog.records)
+    assert any("None" in r.message or "grab failed" in r.message for r in caplog.records)

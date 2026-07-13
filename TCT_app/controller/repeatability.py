@@ -20,7 +20,21 @@ Calibration (px → mm) is optional: ``calibrate()`` commands one known move and
 measures the resulting pixel shift, so results can be reported in µm.  The
 repeatability *scatter* is meaningful even in raw pixels without it.
 
-Only numpy + scipy are required (no OpenCV / scikit-image).
+Frame preprocessing (Wave-5 step 1)
+------------------------------------
+Every grabbed frame is piped through
+``analysis.image_prep.prepare_metrology_roi`` (see
+:meth:`RepeatabilityTester._grab`) before correlation: a static vignette /
+bright rim otherwise correlates at zero shift and biases
+:func:`cross_correlation_shift`'s peak toward ``(0, 0)``, under-reporting
+real motion (``docs/design/camera_survey_metrology.md`` §B.0 point 5 / §D).
+:meth:`RepeatabilityTester.run` also gains a ``quality_min`` gate: a frame
+``prepare_metrology_roi`` scores below it is flagged and excluded from the
+repeatability statistics rather than silently folded in — see that method's
+docstring. :func:`cross_correlation_shift` itself is UNCHANGED and stays a
+pure image-in/shift-out function; it has no idea preprocessing happened.
+
+Only numpy is required (no scipy / OpenCV / scikit-image).
 """
 from __future__ import annotations
 
@@ -31,6 +45,7 @@ from typing import Callable
 
 import numpy as np
 
+from analysis.image_prep import PreparedROI, prepare_metrology_roi
 from controller.danger_gate import DangerAction, DangerGate
 
 
@@ -113,6 +128,17 @@ class RepeatabilityResult:
     shifts_px: list[tuple[float, float]] = field(default_factory=list)  # (dx, dy)
     px_per_mm: float | None = None
     target_user: tuple[float, float, float] | None = None
+    # Quality gating (Wave-5 step 1, RepeatabilityTester.run's `quality_min`):
+    # a cycle whose grabbed frame scores below quality_min is excluded from
+    # `shifts_px` -- and therefore from every statistic below
+    # (std_px/p2p_px/radial_std_px) -- rather than silently folded in.
+    # `quality_flags` has one entry per cycle actually EXECUTED (a frame was
+    # grabbed), True = excluded; `n_low_quality` is the same information as a
+    # plain count.  Both are `0`/`[]` for a denied/unconfirmed run (no cycle
+    # ever executed) and for a pre-Wave-5 caller that never sees a low-quality
+    # frame.
+    n_low_quality: int = 0
+    quality_flags: list[bool] = field(default_factory=list)
 
     def _arr(self) -> np.ndarray:
         return np.asarray(self.shifts_px, dtype=float).reshape(-1, 2)
@@ -154,6 +180,11 @@ class RepeatabilityResult:
             f"  peak-pk: X={px:.2f} px   Y={py:.2f} px",
             f"  radial std: {rad:.2f} px",
         ]
+        if self.n_low_quality:
+            lines.append(
+                f"  excluded: {self.n_low_quality} low-quality frame(s) "
+                f"(quality < quality_min) -- NOT included above"
+            )
         if self.px_per_mm:
             lines.append(f"  scale  : {self.px_per_mm:.2f} px/mm "
                          f"({1000.0/self.px_per_mm:.3f} µm/px)")
@@ -184,14 +215,25 @@ class RepeatabilityTester:
     the plan executor's one-confirm-per-run stance in ``scan_controller``.  If no
     gate is supplied (*gate* is ``None``) the tester REFUSES to move: it raises
     rather than silently running ungated.
+
+    *highpass_sigma_px* / *roi* configure the ``analysis.image_prep.
+    prepare_metrology_roi`` preprocessing every grabbed frame goes through
+    (see :meth:`_grab`, module docstring "Frame preprocessing"). ``roi=None``
+    (default) uses the whole frame -- the closest match to pre-Wave-5
+    behaviour, which never cropped; ``highpass_sigma_px`` defaults to
+    ``prepare_metrology_roi``'s own default (15.0 px).
     """
 
     def __init__(self, motor, camera, logger: logging.Logger | None = None,
-                 *, gate: DangerGate | None = None) -> None:
+                 *, gate: DangerGate | None = None,
+                 highpass_sigma_px: float = 15.0,
+                 roi: tuple[int, int, int, int] | None = None) -> None:
         self._motor = motor
         self._camera = camera
         self.logger = logger or logging.getLogger(__name__)
         self._gate = gate
+        self._highpass_sigma_px = highpass_sigma_px
+        self._roi = roi
 
     # -- helpers ----------------------------------------------------------- #
 
@@ -210,10 +252,22 @@ class RepeatabilityTester:
                 "stage without operator confirmation.")
         return bool(self._gate.confirm(action))
 
-    def _grab(self, settle_s: float) -> np.ndarray:
+    def _grab(self, settle_s: float) -> PreparedROI:
+        """Grab one frame and run it through ``prepare_metrology_roi``
+        (Wave-5 step 1) so a static vignette/illumination gradient cannot
+        bias :func:`cross_correlation_shift`'s peak toward ``(0, 0)`` — see
+        the module docstring "Frame preprocessing" section.
+
+        Returns the full :class:`~analysis.image_prep.PreparedROI`, not just
+        its ``.image``: callers use ``.image`` for correlation and ``.quality``
+        for :meth:`run`'s quality gate.
+        """
         if settle_s > 0:
             time.sleep(settle_s)
-        return np.asarray(self._camera.get_frame())
+        frame = np.asarray(self._camera.get_frame())
+        return prepare_metrology_roi(
+            frame, roi=self._roi, highpass_sigma_px=self._highpass_sigma_px,
+        )
 
     def calibrate(self, axis: str = "x", dist_mm: float = 5.0,
                   settle_s: float = 0.4) -> float:
@@ -236,16 +290,16 @@ class RepeatabilityTester:
         self._motor.move_relative(*d)
         moved = self._grab(settle_s)
         self._motor.move_relative(-d[0], -d[1], -d[2])     # back to start
-        dy, dx = cross_correlation_shift(ref, moved)
+        dy, dx = cross_correlation_shift(ref.image, moved.image)
         shift_px = float(np.hypot(dx, dy))
         # The shift must stay within the frame or phase correlation aliases.
         # Warn if it is close to half the frame (the wrap-around limit).
-        limit = 0.45 * min(moved.shape[:2])
+        limit = 0.45 * min(moved.image.shape[:2])
         if shift_px > limit:
             self.logger.warning(
                 "Calibration shift %.0f px exceeds %.0f px (≈half the %d×%d frame) "
                 "— move too large for this magnification; reduce dist_mm.",
-                shift_px, limit, moved.shape[1], moved.shape[0])
+                shift_px, limit, moved.image.shape[1], moved.image.shape[0])
         px_per_mm = shift_px / abs(dist_mm) if dist_mm else 0.0
         self.logger.info("Calibration: %.1f mm on %s → %.1f px  (%.2f px/mm)",
                          dist_mm, axis.upper(), shift_px, px_per_mm)
@@ -253,12 +307,27 @@ class RepeatabilityTester:
 
     def run(self, n: int = 20, approach_mm: float = 5.0, settle_s: float = 0.4,
             px_per_mm: float | None = None,
+            quality_min: float = 0.2,
             progress: Callable[[int, int], None] | None = None,
             should_stop: Callable[[], bool] | None = None) -> RepeatabilityResult:
         """Run *n* return-to-target cycles and return the measured scatter.
 
         Each cycle moves away by ``approach_mm`` (the direction cycles through
         +X, +Y, -X, -Y so the target is approached from all sides) then back.
+
+        *quality_min* (Wave-5 step 1) gates each cycle's
+        ``prepare_metrology_roi`` quality score (0-1, see :meth:`_grab`): a
+        cycle whose frame scores below it is FLAGGED
+        (``RepeatabilityResult.quality_flags``) and EXCLUDED from
+        ``shifts_px`` — and therefore from every statistic derived from it
+        (``std_px``/``p2p_px``/``radial_std_px``) — rather than silently
+        folded in; ``RepeatabilityResult.n_low_quality`` counts the
+        exclusions. If every frame belonging to a cycle scores below
+        *quality_min* (today, that is just the cycle's one frame — see the
+        module docstring), the WHOLE cycle is excluded this way. This never
+        changes the danger-gate / motion behaviour: the excluded cycle's move
+        still happens exactly as commanded: only its (untrusted) correlation
+        measurement is dropped from the statistics.
         """
         if not getattr(self._camera, "connected", False):
             raise RuntimeError("Camera is not connected — cannot measure repeatability.")
@@ -285,6 +354,13 @@ class RepeatabilityTester:
                                        target_user=target_user)
 
         ref = self._grab(settle_s)
+        if ref.quality < quality_min:
+            self.logger.warning(
+                "Repeatability reference frame quality %.3f is below "
+                "quality_min %.3f — every cycle is measured against this "
+                "low-quality reference; consider re-focusing/re-illuminating "
+                "before trusting this run's numbers.", ref.quality, quality_min)
+
         dirs = [(approach_mm, 0, 0), (0, approach_mm, 0),
                 (-approach_mm, 0, 0), (0, -approach_mm, 0)]
         result = RepeatabilityResult(px_per_mm=px_per_mm,
@@ -297,7 +373,20 @@ class RepeatabilityTester:
             self._motor.move_relative(dx_a, dy_a, dz_a)            # away
             self._motor.move_to(target.x_mm, target.y_mm, target.z_mm)  # back
             frame = self._grab(settle_s)
-            dy, dx = cross_correlation_shift(ref, frame)
+
+            low_quality = frame.quality < quality_min
+            result.quality_flags.append(low_quality)
+            if low_quality:
+                result.n_low_quality += 1
+                self.logger.debug(
+                    "rep %d/%d: quality %.3f < quality_min %.3f — cycle "
+                    "EXCLUDED from repeatability statistics (motion still "
+                    "happened)", i + 1, n, frame.quality, quality_min)
+                if progress:
+                    progress(i + 1, n)
+                continue
+
+            dy, dx = cross_correlation_shift(ref.image, frame.image)
             result.shifts_px.append((dx, dy))
             self.logger.debug("rep %d/%d: dx=%.2f dy=%.2f px", i + 1, n, dx, dy)
             if progress:

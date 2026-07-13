@@ -236,6 +236,17 @@ class HDF5Writer:
         waveform chunk or desyncs the waveforms/points parallel arrays.  It does
         NOT advance ``_n_points`` (only a real point does); a following
         ``SAVE_POINT`` at the same coordinate occupies that point row.
+
+        Caveat (dangling tag): the tagged index NAMES the point row this frame
+        will belong to once that following ``SAVE_POINT`` is written — it does
+        not require one to already exist.  A plan that calls this and then
+        never writes a ``SAVE_POINT`` for that coordinate (run ends early, or
+        moves on to a different point without saving this one) leaves a
+        dangling tag: ``frame_point_index[k] >= len(points/x_mm)`` at read
+        time.  Readers must bounds-check ``frame_point_index`` against
+        ``points/`` length before indexing — the same discipline any
+        ``camera/`` consumer already needs for ``M <= N`` (SCAN_DATA_FORMAT.md
+        "Datasets (XY scans)" — a follow-up should call this out there too).
         """
         f = self._require_open()
         cam = f.require_group("camera")
