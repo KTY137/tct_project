@@ -36,9 +36,24 @@ R1+R2 done).**
 
 | Beat | Agent | Locks / notes |
 |---|---|---|
-| P0' Mary-riders: ACQUIRE_WAVEFORM outer-key typo → action-scoped ERROR (+corpus 0/0 regression proof) · fail-safe test tightened (output_off count after on_error, bias-untouched assert) · docstring contracts (point_index attempt-semantics, no-settle-today) | Abel (acquisition-dev) | `controller/scan_plan_validator.py`, `controller/scan_controller.py`, `tests/test_scan_plan_validator.py`, `tests/test_plan_executor.py` |
-| CAPABILITY_MODEL.md v0.1-draft (D1 entry artifact, beat 5 of Part VI) | Paul (hardware-dev, Fable) | `docs/CAPABILITY_MODEL.md` (new) |
-| Kiroku booking batch (post-push) | kiroku | `docs/ARCHITECTURE.md` changelog, `docs/TECH_DEBT.md` |
+| Bench serial gate at `98629c1` (P0'+gates+riders package) → push on exit 0 | sophonone (background) | remote; push refspec targets gated SHA (+docs-only on top OK) |
+| S2 SAFETY_NORMATIVE_TESTS.md v0.1-draft (port-disposition manifest + completeness grep) | Abel (Fable) | `docs/SAFETY_NORMATIVE_TESTS.md` (new) |
+| Codex-C10 MAJOR fixes: params deep-copy at compile · non-finite wavegen values fail closed (validator + apply-guard; finally-flush must never raise) · R5/R1 bias-loop WAIT dwell + corpus re-freeze byte-identical | Abel#2 (acquisition-dev) | `controller/plan_compiler.py`, `controller/scan_plan_validator.py`, `controller/scan_controller.py`, `data/hdf5_writer.py`, `routines/*`, `tests/fixtures/routine_corpus/*`, executor/validator/compiler tests |
+
+**Landed since:** `ad38db5` P0' Mary-riders (75 passed, corpus 0/0) ·
+`98629c1` lane/ledger chore · `a6d58e0` **CAPABILITY_MODEL.md v0.1-draft**
+(Fable; honest divergences in-doc: P0' landed ⇒ P1=re-hosting, no sim
+twin file, settle-0.0 sentinel wrinkle → P2, 5-vs-6 device dict; NEW ⚑
+for Kaya: multi-channel HV id naming `bias.ch{n}.voltage`).
+
+**Codex C10 verdict (on disk in docs/CODEX_QUEUE.md §C10):** 3 MAJOR —
+params shallow-copy aliasing (post-validation mutation reaches
+hardware), non-finite floats pass validation + `allow_nan=True` JSON
+trace, R5/R1 bias loops have zero post-bias dwell (compiler settles
+only after MoveStep). 2 confirm-clean: range boundaries + setter order;
+corpus byte-identity real, no Linux encoding blocker. All three MAJORs
+→ Abel#2 beat above. Lane bug noted: watcher double-reported C10
+done+failed (outbox file consumed twice) — agent_env TODO.
 
 **Durable evidence line — [Mary] P0': gate=P0'-immediate-review,
 sha=5c75696, verdict=RISK-NOTES (emission-safe proven: setters
@@ -50,6 +65,16 @@ gap = P1 rider (apply→wait_settled→acquire); real-DG4000 settle timing
 = bench question; retained-ON first-point edge = pre-existing,
 documented. Mary items 2-4 → Abel rider beat above; settle-gap +
 trace-semantics rows → next Kiroku batch (TECH_DEBT.md locked now).
+
+## ✅ venv MIGRATED (2026-07-13 evening) — Codex-lane blocker gone
+
+`.venv` now runs real CPython 3.10.11 x64 (`AppData\Local\Programs\
+Python\Python310`), not the Store alias — THE root cause of the Codex
+sandbox's venv-launch failures since C1. numpy 1.26.4 / PySide6 6.11.1
+unchanged (pip-freeze diff). **Parity catch: the fresh resolve silently
+dropped PySpin (camera wheel) + py-spy — both reinstalled, `import
+PySpin` verified.** Smoke: 128 passed. Rollback: `TCT_app/.venv_old`
+(gitignored; delete only after Kaya runs `.\run.ps1` once).
 
 ## NEXT (post-push chain, in order)
 

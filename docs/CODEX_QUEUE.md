@@ -554,7 +554,7 @@ overall Apple-styleness.
 
 ## C10 - Second-opinion review: P0' wavegen-apply + routine corpus (advisory, no code edits)
 
-**Status: QUEUED** - Effort: S/M - Source: Adam free-lane rule, 2026-07-13 evening
+**Status: DONE - Logged Codex second-opinion risk notes.** - Effort: S/M - Source: Adam free-lane rule, 2026-07-13 evening
 
 Adversarial second opinion on two fresh commits (advisory only; the Claude
 crew already has a Mary review with verdict RISK-NOTES - your job is to find
@@ -578,3 +578,56 @@ still broken - known, fix pending). Deliverable: append findings to this
 file per Handback protocol, ranked by severity, each with file:symbol
 citation. "Confirm clean" per area is a valid verdict if you name what you
 checked.
+
+**Codex findings (2026-07-13):**
+- Files touched: `docs/CODEX_QUEUE.md` only. No code or YAML was modified.
+- MAJOR - `TCT_app/controller/plan_compiler.py:compile_plan` / `AcquireStep.params` shallow-copies only the outer params dict (`params=dict(params)`), while `TCT_app/controller/scan_controller.py:_run_plan` later reads the nested `step.params["wavegen"]` mapping and commands hardware from it. Failure case: a caller or GUI model mutates `plan.root[*].params["wavegen"]` after validation/compile but before the worker reaches a paused/queued acquire, changing live wavegen commands without revalidation. Amendment: deep-copy params at compile time, or normalize `wavegen` into an immutable finite-float structure on `AcquireStep`.
+- MAJOR - `TCT_app/controller/scan_plan_validator.py:_check_wavegen_params` uses `_is_num()` and range comparisons but never requires finite floats; `frequency_hz: .nan`, `pulse_width_s: .inf`, `amplitude_V: .nan/.inf`, and `offset_V: .nan/.inf` can pass validation. `TCT_app/data/hdf5_writer.py:_serialise_attr` then uses `json.dumps(..., default=str)` with default `allow_nan=True`, so `wavegen_command_trace` can contain non-standard `NaN`/`Infinity` JSON tokens that strict readers may reject. Amendment: `math.isfinite()` every numeric wavegen value and serialize run metadata with `allow_nan=False` (failing closed before writing).
+- MAJOR - `TCT_app/routines/R5_depletion_fast_scan.yaml` is physically weak as a voltage/depletion routine: the `bias_V` loop ramps from 0 to -300 V in -25 V steps with `settle_s: 0.0`, then immediately `ACQUIRE_WAVEFORM`s. The compiler only emits `settle_s` after `MoveStep` (`plan_compiler.py:compile_plan`), not after `BiasStep`, so R5 has no post-bias dwell at all; R1 also sets the bias-loop settle to 0 and relies only on later stage settling. Failure case: first waveform at each voltage records sensor/bias transients rather than settled charge. Amendment: add explicit `WAIT` after bias changes in bias-sweep routines, or define/implement bias-loop `settle_s` semantics; R2's `WAIT seconds: 0.2` is the correct pattern.
+- Confirm clean - range boundaries otherwise match the stated contract: duty 0/100 are rejected by the open interval, and Vpp `amplitude_V: 0.0` is accepted as non-negative. Setter ordering is deterministic with frequency first, and `_run_plan` flushes the command trace before `_end_run()` closes the writer.
+- Confirm clean - routine/fixture byte identity is real in commit `7272233`: each `TCT_app/routines/R*.yaml` blob ID matches its `TCT_app/tests/fixtures/routine_corpus/R*.yaml` copy. `ScanPlan.load_yaml` reads UTF-8 and uses `yaml.safe_load`; the corpus uses normal Git text blobs, so no Linux line-ending or encoding blocker was found.
+- Tests: not run per C10 instruction. Review was static against `git show 5c75696` and `git show 7272233`.
+- Risk: advisory review only; no runtime pytest, HDF5 reader, or real hardware behavior was executed in this lane.
+
+## C11 - Adversarial review: CAPABILITY_MODEL.md (advisory, no code edits)
+
+**Status: QUEUED** - Effort: M - Source: Adam, 2026-07-13 evening (free-lane parallel value)
+
+`docs/CAPABILITY_MODEL.md` is the normative spec for the capability spine -
+the single most expensive document in the project: it defines PERMANENT
+identifiers, a safety-class taxonomy with gate routing, a transport-
+reservation lifecycle, and the HDF5 provenance contract. Everything built on
+the platform seed inherits its mistakes. Mary (our reviewer) already returned
+REQUEST-CHANGES with 3 BLOCKERs (io_lock is NOT the motor's real transport
+lock; a held reservation would delay emergency-off behind an HV ramp; the
+taxonomy did not force safety_class = max hazard, and the gate-floor table was
+non-monotone in the >= order it is compared with). A v0.2 revision is landing.
+
+Your job: read the CURRENT `docs/CAPABILITY_MODEL.md` at HEAD (v0.2 if it has
+landed; check `git log --oneline -5 -- docs/CAPABILITY_MODEL.md`) as a fresh
+adversary and find what BOTH the author and Mary missed. Highest-value angles:
+
+1. **Permanence traps.** Every capability_id and device_id is promised
+   permanent. Find an id, a grammar rule, or a naming decision that we will be
+   FORCED to break later (multi-channel devices, renamed config keys, two
+   devices of the same type, a device that gains an axis).
+2. **The safety taxonomy under composition.** Can you construct a device or a
+   plan where the class/routing rules produce an UNDER-gated operation, or an
+   over-gated one that pushes an operator toward an auto-confirm workaround?
+3. **Concurrency.** The lock/reservation story vs the real drivers in
+   `TCT_app/devices/` (read them: base.py, motor_grbl.py, motor_pi.py,
+   bias_supply_*.py, oscilloscope.py, intensity_scope_ch.py). Deadlock,
+   priority inversion, or a STOP path that can be starved.
+4. **Provenance honesty.** The `swept/` contract vs `SCAN_DATA_FORMAT.md` and
+   the P0' commanded-trace: any way a commanded value gets labeled as measured,
+   or a fault-time command silently disappears from the file.
+5. **Linux/portability** (PORT1 is on the roadmap): anything in the spec that
+   is implicitly Windows-only or that would break under a Linux HDF5/Qt stack.
+
+Do NOT modify any code or docs other than appending your findings here. You MAY
+now run pytest: the venv was rebuilt today with a real (non-Store) CPython 3.10,
+which fixes the sandbox launch failure you have hit since C1 - verify with
+`TCT_app\.venv\Scripts\python.exe -c "import sys; print(sys.version)"` and tell
+us whether the lane can finally run tests. Deliverable: append findings ranked
+by severity, each with a file:symbol citation. "Confirm clean" per angle is a
+valid verdict if you name what you checked.
