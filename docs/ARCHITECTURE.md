@@ -219,6 +219,16 @@ Core design rules (verified in code):
 All inherit `base.py:BaseDevice` (`DeviceError`, `io_lock`, `simulation`,
 `is_alive()`, abstract `connect()`/`disconnect()`).
 
+**Transport-lock contract (2026-07-13):**
+- `BaseDevice.transport_lock` (public property, re-entrant RLock): the lock a
+  caller must acquire before exclusive transport use (VISA/serial I/O). Every
+  driver's own I/O acquires this same lock internally, so concurrent
+  pollers and move-logic threads never interleave hardware exchanges. **Stop
+  paths are exempt:** emergency stops (motor #24, GRBL real-time byte) take no
+  lock and complete immediately. Detailed invariants verified in
+  `tests/test_motor_transport_lock.py` (motor drivers) and
+  `tests/test_drs4_lock.py` (DRS4 scope). Design: `docs/design/guarded_exchange.md`.
+
 **Motor frame contract (2026-07-11):**
 - `MotorStageBase.limits_user_frame() -> SoftwareLimits | None` (motor_base.py:210–234):
   Soft limits expressed in the *same* frame `get_position()` / `move_to()` speak to
@@ -863,6 +873,36 @@ Maintained by Kiroku; drift-checked by Mamoru on every change.
 - 2026-07-13 — **efad307 (docs): PLATFORM_SEED.md v0.1.0-draft.** Mamoru-verified lift manifest, 22 claims verified + 4 count fixes; §6 flags remote_control_plan.md "Trusted-operator" tension with safety-is-local — remote ruled OUT of the seed pending Kaya/Mary.
 
 - 2026-07-13 — **1927377 (docs/research): B2 metrology_feasibility.md + B3 BENCH_CHECKLIST §12 protocol.** Error budget as f(M); verdict: camera-MEASURED metrology is the realistic class; 2µm only as relative claim, never open-loop. §12a–d protocol (mechanics reality → reticle shortlist, calibration workflow, repeatability stats, drift series). Adopted orphaned `dwm_backdrop_blur_recipe.md` (Prometheus, was never staged with the Echtglas beat).
+
+- 2026-07-13 — **7a55d03 (fix/safety): PI lock-free emergency stop (#24).** PI C-663 StopAll/#24 refined: one-character real-time byte takes no io_lock (no lock acquisition overhead). Complements guarded_exchange transport-lock invariants (commit 4a89647 below). Tests: `tests/test_motor_transport_lock.py` contract 3 (STOP never queued). Research: `docs/research/pi_gcs_stop_semantics.md`.
+
+- 2026-07-13 — **3930f58 (fix/safety): DRS4 board-transport lock.** DRS4 evaluation board SDK handle shared by scan acquisition + scope monitor is now exclusively serialized by BaseDevice.io_lock (re-entrant RLock). Previously unguarded—monitor read could land inside acquirer's domino exchange. Same bug class as pre-fix PIMotorStage. NEW test `tests/test_drs4_lock.py` (identity, no-interleaving, vacuity assertions); Bucket B contract test.
+
+- 2026-07-13 — **c52691f (fix): settings sim-frame display + to_dict round-trip.** `_BiasSection` gains simulated-backend UI frame (sim_channel_count spinbox + sim_channel spinbox, auto-clamped); to_dict now emits complete config dict (was silently dropping sim_channel_count/channel on save). NEW test `tests/test_bias_section_sim_channel_count.py` (load/round-trip/silent-drop regression). Closes RISK row 1 + 12 (Kings retro: GUI setting inaccessible, config-eating bug).
+
+- 2026-07-13 — **7616692 (perf): motor panel cached _last_pos.** MotorPanel._poll_position now caches last-read position + timestamp; unchanged position skips UI rebuild (eliminates stutter during jogs). No functional change; QThread poller pattern unchanged.
+
+- 2026-07-13 — **b323bb4 + 10b8c6c (docs/research): PI GCS stop semantics + SCPI discovery notes.** NEW `docs/research/pi_gcs_stop_semantics.md` (GCS 2.0 StopAll/#24 is lock-free, single-character real-time byte, completes in one exchange, verified against GCS reference manual). NEW `docs/research/scpi_capability_discovery.md` (VISA/SCPI capability query patterns for oscilloscope channel count, averaging limits, trigger modes; live-verified on TBS1052C; sourced from manual 077-1691).
+
+- 2026-07-13 — **b3d0827 (docs/design): guarded_exchange pattern.** NEW `docs/design/guarded_exchange.md` (three-property invariant: identity, no-interleaving, stop-exempt; applied to GRBL RLock io_lock + PI pi_serialisation lock + DRS4 board io_lock). Design note documents the transport-lock contract pinned by tests/test_motor_transport_lock.py, test_drs4_lock.py.
+
+- 2026-07-13 — **a75dfba (feat): bias_supply.sim_channel_count config key.** NEW config key `bias_supply.sim_channel_count` (int 1..16, optional, default 1, SIMULATION-ONLY — warning+ignored on real backends). `bias_supply.channel` [primary index] must be < sim_channel_count for simulated backend, validated by `config_validator`. Addresses "can't set multi-channel sim mode" gap. Added to `docs/config_keys.md`; settings UI frame added in c52691f.
+
+- 2026-07-13 — **fbf94d8 (fix/safety): PI disconnect stops first.** PIMotorStage.disconnect() now calls stop() before close (same pattern as GRBLMotorStage). Ensures no motion persists if connection is yanked mid-move. Closes "dirty disconnect" hazard class.
+
+- 2026-07-13 — **4a89647 (fix/safety): transport locks — BaseDevice.transport_lock public API.** NEW `BaseDevice.transport_lock` property (public, re-entrant RLock) that callers acquire before exclusive transport use; stop paths exempt. GRBL uses device.transport_lock (same RLock its io_lock acquires). PI introduces pi_serialisation RLock (device.transport_lock as public seam). All drivers now follow: one transport lock per device, no interleaving with concurrent I/O, stop is lock-free. Tests: `tests/test_motor_transport_lock.py` (identity, no-interleaving, STOP-never-queued contracts). Closes RISK row 4 (Kings retro: latent PIMotorStage/poller race).
+
+- 2026-07-13 — **4f10253 (feat): per-leaf snapshot memo + routine corpus gate test.** ScanPlan.compiler now deep-copies params dict for each leaf context (ensures `params['bias']` mutations in one step don't leak to sibling steps). Compiler generates immutable-intent memo. NEW test `tests/test_routine_corpus.py` (Bucket A gate: ≥5 saved routines byte-identical, ScanPlan.load_yaml validates, 0 ERROR/0 WARNING under bench-realistic limits). Closes ROADMAP risk #6 (plan-grammar migration / corpus drift).
+
+- 2026-07-13 — **f23f73a (docs): CAPABILITY_MODEL v0.3 finalization.** Capability model finalized per Kaya's rulings: option (c) class-floor + monotone override (safety-routing), multi-channel HV naming `bias.ch{n}.voltage`, per-channel ID tracking. Ready for P0' bootstrap.
+
+- 2026-07-13 — **f84f1e0 (docs): CAPABILITY_MODEL v0.2 (Kaya ratified).** Capability binding design locked: two-step authorization (plan-compile arm envelope + runtime re-validate); per-domain class assignments (motion/HV/imaging/metrology/control); safety-routing shape decision owner Kaya per DECISIONS.md entry.
+
+- 2026-07-13 — **b040753 (docs): S2 manifest v0.2 Mary-ratified.** S2 (ScanViewerPanel integration + design-system rollout) specification v0.2 approved and landed. Complete feature map + acceptance gates + integration touchpoints. Gates on lab verification (BENCH_CHECKLIST §6a–c).
+
+- 2026-07-13 — **3c6bb48 (test): template parity + guard test.** NEW `tests/test_template_parity.py` (WaveformTemplate JSON parity check). Template-change guard ensures no silent schema drifts. Part of WaveformGenerator feature hardening.
+
+- 2026-07-13 — **5915aa1 (fix/safety): C10 fixes — deep-copy params, non-finite fail-closed, bias-settle dwell.** (1) ScanPlan.compiler deep-copies params per leaf (4f10253 below, separate commit for isolation). (2) HDF5 serialization raises on non-finite values (NaN/Inf → JSON-incompatible; fail-closed instead of silent nan=True allow). (3) Bias settle time now respects config dwell override (was hardcoded 0.2 s). Closes C10 wave acceptance gates.
 
 - 2026-07-04 — Initial bookkeep created from source inspection (main, tct_gui,
   state_machine, scan_controller, device_manager, base device, hdf5_writer,

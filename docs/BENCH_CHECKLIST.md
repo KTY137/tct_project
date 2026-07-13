@@ -705,6 +705,24 @@ post-ROI distortion pass).
 
 ---
 
+## 13. PI C-663 Stop Semantics (post 7a55d03)
+
+**What to check:**
+- Verify that the PI C-663 controller's `StopAll` (#24) command halts a running FRF/MOV with single-character latency (sub-10 ms expected).
+- Confirm that after `StopAll` + error-clear, a new `MOV` is accepted WITHOUT re-homing (e.g., stage halts mid-jog, a second `MOV` to a different target succeeds, no stall or reset required).
+- Verify that `IsMoving`/`ontarget` poll reports on-target state for a normal `MOV` exactly as `pitools.waitontarget` did on C-663+L-836 (parity with legacy behavior).
+- **GRBL:** Confirm that `0x85` (real-time byte for soft-reset) does not halt an in-progress `$H` homing cycle; if it does, document the behavior in `docs/design/guarded_exchange.md`.
+
+**Expected result:**
+- PI C-663 StopAll halts sub-command latency; MOV resumption works without re-home; polling parity holds.
+- GRBL soft-reset behavior documented (if not already).
+
+**Closes:**
+- `docs/TECH_DEBT.md` pending research notes (pi_gcs_stop_semantics, scpi_capability_discovery).
+- BENCH_CHECKLIST consistency note: _wait_on_target parity (PI motion completion semantics) verified identically across both PI + simulated backends.
+
+---
+
 ## Next Steps
 
 Once all checklist items are complete:

@@ -230,3 +230,61 @@ session hygiene 1-4, hardware safety rules (PROTECTED). Rationale: the
 binding constraints are now orchestrator context and file locks, not
 tokens — spend goes into per-beat verification depth, not agent count.
 Affects: CLAUDE.md orchestrator sections. Status: APPROVED — in force.
+
+## 2026-07-13 — Guarded-exchange device-layer pattern ADOPTED
+
+Guarded-exchange pattern adopted as the device-layer concurrency standard,
+staged per `docs/design/guarded_exchange.md`: G0 base helpers + detector
+landed (commit 7a55d03); motor + bias as own track; scope/wavegen/camera
+born-guarded in D2. Pattern ensures transport-lock invariants across
+multi-threaded access (no interleaving of GCS/SCPI exchanges with
+concurrent pollers or state queries). Safety-first rationale: any two
+threads touching shared hardware must serialize at the transport layer,
+and the contract must be verifiable per-driver. Kaya: "ja darfste alles
+machen hast mein GO" / "Baller durch" (2026-07-13, after asking "was
+meinst du mit guarded exchange" and receiving the explanation + earlier
+proposing the abstraction himself). Affects: `devices/`, `tests/`.
+Status: APPROVED — foundation in place, phased adoption.
+
+## 2026-07-13 — Capability safety-routing SHAPE
+
+Capability safety-routing shape = option (c): class floor + monotone
+add-only override (per `CAPABILITY_MODEL.md` §14.1). Option (a)
+rejected as unsafe per Mary's adversarial review (permits role downgrade).
+Pattern: a safety-routing capability assigns a class (e.g. "motion") and
+accepts override-to-higher only, never downgrade. Fail-closed on unknown
+class. Kaya: "ich bestätige". Affects: `controller/capability.py`,
+`controller/arm_envelope.py`. Status: APPROVED — ready for capability
+bootstrap (D1/D2).
+
+## 2026-07-13 — Multi-channel HV capability naming
+
+Multi-channel HV capability naming per `CAPABILITY_MODEL.md` §14.2:
+`bias.voltage` is the primary-channel ROLE id (backward-compatible); for
+secondary channels, `bias.ch{n}.voltage` identifies physical channel n.
+`HVSource.channel` attribute + swept/channel naming ensures UI can surface
+"which HV supplies which bias loop" distinctly. Harmonizes multi-channel
+IV sweeps with capability-gating. Kaya: "ja nick ich ab". Affects:
+`controller/bias_channel.py`, `devices/bias_supply_base.py`, `gui/`.
+Status: APPROVED — ready for multi-channel IV routing (D5).
+
+## 2026-07-13 — Platform seed ships MIT-licensed
+
+Platform seed ships MIT-licensed at repo root: `LICENSE` file (MIT
+copyright 2026 Kaya Yesilyurt) + `PLATFORM_SEED.md` license clause.
+e4control functionality reimplemented-from-prior-art per vendor docs,
+upstream informally-confirmed open. Enables: publishable, IP-clean repo
+baseline with no copyleft taint (rejects Printrun GPLv3+ per 2026-07-07
+decision). Kaya: "Put an MIT Lizenz in den Platform_Seed damit keiner
+meckert." Affects: `/LICENSE`, `PLATFORM_SEED.md`, `CLAUDE.md`. Status:
+APPROVED — foundation in place.
+
+## 2026-07-13 — Blanket GO on pending operational gates
+
+Blanket GO issued on pending Phase-0.5 blockers: S2 manifest v0.2 RATIFIED;
+Phase-0.5 merge authorized on next bench-green evidence; stale worktrees
+`agent-aa19d2caf98c928dd` + `slice1-ui` removal authorized and EXECUTED.
+**Scope note (Kaya, same message):** this repo prepares TCT_app as the
+platform BASE only — LabControl construction is explicitly out of scope
+here. Kaya: "ja darfste alles machen hast mein GO." Affects: phase gates,
+branch hygiene, merge readiness. Status: APPROVED — blockers cleared.

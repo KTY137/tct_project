@@ -113,6 +113,7 @@ Backend auto-selects IsegBiasSupply, KeithleyBiasSupply, E4ControlBiasSupply, or
 | `compliance_A` | float | 3.9e-4 | `config_validator._check_bias()` ERROR if ≤ 0 | `IsegBiasSupply.__init__()`, `KeithleyBiasSupply.__init__()` |
 | `voltage_range_V` | float | 2000 | `config_validator._check_bias()` ERROR if < 0 | `IsegBiasSupply.__init__()`, `KeithleyBiasSupply.__init__()` |
 | `timeout_ms` | int | 5000 | — | `IsegBiasSupply.__init__()` |
+| `sim_channel_count` (opt-in) | int | 1 | `config_validator._check_bias()` WARNING if backend ≠ simulated; ERROR if not 1..16 | `SimulatedBiasSupply.__init__()` (real backends ignore with warning) |
 | **ISEG backend keys:** | | | | |
 | `visa_address` | str | "ASRL6::INSTR" | — | `IsegBiasSupply.__init__()` |
 | `host` | str | — | — | `IsegBiasSupply.__init__()` (alt. to visa_address) |

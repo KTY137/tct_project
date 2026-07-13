@@ -10,7 +10,7 @@
 The A/B/C/D classification is the ratified ground truth from the coupling
 analysis. Every file listed here was verified to exist in `TCT_app/tests/` on
 2026-07-13 — **no drift, no missing files, nothing invented.** Counts:
-**A = 47, B = 18, C = 39, D = 5 (109 total test files).**
+**A = 48, B = 20, C = 40, D = 5 (113 total test files).**
 
 | Bucket | Meaning | Migration behavior | Gate |
 |---|---|---|---|
@@ -78,6 +78,7 @@ do not remove them). One file per row; the filename cell is the parse target.
 | 45 | `test_oscilloscope_robustness.py` | scope robustness |
 | 46 | `test_oscilloscope_wedge_recovery.py` | scope CURVE? wedge recovery |
 | 47 | `test_camera_blackfly.py` | FLIR Blackfly simulated backend |
+| 48 | `test_routine_corpus.py` | routine corpus freeze gate (P2-entry) |
 <!-- BUCKET_A_END -->
 
 ### The exact [A-green] run command
@@ -117,7 +118,7 @@ guarded: if the parse yields zero files, the script errors instead of passing.
 
 ---
 
-## Bucket B — CONTRACT (18 files)
+## Bucket B — CONTRACT (20 files)
 
 Safety / wiring contracts. They touch Qt but assert a boundary that must survive
 the migration; the GUI half is rehosted, the contract is preserved (many map 1:1
@@ -143,10 +144,12 @@ into `SAFETY_NORMATIVE_TESTS.md`).
 | 16 | `test_gui_thread_watchdog.py` | GUI-thread watchdog |
 | 17 | `test_run_bg_busy_feedback.py` | run background busy feedback |
 | 18 | `test_bias_all_off.py` | bias all-off contract |
+| 19 | `test_motor_transport_lock.py` | motor transport-lock contract (GRBL + PI serialization) |
+| 20 | `test_drs4_lock.py` | DRS4 board-transport lock contract |
 
 ---
 
-## Bucket C — QWIDGET-PINNED (39 files)
+## Bucket C — QWIDGET-PINNED (40 files)
 
 Enumerated from disk = every remaining `tests/test_*.py` not in A/B/D. Bound to
 the classic QWidget panels / theme engine / shell; U1 reclaims the high-value
@@ -193,6 +196,7 @@ third into viewmodel contract tests, the rest retire or port as panels migrate.
 | 37 | `test_theme_fanout_completeness.py` | theme fan-out completeness |
 | 38 | `test_ui_monkey.py` | UI monkey denial ruleset (QTest harness; ~20% portable to QML walker) |
 | 39 | `test_worker_primitive.py` | `WorkerThread` primitive (Qt teardown) |
+| 40 | `test_bias_section_sim_channel_count.py` | bias settings widget sim-channel config |
 
 ---
 
