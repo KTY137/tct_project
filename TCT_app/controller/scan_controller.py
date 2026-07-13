@@ -607,6 +607,63 @@ class ScanController:
         self._pause_event.set()  # unblock if paused
         self._dev.motor.stop()
 
+    def park_safe(self) -> None:
+        """Assert the between-entries safe state: HV to 0 V, output OFF, motors stopped.
+
+        The public parking seam the Scan Sequencer calls BETWEEN plan entries
+        (after ``record_outcome``, before the next ``next_entry``) and the last
+        line of defense on any teardown path.  It is a **thin composition of the
+        existing run-loop fail-safe primitives** — it introduces no new behaviour:
+
+        * :meth:`_bias_failsafe` — ramp the resolved bias channel to 0 V (its own
+          ``try``) then open the output (its own ``try``), the exact two-step
+          discipline every fault/deny/abort path already applies;
+        * :meth:`_motor_stop_safe` — best-effort halt of all stage axes.
+
+        **No parking MOTION is ever commanded.**  "Park" here means HV to 0 V +
+        output off + motors *stopped* — never an XY/Z move to some "park
+        position" (hardware safety rule 1: no auto-motion; a move commanded
+        between entries could crash the stage or the DUT into the optics).
+
+        Safe and **idempotent in every state** — it never raises into the caller,
+        because it IS the caller's safety net:
+
+        * no run active / already parked / supply already at 0 V + off → no-op;
+        * after FINISHED → a harmless belt-and-braces re-assert;
+        * after ERROR / ABORTED → the executor's fail-safe already ran, so
+          re-asserting is harmless;
+        * bias supply (or the whole stack) disconnected → a clean no-op, logged
+          at debug, never a raise.
+
+        Internal failures are swallowed and logged: the two-``try`` fail-safe
+        already guarantees the output-off attempt is made even if the ramp-down
+        raises, and the motor halt is independently guarded.
+        """
+        # Resolve the primary bias channel exactly as the fault/abort paths do
+        # (default cfg -> self._dev.bias_supply).  Resolution itself must never
+        # propagate: park_safe is the last line of defense.
+        bias: BiasChannel | None = None
+        try:
+            bias = self._resolve_bias(SimpleNamespace(bias_channel=None))
+        except Exception:
+            logger.debug("park_safe: no bias channel to park", exc_info=True)
+
+        # Gate on connectivity like _check_compliance does: a disconnected supply
+        # is a clean, quiet no-op (calling ramp_to on it would only raise into the
+        # fail-safe's WARN branch).  The whole block is belt-and-braces guarded so
+        # a driver-side surprise can never skip the motor halt below.
+        try:
+            if bias is None:
+                pass
+            elif bias.connected:
+                self._bias_failsafe(bias)   # ramp->0 (own try) then output off (own try)
+            else:
+                logger.debug("park_safe: bias supply not connected — HV park is a no-op")
+        except Exception:
+            logger.debug("park_safe: bias park skipped", exc_info=True)
+
+        self._motor_stop_safe()             # best-effort halt; never a MOVE
+
     def _fire_error(self, msg: str) -> None:
         """Record *msg* as this run's terminal-state reason, then forward it.
 

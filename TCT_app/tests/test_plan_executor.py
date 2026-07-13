@@ -542,6 +542,103 @@ def test_last_run_path_cleared_on_new_run(sim):
 
 
 # --------------------------------------------------------------------------- #
+# (l) park_safe() — the between-entries safety park (Scan Sequencer seam)       #
+# --------------------------------------------------------------------------- #
+def _energize(dm, voltage_V=-50.0):
+    """Directly drive the primary sim channel to an ENERGIZED non-zero state.
+
+    Models "the supply is on between entries"; uses the sim driver so no real
+    HV / confirmation is involved.  Returns the primary BiasChannel proxy.
+    """
+    ch = dm.bias_supply
+    drv = ch.driver
+    drv.set_voltage_ch(ch.channel, voltage_V)
+    drv.output_on_ch(ch.channel)
+    assert drv.output_is_on_ch(ch.channel)
+    assert ch.setpoint_V == voltage_V
+    return ch
+
+
+def test_park_safe_after_finished_leaves_supply_off(sim):
+    """After a real FINISHED run, park_safe() is a belt-and-braces re-assert:
+    an energized supply is brought to 0 V + output OFF."""
+    dm, ctrl, sm = sim
+    ctrl.start_plan(_stage_plan([0.0, 1.0]), _limits(), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+    assert sm.state is AppState.FINISHED
+
+    # Simulate the supply being left energized between entries, then park.
+    ch = _energize(dm, -50.0)
+    ctrl.park_safe()
+
+    assert ch.setpoint_V == 0.0
+    assert not ch.driver.output_is_on_ch(ch.channel)
+
+
+def test_park_safe_idempotent_when_already_parked(sim):
+    """Callable with no run active and again when already parked: no raise, and
+    the supply stays at 0 V + output OFF."""
+    dm, ctrl, sm = sim
+    ch = dm.bias_supply
+    assert ch.setpoint_V == 0.0
+    assert not ch.driver.output_is_on_ch(ch.channel)
+
+    ctrl.park_safe()          # already at 0 / off — must be a clean no-op
+    ctrl.park_safe()          # and idempotent on a second call
+
+    assert ch.setpoint_V == 0.0
+    assert not ch.driver.output_is_on_ch(ch.channel)
+    assert sm.state is AppState.READY     # park_safe touches no lifecycle state
+
+
+def test_park_safe_output_off_even_if_ramp_raises(sim):
+    """The output-off is the safety-critical step and must run even when the
+    ramp-to-0 raises (the two-try fail-safe discipline park_safe reuses)."""
+    dm, ctrl, sm = sim
+    ch = _energize(dm, -80.0)
+    ch.ramp_to = mock.Mock(side_effect=RuntimeError("ramp link lost"))
+    ch.output_off = mock.Mock(wraps=ch.output_off)
+
+    ctrl.park_safe()          # must NOT raise despite the failing ramp
+
+    assert ch.ramp_to.called
+    assert ch.output_off.called                       # output opened anyway
+    assert not ch.driver.output_is_on_ch(ch.channel)  # and the channel is OFF
+
+
+def test_park_safe_no_bias_supply_is_clean_noop(sim):
+    """With the bias supply disconnected, park_safe() is a clean no-op: it never
+    touches the (disconnected) supply and never raises."""
+    dm, ctrl, sm = sim
+    ch = dm.bias_supply
+    ch.disconnect()                                   # drops the shared driver link
+    assert not ch.connected
+
+    ch.ramp_to = mock.Mock(wraps=ch.ramp_to)
+    ch.output_off = mock.Mock(wraps=ch.output_off)
+
+    ctrl.park_safe()                                  # clean no-op, no raise
+
+    assert not ch.ramp_to.called                      # disconnected → skipped
+    assert not ch.output_off.called
+
+
+def test_park_safe_never_commands_a_motor_move(sim):
+    """park_safe() STOPS the stage but must never command a MOVE (safety rule 1:
+    no auto-motion — 'park' is HV-to-0 + output-off + motor-stop, nothing else)."""
+    dm, ctrl, sm = sim
+    move_spy = mock.Mock(wraps=dm.motor.move_to)
+    stop_spy = mock.Mock(wraps=dm.motor.stop)
+    dm.motor.move_to = move_spy
+    dm.motor.stop = stop_spy
+
+    ctrl.park_safe()
+
+    assert stop_spy.called                            # motion halted
+    assert not move_spy.called                        # never a park MOVE
+
+
+# --------------------------------------------------------------------------- #
 # danger-gate value types                                                      #
 # --------------------------------------------------------------------------- #
 def test_danger_gates_are_pure():
