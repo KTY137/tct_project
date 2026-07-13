@@ -11,7 +11,30 @@ two agents mid-write.** Read the WARNING section before touching anything.
 
 ## HEAD
 
-`design/cockpit-v5 @ f4f8e7b` (pushed).
+`design/cockpit-v5 @ df10f8e` (pushed, 189 ahead of main).
+
+## 🚦 HV SAFETY GATE — HALF CLOSED. Do NOT run real HV yet.
+
+- **Paul's half: DONE + COMMITTED (`df10f8e`, 165 tests green).** The HV disable
+  write (`:VOLT OFF` / `:OUTP OFF` / `setOutput(False)`) can no longer be skipped
+  by a failing ramp or zero-write, in all three real backends. A failed disable
+  leaves `_output_on` UNKNOWN, never a false OFF.
+- **Noah's half: NOT DONE — ONLY PLANNED (still OPEN).** Noah's beat produced a
+  detailed plan, not code — `tct_gui.py` and `gui/bias_panel.py` are UNCHANGED.
+  Still open: MAJOR 3 (`_safe_bias_shutdown` in `tct_gui.py:1122` runs ramp +
+  output_off in ONE try → split into two, mirror `_bias_failsafe`); MINOR A
+  (`bias_panel._derive_hv_state` ~648 ignores `reading.tripped` → a manual-session
+  trip shows a healthy SETTLED tile; add a tripped-first branch, `is True`
+  discipline, use `getattr(r,"tripped",None)` so the 3-field fake in
+  `test_cockpit_batch_b_panels.py` stays green); MINOR B (`_IVWorker.run:102`
+  ignores `r.tripped` → IV sweep steps HV through a latched trip). Noah's ready
+  implementation plan (new test file `tests/test_bias_trip_visibility.py`,
+  8 tests) is in his beat report — RESTART: just dispatch him to execute it.
+  ONE OPEN QUESTION Noah flagged for Kaya: his fix also makes the
+  previously-silent compliance stop emit a reason notify — keep (honesty gain)
+  or scope the notify to the latched-trip case only? Default: keep.
+- **Then:** Mary re-reviews BOTH halves as a set (mandatory, safety) → bench
+  `-Xdist` → only then is the branch real-HV-ready.
 
 ## 🚨 OPEN SAFETY FINDINGS — the branch is NOT bench-trustworthy for real HV
 
