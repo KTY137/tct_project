@@ -32,32 +32,45 @@ untracked `artifacts_claude/`. All three killed-beat recoveries are committed
    `TCT_app/vision/` package; `analysis/` layer contract stays numpy-pure;
    lazy import with clean degradation.
 
-## 🚦 HV SAFETY GATE — BOTH halves LANDED, Mary set-review IN FLIGHT
+## ✅ HV SAFETY GATE — CLOSED 2026-07-13. Branch is REAL-HV-READY at `88907a4`.
 
-- **Paul: `df10f8e`** (165 targeted green). Disable write can no longer be
-  skipped by failed ramp/zero-write, all three real backends; failed disable
-  ⇒ `_output_on` UNKNOWN, never false OFF.
-- **Noah: `0f1c012`** (beat 0.1, Adam re-ran targeted: 18 passed). Two-try
-  `_safe_bias_shutdown`; tripped-first `_derive_hv_state`; `_IVWorker` breaks
-  on tripped BEFORE compliant + new `stopped(str)` signal → `notify(...,"warn")`
-  with distinct trip/compliance texts (ratified #2); 10 new tests in
-  `tests/test_bias_trip_visibility.py`.
-- **Now:** 0.2 Mary set-review (`df10f8e` + `0f1c012`, all fail-safe paths) →
-  0.3 bench `-Xdist`. **Real HV stays forbidden until 0.3 is green.**
+- **Mary 0.2 verdict: APPROVE** on `df10f8e` + `0f1c012` as a set. Seven
+  fail-safe paths traced, disable not skippable on any (ALARM failsafe,
+  emergency-off, all-off, closeEvent/_teardown, disconnect+reload, scan-abort,
+  driver `_shutdown_*`); 145 targeted tests green in her pass. Non-blocking
+  follow-ups: (a) one-poll trip-detection lag in `_IVWorker` (low-risk, latched
+  supply rejects re-enable); (b) PRE-EXISTING `bias_panel.py:855`
+  `finished→setEnabled` lambda runs on worker thread — fold into the Wave-1
+  WorkerThread trailing batch; (c) NIT e4control disconnect state cosmetics.
+- **0.3 bench `-Xdist` GREEN: 1349 passed, 1 xfailed, 38.51 s** on the
+  `88907a4` set (target was ≥1192). Output seen by Adam in the bench log.
+  Branch pushed: `origin/design/cockpit-v5 @ 88907a4`.
+- Real-HV readiness applies to the VERIFIED set `88907a4`; later commits need
+  the next per-wave bench run before any real-HV session on them.
 
 ## IN-FLIGHT BEATS (file locks — never stage a CLAIMED path)
 
 | Beat | Agent | CLAIMED paths |
 |---|---|---|
-| 0.2 HV-gate set-review | Mary (read-only) | none |
-| E7a CV compat research | Prometheus | `docs/research/sensor_alignment_cv.md` |
+| 0.3 bench -Xdist | background shell | none (bundle of committed HEAD) |
+| 1.1 SM transition lock | Abel (opus) | `TCT_app/controller/state_machine.py`, `TCT_app/tests/test_state_fuzz.py`, `TCT_app/tests/test_state_machine.py` |
+| 1.2 output_on defuse | Paul (opus) | `TCT_app/devices/bias_supply_base.py`, `TCT_app/devices/bias_supply_*.py` (+simulated), call sites in `TCT_app/controller/scan_controller.py` + `TCT_app/gui/bias_panel.py` + `TCT_app/gui/multi_bias_panel.py`, `TCT_app/tests/test_bias_api_guard.py` (new) + swept test files |
 
-## QUEUE (after 0.2 sign-off)
+NOTE deviation from plan (Adam, justified): 1.2 call-site sweep NOT sent to
+Codex — an HV-enable rename is safety-class; lane rule "safety stays with the
+Claude crew" wins. Paul does the whole beat.
 
-0.2 Mary set-review → 0.3 bench `-Xdist` → Phase 1 (1.1 Abel SM-transition
-lock ∥ 1.2 Paul output_on rename + Codex call-site sweep) → four lanes per the
-plan file (A sequencer / B planner+HDF5 / C backdrop / D e-field / E metrology
-+ stitch + sensor-align).
+LANDED this session: `0f1c012` Wave-0 GUI half (Noah) · `f57c00e` E7a research
+note (pin `opencv-python-headless==4.9.0.80`, DICT_4X4_50, pose ladder) ·
+`88907a4` six ratified decisions in docs/DECISIONS.md (Kiroku, append-only
+verified).
+
+## QUEUE
+
+0.3 green + 1.1/1.2 landed + Mary batch-review on 1.1+1.2 → open the four
+feature lanes per the plan file (A sequencer / B planner+HDF5 / C backdrop /
+D e-field / E metrology + stitch + sensor-align). Push branch after bench
+green.
 
 ## BENCH
 
