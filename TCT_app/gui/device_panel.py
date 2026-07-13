@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from controller.device_manager import DeviceManager
+from gui import style
 from gui.panel_kit import Card
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
@@ -68,6 +69,10 @@ class DeviceManagerWindow(QMainWindow):
 
     def __init__(self, devices: DeviceManager, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        # Alpha-capable surface BEFORE any child exists (a child that realizes
+        # the HWND first would lock this window out of per-pixel alpha for good —
+        # see gui.style.prepare_window_surface). No-op with the "none" default.
+        style.prepare_window_surface(self)
         self.setWindowTitle("Device Manager")
         self.resize(620, 380)
         self._devices = devices
@@ -75,6 +80,13 @@ class DeviceManagerWindow(QMainWindow):
         self._bg_thread: QThread | None = None
         self._bg_task: _DeviceTask | None = None
         self._build_ui()
+        # Same cockpit material + opacity + event-spine guard as every other
+        # satellite window (theme editor, settings, torn-off panels) — through
+        # the one entry point, AFTER _build_ui() so the central widget exists:
+        # a QMainWindow's client is painted by that child, and it has to go
+        # translucent too or no alpha ever reaches DWM (see
+        # gui.backdrop._canvas_widgets). A true no-op headless / pre-Win11 22H2.
+        style.reassert_window_backdrop(self)
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._refresh)

@@ -12,7 +12,7 @@ import os
 import sys
 
 from PySide6.QtCore import Qt, Slot, Signal, QObject, QThread, QTimer, QUrl
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QTabWidget, QApplication, QStyle,
     QVBoxLayout, QHBoxLayout, QStatusBar, QToolBar, QSizePolicy,
@@ -22,8 +22,8 @@ from PySide6.QtWidgets import (
 
 from gui import app_settings
 from gui.style import (
-    apply_theme, apply_window_backdrop, apply_window_backdrop_to,
-    apply_window_opacity, get_window_opacity, load_theme_customization,
+    apply_theme, apply_window_backdrop, apply_window_opacity,
+    load_theme_customization, prepare_window_surface, reassert_window_backdrop,
 )
 from gui.detachable_tabs import DetachableTabWidget
 
@@ -195,6 +195,17 @@ class TCTMainWindow(QMainWindow):
 
     def __init__(self, config_path: str = "configs/devices.yaml") -> None:
         super().__init__()
+        # FIRST, before a single child exists: if a DWM material is the persisted
+        # preference, claim an alpha-capable native surface now. Qt fixes a
+        # top-level's surface alpha when its native window is created, and this
+        # window builds a large child tree (including a QQuickWidget chrome
+        # island) that can realize the HWND long before the backdrop chain runs
+        # below — after which the material attaches with S_OK and composites
+        # NOTHING (GL-island spike, finding 2: the cockpit looked glass-less
+        # while a freshly-built dialog looked fine). A no-op when the shipped
+        # "none" backdrop is active. Opening the alpha hole still happens only
+        # after DWM confirms the material (underlay law).
+        prepare_window_surface(self)
         self.setWindowTitle("TCT Setup Control")
         self.resize(1400, 900)
         self._config_path = config_path
@@ -243,24 +254,49 @@ class TCTMainWindow(QMainWindow):
         self._build_menu_and_toolbar()
         self._build_central()
         self._restore_window_state()
-        # Windows 11 DWM system backdrop material (Mica/Acrylic), from the
-        # persisted theme/window_backdrop — applied to THIS window BEFORE
-        # window opacity (apply-order contract: backdrop first, then
-        # setWindowOpacity — see gui.style.apply_window_backdrop) so a launch
-        # with a saved backdrop comes up with the material already painting
-        # instead of snapping in on the next theme touch. A true no-op pre-
-        # Win11 22H2 / non-Windows / headless (offscreen has no DWM) — ships
-        # "none" by default, so this changes nothing until Kaya opts in.
-        apply_window_backdrop_to(self)
-        # Real (compositor) window translucency, from the persisted
-        # theme/window_opacity — applied to THIS window here so a launch with a
-        # saved opacity comes up translucent instead of snapping when the theme
-        # is next touched. Already clamped to the 0.80 safety floor by
-        # load_theme_customization.
-        self.setWindowOpacity(get_window_opacity())
+        # Windows 11 DWM system backdrop material (Mica/Acrylic) from the
+        # persisted theme/window_backdrop, THEN the window opacity from
+        # theme/window_opacity — both through the ONE entry point every
+        # material-capable top-level uses (gui.style.reassert_window_backdrop:
+        # DWM chain, then the WS_EX_LAYERED opacity pin, in that order), which
+        # also installs the event spine's guard so this window re-asserts its
+        # DWM attributes whenever Qt re-creates its native handle. A true no-op
+        # pre-Win11 22H2 / non-Windows / headless (offscreen has no DWM) —
+        # ships "none" by default, so this changes nothing until Kaya opts in.
+        reassert_window_backdrop(self)
+        self._connect_os_theme_signal()
         # App-wide status/notification bus → status bar (one-time connect).
         from gui.status_bus import STATUS
         STATUS.message.connect(self._on_status_message)
+
+    def _connect_os_theme_signal(self) -> None:
+        """Re-assert every window's DWM material when the OS flips its app mode
+        (Fenrir K5, the OS half).
+
+        Windows announces this with ``WM_SETTINGCHANGE``/``WM_THEMECHANGED``.
+        We deliberately do NOT install a ``QAbstractNativeEventFilter`` for it:
+        that would run a Python callback for every single window message in an
+        app whose 15–30 Hz acquisition path is already CPU-bound, to catch two
+        messages a day. Qt already translates them — into per-widget
+        ``ThemeChange``/``PaletteChange`` events (which ``gui.backdrop``'s guard
+        hooks on every top-level) and into this app-level signal, which re-runs
+        the fan-out so the immersive-dark tint follows the OS immediately.
+        ``getattr`` because ``colorSchemeChanged`` is Qt 6.5+."""
+        hints = QGuiApplication.styleHints()
+        signal = getattr(hints, "colorSchemeChanged", None)
+        if signal is None:
+            return
+        try:
+            signal.connect(self._on_os_color_scheme_changed)
+        except (RuntimeError, TypeError):
+            logger.debug("os colour-scheme signal unavailable", exc_info=True)
+
+    def _on_os_color_scheme_changed(self, *_args) -> None:
+        app = QApplication.instance()
+        if app is None:
+            return
+        apply_window_backdrop(app)
+        apply_window_opacity(app)
 
     def _build_central(self) -> None:
         """Build (or rebuild) all device panels, tabs, wiring and timers.

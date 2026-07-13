@@ -1356,13 +1356,13 @@ class SettingsWindow(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Settings — devices.yaml")
         self.resize(820, 680)
-        # Inherit the cockpit's window backdrop material and real window
-        # opacity at construction — same apply-order contract (backdrop
-        # THEN opacity, see gui.style.apply_window_backdrop's docstring) as
-        # gui.detachable_tabs._DetachedWindow: this dialog is part of the
-        # same cockpit, not an opaque slab floating over a translucent shell.
-        style.apply_window_backdrop_to(self)
-        self.setWindowOpacity(style.get_window_opacity())
+        # Inherit the cockpit's material + opacity through the ONE entry point
+        # (gui.style.reassert_window_backdrop: backdrop chain, THEN the
+        # WS_EX_LAYERED opacity pin) — same contract as every other satellite
+        # window (theme editor, device manager, torn-off panels). It also
+        # installs the event spine's guard, so this window re-asserts its DWM
+        # attributes on WinIdChange/Show instead of losing them silently.
+        style.reassert_window_backdrop(self)
         self._config_path = config_path
         self._suppress_yaml_update = False
         self._dirty = False

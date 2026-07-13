@@ -1021,34 +1021,34 @@ def test_backdrop_applied_before_opacity_from_the_dialogs_apply_button(tmp_path,
 # =========================================================================== #
 
 def test_dialog_construction_applies_current_backdrop_and_opacity(tmp_path, monkeypatch):
-    """ThemeEditorDialog.__init__ must call style.apply_window_backdrop_to()
-    and style.get_window_opacity() (feeding setWindowOpacity) on itself, in
-    that order — mirrors _DetachedWindow's construction-time contract.
-    Monkeypatches the two style entry points directly (not the DWM ctypes
-    layer test_backdrop.py owns): this only needs to prove __init__ reaches
-    them, in order, not re-verify the DWM plumbing underneath."""
-    calls: list[str] = []
-    orig_backdrop = style.apply_window_backdrop_to
-    orig_opacity = style.get_window_opacity
+    """ThemeEditorDialog.__init__ must inherit the cockpit's material AND its
+    window opacity, backdrop first — mirrors _DetachedWindow's construction-time
+    contract.
 
-    def recording_backdrop(window, kind=None):
-        calls.append("backdrop")
-        return orig_backdrop(window, kind)
+    Beat G-B1: both now come from the ONE entry point
+    (style.reassert_window_backdrop), which enforces the order internally and
+    applies the WS_EX_LAYERED pin. So this asserts the order at the layer where
+    it actually matters — the DWM native calls vs. setWindowOpacity on this
+    dialog — instead of pinning the two style functions the constructor used to
+    call by hand."""
+    from PySide6.QtWidgets import QDialog
 
-    def recording_opacity():
-        calls.append("opacity")
-        return orig_opacity()
+    _force_backdrop_supported(monkeypatch)
+    calls = _install_recording_dwm(monkeypatch)
+    orig_set_opacity = QDialog.setWindowOpacity
 
-    monkeypatch.setattr(style, "apply_window_backdrop_to", recording_backdrop)
-    monkeypatch.setattr(style, "get_window_opacity", recording_opacity)
+    def recording_set_opacity(self, value):
+        calls.append(("opacity", value))
+        return orig_set_opacity(self, value)
+
+    monkeypatch.setattr(QDialog, "setWindowOpacity", recording_set_opacity)
+    style.set_window_backdrop("mica")
 
     _dialog(tmp_path)
 
-    # get_window_opacity() is ALSO read again later (unrelated) to seed the
-    # opacity-slider draft, so assert order + presence rather than an exact
-    # count — the construction-time application call is the first one.
-    assert "backdrop" in calls and "opacity" in calls
-    assert calls.index("backdrop") < calls.index("opacity")
+    kinds = [c[0] for c in calls]
+    assert "set_attr" in kinds and "opacity" in kinds
+    assert kinds.index("set_attr") < kinds.index("opacity")
 
 
 # =========================================================================== #
@@ -1074,9 +1074,16 @@ def test_canvas_fill_is_byte_identical_when_backdrop_is_none():
 
 
 def test_canvas_fill_becomes_rgba_alpha_when_backdrop_active():
-    """The actual fix: once a real backdrop material is the user's chosen
-    preference, the canvas rule stops being a flat opaque hex and starts
-    letting DWM through via rgba() alpha."""
+    """Once a real backdrop material is the user's chosen preference, the canvas
+    gains an rgba() alpha fill that lets DWM through.
+
+    UNDERLAY LAW (beat G-B1, 2026-07-13): that fill is PROPERTY-GATED. The plain
+    QMainWindow/QDialog/#mainShell rules keep painting the opaque token
+    pre-blend; the rgba fill only applies behind [glassCanvas="true"], which
+    gui.backdrop sets on a window only while its material is verifiably attached
+    to its CURRENT HWND. This test used to assert the rgba fill on the
+    unqualified rule — that WAS the black-window bug (any window that did not
+    actually get the material painted an alpha hole over nothing)."""
     for kind in ("mica", "acrylic"):
         style.set_window_backdrop(kind)
         p = style.palette("dark")
@@ -1085,9 +1092,23 @@ def test_canvas_fill_becomes_rgba_alpha_when_backdrop_active():
         assert fill != p["bg"]
         assert 0.0 < style.BACKDROP_CANVAS_ALPHA < 1.0
         qss = style.build_qss(p)
-        assert f"QMainWindow, QDialog {{ background: {fill}; }}" in qss
-        assert f"QWidget#mainShell {{ background: {fill}; }}" in qss
+        # The underlay: opaque, always, on the unqualified rules.
+        assert f"QMainWindow, QDialog {{ background: {p['bg']}; }}" in qss
+        assert f"QWidget#mainShell {{ background: {p['bg']}; }}" in qss
+        # The glass: only where a live material is proven.
+        assert ('QMainWindow[glassCanvas="true"], QDialog[glassCanvas="true"] '
+                f"{{ background: {fill}; }}") in qss
+        assert f'QWidget#mainShell[glassCanvas="true"] {{ background: {fill}; }}' in qss
     style.reset_theme_customization()
+
+
+def test_glass_canvas_rules_are_absent_while_no_material_is_preferred():
+    """Byte-identical-when-off: with the shipped "none" backdrop the QSS carries
+    no glass-canvas rules at all (nothing could match them — no window can have
+    glassCanvas set without a live material)."""
+    assert style.get_window_backdrop() == "none"
+    for mode in ("dark", "light"):
+        assert "glassCanvas" not in style.build_qss(style.palette(mode))
 
 
 def test_canvas_fill_never_touches_panel_or_readout_surfaces():

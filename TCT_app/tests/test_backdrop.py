@@ -183,13 +183,29 @@ def test_extend_frame_called_before_set_attribute(monkeypatch):
 
 
 def test_translucent_attribute_set_only_after_both_dwm_calls_succeed(monkeypatch):
+    """The fail-safe pairing, restated after the GL-island spike (2026-07-13):
+
+    The old contract was "WA_TranslucentBackground is set only after both DWM
+    calls succeed". That is now known to be self-defeating — Qt fixes a
+    top-level's surface alpha in QWidgetPrivate::create(), so an attribute set
+    after the HWND exists yields alphaBufferSize == -1 and the material composites
+    NOTHING (measured; see tests/test_backdrop_event_spine.py's order tests).
+
+    The invariant that actually guards the hole therefore moved to the glass
+    PIXELS (the glassCanvas property, which is what makes the QSS paint an rgba
+    canvas): surface early, pixels only on S_OK. This test pins both halves for
+    the success path; the failure path is pinned by the fail-safe tests below."""
     _force_supported(monkeypatch)
     _recording_dwm(monkeypatch)
     w = _make_window()
 
     assert w.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+    assert not w.property(backdrop.CANVAS_GLASS_PROPERTY)
     assert backdrop.apply_backdrop(w, "mica") is True
     assert w.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+    assert w.property(backdrop.CANVAS_GLASS_PROPERTY) == "true"
+    # ...and the surface really did get an alpha channel (the whole point).
+    assert w.windowHandle().format().alphaBufferSize() >= 8
 
 
 # --------------------------------------------------------------------------- #
@@ -723,7 +739,17 @@ def test_backdrop_none_repaint_behaviour_is_unchanged(monkeypatch):
 def test_detached_window_construction_applies_current_backdrop(monkeypatch):
     """gui/detachable_tabs._DetachedWindow is created AFTER the setting is
     applied, so -- mirroring window opacity's existing contract -- it must
-    pick the backdrop kind up at construction, backdrop before opacity."""
+    pick the backdrop kind up at construction, backdrop before opacity.
+
+    The opacity assertion changed in beat G-B1 and the change IS the fix: the
+    constructor used to push the RAW stored opacity (0.85 here) onto a window it
+    had just attached a material to, which layers it (WS_EX_LAYERED) and
+    suppresses that material outright -- so a torn-off panel could never show
+    glass. It now goes through style.reassert_window_backdrop, which applies the
+    same pin apply_window_opacity has always applied app-wide (see
+    test_apply_window_opacity_pinned_to_full_while_backdrop_active). The stored
+    preference is untouched and returns when the backdrop goes back to "none"
+    (asserted below)."""
     from PySide6.QtWidgets import QLabel
     from gui.detachable_tabs import _DetachedWindow
 
@@ -737,6 +763,29 @@ def test_detached_window_construction_applies_current_backdrop(monkeypatch):
     try:
         assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
         assert ("set_attr", 38, backdrop.DWMSBT_TRANSIENTWINDOW) in calls
+        # Layered-window pin: fully opaque while the material is live...
+        assert win.windowOpacity() == pytest.approx(1.0, abs=1.0 / 255.0)
+        # ...and the stored preference survives untouched.
+        assert style.get_window_opacity() == pytest.approx(0.85)
+    finally:
+        win.deleteLater()
+
+
+def test_detached_window_without_material_keeps_the_stored_opacity(monkeypatch):
+    """The pin is ONLY for a live material: with the shipped "none" backdrop a
+    torn-off panel still inherits the cockpit's translucency exactly as before
+    (byte-identical-when-off guard for the G-B1 opacity change above)."""
+    from PySide6.QtWidgets import QLabel
+    from gui.detachable_tabs import _DetachedWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    _app()
+
+    style.set_window_opacity(0.85)
+    win = _DetachedWindow(QLabel("panel"), "Motor Stage")
+    try:
+        assert style.get_window_backdrop() == "none"
         assert win.windowOpacity() == pytest.approx(0.85, abs=1.0 / 255.0)
     finally:
         win.deleteLater()

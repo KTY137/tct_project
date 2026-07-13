@@ -223,13 +223,13 @@ class ThemeEditorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Theme")
         self.setModal(False)
-        # Inherit the cockpit's window backdrop material and real window
-        # opacity at construction — same apply-order contract (backdrop
-        # THEN opacity, see gui.style.apply_window_backdrop's docstring) as
-        # gui.detachable_tabs._DetachedWindow: this dialog is part of the
-        # same cockpit, not an opaque slab floating over a translucent shell.
-        style.apply_window_backdrop_to(self)
-        self.setWindowOpacity(style.get_window_opacity())
+        # Inherit the cockpit's material + opacity through the ONE entry point
+        # (backdrop chain, THEN the WS_EX_LAYERED opacity pin) and install the
+        # event spine's guard on this window, so a close-and-reopen re-asserts
+        # the DWM attributes instead of coming back as a black hole (beat G-B1:
+        # this dialog is created lazily ONCE and re-shown, and nothing on the
+        # re-show path used to touch DWM again).
+        style.reassert_window_backdrop(self)
         self._settings = settings if settings is not None else app_settings.settings()
         self._mode = "dark" if str(mode).lower() == "dark" else "light"
 

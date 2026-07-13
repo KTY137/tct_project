@@ -40,8 +40,9 @@ from __future__ import annotations
 
 import json
 import re
+import weakref
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPalette
 
 from gui import backdrop
@@ -743,19 +744,50 @@ MAX_PANEL_GLASS_ALPHA = 1.0
 
 
 def _canvas_fill(p: dict) -> str:
-    """QMainWindow/QDialog/#mainShell background — opaque ``p['bg']`` (BYTE-
-    IDENTICAL to before this existed) unless a real backdrop material is the
-    user's persisted preference, in which case it becomes an ``rgba()`` alpha
-    fill so DWM can actually show through the window's own canvas — see the
-    ``BACKDROP_CANVAS_ALPHA`` comment above for scope. Guard:
-    tests/test_theme_editor.py's canvas-passthrough tests."""
+    """The GLASS canvas fill — an ``rgba()`` alpha fill so a real DWM material
+    can show through the window's own unclaimed background, or the opaque
+    ``p['bg']`` when no material is the user's persisted preference at all.
+
+    UNDERLAY LAW (2026-07-13, beat G-B1): this value is NOT what the plain
+    ``QMainWindow, QDialog`` / ``#mainShell`` rules paint. Those always paint the
+    opaque ``p['bg']`` token pre-blend; the rgba fill below only ever applies
+    behind the ``[glassCanvas="true"]`` attribute selector, and
+    ``gui.backdrop`` sets that property on a window ONLY while a material is
+    verifiably attached to its current HWND. Painting rgba on every window just
+    because the *preference* was set is exactly how a window whose DWM
+    attributes had died (a recreated HWND, a layered window, a path-D window)
+    ended up as an alpha hole over nothing — the BLACK Kaya reported when he
+    closed and reopened the theme editor. See ``gui/backdrop.py``'s
+    CANVAS_GLASS_PROPERTY. Guard: tests/test_theme_editor.py's canvas-passthrough
+    tests + tests/test_backdrop_event_spine.py's underlay-law tests."""
     if get_window_backdrop() == "none":
         return p["bg"]
     return _rgba(p["bg"], _canvas_alpha)
 
 
+def _glass_canvas_qss(p: dict) -> str:
+    """The property-gated glass-canvas rules (underlay law, see
+    :func:`_canvas_fill`). Empty string while the shipped "none" backdrop is
+    active — with no material anywhere, the rules would be dead weight and the
+    QSS stays byte-identical to the pre-glass build."""
+    if get_window_backdrop() == "none":
+        return ""
+    fill = _canvas_fill(p)
+    return f"""
+/* Glass canvas (underlay law) — ONLY on a window whose DWM material is
+   verifiably attached to its CURRENT HWND right now. gui.backdrop sets
+   glassCanvas="true" after both DWM calls returned S_OK on that handle, and
+   clears it again on every loss/reset path (HWND recreated, attach failed,
+   material reset). The unqualified rules above keep painting the opaque token
+   pre-blend, so a lost material degrades to "looks like token glass" and can
+   never degrade to a translucent hole over nothing (black). */
+QMainWindow[glassCanvas="true"], QDialog[glassCanvas="true"] {{ background: {fill}; }}
+QWidget#mainShell[glassCanvas="true"] {{ background: {fill}; }}
+"""
+
+
 def build_qss(p: dict) -> str:
-    canvas_fill = _canvas_fill(p)
+    glass_canvas = _glass_canvas_qss(p)
     return f"""
 * {{
     font-family: {SANS_FAMILY};
@@ -780,15 +812,20 @@ def build_qss(p: dict) -> str:
    shown as its own window without being one of those (e.g. a panel grabbed
    standalone by scripts/capture_panels.py).
    Guard: tests/test_style_no_label_box.py.
-   HISTORY (2026-07-13, the glass-gap fix): `canvas_fill` (computed above,
-   see `_canvas_fill`) is `p['bg']` byte-identical UNLESS a real DWM backdrop
-   material is active, in which case it is an rgba() alpha fill so the
-   backdrop can show through the window's own unclaimed background — the
-   ONE thing `gui.backdrop._prepare_window_canvas`'s transparent Window-role
-   palette was ALWAYS meant to expose, but this rule used to paint a fully
-   opaque hex directly over it regardless. */
-QMainWindow, QDialog {{ background: {canvas_fill}; }}
-QWidget#mainShell {{ background: {canvas_fill}; }}
+   HISTORY (2026-07-13, the glass-gap fix, then the underlay law the same
+   night): these two rules paint the OPAQUE `p['bg']` token pre-blend —
+   always, in every backdrop state. The rgba() alpha fill that actually lets a
+   DWM material through lives in a separate, property-gated rule
+   (`_glass_canvas_qss`, emitted right below) that only matches a window whose
+   material `gui.backdrop` has verified on its current HWND. The first version
+   of the glass-gap fix put the rgba fill HERE, unconditionally, for every
+   QMainWindow/QDialog the moment the preference was set — so any window that
+   did not actually get the material (recreated HWND, layered window,
+   GL-hosting window) painted an alpha hole over nothing, i.e. BLACK. Never
+   put an alpha fill in an unqualified canvas rule again. */
+QMainWindow, QDialog {{ background: {p['bg']}; }}
+QWidget#mainShell {{ background: {p['bg']}; }}
+{glass_canvas}
 
 /* Text-ish widgets are transparent — they sit ON a surface, they are not one.
    Explicit (not merely "inherited by omission") so that re-introducing a
@@ -2059,6 +2096,14 @@ _window_backdrop: str = "none"
 # active theme (gui.backdrop.DWMWA_USE_IMMERSIVE_DARK_MODE) — the cockpit is
 # dark-first, so "dark" is the safe pre-first-apply fallback.
 _active_mode: str = "dark"
+# Windows currently inside a backdrop re-assert — the re-entrancy guard for
+# _apply_window_backdrop_to (see its docstring: our own palette write delivers
+# PaletteChange back into the event filter that called us). WeakSet so a closed
+# window is never kept alive by this module.
+_reasserting_windows: "weakref.WeakSet" = weakref.WeakSet()
+# True while a deferred post-toggle re-assert is already queued — see
+# _schedule_post_toggle_reassert (coalesced: at most one pending pass).
+_post_toggle_pending: bool = False
 _overrides: dict[str, dict[str, str]] = {"light": {}, "dark": {}}
 _typography: dict = {"sans": None, "mono": None, "hinting": None, "base_px": None}
 _radius_scale: str = "m"
@@ -2194,6 +2239,28 @@ def get_window_opacity() -> float:
     return _window_opacity
 
 
+def effective_window_opacity() -> float:
+    """The opacity a window must ACTUALLY carry right now.
+
+    A DWM system backdrop material and a LAYERED window (``setWindowOpacity``
+    < 1 ⇒ ``WS_EX_LAYERED``) are mutually exclusive: the uniform per-window
+    alpha suppresses the material outright (Kaya's live 98 % was the proof the
+    acrylic "vanished"). So while a material is the active preference, every
+    window is pinned to fully opaque; the stored preference
+    (:func:`get_window_opacity`) is untouched and returns the moment the
+    backdrop goes back to "none".
+
+    Extracted from :func:`apply_window_opacity` (beat G-B1) because the
+    CONSTRUCTION paths — ``_DetachedWindow``, ``ThemeEditorDialog``,
+    ``SettingsWindow``, ``TCTMainWindow`` — used to push the RAW stored value
+    onto a brand-new window and so layered every satellite created while a
+    material was live. A detached panel could therefore never show glass: it
+    laid ``WS_EX_LAYERED`` over its own material microseconds after attaching
+    it. Every one of those call sites now goes through
+    :func:`reassert_window_backdrop`, which applies this pin."""
+    return 1.0 if _window_backdrop != "none" else _window_opacity
+
+
 def apply_window_opacity(app=None, opacity: float | None = None) -> float:
     """Push the current window opacity onto EVERY top-level window of *app*.
 
@@ -2212,15 +2279,9 @@ def apply_window_opacity(app=None, opacity: float | None = None) -> float:
     app = app if app is not None else QApplication.instance()
     if app is None:
         return value
-    # A DWM system backdrop material and a LAYERED window (setWindowOpacity < 1,
-    # WS_EX_LAYERED) are mutually exclusive: the uniform per-window alpha
-    # suppresses the material outright (apply_window_backdrop's interaction
-    # matrix, row 4 — Kaya's live 98% was the proof the acrylic "vanished").
-    # So while a material is active, PIN every window to fully opaque. The
-    # stored preference (_window_opacity, returned below) is left untouched, so
-    # the user's translucency returns the moment the backdrop is set back to
-    # "none". See gui/theme_editor.py for the matching UI clamp + visible note.
-    effective = 1.0 if _window_backdrop != "none" else value
+    # The WS_EX_LAYERED pin — see effective_window_opacity() for the mechanism
+    # and gui/theme_editor.py for the matching UI clamp + visible note.
+    effective = effective_window_opacity()
     for w in app.topLevelWidgets():
         if w.isWindow() and not _is_transient_window(w):
             w.setWindowOpacity(effective)
@@ -2333,7 +2394,38 @@ def apply_window_backdrop_to(window, kind: str | None = None) -> str:
     reserved for the palette-reset case) schedules the missing repaint without
     touching the palette the DWM material needs to show through.
     """
+    return _apply_window_backdrop_to(window, kind, reason="apply")
+
+
+def _apply_window_backdrop_to(window, kind: str | None = None, *,
+                              reason: str = "apply") -> str:
+    """:func:`apply_window_backdrop_to` with the truth-log ``reason`` tag the
+    event spine passes ("show", "winidchange", "themechange", ...).
+
+    RE-ENTRANCY (the loop this function must not close): the work below writes
+    the window's palette (``_reassert_window_palette``) and repolishes it, and Qt
+    delivers ``PaletteChange`` for exactly that — synchronously, to the very
+    window whose event filter then wants to re-assert again. Without this guard
+    the "none" branch recurses until the stack dies. A window already inside a
+    re-assert simply skips the nested one: it is redundant by definition, the
+    outer pass is mid-flight and will finish the job."""
     resolved = _window_backdrop if kind is None else kind
+    if window in _reasserting_windows:
+        return resolved
+    _reasserting_windows.add(window)
+    try:
+        return _apply_window_backdrop_to_impl(window, resolved, reason)
+    finally:
+        _reasserting_windows.discard(window)
+
+
+def _apply_window_backdrop_to_impl(window, resolved: str, reason: str) -> str:
+    # Guard EVERY window this ever touches (idempotent): the DWM attributes are
+    # per-HWND state, and Qt re-creates HWNDs behind our back — see
+    # gui.backdrop._BackdropGuard. Installed even for kind == "none" so that
+    # switching a material on later needs no second wiring pass.
+    backdrop.install_backdrop_guard(
+        window, _guard_reassert, _schedule_post_toggle_reassert)
     # Assert the DWM material's immersive-dark tint from the live theme mode so
     # Mica/Acrylic composes dark under the dark cockpit theme instead of DWM's
     # light default ("komplett weiss"). backdrop.py stays theme-blind; this is
@@ -2342,14 +2434,93 @@ def apply_window_backdrop_to(window, kind: str | None = None) -> str:
     # _toggle_theme), so a dark<->light flip re-tints the material explicitly
     # rather than relying on a stylesheet-repolish side effect the identical-QSS
     # perf guard can skip.
-    applied = backdrop.apply_backdrop(window, resolved, dark=(_active_mode == "dark"))
+    had_material = backdrop.window_has_material(window)
+    applied = backdrop.reassert_backdrop(
+        window, resolved, dark=(_active_mode == "dark"), reason=reason)
     if resolved == "none":
-        _reassert_window_palette(window)
-        _repaint_central_widget(window)
+        # The palette resync exists for the material → "none" TRANSITION (the C1
+        # risk-note fix). A spine-triggered re-assert (Show, WinIdChange, ...) on
+        # a window that has no material and is not being switched has nothing to
+        # undo — so it must not repolish. That keeps the event spine a TRUE no-op
+        # in the shipped default configuration (backdrop "none"): zero repolish
+        # churn on every show, zero risk to a suite that never asked for glass.
+        if reason == "apply" or had_material:
+            _reassert_window_palette(window)
+            _repaint_central_widget(window)
     elif applied:
         window.update()
         _repaint_central_widget(window)
+        # Stale-surface heal (Frigg/W4): a re-assert that follows an HWND or
+        # surface recreation needs a REAL repaint, not just an update() — the
+        # window can otherwise keep compositing the old backing store. Inert
+        # headless and while the window is not on screen.
+        backdrop.nudge_repaint(window)
     return resolved
+
+
+def prepare_window_surface(window) -> bool:
+    """Call this as the FIRST line of a material-capable top-level's ``__init__``
+    (before it builds children), so the window is guaranteed an alpha-capable
+    native surface if — and only if — a DWM material is the active preference.
+
+    Qt fixes a top-level's surface alpha when the native window is created. Any
+    child that realizes the HWND first (``winId()``, a ``QQuickWidget``, an early
+    ``show()``) permanently locks that window out of per-pixel alpha, and from
+    then on the material attaches with S_OK and composites NOTHING — the failure
+    that made the cockpit look glass-less while the freshly-built theme dialog
+    looked fine (GL-island spike, finding 2). ``gui.backdrop.prepare_surface``
+    does the work; this is the theme-aware gate (no material preferred ⇒ the
+    window is not touched at all, so the shipped default stays byte-identical).
+
+    :func:`reassert_window_backdrop` runs the same prep, so a window that is
+    still unrealized when it calls that is already safe; this exists for the ones
+    that build a heavy child tree first (the cockpit, the device manager, a
+    torn-off panel)."""
+    if _window_backdrop == "none":
+        return False
+    return backdrop.prepare_surface(window)
+
+
+def reassert_window_backdrop(window, *, reason: str = "apply") -> str:
+    """THE single entry point for putting a top-level window into the material
+    state the app is currently in: DWM chain first, then the WS_EX_LAYERED
+    opacity pin — in that order, which is the apply-order contract.
+
+    Every material-capable top-level goes through exactly this function — the
+    cockpit (``tct_gui.TCTMainWindow``), the theme editor, the settings window,
+    the device-manager window, and every torn-off panel
+    (``gui.detachable_tabs._DetachedWindow``) — at construction, and again from
+    the event spine whenever the window's native state could have dropped the
+    attributes (``gui.backdrop._BackdropGuard``).
+
+    Before this existed, each of those call sites hand-rolled
+    ``apply_window_backdrop_to(w)`` + ``w.setWindowOpacity(get_window_opacity())``
+    — and that second line pushed the RAW stored opacity, layering the window
+    and killing the material it had just attached (see
+    :func:`effective_window_opacity`).
+
+    The re-entrancy lock spans BOTH steps: creating the native window (``winId``
+    inside the DWM chain) delivers ``WinIdChange`` synchronously, straight back
+    into this window's event filter. A nested pass that skipped the DWM chain
+    (already locked) but still pushed ``setWindowOpacity`` would land the
+    opacity BEFORE the material — inverting the apply-order contract from the
+    inside."""
+    if window in _reasserting_windows:
+        return _window_backdrop
+    _reasserting_windows.add(window)
+    try:
+        resolved = _apply_window_backdrop_to_impl(window, _window_backdrop, reason)
+        window.setWindowOpacity(effective_window_opacity())
+        return resolved
+    finally:
+        _reasserting_windows.discard(window)
+
+
+def _guard_reassert(window, reason: str) -> None:
+    """Callback injected into ``gui.backdrop``'s event filter — keeps that
+    module theme-blind (it never imports style.py; the dependency runs one way
+    only)."""
+    reassert_window_backdrop(window, reason=reason)
 
 
 def _repaint_central_widget(window) -> None:
@@ -2401,7 +2572,55 @@ def apply_window_backdrop(app=None) -> str:
     for w in app.topLevelWidgets():
         if w.isWindow() and not _is_transient_window(w):
             apply_window_backdrop_to(w, kind)
+    _schedule_post_toggle_reassert()
     return kind
+
+
+def _schedule_post_toggle_reassert() -> None:
+    """Re-assert the whole fan-out ONE event-loop turn later (Fenrir rider 2).
+
+    Qt's own palette/colour-scheme heuristic can write
+    ``DWMWA_USE_IMMERSIVE_DARK_MODE`` on a window AFTER we do, during the
+    stylesheet repolish that a theme switch kicks off — last writer wins, and on
+    that path the loser is our explicitly-asserted tint. Scheduling one more
+    pass after the current event-loop turn puts us last.
+
+    Three gates, all load-bearing:
+
+    * no material preferred (the shipped default) ⇒ nothing to re-assert;
+    * no real compositor (``is_backdrop_supported``) ⇒ nothing to re-assert —
+      this is what keeps the headless suite from ever queueing a timer;
+    * COALESCED — at most one pass may be pending. Without this, a caller that
+      re-applies the backdrop in a loop (the theme editor's live preview; a test
+      sweeping presets) queues one full fan-out per call, and the next
+      ``processEvents()`` drains them all across every window that exists.
+
+    The deferred pass calls the per-window apply directly — it never re-enters
+    this function, so it cannot reschedule itself."""
+    global _post_toggle_pending
+    if _window_backdrop == "none" or not backdrop.is_backdrop_supported():
+        return
+    if _post_toggle_pending:
+        return
+    _post_toggle_pending = True
+    QTimer.singleShot(0, _reassert_all_top_levels)
+
+
+def _reassert_all_top_levels() -> None:
+    global _post_toggle_pending
+    _post_toggle_pending = False
+
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    for w in app.topLevelWidgets():
+        try:
+            if w.isWindow() and not _is_transient_window(w):
+                reassert_window_backdrop(w, reason="post-toggle")
+        except RuntimeError:        # window destroyed between turns
+            continue
 
 
 # Window TYPE lives as a value inside WindowType_Mask (Window=0x1, Dialog=0x3,
