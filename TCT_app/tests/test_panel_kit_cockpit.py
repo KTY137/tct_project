@@ -109,8 +109,14 @@ def test_v5_palette_values_match_polish_artifact():
     # docs/design/codex_style_audit_20260713.md) ratified a one-step-darker
     # light canvas for surface-ladder contrast; DARK["bg"] is unchanged by
     # that beat.
+    # DARK["panel"]: v6 "Glass" material pass (Kaya-ratified A/B artifact,
+    # artifacts_claude/tct_bias_glass_ab.html side B) moved panel off the
+    # flat #121824 slate tone onto the artifact's own --card-bg recipe
+    # (rgba(16,23,36,0.42) composited over the real canvas hex — see
+    # gui/style.py's _DARK_PANEL_V6). canvas/accent/good/warn/crit are
+    # untouched by that pass.
     assert DARK["bg"] == "#0A0D13"
-    assert DARK["panel"] == "#121824"
+    assert DARK["panel"] == "#0d111a"
     assert DARK["accent"] == "#5AA9FF"
     assert DARK["good"] == "#3DD68C"
     assert DARK["warn"] == "#FFB84D"

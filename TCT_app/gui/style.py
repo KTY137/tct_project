@@ -63,17 +63,31 @@ SPACE = {"xs": SPACE_XS, "sm": SPACE_SM, "md": SPACE_MD, "lg": SPACE_LG, "xl": S
 # Corner-radius scale (px) — cockpit v5 round-2: recalibrated to the frozen
 # artifact's OWN radius tokens (tct_cockpit_design_v4_final.html ``--r-sm:8;
 # --r:12; --r-lg:16`` — the spec §2 "Radii 8/12/16" rule). sm = buttons /
-# inputs / chips-adjacent small shapes; md = cards / tiles; lg = large
-# clusters / hero shells. xs (4) survives only for sub-element highlights
+# inputs / chips-adjacent small shapes; md = tiles / small nested surfaces;
+# lg = large clusters / hero shells (NOT the card radius — see RADIUS_XL
+# below, added for the v6 pass, before repointing anything at RADIUS_LG:
+# it is already spoken for by QFrame#controlCluster, a "large cluster",
+# per this very scale). xs (4) survives only for sub-element highlights
 # (menu items, tooltips) that have no artifact counterpart; pill is the one
 # intentionally larger shape.
 RADIUS_XS = 4     # menu-item highlights / tooltips (sub-element only)
 RADIUS_SM = 8
 RADIUS_MD = 12
 RADIUS_LG = 16
+# v6 "Glass" material pass (Kaya-ratified A/B artifact,
+# artifacts_claude/tct_bias_glass_ab.html): the artifact's own card radius
+# moves 16 -> 20px. RADIUS_LG (16) is already consumed by a non-card
+# surface (QFrame#controlCluster, "large clusters / hero shells" above) —
+# reassigning it globally would silently resize that unrelated cluster too,
+# so this is a NEW, dedicated step instead, wired only into the actual
+# card/panel QSS rules (QGroupBox, QFrame#cardPane) below. Deliberately NOT
+# part of the theme-editor's RADIUS_SCALES s/m/l density preset (that scale
+# only ever covered sm/md/lg) — a fixed constant, consistent with how
+# RADIUS_XS/RADIUS_PILL already sit outside that preset system too.
+RADIUS_XL = 20
 RADIUS_PILL = 999
 RADIUS = {"xs": RADIUS_XS, "sm": RADIUS_SM, "md": RADIUS_MD,
-          "lg": RADIUS_LG, "pill": RADIUS_PILL}
+          "lg": RADIUS_LG, "xl": RADIUS_XL, "pill": RADIUS_PILL}
 
 # Type scale (px). Roles (see build_qss() call sites for where each lands):
 #   xs/sm  = caption / small label (eyebrows, table headers, chip text).
@@ -343,6 +357,69 @@ ERROR_ORANGE_LIGHT = "#d96c00"
 AMBER_LIGHT = "#C67F14"
 AMBER_DARK = "#E8A33D"
 
+# ---------------------------------------------------------------------------
+# v6 "Glass" material pass — Kaya-ratified A/B artifact side B
+# (artifacts_claude/tct_bias_glass_ab.html's ``.skin-glass`` block; side A in
+# that file is byte-identical to the pre-v6 DARK tokens below, side B is the
+# target). QWidgets-honest pre-blend only: the ratified Prometheus finding is
+# that real MultiEffect/ShaderEffect backdrop-blur does not render on the
+# software/RDP path, so "glass" here means ``_blend`` colour-mix against the
+# real canvas, never translucency/QGraphicsEffect.
+#
+# Two artifact recipes, applied as literal ``_blend`` foregrounds (DARK
+# only — the artifact is dark-committed by design, "Einseitig dunkel mit
+# Absicht"; LIGHT has no artifact literal to borrow, see below):
+#   --card-bg rgba(16,23,36,0.42)  -> panel/material (the "card" surface)
+#   --well-bg rgba(4,7,12,0.55)    -> well/sunk/pressed/disabled_bg (deeper
+#     recess; well/sunk COLLAPSE onto one value here, matching the
+#     pre-existing theme-editor override fanout
+#     ``_OVERRIDE_FANOUT["well"] = ("well", "sunk")`` further down this file
+#     — a user override already treats them as one concept, so the shipped
+#     v6 default does too).
+#
+# "raised" is deliberately left UNCHANGED: the artifact page never exercises
+# a ``--raised``-keyed element (only .card/.chip/.tile/.trough/.spark/.dwell
+# — the last four key off --chip-bg/--well-bg, not --raised), so moving it
+# would be an invented number, not a translated one. Leaving it in place also
+# widens the panel<->raised gap as panel recedes toward canvas — a
+# legitimate side effect in the artifact's own spirit ("cards recede toward
+# the canvas; in-card controls read more distinctly raised"). "chrome"/
+# "strip" need no separate formula change: both are already DERIVED from
+# raised/panel/sunk (see the inline definitions below and
+# ``_recompute_palettes``), so they inherit the new panel/well values
+# automatically when recomputed with the SAME literal args
+# ``_recompute_palettes`` would use — keeping
+# ``test_recompute_at_defaults_is_byte_identical`` (tests/test_theme_editor.py)
+# green. "tint"/"active" (accent-over-panel washes) are likewise re-pointed
+# at the new panel value below for the same reason: ``_recompute_palettes``
+# always derives them from the LIVE "panel" key, so the inline literal has
+# to track it or the byte-identical-at-defaults guarantee breaks.
+_GLASS_CARD_ALPHA = 0.42
+_GLASS_WELL_ALPHA = 0.55
+_GLASS_CARD_FG_DARK = "#101724"   # artifact --card-bg fg rgb(16,23,36), verbatim
+_GLASS_WELL_FG_DARK = "#04070C"   # artifact --well-bg fg rgb(4,7,12), verbatim
+_DARK_PANEL_V6 = _blend(_GLASS_CARD_FG_DARK, "#0A0D13", _GLASS_CARD_ALPHA)
+_DARK_WELL_V6 = _blend(_GLASS_WELL_FG_DARK, "#0A0D13", _GLASS_WELL_ALPHA)
+
+# LIGHT has no artifact literal (dark-committed reference), and — unlike
+# dark — cannot reuse the SAME 0.42 card-alpha grammar on its own panel: dark
+# had real headroom between canvas and raised for a 0.42 blend to land
+# cleanly in between; light's panel is ALREADY the brightness ceiling (pure
+# white), only 7-8 hex units above "raised" (#F8FAFD), so ANY blend toward
+# the darker canvas that reads as a visible step pulls panel BELOW raised —
+# inverting the card/control elevation relationship (cards would read
+# darker than the buttons/tiles sitting on them). Verified empirically: the
+# 0.42 alpha needs >= ~0.83 just to stay non-inverted, at which point the
+# "material" change is imperceptible anyway. So light panel/material get NO
+# blend (stay pure white) — light's v6 identity comes through the tokens
+# that DO have real headroom: well/sunk (a much gentler 0.08 ink wash, not
+# dark's 0.55 — full-strength blending toward black reads muddy on a light
+# surface), chip (below), and specular/edge (bumped separately above) —
+# "brighter toplight, softer hairline", not "as deep/dark as dark's card".
+_LIGHT_WELL_ALPHA = 0.08
+_LIGHT_PANEL_V6 = "#FFFFFF"
+_LIGHT_WELL_V6 = _blend("#000000", "#E6EBF3", _LIGHT_WELL_ALPHA)
+
 LIGHT = {
     "accent": ACCENT_LIGHT, "accent_strong": ACCENT_LIGHT_STRONG,
     "amber": AMBER_LIGHT,
@@ -361,14 +438,24 @@ LIGHT = {
     # panel/canvas (v5) rather than a third hand-picked tone, so the ribbon
     # reads as the SAME surface ladder as every card instead of a separately
     # drifting grey.
-    "material": "#FFFFFF", "material_strong": "#E6EBF3",
-    "panel": "#FFFFFF",
+    # v6 glass pass: material/panel now read the pre-blended _LIGHT_PANEL_V6
+    # (see the module comment above LIGHT) instead of pure white — the
+    # "card" surface loses its flat paper-white ceiling and picks up a
+    # faint canvas-tinted glass reveal.
+    "material": _LIGHT_PANEL_V6, "material_strong": "#E6EBF3",
+    "panel": _LIGHT_PANEL_V6,
     # border/border_strong: kept as their own keys for existing call sites,
     # synced 1:1 to hairline/hairline_strong (the two concepts were already
     # near-identical pre-v5; DARK even had them byte-equal).
     "border": "#D9DFEA", "border_strong": "#BFC9DA",
     "hairline": "#D9DFEA", "hairline_strong": "#BFC9DA",
-    "specular": "rgba(255, 255, 255, 0.85)",
+    # v6 glass pass: 0.85 -> 0.92 — a proportionate light-theme equivalent of
+    # the dark specular bump (see DARK["specular"] below), reasoned rather
+    # than copied: light's highlight was already near its practical ceiling
+    # (a hairline this close to white barely has room to brighten further
+    # without flattening into a solid opaque line), so the same "brighter
+    # toplight" direction gets a much smaller absolute step than dark's.
+    "specular": "rgba(255, 255, 255, 0.92)",
     "toplight": "#F8FAFD",
     "text": "#131A28", "muted": "#525D72", "faint": "#949DB0",
     "on_accent": "#ffffff",
@@ -378,8 +465,8 @@ LIGHT = {
     # drift from "accent" — and, unlike a raw ``_rgba()`` string, still a
     # plain hex ``gui/qml_theme.py``'s ``Theme.tint`` QColor property can
     # parse directly (see ``_blend``'s docstring).
-    "tint": _blend(ACCENT_LIGHT, "#FFFFFF", 0.10),
-    "active": _blend(ACCENT_LIGHT, "#FFFFFF", 0.10),
+    "tint": _blend(ACCENT_LIGHT, _LIGHT_PANEL_V6, 0.10),
+    "active": _blend(ACCENT_LIGHT, _LIGHT_PANEL_V6, 0.10),
     # field: v5 evidence (tct_cockpit_design_v4_final.html's `.btn` rule) —
     # a DEFAULT BUTTON/CHIP surface is "panel-2" (raised), not a sunken
     # input well; that raised tone is what "field" already meant here
@@ -389,8 +476,8 @@ LIGHT = {
     "field": "#F8FAFD",
     # pressed/disabled_bg: a control being pushed in / greyed out both read
     # as "recessed" — the spec's "sunk" surface, rather than two more
-    # one-off hand-picked tones.
-    "pressed": "#E2E7F0", "disabled_bg": "#E2E7F0",
+    # one-off hand-picked tones. v6: tracks the new _LIGHT_WELL_V6 (below).
+    "pressed": _LIGHT_WELL_V6, "disabled_bg": _LIGHT_WELL_V6,
     # Cockpit kit (Phase 0, docs/design/cockpit_style_overhaul.md §2) —
     # additive layering/emphasis tokens, v5-recalibrated
     # (docs/design/cockpit_design_system.md §2): "raised" (the spec's own
@@ -406,8 +493,20 @@ LIGHT = {
     # aliases, kept byte-synced by convention) and well nudged for material
     # contrast against the darker canvas above.
     "panel_2": "#F8FAFD", "raised": "#F8FAFD", "panel_3": "#eef0f4",
-    "sunk": "#E2E7F0", "well": "#E8EEF6",
+    # v6 glass pass: well/sunk COLLAPSE onto the single deeper _LIGHT_WELL_V6
+    # (see the module comment above LIGHT) — matches the existing
+    # theme-editor override fanout, which already treats well/sunk as one
+    # concept.
+    "sunk": _LIGHT_WELL_V6, "well": _LIGHT_WELL_V6,
     "hover": "#F8FAFD",
+    # chip: the artifact's ``--chip-bg`` glass grammar (status pill resting
+    # surface) — a translucency-EQUIVALENT wash, not a copy of "raised": a
+    # low-alpha ink blend over the new v6 "panel" so the chip reads as a
+    # touch recessed against the card instead of sharing panel's own tone.
+    # Same magnitude as DARK's 0.065 white-over-panel blend (see below),
+    # mirrored to black since light chips read as a soft shadow, not a
+    # highlight, against a bright card.
+    "chip": _blend("#000000", _LIGHT_PANEL_V6, 0.06),
     # Round-2 material tokens (all DERIVED via _blend — one source of truth):
     #   chrome — the frosted rail/topbar strip: the artifact's
     #     ``color-mix(in srgb, var(--panel-2) 74%, var(--panel))`` (.rail),
@@ -422,9 +521,18 @@ LIGHT = {
     #   edge_shade — the darker top edge of a SUNKEN surface (inputs,
     #     segmented tracks, progress troughs): the inverse cue, approximating
     #     the artifact's ``inset 0 1px 2px rgba(0,0,0,.14-.2)``.
-    "chrome": _blend("#F8FAFD", "#FFFFFF", 0.74),
-    "strip": _blend("#E2E7F0", "#FFFFFF", 0.55),
-    "edge": _blend("#FFFFFF", "#D9DFEA", 0.85),
+    # chrome/strip: unchanged FORMULA (raised/well blended over panel at the
+    # same 0.74/0.55 ratios) but now resolve against the new v6 panel/well
+    # values above — the exact args ``_recompute_palettes`` would use at
+    # defaults, so the byte-identical-at-defaults guarantee keeps holding.
+    "chrome": _blend("#F8FAFD", _LIGHT_PANEL_V6, 0.74),
+    "strip": _blend(_LIGHT_WELL_V6, _LIGHT_PANEL_V6, 0.55),
+    # edge: 0.85 -> 0.92, unified with the specular bump above (both
+    # approximate the SAME artifact "inset highlight" cue, just via two
+    # rendering paths — QSS border-top-color here, a QML rectangle for
+    # specular — so they now share one number instead of two that happened
+    # to already coincide before this pass).
+    "edge": _blend("#FFFFFF", "#D9DFEA", 0.92),
     "edge_shade": _blend("#000000", "#D9DFEA", 0.16),
     # Plot chrome tokens (grid/overlay) — kept identical in both dicts on
     # purpose, same idiom as good/warn/crit above: the plot canvas itself
@@ -442,32 +550,56 @@ DARK = {
     "sim": SIM_PURPLE, "error": ERROR_ORANGE,
     "danger": DANGER_DARK, "armed": ARMED_DARK,
     "canvas": "#0A0D13", "bg": "#0A0D13",
-    "material": "#121824", "material_strong": "#0A0D13",
-    "panel": "#121824",
+    # v6 glass pass: material/panel now read the pre-blended _DARK_PANEL_V6
+    # (see the module comment above LIGHT) — the artifact's own
+    # ``--card-bg:rgba(16,23,36,0.42)`` composited over the real canvas hex
+    # instead of the flat opaque #121824 slate tone.
+    "material": _DARK_PANEL_V6, "material_strong": "#0A0D13",
+    "panel": _DARK_PANEL_V6,
     # Codex S1 audit item 2: dark hairline/border nudged lighter for material
     # separation against panel; hairline_strong unchanged.
     "border": "#27344A", "border_strong": "#334159",
     "hairline": "#27344A", "hairline_strong": "#334159",
-    "specular": "rgba(255, 255, 255, 0.045)",
+    # v6 glass pass: 0.045 -> 0.14 — the artifact's own card-shadow inset
+    # value (``0 1px 0 rgba(255,255,255,0.14) inset``), applied verbatim.
+    "specular": "rgba(255, 255, 255, 0.14)",
     "toplight": "#1B253A",
     "text": "#E9EDF5", "muted": "#98A1B5", "faint": "#5B657A",
     "on_accent": "#04222c",
-    "tint": _blend(ACCENT_DARK, "#121824", 0.13),
-    "active": _blend(ACCENT_DARK, "#121824", 0.13),
+    "tint": _blend(ACCENT_DARK, _DARK_PANEL_V6, 0.13),
+    "active": _blend(ACCENT_DARK, _DARK_PANEL_V6, 0.13),
     "field": "#1B253A",
-    "pressed": "#0C1019", "disabled_bg": "#0C1019",
+    # v6 glass pass: tracks the new _DARK_WELL_V6 (below) — see the module
+    # comment above LIGHT for the artifact's --well-bg recipe.
+    "pressed": _DARK_WELL_V6, "disabled_bg": _DARK_WELL_V6,
     # See the matching comments in LIGHT above. Codex S1 audit item 2: raised
     # (+aliases) and well nudged for material contrast against panel/canvas.
+    # v6: "raised" is intentionally UNCHANGED (see the module comment above
+    # LIGHT — the artifact never exercises a --raised-keyed element); well/
+    # sunk collapse onto the single deeper _DARK_WELL_V6.
     "panel_2": "#1B253A", "raised": "#1B253A", "panel_3": "#2b2b31",
-    "sunk": "#0C1019", "well": "#0B111C",
+    "sunk": _DARK_WELL_V6, "well": _DARK_WELL_V6,
     "hover": "#1B253A",
+    # chip: the artifact's ``--chip-bg`` glass grammar (status pill resting
+    # surface) — a translucency-equivalent wash: white at the artifact's own
+    # 0.065 alpha over the new v6 "panel" (not "raised"/"field" — chip reads
+    # as its own, slightly-lifted resting surface, distinct from a button).
+    "chip": _blend("#FFFFFF", _DARK_PANEL_V6, 0.065),
     # Round-2 material tokens — see the matching comments in LIGHT above.
-    # Dark "edge" uses a slightly higher alpha than the 0.045 specular token:
-    # a 1px border line has far less area than the artifact's inset highlight
-    # band, so it needs a touch more ink to read at all on a real display.
-    "chrome": _blend("#1B253A", "#121824", 0.74),
-    "strip": _blend("#0C1019", "#121824", 0.55),
-    "edge": _blend("#FFFFFF", "#27344A", 0.10),
+    # chrome/strip: unchanged FORMULA (raised/well blended over panel at the
+    # same 0.74/0.55 ratios) but now resolve against the new v6 panel/well
+    # values above — the exact args ``_recompute_palettes`` would use at
+    # defaults, so the byte-identical-at-defaults guarantee keeps holding.
+    # Dark "edge" alpha (0.10 -> 0.14) is now UNIFIED with the specular bump
+    # above — both approximate the SAME artifact "inset highlight" cue (a 1px
+    # QSS border-top-color here, a QML rectangle for specular), so they share
+    # one number instead of two that used to diverge (0.045 vs 0.10).
+    # "edge_shade" (the INVERSE cue, for sunken surfaces) is intentionally
+    # left at its existing alpha — the artifact gives no evidence for moving
+    # it, and it is a distinct concept from the specular highlight.
+    "chrome": _blend("#1B253A", _DARK_PANEL_V6, 0.74),
+    "strip": _blend(_DARK_WELL_V6, _DARK_PANEL_V6, 0.55),
+    "edge": _blend("#FFFFFF", "#27344A", 0.14),
     "edge_shade": _blend("#000000", "#27344A", 0.30),
     "plot_grid": None, "plot_overlay": None,
 }
@@ -626,10 +758,12 @@ QLabel#ribbonLabel {{
    paint cost on hot-path containers). The machined material survives on
    static chrome + interaction-only controls (ribbon, buttons, tabs,
    segments, dock titles, control clusters). */
+/* v6 "Glass" material pass: card radius 16 -> 20px (RADIUS_XL, see its own
+   comment near RADIUS_LG) — QGroupBox IS the app's "card" surface. */
 QGroupBox {{
     background: {p['panel']};
     border: 1px solid {p['hairline']};
-    border-radius: {RADIUS_MD}px;
+    border-radius: {RADIUS_XL}px;
     margin-top: {SPACE_LG - 2}px;
     padding: {SPACE_LG - 1}px {SPACE_LG + 1}px {SPACE_LG - 1}px {SPACE_LG + 1}px;
 }}
@@ -1224,9 +1358,12 @@ QPushButton#segBtn:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outli
    column). */
 /* Uniform border on purpose: cardPane hosts the camera live view, the stage
    view and every FigureCard plot (hard rule 3 — see QGroupBox). */
+/* v6 "Glass" material pass: card radius 16 -> 20px (RADIUS_XL) — cardPane is
+   a Card's own surface (gui/panel_kit.py), the same "card" concept as
+   QGroupBox above. */
 QFrame#cardPane {{
     background: {p['panel']}; border: 1px solid {p['hairline']};
-    border-radius: {RADIUS_MD}px;
+    border-radius: {RADIUS_XL}px;
 }}
 
 /* Channel card — a cardPane variant used per scope channel.  The panel adds an
@@ -1289,22 +1426,26 @@ QLabel#cardSubtitle {{
        chip.style().unpolish(chip); chip.style().polish(chip)
    (``gui.status_widgets.StatusChip.set_status()``/``gui.style.set_chip_state``
    already do this.) Any unlisted state value falls through to the quiet
-   neutral pill. */
+   neutral pill.
+   v6 "Glass" material pass: the resting (neutral/unknown) surface now reads
+   ``p['chip']`` instead of ``p['field']`` — the artifact's own
+   ``--chip-bg`` grammar, a translucency-equivalent wash distinct from the
+   button/field material (see the "chip" token comment in LIGHT/DARK). */
 QLabel#statusChip {{
     padding: 2px {SPACE_SM + 2}px;
     border-radius: {RADIUS_PILL}px;
     font-size: {FONT_XS}px; font-weight: 600;
-    background: {p['field']}; color: {p['muted']};
+    background: {p['chip']}; color: {p['muted']};
     border: 1px solid {p['hairline']};
 }}
 QLabel#statusChip[state="neutral"] {{
-    background: {p['field']}; color: {p['muted']}; border: 1px solid {p['hairline']};
+    background: {p['chip']}; color: {p['muted']}; border: 1px solid {p['hairline']};
 }}
 QLabel#statusChip[state="disconnected"] {{
     background: transparent; color: {p['faint']}; border: 1px solid {p['hairline']};
 }}
 QLabel#statusChip[state="unknown"] {{
-    background: {p['field']}; color: {p['muted']};
+    background: {p['chip']}; color: {p['muted']};
     border: 1px dashed {p['hairline_strong']};
 }}
 QLabel#statusChip[state="good"] {{
@@ -1553,19 +1694,25 @@ DEFAULT_WINDOW_OPACITY = 1.0
 # opaque tokens, no real blur). ``glass_amount`` g in [0, 1] scales them:
 #   chrome     = _blend(raised, panel, 0.74 * g)  — frosted rail/ribbon chrome
 #   strip      = _blend(sunk,  panel, 0.55 * g)   — recessed status-strip wash
-#   edge       = _blend(#fff, hairline, (0.85 light / 0.10 dark) * g)
+#   edge       = _blend(#fff, hairline, (0.92 light / 0.14 dark) * g)
 #                                                 — specular machined top edge
 #   edge_shade = _blend(#000, hairline, (0.16 light / 0.30 dark) * g)
 #                                                 — shaded top edge of sunken wells
-# g == 1.0 (DEFAULT) reproduces today's v4 glass ceiling byte-for-byte;
+# g == 1.0 (DEFAULT) reproduces today's v6 glass ceiling byte-for-byte;
 # g == 0.0 is fully opaque: chrome/strip collapse to plain "panel" and both
 # machined edges collapse to the uniform hairline. PLOT_BG/PLOT_FG are
 # deliberately NOT parametrized: plots/camera keep the fixed opaque
 # instrument screen at ANY glass amount (design law 8 / "nothing translucent
 # over a plot").
+# v6 glass pass (Kaya-ratified A/B artifact side B): "edge" alpha moves to
+# 0.14 dark / 0.92 light, UNIFIED with the DARK/LIGHT "specular" token bump
+# right above — both approximate the same artifact inset-highlight cue via
+# two different rendering paths (a QSS border-top-color here, a QML
+# rectangle for specular). "edge_shade" is untouched — a distinct, inverse
+# cue with no artifact evidence to move it.
 _GLASS_BLEND_ALPHAS = {
-    "light": {"chrome": 0.74, "strip": 0.55, "edge": 0.85, "edge_shade": 0.16},
-    "dark":  {"chrome": 0.74, "strip": 0.55, "edge": 0.10, "edge_shade": 0.30},
+    "light": {"chrome": 0.74, "strip": 0.55, "edge": 0.92, "edge_shade": 0.16},
+    "dark":  {"chrome": 0.74, "strip": 0.55, "edge": 0.14, "edge_shade": 0.30},
 }
 
 # Safety palette — LOCKED (laws 1/2/6: quiet nominal / command classes / sim
