@@ -309,7 +309,20 @@ architecture stands; revisit only at Qt 6.10+ LTS with a bench spike):
   hard-codes Axis members in ~15 places — baking the enum into a new
   viewmodel would churn twice when P3 axes flow trunk→branch. Other U1
   slices are P-track-independent.**
-- U2 ScanViewer hero slice (M; proves panel-VM-island pattern; [Kaya]
+- **U1.5 v2 Design Council round (Kaya directive 2026-07-13 night,
+  [Kaya] gate):** the big design iteration for the QML suit — per-panel
+  artifacts against the visionOS references in design_assets/, council
+  bounces (crew + NorthStar personas + Codex, as practiced), and the
+  binding deliverable: the **QML component-kit spec** (the panel_kit
+  analogue: Card/ActionBar/SegmentedControl/EmptyState/StatusPill…,
+  tokens via the existing Theme singleton, motion via native
+  Behavior/springs). Sits AFTER U1 (viewmodels first — data before
+  paint) and BEFORE U2 (the hero slice implements against the ratified
+  artifacts). QML's advantage: artifact≈implementation — springs and
+  in-scene glass are the same technology class, so the v5-era
+  translation loss largely disappears.
+- U2 ScanViewer hero slice (M; proves panel-VM-island pattern +
+  implements the U1.5 kit spec as the reference implementation; [Kaya]
   pattern sign-off).
 - U3 easy panels: Calibration, RefMonitor, Monitor, Laser (M).
 - U4 medium: Camera, Bias (**kill switch re-parented, never
