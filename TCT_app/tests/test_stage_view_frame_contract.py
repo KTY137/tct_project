@@ -36,7 +36,7 @@ from controller.danger_gate import AutoConfirmGate
 from devices.motor_base import SoftwareLimits
 from devices.motor_grbl import GRBLMotorStage
 from gui.motor_panel import MotorPanel
-from gui.stage_view import _HAS_PG
+from gui.stage_view import StageView, _HAS_PG
 
 
 # Kaya's stage envelope (machine frame) — same as test_motor_frame_contract.py.
@@ -284,5 +284,74 @@ def test_theme_switch_after_zero_here_keeps_frame_and_tokens():
         panel.refresh_theme("light")
         assert panel._stage_view._v2d._theme_mode == "light"
         assert _env_rect(top) == pytest.approx(env)
+    finally:
+        _dispose(panel)
+
+
+# --------------------------------------------------------------------------- #
+# 2D-only stage view (3D/GL page removed 2026-07-13 — Kaya: "die 3D view       #
+# brauchen wir auch nicht"; the RTT/glass reason is pinned separately in       #
+# tests/test_no_render_to_texture_children_in_gui.py)                          #
+# --------------------------------------------------------------------------- #
+
+def test_stage_view_has_no_3d_page_and_no_gl_import():
+    """The stage view is 2D-only: no ``StageView3D`` class, no ``_v3d`` page,
+    no page-switching stack, and no ``pyqtgraph.opengl`` import left behind.
+
+    The GL page was a ``GLViewWidget`` (a render-to-texture child), which makes
+    DWM window material impossible for the whole top-level that hosts it
+    (docs/design/glass_council/SYNTHESIS.md §2, Thor's path-D)."""
+    import gui.stage_view as sv
+
+    assert not hasattr(sv, "StageView3D")
+    assert not hasattr(sv, "_HAS_GL")
+    assert not hasattr(sv, "gl")           # the `pyqtgraph.opengl as gl` alias
+
+    view = sv.StageView(_MACHINE_LIMITS)
+    try:
+        assert hasattr(view, "_v2d")
+        assert not hasattr(view, "_v3d")
+        assert not hasattr(view, "_stack")     # nothing left to switch pages
+        assert not hasattr(view, "_btn3d")     # no orphan toggle button
+        assert not hasattr(view, "_btn2d")
+    finally:
+        view.deleteLater()
+        _pump(_app(), 0.05)
+
+
+def test_z_axis_is_represented_in_the_2d_view():
+    """Kaya's scope call: "2d plus z achse reicht voll".  Z must stay legible
+    without the 3D box — geometrically in the X-Z side plot, and numerically in
+    the header chip that the wrapper drives from the same ``set_position``."""
+    _skip_without_pg()
+    view = StageView(_MACHINE_LIMITS)
+    try:
+        view.set_position(3.0, 4.0, 7.5)
+        # Side plot: horizontal = X, vertical = Z.
+        assert _marker(view._v2d._side) == pytest.approx((3.0, 7.5))
+        assert view._v2d._side["hline"].value() == pytest.approx(7.5)
+        # Numeric mirror in the header.
+        assert view._z_chip.text() == "Z 7.500 mm"
+
+        view.set_position(3.0, 4.0, -1.25)
+        assert _marker(view._v2d._side) == pytest.approx((3.0, -1.25))
+        assert view._z_chip.text() == "Z -1.250 mm"
+    finally:
+        view.deleteLater()
+        _pump(_app(), 0.05)
+
+
+def test_panel_stage_view_z_chip_tracks_the_live_poller():
+    """End-to-end through the panel: the poller's user-frame Z reaches the
+    header chip (the 3D view used to be the only place Z appeared as more than
+    a plot axis)."""
+    _skip_without_pg()
+    app = _app()
+    motor = _sim_grbl()
+    motor.move_to(5.0, 5.0, 2.0)
+    panel = _panel(motor)
+    try:
+        assert _pump_until(
+            app, lambda: panel._stage_view._z_chip.text() == "Z 2.000 mm")
     finally:
         _dispose(panel)
