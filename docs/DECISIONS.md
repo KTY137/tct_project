@@ -113,3 +113,65 @@ Rationale recorded because it is a deliberate *narrowing* of a literal
 reading of safety rule 2 ("stage motion" would include jog), made by Kaya
 with the trade-off stated. Any future agent proposing to gate jog must bring
 this entry to Kaya, not silently "harden" it.
+
+## 2026-07-13 — Sequencer envelope semantics RATIFIED
+
+ONE combined envelope per routine queue (single authorization step). Arm via
+hold-3s or press-twice → ONE envelope covering: max HV, total travel, every
+routine named in the arm text. Executor re-validates every step at runtime.
+Re-arm-per-routine rejected: defeats the unattended overnight-run purpose.
+Rationale: unattended operation requires a single, explicit, conscious envelope
+decision; per-routine re-arming forces operator intervention, breaking autonomy.
+Affects: `controller/scan_controller.py`, `gui/scan_planner_panel.py` (arm UX).
+Status: APPROVED — ready for sequencer build (Wave 0).
+
+## 2026-07-13 — Bias-panel IV sweep: both stop causes now visible RATIFIED
+
+Two distinct stop reasons emit a visible notification: (1) compliance limit
+(previously silent), (2) hardware trip (already visible). Rationale: operator
+honesty — silent failure to reach target voltage hides the reason from the bench
+log. Affects: `gui/bias_panel.py`, `devices/bias_supply_*.py`. Status:
+APPROVED — implement in bias-panel enhancements.
+
+## 2026-07-13 — "Real transparency" backdrop added alongside opacity slider RATIFIED
+
+Windows 11 acrylic/mica DWM backdrop filter (content stays opaque; plots/camera
+always opaque per design law 5) ADDED as a new toggle, independent of the
+existing whole-window opacity slider. Both can coexist. Opaque fallback on
+non-Win11/unsupported RHI. Ships with "none" default (opaque backdrop) until
+Kaya verifies rendering on real display hardware. Rationale: DWM backdrop gives
+OS-native gloss without overexposure; separation from opacity slider gives users
+two axes of visual control. Affects: `gui/style.py`, theme system, RHI layer.
+Status: APPROVED — ready for GUI build (Wave 0).
+
+## 2026-07-13 — Big-wave execution order RATIFIED
+
+Wave 0 (HV gate hardening) → two structural blockers (StateMachine.transition
+lock, BiasChannel.output_on rename) → four feature lanes in parallel (sequencer,
+HDF5+capture_photo, backdrop, e-field/metrology) → Wave 1/3/4 items via free
+lanes. Rationale: critical-path safety-system work lands first; structural
+changes unblock all downstream feature work; parallelizable features ship
+together to consolidate review gates. Affects: `docs/ARCHITECTURE.md`, task
+queue, review cadence. Status: ACTIVE — execution in flight (2026-07-13).
+
+## 2026-07-13 — Stitched-image feature in scope for big wave RATIFIED
+
+Stitched-image / mosaic feature APPROVED for Wave 0: (1) survey preset (grid of
+move+capture_photo planner steps), (2) offline mosaic view in analysis_panel
+(affine placement, omitted frames shown as gaps, never zero-filled). Rationale:
+seamless integration into existing capture/planner flow; affine alignment avoids
+optical calibration complexity. Affects: `gui/scan_planner_panel.py` (preset),
+`gui/analysis_panel.py` (mosaic viewer), `analysis/` (affine stitch logic).
+Status: APPROVED — ready for build.
+
+## 2026-07-13 — Sensor orientation via opencv-python-headless RATIFIED
+
+Sensor orientation ("bonding-machine" alignment) implemented via ArUco fiducials
++ classical template matching/contours, explicitly NO CNN (no dataset, no torch).
+opencv-python-headless chosen to avoid Qt-plugin clashes with PySide6. NEW
+TCT_app/vision/ package created; analysis/ stdlib+numpy contract unchanged.
+Lazy import + clean feature-disabled degradation. Rationale: no ML dataset
+available for proprietary alignment task; classical CV sufficient; headless
+variant eliminates Qt plugin conflicts endemic to GUI-heavy PySide6 apps.
+Affects: new `TCT_app/vision/` package, `analysis/` interface, requirements.txt.
+Status: APPROVED — ready for build.
