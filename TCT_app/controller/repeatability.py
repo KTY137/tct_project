@@ -633,7 +633,8 @@ class RepeatabilityTester:
 
     def calibrate_affine(self, *, nx: int = 3, ny: int = 3, step_mm: float = 0.5,
                          settle_s: float = 0.5, tolerance_um: float | None = None,
-                         quality_min: float = 0.2) -> StageCameraCal:
+                         quality_min: float = 0.2,
+                         should_stop: Callable[[], bool] | None = None) -> StageCameraCal:
         """Drive a danger-gated staircase and fit the stage->camera affine.
 
         Placement-grade companion to :meth:`calibrate` (which measures a single
@@ -656,12 +657,27 @@ class RepeatabilityTester:
         * Every move is a planned staircase position; nothing moves outside the
           confirmed extent. On success the stage is left at the last staircase
           point (this method does not auto-home or auto-return).
+        * *should_stop* (optional) is polled BEFORE every staircase move, exactly
+          like :meth:`run`'s cooperative abort. The first time it returns True no
+          further motion of any kind is commanded and a no-data
+          :class:`StageCameraCal` (``affine is None``) is returned immediately,
+          its ``notes`` recording "aborted by should_stop after step N of M".
 
         A position whose grabbed frame scores below *quality_min* is EXCLUDED
         from the fit (never fabricated into a pair), counted in the returned
         ``notes``, and the chained correlation bridges the gap to the next good
         frame. If fewer than three usable points remain, a no-data result is
         returned rather than a meaningless fit.
+
+        Result contract -- **callers MUST branch on ``cal.affine is None`` and
+        surface ``cal.notes`` to the user.** ``affine`` is a real fit ONLY on
+        success; on EVERY failure/early-exit path -- gate denial, ``should_stop``
+        abort, fewer than three usable points, or a degenerate/collinear (hence
+        ill-posed) fit -- it is ``None`` and ``notes`` is a non-empty,
+        human-readable reason, never a partial or garbage affine. Device-call
+        exceptions (a stage/camera lost mid-staircase) are deliberately NOT
+        swallowed: they propagate exactly as before so the caller fails safe
+        under hardware-safety rule 5, rather than being masked as a soft result.
         """
         if not getattr(self._camera, "connected", False):
             raise RuntimeError(
@@ -709,6 +725,20 @@ class RepeatabilityTester:
         n_excluded = 0
 
         for k, (px_mm, py_mm) in enumerate(path):
+            # Cooperative abort BEFORE every motion step (mirrors run()): once
+            # should_stop returns True no further move of any kind is commanded.
+            # k moves have already happened, so motion is frozen exactly here and
+            # a fail-safe no-data result is returned (never a partial fit).
+            if should_stop and should_stop():
+                self.logger.info(
+                    "Affine calibration aborted by should_stop after step %d of "
+                    "%d — no further motion commanded.", k, len(path))
+                return StageCameraCal(
+                    affine=None, backlash_mm=(0.0, 0.0), rms_um=0.0, passes=None,
+                    n_points=len(commanded),
+                    notes=(f"affine calibration aborted by should_stop after step "
+                           f"{k} of {len(path)} — no further motion commanded"),
+                )
             self._motor.move_to(px_mm, py_mm, z0)
             prepared = self._grab(settle_s)
             if prepared.quality < quality_min:
@@ -738,9 +768,25 @@ class RepeatabilityTester:
                        f"need at least 3"),
             )
 
-        cal = fit_stage_camera_affine(
-            commanded, measured, tolerance_um=tolerance_um, forward_mask=fwd_flags,
-        )
+        try:
+            cal = fit_stage_camera_affine(
+                commanded, measured, tolerance_um=tolerance_um, forward_mask=fwd_flags,
+            )
+        except ValueError as exc:
+            # >=3 usable points remained, but they are degenerate/collinear (or a
+            # correlation returned a non-finite pixel): fit_affine raises rather
+            # than hand back a garbage least-squares matrix. Convert that raise to
+            # the same fail-safe contract as every other early exit -- never leak
+            # it past the (already-confirmed) gate, never return a partial affine.
+            self.logger.warning(
+                "Affine fit failed on %d usable point(s): %s", len(commanded), exc)
+            return StageCameraCal(
+                affine=None, backlash_mm=(0.0, 0.0), rms_um=0.0, passes=None,
+                n_points=len(commanded),
+                notes=(f"affine calibration failed: {exc} — {len(commanded)} usable "
+                       f"point(s) after {n_excluded} low-quality exclusion(s) could "
+                       f"not be fitted (degenerate/collinear geometry)"),
+            )
         if n_excluded:
             cal = replace(
                 cal,

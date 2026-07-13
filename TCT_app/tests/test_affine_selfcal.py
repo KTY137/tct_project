@@ -352,6 +352,74 @@ def test_calibrate_affine_excludes_low_quality_frame_but_still_fits():
     assert cal.affine.rms_px < 0.2           # bridged correlation stayed sane
 
 
+def test_calibrate_affine_should_stop_freezes_motion_and_returns_no_data():
+    """Cooperative abort (Mary RISK rider 1): a should_stop that flips True once
+    N moves have happened freezes motion at exactly N move commands, returns a
+    no-data result (affine is None), and records the abort in notes."""
+    motor = _AffineSimMotor()
+    center = _grid_center(3, 3, 0.5)
+    cam = _AffineSimCamera(motor, _M, center)
+    tester = RepeatabilityTester(motor, cam, gate=AutoConfirmGate())
+    n_full = len(plan_affine_staircase(3, 3, 0.5))
+    stop_after = 4                                   # abort well before the end
+
+    def should_stop() -> bool:
+        # move_to is the only motion command calibrate_affine issues here.
+        return len(motor.moves) >= stop_after
+
+    cal = tester.calibrate_affine(nx=3, ny=3, step_mm=0.5, settle_s=0.0,
+                                  should_stop=should_stop)
+
+    assert len(motor.moves) == stop_after            # motion frozen at N
+    assert stop_after < n_full                        # proves it stopped early
+    assert cal.affine is None                         # fail-safe no-data result
+    assert cal.passes is None
+    assert "aborted by should_stop" in cal.notes
+    assert f"after step {stop_after}" in cal.notes
+
+
+def test_calibrate_affine_should_stop_none_leaves_behaviour_unchanged():
+    """should_stop=None (the default) must fit the full staircase exactly as
+    before -- the abort hook adds no behaviour when unused."""
+    motor = _AffineSimMotor(backlash_mm=(0.0, 0.0))
+    center = _grid_center(3, 3, 0.5)
+    cam = _AffineSimCamera(motor, _M, center)
+    tester = RepeatabilityTester(motor, cam, gate=AutoConfirmGate())
+
+    cal = tester.calibrate_affine(nx=3, ny=3, step_mm=0.5, settle_s=0.0,
+                                  tolerance_um=50.0, should_stop=None)
+
+    assert cal.affine is not None
+    assert cal.n_points == len(plan_affine_staircase(3, 3, 0.5))
+    assert cal.passes is True
+
+
+def test_calibrate_affine_degenerate_fit_returns_no_data_not_raise():
+    """Result-contract hardening (Mary RISK rider 2): >=3 usable points that are
+    collinear make the affine ill-posed -- fit_affine raises ValueError. That
+    raise must NOT leak past the (already-confirmed) gate; the method returns
+    affine is None with a non-empty, human-readable note instead.
+
+    Trigger: the 3x3 staircase visits row 0 (all y=origin_y, collinear along X)
+    on its first five visits, then climbs. Blanking every frame from visit 5 on
+    leaves only those collinear survivors -- >=3 points (so NOT the fewer-than-3
+    early exit) but rank-deficient, which is exactly the fit-raise path."""
+    motor = _AffineSimMotor()
+    center = _grid_center(3, 3, 0.5)
+    n_full = len(plan_affine_staircase(3, 3, 0.5))
+    cam = _AffineSimCamera(motor, _M, center,
+                           blank_call_indices=set(range(5, n_full)))
+    tester = RepeatabilityTester(motor, cam, gate=AutoConfirmGate())
+
+    cal = tester.calibrate_affine(nx=3, ny=3, step_mm=0.5, settle_s=0.0)
+
+    assert cal.affine is None                         # no garbage/partial affine
+    assert cal.notes                                  # non-empty, human-readable
+    assert "failed" in cal.notes
+    assert cal.n_points >= 3                           # collinear survivors, not <3
+    assert motor.moves                                # ...and the staircase ran
+
+
 def test_forward_mask_from_path_labels_sweeps():
     """The private helper labels forward sweeps (+X/+Y arrivals) True and
     return sweeps (-X/-Y) False -- the labelling calibrate_affine feeds the fit."""
