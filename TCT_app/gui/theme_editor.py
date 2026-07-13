@@ -32,10 +32,16 @@ SAME machinery as the View menu's dark-mode toggle (tct_gui._toggle_theme, via
 the ``applyRequested`` signal), so QSS regeneration, the QML Theme singleton,
 and every panel's ``refresh_theme`` all fire exactly as they do today.
 
-Five built-in presets (Cockpit Dark · Graphite · Deep Violet · Lab Light ·
-Paper) come from ``style.BUILTIN_PRESETS`` — token sets ported from the v5
-playground. Window opacity is deliberately NOT part of a preset: it is a window
-property, not a palette token.
+Nine built-in presets (Cockpit Dark · Glass · Graphite · Deep Violet · Plasma ·
+Aurora · Lab Light · Paper · Spatial Light) come from ``style.BUILTIN_PRESETS``
+— the first five are token sets ported from the v5 playground; Glass/Plasma/
+Aurora/Spatial Light are round 3's "Glass family" (Kaya 2026-07-13), headlined
+by Glass — a 1:1 derivation of the ratified A/B artifact's glass side (see the
+module comment above ``style.BUILTIN_PRESETS``). Window opacity is deliberately
+NOT part of a preset: it is a window property, not a palette token — same
+story for the DWM backdrop material below (its own ``theme/window_backdrop``
+knob, not a preset field either; a preset that wants to RECOMMEND a backdrop
+is a schema extension for a future beat, not implemented here).
 
 Safety palette (danger/armed/sim/error — laws 1/2/6) is rendered as locked,
 read-only swatches with no color-dialog path; a preset whose overrides name any
@@ -93,14 +99,16 @@ _SWATCH_W, _SWATCH_H = 44, 22
 
 
 def builtin_presets() -> list[dict]:
-    """The five shipped presets — Cockpit Dark (default) · Graphite · Deep
-    Violet · Lab Light · Paper.
+    """The nine shipped presets — Cockpit Dark (default) · Glass · Graphite ·
+    Deep Violet · Plasma · Aurora · Lab Light · Paper · Spatial Light.
 
-    Token sets live in ``style.BUILTIN_PRESETS`` (ported from the v5 playground;
-    style.py is the only gui module allowed hex literals). Each one goes through
-    :func:`_sanitize_preset` like any other preset, so a built-in gets exactly
-    the same safety validation as a hand-edited JSON blob — a built-in that ever
-    named a safety token would be rejected here, not trusted for being ours.
+    Token sets live in ``style.BUILTIN_PRESETS`` (the first five ported from
+    the v5 playground; Glass/Plasma/Aurora/Spatial Light are round 3's "Glass
+    family" — style.py is the only gui module allowed hex literals). Each one
+    goes through :func:`_sanitize_preset` like any other preset, so a built-in
+    gets exactly the same safety validation as a hand-edited JSON blob — a
+    built-in that ever named a safety token would be rejected here, not
+    trusted for being ours.
     """
     presets: list[dict] = []
     for spec in style.BUILTIN_PRESETS:

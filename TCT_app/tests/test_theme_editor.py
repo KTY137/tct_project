@@ -584,12 +584,12 @@ def test_material_card_labels_are_honest(tmp_path):
 
 # --- the five built-in presets --------------------------------------------- #
 
-def test_five_builtin_presets_are_shipped():
+def test_nine_builtin_presets_are_shipped():
     from gui.theme_editor import builtin_presets
     _app()
     names = [p["name"] for p in builtin_presets()]
-    assert names == ["Cockpit Dark", "Graphite", "Deep Violet",
-                     "Lab Light", "Paper"]
+    assert names == ["Cockpit Dark", "Glass", "Graphite", "Deep Violet",
+                     "Plasma", "Aurora", "Lab Light", "Paper", "Spatial Light"]
     assert names[0] == "Cockpit Dark"                       # the default
 
 
@@ -680,13 +680,123 @@ def test_shipped_presets_are_the_shipped_themes():
 
 
 def test_new_presets_carry_a_full_token_set():
-    """Graphite / Deep Violet / Paper must each set every colour a theme needs —
-    a preset that changes the canvas but forgets the well leaves a mismatched
-    input recess."""
+    """Graphite / Deep Violet / Paper / the Glass family must each set every
+    colour a theme needs — a preset that changes the canvas but forgets the
+    well leaves a mismatched input recess."""
     needed = {"canvas", "panel", "text", "muted", "hairline", "accent", "well"}
     by_name = {p["name"]: p for p in style.BUILTIN_PRESETS}
-    for name in ("Graphite", "Deep Violet", "Paper"):
+    for name in ("Graphite", "Deep Violet", "Paper",
+                 "Glass", "Plasma", "Aurora", "Spatial Light"):
         assert set(by_name[name]["overrides"]) == needed, name
+
+
+# --------------------------------------------------------------------------- #
+# Glass family (round 3, Kaya 2026-07-13): Glass · Plasma · Aurora ·          #
+# Spatial Light — headlined by Glass, a 1:1 derivation of the ratified A/B    #
+# artifact's glass side (artifacts_claude/tct_bias_glass_ab.html).            #
+# --------------------------------------------------------------------------- #
+
+_GLASS_FAMILY_ALL = ("Glass", "Plasma", "Aurora", "Spatial Light")
+
+
+def _srgb_to_linear(c: int) -> float:
+    c = c / 255
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _relative_luminance(hex_color: str) -> float:
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+    r, g, b = _srgb_to_linear(r), _srgb_to_linear(g), _srgb_to_linear(b)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast_ratio(hex_a: str, hex_b: str) -> float:
+    """WCAG 2.x contrast ratio — (L1 + 0.05) / (L2 + 0.05), L1 >= L2."""
+    l_a, l_b = _relative_luminance(hex_a), _relative_luminance(hex_b)
+    l_a, l_b = max(l_a, l_b), min(l_a, l_b)
+    return (l_a + 0.05) / (l_b + 0.05)
+
+
+@pytest.mark.parametrize("name", _GLASS_FAMILY_ALL)
+def test_glass_family_text_and_muted_meet_the_contrast_floor(name):
+    """House floor (task brief): text-vs-panel >= 4.5:1, muted-vs-panel >=
+    3:1 — computed from the shipped hex, never eyeballed."""
+    preset = next(p for p in style.BUILTIN_PRESETS if p["name"] == name)
+    ov = preset["overrides"]
+    assert _contrast_ratio(ov["text"], ov["panel"]) >= 4.5
+    assert _contrast_ratio(ov["muted"], ov["panel"]) >= 3.0
+
+
+def test_glass_preset_is_1to1_with_the_ratified_artifact():
+    """"Glass" reproduces the ratified A/B artifact's side B exactly for the
+    three tokens the artifact itself never varies (its --text/--muted/--accent
+    custom properties are the SAME in both the Slate and Glass skins) — these
+    must be verbatim, not merely close."""
+    glass = next(p for p in style.BUILTIN_PRESETS if p["name"] == "Glass")
+    ov = glass["overrides"]
+    assert ov["text"].upper() == "#E9EDF5"
+    assert ov["muted"].upper() == "#98A1B5"
+    assert ov["accent"].upper() == "#5AA9FF"
+    assert glass["glass"] == style.DEFAULT_GLASS_AMOUNT     # "the full tinted material"
+    # canvas/panel/well/hairline are DERIVED (artifact literals over the
+    # preset's own ambient-biased canvas) — pin the derivation itself rather
+    # than a magic hex, so a future _blend/_GLASS_CARD_FG_DARK change can't
+    # silently drift this preset out of sync with the shipped v6 pass it
+    # borrows its card/well recipe from.
+    canvas = style._glass_family_canvas("#2A6FE0")
+    assert ov["canvas"].lower() == canvas.lower()
+    assert ov["panel"].lower() == style._blend(
+        style._GLASS_CARD_FG_DARK, canvas, style._GLASS_CARD_ALPHA).lower()
+    assert ov["well"].lower() == style._blend(
+        style._GLASS_WELL_FG_DARK, canvas, style._GLASS_WELL_ALPHA).lower()
+
+
+def test_aurora_teal_is_visually_distinct_from_the_sim_safety_token():
+    """The artifact's own cyan glow (rgba(65,216,228,·)) is byte-identical to
+    SIM_PURPLE — Aurora must not reuse it verbatim (law 6: sim can never pass
+    as real), and the distinctness must be more than a rounding difference."""
+    aurora = next(p for p in style.BUILTIN_PRESETS if p["name"] == "Aurora")
+    ov = aurora["overrides"]
+
+    def _rgb(h):
+        h = h.lstrip("#")
+        return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+    def _dist(a, b):
+        ra, ga, ba = _rgb(a)
+        rb, gb, bb = _rgb(b)
+        return ((ra - rb) ** 2 + (ga - gb) ** 2 + (ba - bb) ** 2) ** 0.5
+
+    for token in ("accent", "canvas", "panel", "well"):
+        assert ov[token].lower() != style.SIM_PURPLE.lower()
+    assert _dist(ov["accent"], style.SIM_PURPLE) > 40
+    assert _dist(ov["accent"], style.OK_GREEN) > 40
+
+
+@pytest.mark.parametrize("name", _GLASS_FAMILY_ALL)
+def test_glass_family_preset_loads_applies_and_builds_one_panel(tmp_path, name):
+    """Load -> apply -> construct one panel smoke -> no crash, correct accent
+    resolved (task brief). Uses gui.panel_kit.Card — the same lightweight
+    cockpit-kit surface gui/theme_editor.py itself is built from — rather than
+    a full device panel, so this stays independent of any panel-owning beat."""
+    from gui.panel_kit import Card
+    from gui.theme_editor import ThemeEditorDialog
+
+    _app()
+    preset = next(p for p in style.BUILTIN_PRESETS if p["name"] == name)
+    dlg = ThemeEditorDialog(mode=preset["mode"], settings=_tmp_settings(tmp_path))
+    names = [dlg._preset_list.item(i).text()
+             for i in range(dlg._preset_list.count())]
+    dlg._preset_list.setCurrentRow(names.index(name))
+    dlg._apply()
+
+    live = style.DARK if preset["mode"] == "dark" else style.LIGHT
+    assert live["accent"].lower() == preset["overrides"]["accent"].lower()
+
+    card = Card("Smoke")
+    card.setStyleSheet(style.build_qss(live))
+    assert card.objectName() == "cardPane"
 
 
 # =========================================================================== #

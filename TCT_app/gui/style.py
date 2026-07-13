@@ -1744,9 +1744,12 @@ EDITABLE_TOKENS: tuple[str, ...] = tuple(_OVERRIDE_FANOUT)
 _HEX6_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 # ---------------------------------------------------------------------------
-# BUILT-IN PRESETS (Kaya round 2: "ich will mehr theme presets")
+# BUILT-IN PRESETS (Kaya round 2: "ich will mehr theme presets"; the Glass
+# family below is round 3, Kaya 2026-07-13: "mehr Presets, angeführt von
+# einem 1:1 Glass-Preset")
 #
-# Ported verbatim from the v5 playground's `P` map
+# The first five (Cockpit Dark/Graphite/Deep Violet/Lab Light/Paper) are
+# ported verbatim from the v5 playground's `P` map
 # (artifacts_claude/v5/src/themes.body.html) — designed and eyeball-checked
 # there; nothing here is invented. They live in THIS module because it is the
 # only gui/ file allowed to contain hex literals (tests/test_no_inline_hex_gui.py)
@@ -1757,7 +1760,7 @@ _HEX6_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 # preset can never reach a safety token: `danger`/`armed`/`sim`/`error` are not
 # groups, apply_theme_overrides raises on them, and sanitize/validate reject any
 # preset that names one (laws 1/2/6). The safety palette is IDENTICAL in all
-# five presets, by construction.
+# nine presets, by construction.
 #
 # "Cockpit Dark" and "Lab Light" carry NO overrides on purpose: they ARE the
 # shipped themes (the ratified v5 look), so selecting them restores the app
@@ -1769,9 +1772,128 @@ def _preset_well(canvas: str, panel: str) -> str:
     return _blend(canvas, panel, 0.6)
 
 
+# ---------------------------------------------------------------------------
+# Glass family (round 3): Glass · Plasma · Aurora · Spatial Light — headlined
+# by "Glass", a 1:1 derivation of the Kaya-ratified A/B artifact's side B
+# (artifacts_claude/tct_bias_glass_ab.html, ``.skin-glass``), same
+# QWidgets-honest "flat ``_blend`` pre-blend, no live translucency" law as the
+# shipped v6 pass above (_DARK_PANEL_V6 etc.) — these are ordinary presets,
+# not a new material mechanism.
+#
+# The artifact renders its card material with REAL backdrop-blur floating
+# over a fixed ambient backdrop: the page base ``body{background:#05070C}``
+# plus four radial glow gradients (``.ambient``). A flat QSS token can't
+# reproduce a per-pixel radial gradient, so the SAME move the shipped v6 pass
+# already makes (composite a literal artifact colour over the real canvas via
+# ``_blend`` instead of live blur) is applied one level up: each preset's
+# CANVAS becomes the artifact's page base biased by a FAINT wash of one
+# ambient glow colour, and panel/well/hairline then use the artifact's own
+# card/well/border recipes composited over THAT canvas — so the whole
+# material ladder shifts together, not just one token.
+#
+# ``_GLASS_FAMILY_AMBIENT_ALPHA = 0.08`` is deliberately far below any single
+# gradient's own peak alpha (0.32/0.16/0.20 in the artifact): each gradient
+# is a concentrated hot-spot covering roughly a third of one page corner
+# (``radial-gradient(38% 45% at 12% 20%, ...)`` etc.), not present at full
+# strength across an entire panel — a flat token has to stand in for the
+# AVERAGE ambient presence a panel actually sits in, so "faint... bias" per
+# the task brief, not a flat wash at the gradient's own peak. The SAME alpha
+# is shared by every dark member of the family (only the ambient hue
+# rotates) so the "material depth" reads consistent across the set — a
+# deliberate normalisation, since the artifact's own three glow alphas differ
+# for reasons (page-composition emphasis) that don't apply to a single-hue
+# preset canvas.
+_GLASS_FAMILY_PAGE_BASE = "#05070C"     # artifact body{background} verbatim
+_GLASS_FAMILY_AMBIENT_ALPHA = 0.08      # shared "faint" bias, see comment above
+_GLASS_FAMILY_HAIRLINE_ALPHA = 0.10     # artifact --card-border: rgba(255,255,255,0.10)
+
+
+def _glass_family_canvas(ambient_fg: str) -> str:
+    """Faint *ambient_fg* bias over the artifact's page base — the preset's
+    own "lab ambient" canvas, see the module comment above."""
+    return _blend(ambient_fg, _GLASS_FAMILY_PAGE_BASE, _GLASS_FAMILY_AMBIENT_ALPHA)
+
+
+def _glass_family_panel(canvas: str) -> str:
+    """The artifact's own ``--card-bg`` recipe (_GLASS_CARD_FG_DARK at
+    _GLASS_CARD_ALPHA, both already defined for the shipped v6 pass above),
+    composited over *this preset's* ambient-biased canvas instead of the
+    shipped app canvas."""
+    return _blend(_GLASS_CARD_FG_DARK, canvas, _GLASS_CARD_ALPHA)
+
+
+def _glass_family_well(canvas: str) -> str:
+    """The artifact's own ``--well-bg`` recipe, same treatment as
+    ``_glass_family_panel`` above."""
+    return _blend(_GLASS_WELL_FG_DARK, canvas, _GLASS_WELL_ALPHA)
+
+
+def _glass_family_hairline(canvas: str) -> str:
+    """The artifact's own ``--card-border: rgba(255,255,255,0.10)``, white
+    over *this preset's* canvas — the same "white/black over the backing
+    surface" idiom ``_recompute_palettes`` already uses to derive
+    chrome/edge from panel/hairline."""
+    return _blend("#FFFFFF", canvas, _GLASS_FAMILY_HAIRLINE_ALPHA)
+
+
+# "Glass" — the 1:1 preset: literal artifact ambient (its DOMINANT glow, the
+# first/largest/highest-alpha gradient, rgba(42,111,224,0.32), positioned
+# top-left) plus the artifact's own text/muted/accent literals verbatim. All
+# three of those already equal the shipped DARK tokens (the v6 pass above
+# already carries them), so Glass reproduces them exactly rather than
+# re-deriving — only canvas/panel/well/hairline actually move, because only
+# those read differently against this preset's own ambient-biased canvas.
+_GLASS_CANVAS = _glass_family_canvas("#2A6FE0")
+
+# "Plasma" — same grammar, the artifact's THIRD gradient
+# (rgba(120,80,255,0.20), the "Vision-Pro-dashboard" violet family in
+# design_assets/) standing in for the ambient bias. Accent is Deep Violet's
+# own literal (task brief: "violet accent ≈ #8f7aff family") rather than the
+# raw ambient hex — same split the artifact itself uses (--accent is a
+# separate, brighter/more-legible token from any one ambient glow).
+_PLASMA_CANVAS = _glass_family_canvas("#7850FF")
+_PLASMA_ACCENT = "#8f7aff"
+
+# "Aurora" — same grammar again, but the artifact's own CYAN gradient
+# (rgba(65,216,228,0.16)) is #41D8E4 — byte-identical to SIM_PURPLE, the
+# locked "simulated" safety token (law 6: sim can never pass as real). Reusing
+# it verbatim would let an Aurora accent chip read as the SIM badge, so the
+# ambient/accent hue here is that SAME cyan rotated -25° (same HLS lightness/
+# saturation, only hue moves) — verified >55 RGB-distance from BOTH
+# SIM_PURPLE and OK_GREEN (the other border it must not drift into) in
+# tests/test_theme_editor.py. Accent is a lighter/more-saturated variant of
+# the rotated hue, matching the "ambient glow vs. legible accent" split
+# Glass/Plasma already use.
+_AURORA_CANVAS = _glass_family_canvas("#41e4ac")
+_AURORA_ACCENT = "#63eebe"
+
+# "Spatial Light" — the one LIGHT member (bright frosted-white "Apple Spatial
+# UI" reference in design_assets/): a cool pale ambient standing in for the
+# artifact's dark backdrop. LIGHT has NO artifact literal to borrow (same gap
+# noted above _LIGHT_PANEL_V6) and the SAME ladder-inversion risk applies:
+# panel is already the brightness ceiling, so it stays pure white — UNCHANGED,
+# never blended toward canvas — while canvas/well/hairline carry the "material"
+# via the gentler ink-wash grammar the shipped LIGHT v6 pass already uses
+# (``_LIGHT_WELL_V6 = _blend("#000000", canvas, alpha)``), not the dark
+# family's card-alpha blend (0.42/0.55 would invert the ladder here exactly
+# as reasoned above _LIGHT_PANEL_V6). `well` reuses `_preset_well` (the same
+# helper Graphite/Deep Violet/Paper already use) for that reason — it IS the
+# ceiling-safe recipe already, no new one needed.
+_SPATIAL_LIGHT_CANVAS = _blend("#2A6FE0", "#FFFFFF", 0.10)
+_SPATIAL_LIGHT_HAIRLINE = _blend("#000000", _SPATIAL_LIGHT_CANVAS, 0.05)
+_SPATIAL_LIGHT_ACCENT = "#1c87e8"
+
+
 BUILTIN_PRESETS: tuple[dict, ...] = (
     {"name": "Cockpit Dark", "mode": "dark", "glass": DEFAULT_GLASS_AMOUNT,
      "overrides": {}},
+    {"name": "Glass", "mode": "dark", "glass": DEFAULT_GLASS_AMOUNT, "overrides": {
+        "canvas": _GLASS_CANVAS,
+        "panel": _glass_family_panel(_GLASS_CANVAS),
+        "well": _glass_family_well(_GLASS_CANVAS),
+        "hairline": _glass_family_hairline(_GLASS_CANVAS),
+        "text": "#E9EDF5", "muted": "#98A1B5", "accent": "#5AA9FF",
+    }},
     {"name": "Graphite", "mode": "dark", "glass": 0.60, "overrides": {
         "canvas": "#0e0f11", "panel": "#17181c", "text": "#eceef1",
         "muted": "#9a9fa8", "hairline": "#26282e", "accent": "#7aa7d9",
@@ -1782,12 +1904,33 @@ BUILTIN_PRESETS: tuple[dict, ...] = (
         "muted": "#9d98b5", "hairline": "#262239", "accent": "#8f7aff",
         "well": _preset_well("#0b0a14", "#151327"),
     }},
+    {"name": "Plasma", "mode": "dark", "glass": DEFAULT_GLASS_AMOUNT, "overrides": {
+        "canvas": _PLASMA_CANVAS,
+        "panel": _glass_family_panel(_PLASMA_CANVAS),
+        "well": _glass_family_well(_PLASMA_CANVAS),
+        "hairline": _glass_family_hairline(_PLASMA_CANVAS),
+        "text": "#E9EDF5", "muted": "#98A1B5", "accent": _PLASMA_ACCENT,
+    }},
+    {"name": "Aurora", "mode": "dark", "glass": DEFAULT_GLASS_AMOUNT, "overrides": {
+        "canvas": _AURORA_CANVAS,
+        "panel": _glass_family_panel(_AURORA_CANVAS),
+        "well": _glass_family_well(_AURORA_CANVAS),
+        "hairline": _glass_family_hairline(_AURORA_CANVAS),
+        "text": "#E9EDF5", "muted": "#98A1B5", "accent": _AURORA_ACCENT,
+    }},
     {"name": "Lab Light", "mode": "light", "glass": DEFAULT_GLASS_AMOUNT,
      "overrides": {}},
     {"name": "Paper", "mode": "light", "glass": 0.55, "overrides": {
         "canvas": "#f2efe9", "panel": "#fffdf8", "text": "#1c1a15",
         "muted": "#5d5850", "hairline": "#e2ddd2", "accent": "#3e6b8f",
         "well": _preset_well("#f2efe9", "#fffdf8"),
+    }},
+    {"name": "Spatial Light", "mode": "light", "glass": DEFAULT_GLASS_AMOUNT,
+     "overrides": {
+        "canvas": _SPATIAL_LIGHT_CANVAS, "panel": _LIGHT_PANEL_V6,
+        "well": _preset_well(_SPATIAL_LIGHT_CANVAS, _LIGHT_PANEL_V6),
+        "hairline": _SPATIAL_LIGHT_HAIRLINE,
+        "text": "#0f1b2e", "muted": "#4a5568", "accent": _SPATIAL_LIGHT_ACCENT,
     }},
 )
 
