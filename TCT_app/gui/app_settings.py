@@ -21,7 +21,16 @@ THEME_RADIUS_SCALE_KEY = "theme/radius_scale"
 THEME_WINDOW_OPACITY_KEY = "theme/window_opacity"
 THEME_WINDOW_BACKDROP_KEY = "theme/window_backdrop"
 THEME_PANEL_GLASS_KEY = "theme/panel_glass"
+THEME_CANVAS_ALPHA_KEY = "theme/canvas_alpha"
+THEME_PANEL_GLASS_ALPHA_KEY = "theme/panel_glass_alpha"
+THEME_GLASS_TIER_KEY = "theme/glass_tier"
 THEME_PRESETS_KEY = "theme/presets"
+
+# Ymir's operator material-override tier (docs/design/glass_council/ymir.md §7):
+# the "for when detection lies" escape hatch. "auto" lets the app pick; the
+# other three force a rung. Real translucency is NEVER guaranteed on any host,
+# so no hazard information may ever be encoded in the tier (Völundr G3).
+GLASS_TIERS = ("auto", "real", "token", "flat")
 
 
 def settings():
@@ -127,6 +136,18 @@ def theme_panel_glass_enabled(store=None) -> bool:
 
 def set_theme_panel_glass_enabled(enabled: bool, store=None) -> None:
     _store(store).setValue(THEME_PANEL_GLASS_KEY, bool(enabled))
+
+
+def theme_glass_tier(store=None) -> str:
+    """The persisted material-override tier (Ymir §7). Fails safe to ``auto``
+    for any absent/garbage value — an unknown tier never wedges startup."""
+    raw = str(_store(store).value(THEME_GLASS_TIER_KEY, "auto") or "auto").strip().lower()
+    return raw if raw in GLASS_TIERS else "auto"
+
+
+def set_theme_glass_tier(tier: str, store=None) -> None:
+    key = str(tier).strip().lower()
+    _store(store).setValue(THEME_GLASS_TIER_KEY, key if key in GLASS_TIERS else "auto")
 
 
 def theme_overrides_json(store=None) -> str:

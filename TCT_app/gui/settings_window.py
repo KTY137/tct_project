@@ -51,7 +51,7 @@ from controller.config_validator import _MAX_SIM_BIAS_CHANNELS
 from devices.waveform_generator import prime_pyvisa
 from gui.app_settings import theme_mode
 from gui import style
-from gui.panel_kit import Card, form_row, panel_header
+from gui.panel_kit import Card, form_row, panel_header, register_glass_pane
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import DARK, FONT_MD, FONT_XS, LIGHT, MONO_FAMILIES, SPACE_SM
 
@@ -696,6 +696,7 @@ class _OscilloscopeSection(QWidget):
         card = Card("Oscilloscope", "VISA / DRS4 backend")
         _accent_rail(card, self._theme_mode)
         outer.addWidget(card)
+        self.card = card
         form = QFormLayout()
 
         self._backend = _combo(["visa", "drs4"], cfg.get("backend", "visa"))
@@ -800,6 +801,7 @@ class _MotorSection(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         card = Card("Motor Stage", "printer preset · backend · travel limits")
         outer.addWidget(card)
+        self.card = card
         form = QFormLayout()
 
         # ── Printer model preset ──────────────────────────────────────
@@ -1001,6 +1003,7 @@ class _BiasSection(QWidget):
         card = Card("Bias Supply", "connection · compliance")
         card.set_rail("bias", self._theme_mode)
         outer.addWidget(card)
+        self.card = card
         form = QFormLayout()
         self._backend = _combo(["simulated", "keithley", "e4control", "iseg"],
                                 cfg.get("backend", "simulated"))
@@ -1249,6 +1252,7 @@ class _WaveformSection(QWidget):
         card = Card("Waveform Generator", "trigger / rep-rate source")
         card.set_rail("delay", theme_mode)
         outer.addWidget(card)
+        self.card = card
         form = QFormLayout()
         self._addr   = _VisaPicker(str(cfg.get("visa_address", "")), scan_mgr)
         self._vendor = _combo(["rigol", "tektronix", "keysight", "siglent", "generic"],
@@ -1288,6 +1292,7 @@ class _CameraSection(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         card = Card("Camera", "FLIR Blackfly — connection & acquisition")
         outer.addWidget(card)
+        self.card = card
         form = QFormLayout()
         self._serial   = _line(str(cfg.get("serial_number", "")))
         self._exposure = _dspin(cfg.get("exposure_us", 5000.0), 1.0, 1e7, 1)
@@ -1647,6 +1652,21 @@ class SettingsWindow(QDialog):
         for sec in (self._scope_section, self._motor_section, self._wfg_section,
                     self._cam_section, self._bias_section, self._data_section):
             sec.changed.connect(self._on_quick_settings_changed)
+
+        # Panel glass (opt-in, Baldr Z-ladder): the settings dialog is a
+        # margin-rich surface where DWM material genuinely shows (glass_gap_
+        # findings §1 — dialogs, not the packed cockpit, carry the classic
+        # shell's glass identity). Every device section is a pure YAML config
+        # form (selectors, addresses, limits) — no live readout, no motion/
+        # danger control — so its card is glass-eligible. Data/Saving is the
+        # one exclusion: it carries `crit`-inked "NOT recomputable" data-loss
+        # captions, and material must never reduce a crit-token surface's
+        # contrast (Völundr G1). Sections rebuild on every YAML round-trip; the
+        # registry is a WeakSet so retired cards drop out and each fresh card
+        # adopts the current switch state (late-joiner rule).
+        for sec in (self._scope_section, self._motor_section, self._wfg_section,
+                    self._cam_section, self._bias_section):
+            register_glass_pane(sec.card)
 
     # ------------------------------------------------------------------ #
     # Tab switching                                                       #

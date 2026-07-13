@@ -703,9 +703,20 @@ def set_chip_state(chip, state: str) -> None:
 # one, so touching the panel role risks the "content stays opaque" hard
 # rule for the widgets that actually matter. See
 # docs/design/glass_gap_findings.md for the full barrier list and why this
-# stays canvas-only. Tunable by Kaya's own eyeball (real DWM blur cannot be
-# judged from an offscreen capture) — the number itself is a placeholder.
+# stays canvas-only. Tunable live via the theme editor's Material section
+# (set_backdrop_canvas_alpha) — this constant is the SHIPPED DEFAULT, and the
+# module reads the mutable ``_canvas_alpha`` below (which starts here).
 BACKDROP_CANVAS_ALPHA = 0.82
+# Safety clamp on the canvas alpha (Baldr's scrim-floor / worst-case-contrast
+# contract, docs/design/glass_council/baldr.md §1.2): every glass alpha ships
+# with a clamped legal range so a hand-edited settings file / an over-eager
+# slider can never wash a glass surface out below WCAG-AA legibility. The floor
+# 0.80 was picked with the panel-glass floor (0.50) so the WORST combined
+# corner — the most-translucent legal canvas AND panel, over a pure-white or
+# pure-black desktop, dark OR light theme — still clears 4.5:1 for muted text
+# (measured 4.90:1 at 0.80/0.50; the shipped 0.82/0.55 default is 5.16:1).
+MIN_BACKDROP_CANVAS_ALPHA = 0.80
+MAX_BACKDROP_CANVAS_ALPHA = 1.0
 
 
 # Panel-glass opt-in (experimental, Kaya-ratified 2026-07-13): how translucent
@@ -717,9 +728,18 @@ BACKDROP_CANVAS_ALPHA = 0.82
 # NOT a blanket ``QFrame#cardPane`` selector, which cannot tell a plot/camera/
 # danger-well pane from a plain one and so would violate the "content stays
 # opaque" hard rule for the widgets that actually matter (live readouts). Like
-# BACKDROP_CANVAS_ALPHA this is a PLACEHOLDER for Kaya's live tuning — real DWM
-# blur cannot be judged from an offscreen capture.
+# BACKDROP_CANVAS_ALPHA this is the SHIPPED DEFAULT; the glassPane QSS reads the
+# mutable ``_panel_glass_alpha`` below, tunable live via the theme editor's
+# Material section (set_panel_glass_alpha).
 PANEL_GLASS_ALPHA = 0.55
+# Safety clamp on the panel-glass alpha — same scrim-floor contract as the
+# canvas clamp above (Baldr §1.2). Floor 0.50 keeps the worst combined corner
+# (canvas at its 0.80 floor too) at 4.90:1 for muted text on a glass pane over
+# a pure-white/black desktop; the shipped 0.55 default measures 5.16:1. The
+# readouts that MUST stay legible (Z4 hero tiles/wells) are opaque regardless —
+# these panes only ever carry chrome/labels (Baldr Z-ladder), never live values.
+MIN_PANEL_GLASS_ALPHA = 0.50
+MAX_PANEL_GLASS_ALPHA = 1.0
 
 
 def _canvas_fill(p: dict) -> str:
@@ -731,7 +751,7 @@ def _canvas_fill(p: dict) -> str:
     tests/test_theme_editor.py's canvas-passthrough tests."""
     if get_window_backdrop() == "none":
         return p["bg"]
-    return _rgba(p["bg"], BACKDROP_CANVAS_ALPHA)
+    return _rgba(p["bg"], _canvas_alpha)
 
 
 def build_qss(p: dict) -> str:
@@ -1437,8 +1457,8 @@ QFrame#channelCard {{
    plot/camera/danger-well pane (a FigureCard is refused outright), so those
    never get the property — guard: tests/test_panel_kit_cockpit.py. See
    PANEL_GLASS_ALPHA / docs/design/glass_gap_findings.md §6. */
-QFrame#cardPane[glassPane="true"] {{ background: {_rgba(p['panel'], PANEL_GLASS_ALPHA)}; }}
-QGroupBox[glassPane="true"] {{ background: {_rgba(p['panel'], PANEL_GLASS_ALPHA)}; }}
+QFrame#cardPane[glassPane="true"] {{ background: {_rgba(p['panel'], _panel_glass_alpha)}; }}
+QGroupBox[glassPane="true"] {{ background: {_rgba(p['panel'], _panel_glass_alpha)}; }}
 
 /* Eyebrow — a small caption label above a heading/value.  QSS cannot
    uppercase text, so the panel should pass already-uppercased text; letter-
@@ -2017,10 +2037,18 @@ _SETTINGS_TYPOGRAPHY_KEY = "theme/typography"
 _SETTINGS_RADIUS_KEY = "theme/radius_scale"
 _SETTINGS_WINDOW_OPACITY_KEY = "theme/window_opacity"
 _SETTINGS_WINDOW_BACKDROP_KEY = "theme/window_backdrop"
+_SETTINGS_CANVAS_ALPHA_KEY = "theme/canvas_alpha"
+_SETTINGS_PANEL_GLASS_ALPHA_KEY = "theme/panel_glass_alpha"
 
 # Live customization state (module-level; reset via reset_theme_customization).
 _glass_amount: float = DEFAULT_GLASS_AMOUNT
 _window_opacity: float = DEFAULT_WINDOW_OPACITY
+# Glass alphas — the two material dials the theme editor's Material section
+# exposes (Baldr T3 "mechanism-tunable" tokens). Mutable so a live slider can
+# retune them; the QSS builder / _canvas_fill read these, not the DEFAULT
+# constants above. Clamped on every write to the scrim-floor legal range.
+_canvas_alpha: float = BACKDROP_CANVAS_ALPHA
+_panel_glass_alpha: float = PANEL_GLASS_ALPHA
 # Windows 11 DWM system backdrop material — see gui/backdrop.py. Preference
 # state only; whether it actually renders is decided at apply time by
 # backdrop.is_backdrop_supported(). "none" everywhere else in the module.
@@ -2095,6 +2123,51 @@ def set_glass_amount(amount: float) -> float:
 
 def get_glass_amount() -> float:
     return _glass_amount
+
+
+def set_backdrop_canvas_alpha(value) -> float:
+    """Set how much the window-canvas fill lets a DWM backdrop through and
+    return the value actually set — CLAMPED to
+    [MIN_BACKDROP_CANVAS_ALPHA, MAX_BACKDROP_CANVAS_ALPHA] (the scrim-floor
+    safety rail, Baldr §1.2). Garbage (None, "", NaN) fails to the fully-opaque
+    end. Does NOT recompute palettes (the alpha only affects _canvas_fill's QSS,
+    never the palette dicts); the caller still regenerates + reapplies the QSS
+    (apply_theme) and re-runs apply_window_backdrop to repaint."""
+    global _canvas_alpha
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = MAX_BACKDROP_CANVAS_ALPHA
+    if value != value:                      # NaN — clamp to the opaque end
+        value = MAX_BACKDROP_CANVAS_ALPHA
+    _canvas_alpha = max(MIN_BACKDROP_CANVAS_ALPHA,
+                        min(MAX_BACKDROP_CANVAS_ALPHA, value))
+    return _canvas_alpha
+
+
+def get_backdrop_canvas_alpha() -> float:
+    return _canvas_alpha
+
+
+def set_panel_glass_alpha(value) -> float:
+    """Set the opted-in panel-glass tint alpha and return the value actually
+    set — CLAMPED to [MIN_PANEL_GLASS_ALPHA, MAX_PANEL_GLASS_ALPHA] (scrim
+    floor, Baldr §1.2). Garbage / NaN fails opaque. Only affects the glassPane
+    QSS rule, so no palette recompute; caller reapplies the QSS to repaint."""
+    global _panel_glass_alpha
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = MAX_PANEL_GLASS_ALPHA
+    if value != value:                      # NaN — clamp to the opaque end
+        value = MAX_PANEL_GLASS_ALPHA
+    _panel_glass_alpha = max(MIN_PANEL_GLASS_ALPHA,
+                             min(MAX_PANEL_GLASS_ALPHA, value))
+    return _panel_glass_alpha
+
+
+def get_panel_glass_alpha() -> float:
+    return _panel_glass_alpha
 
 
 def set_window_opacity(value) -> float:
@@ -2481,11 +2554,14 @@ def reset_theme_customization() -> None:
     ``_window_opacity``) — callers that need the reset visible re-apply it
     (``apply_window_backdrop`` / ``apply_window_opacity``)."""
     global _glass_amount, _window_opacity, _window_backdrop
+    global _canvas_alpha, _panel_glass_alpha
     _overrides["light"] = {}
     _overrides["dark"] = {}
     _glass_amount = DEFAULT_GLASS_AMOUNT
     _window_opacity = DEFAULT_WINDOW_OPACITY
     _window_backdrop = "none"
+    _canvas_alpha = BACKDROP_CANVAS_ALPHA
+    _panel_glass_alpha = PANEL_GLASS_ALPHA
     apply_typography(sans=None, mono=None, hinting=None, base_px=None)
     apply_radius_scale("m")
     _recompute_palettes()
@@ -2503,6 +2579,8 @@ def save_theme_customization(settings=None) -> None:
     s.setValue(_SETTINGS_GLASS_KEY, float(_glass_amount))
     s.setValue(_SETTINGS_WINDOW_OPACITY_KEY, float(_window_opacity))
     s.setValue(_SETTINGS_WINDOW_BACKDROP_KEY, _window_backdrop)
+    s.setValue(_SETTINGS_CANVAS_ALPHA_KEY, float(_canvas_alpha))
+    s.setValue(_SETTINGS_PANEL_GLASS_ALPHA_KEY, float(_panel_glass_alpha))
     s.setValue(_SETTINGS_OVERRIDES_KEY, json.dumps(_overrides))
     s.setValue(_SETTINGS_TYPOGRAPHY_KEY, json.dumps(_typography))
     s.setValue(_SETTINGS_RADIUS_KEY, _radius_scale)
@@ -2517,6 +2595,7 @@ def load_theme_customization(settings=None) -> None:
     a hand-edited registry can neither unlock the safety palette nor wedge
     startup."""
     global _glass_amount, _window_opacity, _window_backdrop
+    global _canvas_alpha, _panel_glass_alpha
     s = settings if settings is not None else _default_settings()
     # A load DEFINES the customization state; it never inherits leftovers from
     # whatever was loaded/applied before. An ABSENT key means "shipped default",
@@ -2548,6 +2627,19 @@ def load_theme_customization(settings=None) -> None:
         _window_backdrop = "none"
     else:
         set_window_backdrop(raw_backdrop)
+    # Glass alphas go through their clamped setters, so a hand-edited registry
+    # value below the scrim floor is raised to the floor, never obeyed (same
+    # fail-safe philosophy as the opacity clamp). Absent -> shipped default.
+    raw_canvas_alpha = s.value(_SETTINGS_CANVAS_ALPHA_KEY, None)
+    if raw_canvas_alpha is None:
+        _canvas_alpha = BACKDROP_CANVAS_ALPHA
+    else:
+        set_backdrop_canvas_alpha(raw_canvas_alpha)
+    raw_panel_alpha = s.value(_SETTINGS_PANEL_GLASS_ALPHA_KEY, None)
+    if raw_panel_alpha is None:
+        _panel_glass_alpha = PANEL_GLASS_ALPHA
+    else:
+        set_panel_glass_alpha(raw_panel_alpha)
     try:
         blob = json.loads(str(s.value(_SETTINGS_OVERRIDES_KEY, "") or "{}"))
     except (TypeError, ValueError):

@@ -48,7 +48,7 @@ from controller.scan_plan import (
 from controller.scan_plan_validator import PlanIssue, PlanLimits, validate_plan
 from gui.arm_latch import ArmLatch
 from gui.app_settings import planner_arm_latch_enabled, theme_mode
-from gui.panel_kit import EmptyState, MetricGrid, MetricTile
+from gui.panel_kit import EmptyState, MetricGrid, MetricTile, register_glass_pane
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
 from gui.style import (
@@ -629,7 +629,15 @@ class PlannerPanel(QWidget):
         root.addLayout(body, 1)
 
         # ---- "add blocks" palette -----------------------------------------
-        body.addWidget(self._build_palette(), 0)
+        # Panel glass (opt-in, Baldr Z-ladder): the palette is pure chrome (a
+        # rail of draggable block buttons), the one planner side-surface with
+        # no live data and no hazard control — eligible. The recipe tree
+        # (center working surface) and the "before you run" aside are DENIED:
+        # the aside hosts the ArmLatch danger well, the #dangerBtn Abort, the
+        # armed HV chip and the estimate readout tiles (Völundr G2, Baldr §5).
+        self._palette_card = self._build_palette()
+        body.addWidget(self._palette_card, 0)
+        register_glass_pane(self._palette_card)
 
         # ---- recipe tree card --------------------------------------------
         tree_card = QFrame()

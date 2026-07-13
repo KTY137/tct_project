@@ -20,7 +20,7 @@ from devices.laser_manual import LaserManualMetadata
 from devices.waveform_generator import WaveformGenerator, list_visa_resources
 from gui.app_settings import theme_mode
 from gui.motion import set_pulse
-from gui.panel_kit import Card, CheckableCard, panel_header
+from gui.panel_kit import Card, CheckableCard, panel_header, register_glass_pane
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import SPACE_MD, SPACE_SM, WARN_AMBER, palette
 
@@ -319,6 +319,13 @@ class LaserPanel(QWidget):
         root.addWidget(self._card_wfg)
         root.addWidget(self._card_pdl)
         root.addStretch(1)
+        # Panel glass (opt-in, Baldr Z-ladder): ONLY the PDL metadata card is
+        # eligible — it is pure bookkeeping chrome (knob settings recorded in
+        # run metadata), no live readout, no armed control. The wavegen hero
+        # card is DENIED (it hosts the "Output on" armed trigger button —
+        # Baldr §5.2, no glass may sit under an armed control) and so is the
+        # amber manual-laser honesty banner (Völundr G1, a hazard-ink surface).
+        register_glass_pane(self._card_pdl)
         self._restyle_theme_tokens()
 
     # ------------------------------------------------------------------ #

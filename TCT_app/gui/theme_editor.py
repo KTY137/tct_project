@@ -243,6 +243,10 @@ class ThemeEditorDialog(QDialog):
         # Same story for the backdrop material — its own persisted knob under
         # theme/window_backdrop, not a preset field.
         self._draft_backdrop: str = style.get_window_backdrop()
+        # Glass alphas (Baldr T3 mechanism tokens) — their own auto-persisted
+        # knobs (theme/canvas_alpha, theme/panel_glass_alpha), not preset fields.
+        self._draft_canvas_alpha: float = style.get_backdrop_canvas_alpha()
+        self._draft_panel_glass_alpha: float = style.get_panel_glass_alpha()
 
         self._swatches: dict[str, QPushButton] = {}
         self._locked_swatches: dict[str, QLabel] = {}
@@ -327,6 +331,56 @@ class ThemeEditorDialog(QDialog):
 
     def _build_material_card(self) -> Card:
         card = Card("Material")
+
+        # ── Material mode — Ymir's OPERATOR OVERRIDE ("for when detection
+        # lies", docs/design/glass_council/ymir.md §7). One pick that sets the
+        # whole material rung instead of making the user reason about the three
+        # sub-knobs below. Persisted as theme/glass_tier ∈ auto|real|token|flat
+        # (the seed's tier vocabulary; Mica and Acrylic are both the "real"
+        # tier, the specific material lives in theme/window_backdrop).
+        #
+        # It is a MACRO over the existing auto-persisted controls — it drives
+        # the Backdrop combo and the Panel-glass switch, whose own handlers do
+        # the persisting and live-applying. It deliberately does NOT touch the
+        # Surface-tint slider (a draft/preset token, not window state) — mixing
+        # a draft knob into an auto-persisted macro is how the two would drift
+        # out of sync across a restart.
+        #
+        # SAFETY (Völundr G3): no rung carries hazard information. Every option
+        # here changes only chrome; the locked danger/armed/sim tokens and every
+        # surface that renders them are untouched by every one of these picks.
+        self._material_mode_combo = QComboBox()
+        for label, value in (
+            ("Auto (let the app pick)", "auto"),
+            ("Mica — real material", "mica"),
+            ("Acrylic — real material", "acrylic"),
+            ("Token-glass (pre-blended)", "token"),
+            ("Flat (no glass)", "flat"),
+        ):
+            self._material_mode_combo.addItem(label, value)
+        self._material_mode_combo.setToolTip(
+            "The material rung. Auto lets the app pick a real Windows 11 "
+            "material where it is supported and falls back to the pre-blended "
+            "token glass everywhere else. Force Token-glass or Flat when "
+            "detection is wrong (RDP, transparency off, a lying driver). "
+            "Readouts, plots and danger controls are opaque on every rung.")
+        # ``activated`` (not currentIndexChanged): it is the USER-pick signal —
+        # it fires on any selection the operator makes INCLUDING re-picking the
+        # item already shown, and it never fires for a programmatic
+        # setCurrentIndex. That matters twice: (a) on a fresh install the combo
+        # already displays "Auto", so a currentIndexChanged-only wiring would
+        # silently do nothing when the operator actually clicks Auto — the
+        # 2am "I picked it and nothing happened" bug Ymir's override exists to
+        # prevent; (b) _sync_material_mode_control can push the persisted tier
+        # into the combo without re-triggering the macro.
+        self._material_mode_combo.activated.connect(self._on_material_mode_changed)
+        card.add_widget(_settings_row("Material mode", self._material_mode_combo))
+        m_hint = QLabel(
+            "Sets the Backdrop and Panel-glass controls below in one pick. "
+            "Hazard colours never change with the material.")
+        m_hint.setObjectName("metricTileCaption")
+        m_hint.setWordWrap(True)
+        card.add_widget(m_hint)
 
         # ── Surface tint (was "Glass amount") ─────────────────────────────
         # Renamed, same knob: it drives the SAME chrome/strip/edge pre-blend as
@@ -462,7 +516,67 @@ class ThemeEditorDialog(QDialog):
         pg_hint.setObjectName("metricTileCaption")
         pg_hint.setWordWrap(True)
         card.add_widget(pg_hint)
+
+        # ── The two glass ALPHAS (Baldr §1.2's scrim-floor contract) ────────
+        # Canvas alpha = how much backdrop shows through the window's own
+        # background; Panel-glass alpha = how much shows through an opted-in
+        # pane. Both are CLAMPED to a legal range in gui/style.py: the slider
+        # cannot even express a value that would drop text on a glass surface
+        # below WCAG-AA (4.5:1) against a worst-case white OR black desktop —
+        # the same "the control cannot express an unsafe value" rail as the
+        # window-opacity floor. Retuning them is a full QSS regen, so the live
+        # re-apply is debounced (one restyle when the drag settles), matching
+        # the Surface-tint slider's own throttle.
+        self._material_alpha_timer = QTimer(self)
+        self._material_alpha_timer.setSingleShot(True)
+        self._material_alpha_timer.setInterval(200)
+        self._material_alpha_timer.timeout.connect(self._preview_material_alphas)
+
+        self._canvas_alpha_slider, self._canvas_alpha_label = self._alpha_slider_row(
+            card, "Backdrop bleed",
+            style.MIN_BACKDROP_CANVAS_ALPHA, style.MAX_BACKDROP_CANVAS_ALPHA,
+            self._on_canvas_alpha_changed,
+            "How much of the Mica/Acrylic material shows through the window's "
+            "own background. Lower = more material. The floor is a legibility "
+            "clamp, not a taste limit.",
+            "Only visible while a Backdrop material is active.")
+
+        self._panel_alpha_slider, self._panel_alpha_label = self._alpha_slider_row(
+            card, "Panel glass bleed",
+            style.MIN_PANEL_GLASS_ALPHA, style.MAX_PANEL_GLASS_ALPHA,
+            self._on_panel_alpha_changed,
+            "How translucent an opted-in (registered) pane's own surface "
+            "becomes. Lower = more glass. Clamped so label text on a glass "
+            "pane stays legible over any desktop.",
+            "Only visible while Panel glass is on. Readouts, plots and danger "
+            "controls stay opaque at every setting.")
         return card
+
+    def _alpha_slider_row(self, card: Card, label: str, lo: float, hi: float,
+                          on_change, tooltip: str, hint: str):
+        """Build one clamped 0-100%-style alpha slider row (the two Material
+        alphas share this shape). The slider's RANGE is the token's legal
+        clamped range, so an unsafe value is not reachable by dragging."""
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(int(round(lo * 100)), int(round(hi * 100)))
+        slider.setSingleStep(1)
+        slider.setFixedWidth(180)
+        slider.setToolTip(tooltip)
+        value_label = QLabel(f"{int(round(hi * 100))}%")
+        slider.valueChanged.connect(on_change)
+        slider.sliderReleased.connect(self._preview_material_alphas)
+        holder = QWidget()
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(SPACE_SM)
+        row.addWidget(slider)
+        row.addWidget(value_label)
+        card.add_widget(_settings_row(label, holder))
+        hint_lbl = QLabel(hint)
+        hint_lbl.setObjectName("metricTileCaption")
+        hint_lbl.setWordWrap(True)
+        card.add_widget(hint_lbl)
+        return slider, value_label
 
     def _build_colors_card(self) -> Card:
         card = Card("Colors")
@@ -573,6 +687,8 @@ class ThemeEditorDialog(QDialog):
         self._sync_opacity_control()
         self._sync_backdrop_control()
         self._sync_opacity_enabled_for_backdrop()
+        self._sync_alpha_controls()
+        self._sync_material_mode_control()
         typo = style.typography()
         for combo, key in ((self._sans_combo, "sans"), (self._mono_combo, "mono"),
                            (self._hinting_combo, "hinting")):
@@ -718,6 +834,120 @@ class ThemeEditorDialog(QDialog):
         self._panel_glass_check.setChecked(enabled)
         self._panel_glass_check.blockSignals(False)
         panel_kit.set_panel_glass(enabled)
+
+    # ------------------------------------------------------------------ #
+    # Material mode (Ymir tier override) + the two glass alphas           #
+    # ------------------------------------------------------------------ #
+
+    def _on_material_mode_changed(self, _index: int) -> None:
+        """Apply the picked material rung + AUTO-PERSIST the tier. A macro over
+        the Backdrop combo and the Panel-glass switch — both auto-persisted,
+        both live — so this never invents a second apply path."""
+        self._apply_material_mode(self._material_mode_combo.currentData())
+
+    def _apply_material_mode(self, key: str) -> None:
+        """Map one of the five selector options onto (backdrop, panel-glass)
+        and persist the Ymir tier it stands for.
+
+        Mica/Acrylic are both the ``real`` tier — the material itself is
+        recorded in theme/window_backdrop, so the pair round-trips. ``auto``
+        asks the platform: a real material where the DWM probe says it is
+        supported, the pre-blended token rung everywhere else (offscreen, Win10,
+        RDP, a non-native Qt platform). ``flat`` is the only rung that turns
+        panel glass OFF — that IS the difference between "pre-blended glass" and
+        "no glass pretense at all" (Ymir T1 vs T2).
+
+        Hazard invariant (Völundr G3): every branch below moves only chrome —
+        backdrop material and the opt-in pane tint. No branch can reach a
+        SAFETY_TOKENS colour, a danger/armed surface, or an unregistered pane.
+        """
+        tier = {"auto": "auto", "mica": "real", "acrylic": "real",
+                "token": "token", "flat": "flat"}.get(str(key), "auto")
+        app_settings.set_theme_glass_tier(tier, self._settings)
+
+        if key == "auto":
+            want_backdrop = "mica" if backdrop.is_backdrop_supported() else "none"
+            want_glass = True
+        elif key in ("mica", "acrylic"):
+            want_backdrop = key
+            want_glass = True
+        elif key == "token":
+            want_backdrop = "none"
+            want_glass = True
+        else:                                   # "flat"
+            want_backdrop = "none"
+            want_glass = False
+
+        # Drive the existing controls; their own handlers persist + live-apply.
+        # setCurrentIndex/setChecked are no-ops (no signal) when already there,
+        # so an unchanged sub-knob costs no restyle.
+        idx = self._backdrop_combo.findData(want_backdrop)
+        if idx >= 0:
+            self._backdrop_combo.setCurrentIndex(idx)
+        self._panel_glass_check.setChecked(want_glass)
+        self._settings.sync()
+
+    def _sync_material_mode_control(self) -> None:
+        """Show the persisted tier without firing the macro. ``real`` resolves
+        back to the concrete material via theme/window_backdrop."""
+        tier = app_settings.theme_glass_tier(self._settings)
+        if tier == "real":
+            bk = style.get_window_backdrop()
+            key = bk if bk in ("mica", "acrylic") else "mica"
+        elif tier in ("token", "flat"):
+            key = tier
+        else:
+            key = "auto"
+        idx = self._material_mode_combo.findData(key)
+        self._material_mode_combo.blockSignals(True)
+        self._material_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._material_mode_combo.blockSignals(False)
+
+    def _on_canvas_alpha_changed(self, value: int) -> None:
+        """Live + AUTO-PERSISTED (window material state, not a draft token —
+        same contract as the backdrop/opacity/panel-glass handlers). The value
+        goes through style's CLAMPED setter, so what is stored is always inside
+        the legal scrim-floor range even if the slider is driven programmatically."""
+        self._draft_canvas_alpha = style.set_backdrop_canvas_alpha(value / 100.0)
+        self._canvas_alpha_label.setText(
+            f"{int(round(self._draft_canvas_alpha * 100))}%")
+        self._settings.setValue(app_settings.THEME_CANVAS_ALPHA_KEY,
+                                float(self._draft_canvas_alpha))
+        self._settings.sync()
+        self._material_alpha_timer.start()
+
+    def _on_panel_alpha_changed(self, value: int) -> None:
+        """Live + AUTO-PERSISTED, clamped — see _on_canvas_alpha_changed."""
+        self._draft_panel_glass_alpha = style.set_panel_glass_alpha(value / 100.0)
+        self._panel_alpha_label.setText(
+            f"{int(round(self._draft_panel_glass_alpha * 100))}%")
+        self._settings.setValue(app_settings.THEME_PANEL_GLASS_ALPHA_KEY,
+                                float(self._draft_panel_glass_alpha))
+        self._settings.sync()
+        self._material_alpha_timer.start()
+
+    def _preview_material_alphas(self) -> None:
+        """Repaint after an alpha change. Both alphas live in the QSS text
+        (_canvas_fill / the glassPane rule), so the repaint IS a full theme
+        re-apply — debounced by _material_alpha_timer so a drag costs one
+        restyle, not one per pixel."""
+        self._material_alpha_timer.stop()
+        self.applyRequested.emit(self._mode)
+
+    def _sync_alpha_controls(self) -> None:
+        """Push the persisted alphas onto their sliders without firing a
+        preview. The sliders' ranges are the clamped legal ranges, so a value
+        loaded from a hand-edited store shows where style.py actually put it."""
+        for slider, label, value in (
+            (self._canvas_alpha_slider, self._canvas_alpha_label,
+             self._draft_canvas_alpha),
+            (self._panel_alpha_slider, self._panel_alpha_label,
+             self._draft_panel_glass_alpha),
+        ):
+            slider.blockSignals(True)
+            slider.setValue(int(round(value * 100)))
+            slider.blockSignals(False)
+            label.setText(f"{slider.value()}%")
 
     def _sync_glass_from_slider(self) -> None:
         """The slider is the source of truth for the glass draft — Apply /
