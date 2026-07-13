@@ -1121,7 +1121,11 @@ class TCTMainWindow(QMainWindow):
 
     def _safe_bias_shutdown(self) -> None:
         """Ramp the bias to 0 V and disable the output before any teardown, so
-        the sensor is never left biased when the app disconnects / closes."""
+        the sensor is never left biased when the app disconnects / closes.
+
+        Ramp-down and output-off are SEPARATELY guarded (same discipline as
+        scan_controller._bias_failsafe): output_off is the safety-critical step
+        and must always be attempted, even when the ramp-down raises."""
         bias = getattr(self._devices, "bias_supply", None)
         if bias is None or not getattr(bias, "connected", False):
             return
@@ -1129,9 +1133,12 @@ class TCTMainWindow(QMainWindow):
             if abs(getattr(bias, "setpoint_V", 0.0)) > 1.0:
                 logger.info("Safety: ramping bias to 0 V before shutdown")
                 bias.ramp_to(0.0)
+        except Exception as exc:
+            logger.warning("Bias safe-shutdown ramp-down failed: %s", exc)
+        try:
             bias.output_off()
         except Exception as exc:
-            logger.warning("Bias safe-shutdown failed: %s", exc)
+            logger.warning("Bias safe-shutdown output-off failed: %s", exc)
 
     # ------------------------------------------------------------------ #
     # Connection                                                          #

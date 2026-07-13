@@ -61,11 +61,14 @@ class _IVWorker(QObject):
     -------
     point(float, float)   — emitted after each step: (voltage_V, current_A)
     progress(int)         — number of steps completed so far
+    stopped(str)          — sweep stopped EARLY; reason distinguishes a latched
+                            hardware trip from a compliance limit (both visible)
     finished()            — emitted when the sweep ends (normally or on trip)
     error(str)            — emitted on exception
     """
     point    = Signal(float, float)   # (V, I)
     progress = Signal(int)
+    stopped  = Signal(str)            # early-stop reason (trip / compliance)
     finished = Signal()
     error    = Signal(str)
 
@@ -99,8 +102,22 @@ class _IVWorker(QObject):
                 r = self._supply.read()
                 self.point.emit(r.voltage_V, r.current_A)
                 self.progress.emit(idx + 1)
+                # A latched hardware trip means the supply has already switched
+                # HV off behind us — check it BEFORE compliance so we never keep
+                # stepping the setpoint through a trip.  Both stop causes emit a
+                # visible, DISTINCT reason (Kaya, 2026-07-13).
+                if getattr(r, "tripped", None) is True:
+                    self.stopped.emit(
+                        f"IV sweep stopped: latched hardware trip at "
+                        f"{r.voltage_V:+.1f} V — supply switched HV off."
+                    )
+                    break
                 if r.compliant:
-                    break   # stop on compliance trip
+                    self.stopped.emit(
+                        f"IV sweep stopped: compliance limit hit at "
+                        f"{r.voltage_V:+.1f} V ({r.current_A*1e6:+.2f} µA)."
+                    )
+                    break
         except Exception as exc:
             self.error.emit(str(exc))
         finally:
@@ -645,6 +662,13 @@ class BiasPanel(QWidget):
         yet, so inferred states say so in their caption (law 7) — the driver
         backlog for the real bits is Paul's (design system §6)."""
         v = float(r.voltage_V)
+        # A LATCHED hardware trip (arc / external inhibit / current trip) is the
+        # highest-severity state and can persist while |V| looks benign — check
+        # it FIRST so a settled-looking readback never masks it.  Strict ``is
+        # True``: an UNKNOWN status (None) is not a trip, and ``getattr`` keeps
+        # the 3-field fake readings (no ``tripped`` attr) working unchanged.
+        if getattr(r, "tripped", None) is True:
+            return "TRIPPED", "crit", "latched hardware trip — supply switched HV off"
         if getattr(r, "compliant", False):
             return "TRIPPED", "crit", "compliance limit hit — output current-limited"
         scan_live = (self._hv_scan_stepping
@@ -830,6 +854,8 @@ class BiasPanel(QWidget):
         self._iv_worker.finished.connect(self._iv_thread.quit)
         self._iv_worker.finished.connect(lambda: self._btn_iv.setEnabled(True))
         self._iv_worker.finished.connect(self._on_iv_finished_chip)
+        # Surface WHY a sweep stopped early (trip vs compliance) to the operator.
+        self._iv_worker.stopped.connect(lambda msg: notify(msg, "warn"))
         self._iv_worker.error.connect(
             lambda msg: notify(f"IV scan error: {msg}", "error")
         )
