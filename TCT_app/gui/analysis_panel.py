@@ -55,6 +55,7 @@ from analysis.map_slice import (
 )
 from analysis.mosaic_stitch import canvas_geometry, place_tiles, plan_grid
 from analysis.scan_grid import grid_extent
+from gui.motion_kit import fade_swap
 from gui.panel_kit import (
     Card, EmptyState, FigureCard, MetricGrid, MetricTile, SegmentedControl,
     panel_header,
@@ -326,8 +327,12 @@ class AnalysisPanel(QWidget):
         self._modes.addWidget(self._build_map_mode())      # index 0
         self._modes.addWidget(self._build_cce_mode())      # index 1
         self._modes.addWidget(self._build_survey_mode())   # index 2
+        # fade_swap (gui/motion_kit.py): a static QPixmap snapshot cross-fade,
+        # never a QGraphicsEffect on this stack or its pages — 2/3 of them
+        # host a pyqtgraph plot (ScanMapView/CCE), which the hot-path law
+        # bans an effect on. See fade_swap's own docstring for the mechanism.
         self._segmented.selection_changed.connect(
-            lambda key: self._modes.setCurrentIndex(_SURVEY_MODE_INDEX.get(key, 0)))
+            lambda key: fade_swap(self._modes, _SURVEY_MODE_INDEX.get(key, 0)))
         lay.addWidget(self._modes, 1)
         return page
 

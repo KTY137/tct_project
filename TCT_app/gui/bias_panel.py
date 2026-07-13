@@ -44,6 +44,7 @@ from devices.bias_supply_base import BiasSupplyBase
 from controller.danger_gate import DangerAction, DangerGate
 from controller.scan_controller import VoltageScanConfig
 from gui.app_settings import theme_mode
+from gui.motion_kit import roll_number
 from gui.panel_kit import Card, CheckableCard, MetricGrid, MetricTile, section_header
 from gui.status_bus import notify
 from gui.style import PLOT_BG, WARN_RED, axis_color, palette, repolish
@@ -247,6 +248,10 @@ class BiasPanel(QWidget):
         self._danger_locked = False
         self._last_polarity: str | None = None
         self._pol_supported = False
+        # roll_number's own "previous displayed value" anchor (display only —
+        # see set_reading()); starts at 0.0 so the FIRST real reading rolls up
+        # from a neutral baseline instead of animating from an undefined prior.
+        self._voltage_display_V = 0.0
         # Presentation-only HV-state bookkeeping (design system §6): the
         # supply exposes NO output-on/ramp-state readback today, so the HV
         # STATE tile derives OFF/RAMPING/SETTLED/TRIPPED from setpoint +
@@ -778,9 +783,18 @@ class BiasPanel(QWidget):
         try:
             sp = float(getattr(self._supply, "setpoint_V", 0.0) or 0.0)
             # Voltage · measured — polarity sign straight from the readback;
-            # the setpoint is caption-only, labelled apart (law 7).
+            # the setpoint is caption-only, labelled apart (law 7). Display
+            # only: set_value() first (tooltip/elide/_value_full bookkeeping
+            # via the real, final text), then roll_number re-animates the
+            # SAME QLabel from the previously-displayed value — no device or
+            # HV-state logic touched, this is a pure readout-presentation
+            # change (see gui/motion_kit.py's roll_number docstring).
+            new_v = float(r.voltage_V)
+            v_fmt = "{:+.2f} V"
             self._tile_v.set_stale(False)
-            self._tile_v.set_value(f"{r.voltage_V:+.2f} V")
+            self._tile_v.set_value(v_fmt.format(new_v))
+            roll_number(self._tile_v._value, self._voltage_display_V, new_v, v_fmt)
+            self._voltage_display_V = new_v
             cap = f"setpoint {sp:+.1f} V"
             if self._pol_supported:
                 sym = self._POL_SYMBOLS.get(self._last_polarity)

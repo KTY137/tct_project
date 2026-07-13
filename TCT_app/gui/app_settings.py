@@ -12,6 +12,7 @@ WINDOW_GEOMETRY_KEY = "geometry"
 ACTIVE_TAB_KEY = "active_tab"
 DETACHED_TITLES_KEY = "detached_titles"
 PLANNER_ARM_LATCH_KEY = "planner/arm_latch"
+MOTION_ENABLED_KEY = "ui/motion_enabled"
 
 THEME_GLASS_AMOUNT_KEY = "theme/glass_amount"
 THEME_OVERRIDES_KEY = "theme/overrides"
@@ -82,6 +83,23 @@ def planner_arm_latch_enabled(store=None) -> bool:
     if isinstance(raw, bool):
         return raw
     return str(raw).strip().lower() not in ("false", "0", "no", "off")
+
+
+def motion_enabled(store=None) -> bool:
+    """Global "fluent motion" kill switch (``gui/motion_kit.py`` — NOT the
+    pre-existing ``gui/motion.py``, see that module's own docstring for the
+    naming collision) — the app's prefers-reduced-motion equivalent. Default
+    ``True``; every ``gui.motion_kit`` helper becomes a no-op
+    jump-to-end-state when this is ``False``. No settings-UI toggle yet (a
+    follow-up), but the key is live today."""
+    raw = _store(store).value(MOTION_ENABLED_KEY, True)
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() not in ("false", "0", "no", "off")
+
+
+def set_motion_enabled(enabled: bool, store=None) -> None:
+    _store(store).setValue(MOTION_ENABLED_KEY, bool(enabled))
 
 
 def theme_glass_amount_value(store=None) -> Any:

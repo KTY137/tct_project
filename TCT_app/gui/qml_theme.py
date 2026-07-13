@@ -30,6 +30,7 @@ QML usage::
 """
 from __future__ import annotations
 
+import re
 import weakref
 
 from PySide6.QtCore import Property, QObject, Signal
@@ -41,6 +42,24 @@ from gui.style import (
     FONT_VALUE_PX, MONO_FAMILIES, RADIUS, SPACE, PLOT_BG, PLOT_FG, PLOT_GRID,
     PLOT_OVERLAY, TRACKING_METRIC_LABEL_PX, TRANSITION_MS, palette,
 )
+
+# QColor's string constructor cannot parse CSS functional ``rgba()`` notation
+# (only named colours / "#rrggbb[aa]"), which is how gui/style.py stores
+# "specular" (``"rgba(255, 255, 255, 0.92)"``). Rather than hand-copy the
+# alpha into a second literal here (the exact drift that went stale — 0.85/
+# 0.045 vs style.py's 0.92/0.14 — before this fix), this regex pulls the
+# alpha out of style.py's own string in one place; see the ``specular``
+# property below for why it is parsed live on every access instead of cached.
+_RGBA_ALPHA_RE = re.compile(
+    r"rgba\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*([\d.]+)\s*\)")
+
+
+def _alpha_from_rgba(rgba: str) -> float:
+    """Extract the alpha channel from a CSS ``rgba(r, g, b, a)`` string."""
+    match = _RGBA_ALPHA_RE.match(str(rgba).strip())
+    if not match:
+        raise ValueError(f"gui.qml_theme: not a parseable rgba() string: {rgba!r}")
+    return float(match.group(1))
 
 # PySide6 declarative registration: the QML side does ``import Tct``.
 QML_IMPORT_NAME = "Tct"
@@ -219,16 +238,18 @@ class Theme(QObject):
     # ``specular`` (docs/design/cockpit_design_system.md §2) is a
     # translucent white highlight whose ALPHA (not hue) differs per theme —
     # gui/style.py stores it as an ``rgba(255, 255, 255, a)`` QSS string,
-    # which QColor cannot parse (QColor's string constructor only accepts
-    # named colours / "#rrggbb[aa]", not CSS rgba() functional notation), so
-    # it is intentionally NOT in TOKEN_MAP (whose consistency test compares
-    # exact hex strings) and is computed here from a small alpha-only table
-    # instead of duplicating a second hex.
-    _SPECULAR_ALPHA = {"light": 0.85, "dark": 0.045}
-
+    # which QColor cannot parse (see ``_alpha_from_rgba`` above), so it is
+    # intentionally NOT in TOKEN_MAP (whose consistency test compares exact
+    # hex strings) and is parsed here from style.py's own string instead.
     @Property(QColor, notify=changed)
     def specular(self) -> QColor:
-        alpha = self._SPECULAR_ALPHA.get(_MODE, self._SPECULAR_ALPHA["dark"])
+        # Parsed live from ``palette(_MODE)`` (not cached at import/class
+        # scope) for the same reason ``_c()`` re-reads it on every access:
+        # gui/style.py's LIGHT/DARK dicts are mutated in place at runtime by
+        # ``set_glass_amount()``/dev-tool overrides (see its
+        # ``_recompute_palettes``), so a cached alpha would go stale exactly
+        # the way the old hardcoded 0.85/0.045 table did.
+        alpha = _alpha_from_rgba(palette(_MODE)["specular"])
         c = QColor(255, 255, 255)
         c.setAlphaF(alpha)
         return c

@@ -34,6 +34,12 @@ def test_app_settings_round_trip_uses_existing_defaults(tmp_path):
     settings.setValue(app_settings.PLANNER_ARM_LATCH_KEY, "false")
     assert app_settings.planner_arm_latch_enabled(settings) is False
 
+    assert app_settings.motion_enabled(settings) is True
+    app_settings.set_motion_enabled(False, settings)
+    assert app_settings.motion_enabled(settings) is False
+    settings.setValue(app_settings.MOTION_ENABLED_KEY, "true")
+    assert app_settings.motion_enabled(settings) is True
+
     app_settings.save_theme_customization_values(
         glass_amount=0.25,
         window_opacity=0.9,
