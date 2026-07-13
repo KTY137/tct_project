@@ -68,6 +68,25 @@ class HDF5Writer:
                 grp.attrs[key] = self._serialise_attr(value)
             grp.attrs["start_time"] = self._file.attrs["start_time"]
 
+    def set_run_metadata(self, key: str, value: Any) -> None:
+        """Attach one run-level metadata attr to ``/run_info`` AFTER :meth:`open`.
+
+        :meth:`open` populates ``/run_info`` from ``run_info`` at file creation,
+        but some provenance is only known once the run has EXECUTED — e.g. the
+        per-point wavegen command trace (values the executor COMMANDED, never
+        measured read-back).  This writes into the SAME ``/run_info`` group,
+        honoring the ``run_metadata`` save toggle exactly like ``open()`` (a
+        no-op when metadata saving is off, or when the file is not open), and
+        serialising non-scalars to JSON via the same :meth:`_serialise_attr`
+        path as ``run_info``.  The last write of a given *key* wins.
+        """
+        if self._file is None:
+            return
+        if not self.save_options.run_metadata:
+            return
+        grp = self._file.require_group("run_info")
+        grp.attrs[key] = self._serialise_attr(value)
+
     def set_outcome(self, outcome: str, reason: str | None = None) -> None:
         """Record how the run ended; written into the file by :meth:`close`.
 

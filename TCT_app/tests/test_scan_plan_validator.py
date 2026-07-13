@@ -187,6 +187,75 @@ def test_acquire_param_n_averages_below_one_is_error():
     assert any("n_averages" in e for e in errors(validate_plan(plan, limits())))
 
 
+# --------------------------------------------------------------------------- #
+# nested wavegen params (P0': the C1-found validation gap)                     #
+# --------------------------------------------------------------------------- #
+
+def _wavegen_plan(wavegen):
+    """A stage plan whose acquire carries params['wavegen'] = *wavegen*."""
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0],
+                     children=[_acq(wavegen=wavegen), _save()])
+    return ScanPlan(root=[loop])
+
+
+def test_wavegen_known_keys_clean():
+    plan = _wavegen_plan({
+        "frequency_hz": 1000.0, "pulse_width_s": 100e-9,
+        "duty_cycle_pct": 0.3, "amplitude_V": 3.3, "offset_V": 0.0,
+    })
+    assert errors(validate_plan(plan, limits())) == []
+
+
+def test_wavegen_unknown_key_is_error_not_warning():
+    # A 'dutycycle' typo must fail LOUD at validate time, not ride along inert
+    # (unlike the outer unknown-param WARNING).
+    plan = _wavegen_plan({"dutycycle": 5.0})
+    issues = validate_plan(plan, limits())
+    assert any("dutycycle" in e for e in errors(issues))
+    assert not any("dutycycle" in w for w in warnings(issues))
+
+
+def test_wavegen_duty_out_of_range_is_error():
+    assert any("duty_cycle_pct" in e
+               for e in errors(validate_plan(_wavegen_plan(
+                   {"duty_cycle_pct": 150.0}), limits())))
+    assert any("duty_cycle_pct" in e
+               for e in errors(validate_plan(_wavegen_plan(
+                   {"duty_cycle_pct": 0.0}), limits())))
+
+
+def test_wavegen_nonpositive_frequency_and_width_are_errors():
+    assert any("frequency_hz" in e
+               for e in errors(validate_plan(_wavegen_plan(
+                   {"frequency_hz": 0.0}), limits())))
+    assert any("pulse_width_s" in e
+               for e in errors(validate_plan(_wavegen_plan(
+                   {"pulse_width_s": -1e-9}), limits())))
+
+
+def test_wavegen_negative_amplitude_is_error():
+    assert any("amplitude_V" in e
+               for e in errors(validate_plan(_wavegen_plan(
+                   {"amplitude_V": -1.0}), limits())))
+
+
+def test_wavegen_non_numeric_value_is_error():
+    assert any("must be a number" in e
+               for e in errors(validate_plan(_wavegen_plan(
+                   {"frequency_hz": "fast"}), limits())))
+
+
+def test_wavegen_non_mapping_is_error():
+    assert any("must be a mapping" in e
+               for e in errors(validate_plan(_wavegen_plan([1, 2, 3]), limits())))
+
+
+def test_wavegen_offset_unconstrained():
+    # offset_V has no structural domain bound — any real is accepted.
+    plan = _wavegen_plan({"offset_V": -12.5})
+    assert errors(validate_plan(plan, limits())) == []
+
+
 def test_issue_is_frozen_and_stringifies_with_path():
     issue = PlanIssue(ERROR, "root/loop(stage_x)[0]", "boom")
     assert issue.severity == ERROR

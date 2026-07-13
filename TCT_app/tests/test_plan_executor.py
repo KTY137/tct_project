@@ -776,6 +776,129 @@ def test_capture_photo_grab_raises_mid_plan_leaves_hv_safe(sim):
 
 
 # --------------------------------------------------------------------------- #
+# (P0') per-point wavegen apply + command trace                                #
+# --------------------------------------------------------------------------- #
+def _duty_ramp_plan(duties):
+    """Several acquire+save at ONE point, each acquire commanding a distinct
+    duty cycle — the per-point duty ramp (Kaya's concrete ask)."""
+    children: list = []
+    for d in duties:
+        children.append(_acq(wavegen={"duty_cycle_pct": float(d)}))
+        children.append(_save())
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0], children=children)
+    return ScanPlan(name="duty_ramp", root=[loop])
+
+
+def test_wavegen_applied_per_point_in_plan_order(sim):
+    dm, ctrl, sm = sim
+    duty = mock.Mock(wraps=dm.waveform_generator.set_duty_cycle)
+    dm.waveform_generator.set_duty_cycle = duty
+
+    ctrl.start_plan(_duty_ramp_plan([0.2, 0.4, 0.6]), _limits(), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.FINISHED
+    assert ctrl._writer._n_points == 3
+    # The sim wavegen received one set_duty_cycle per acquire, in PLAN ORDER.
+    assert [c.args[0] for c in duty.call_args_list] == [0.2, 0.4, 0.6]
+
+
+def test_wavegen_multi_setting_applied_frequency_first(sim):
+    """Within one point the setters fire in a deterministic order — frequency
+    first (the duty floor / min pulse width are frequency-dependent) — even when
+    the params dict lists duty before frequency."""
+    dm, ctrl, sm = sim
+    manager = mock.Mock()
+    manager.attach_mock(
+        mock.Mock(wraps=dm.waveform_generator.set_frequency), "freq")
+    manager.attach_mock(
+        mock.Mock(wraps=dm.waveform_generator.set_duty_cycle), "duty")
+    dm.waveform_generator.set_frequency = manager.freq
+    dm.waveform_generator.set_duty_cycle = manager.duty
+
+    loop = LoopBlock(
+        axis=Axis.STAGE_X, values=[0.0],
+        children=[_acq(wavegen={"duty_cycle_pct": 0.5, "frequency_hz": 2000.0}),
+                  _save()])
+    ctrl.start_plan(ScanPlan(name="p", root=[loop]), _limits(), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.FINISHED
+    assert [c[0] for c in manager.mock_calls] == ["freq", "duty"]
+    assert manager.freq.call_args.args[0] == 2000.0
+    assert manager.duty.call_args.args[0] == 0.5
+
+
+def test_wavegen_command_trace_written_to_run_metadata(sim):
+    import json
+    import h5py
+
+    dm, ctrl, sm = sim
+    ctrl.start_plan(_duty_ramp_plan([0.2, 0.4, 0.6]), _limits(), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.FINISHED
+    with h5py.File(ctrl.last_run_path, "r") as f:
+        raw = f["run_info"].attrs["wavegen_command_trace"]
+    if isinstance(raw, bytes):
+        raw = raw.decode()
+    trace = json.loads(raw)
+    assert [e["point_index"] for e in trace] == [0, 1, 2]
+    assert [e["commanded"]["duty_cycle_pct"] for e in trace] == [0.2, 0.4, 0.6]
+
+
+def test_no_wavegen_params_is_byte_identical(sim):
+    """A plan WITHOUT wavegen params never touches the setters and writes no
+    trace attr — the executor's behaviour is unchanged for existing plans."""
+    import h5py
+
+    dm, ctrl, sm = sim
+    freq = mock.Mock(wraps=dm.waveform_generator.set_frequency)
+    duty = mock.Mock(wraps=dm.waveform_generator.set_duty_cycle)
+    dm.waveform_generator.set_frequency = freq
+    dm.waveform_generator.set_duty_cycle = duty
+
+    ctrl.start_plan(_stage_plan([0.0, 1.0, 2.0]), _limits(), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.FINISHED
+    assert not freq.called
+    assert not duty.called
+    with h5py.File(ctrl.last_run_path, "r") as f:
+        assert "wavegen_command_trace" not in f["run_info"].attrs
+
+
+def test_wavegen_setter_error_fails_safe_and_preserves_data(sim):
+    """A wavegen setter that raises mid-plan is NOT swallowed: the run ERRORs,
+    the wavegen output-off fail-safe runs, and the point(s) taken before the
+    fault are preserved (safety rule 5)."""
+    dm, ctrl, sm = sim
+    wf_off = mock.Mock(wraps=dm.waveform_generator.output_off)
+    dm.waveform_generator.output_off = wf_off
+    errs: list = []
+    ctrl.on_error = lambda m: errs.append(m)
+
+    calls = {"n": 0}
+    real_duty = dm.waveform_generator.set_duty_cycle
+
+    def flaky(percent):
+        calls["n"] += 1
+        if calls["n"] == 2:                       # the SECOND acquire's setter
+            raise RuntimeError("wavegen link lost")
+        return real_duty(percent)
+
+    dm.waveform_generator.set_duty_cycle = mock.Mock(side_effect=flaky)
+
+    ctrl.start_plan(_duty_ramp_plan([0.2, 0.4, 0.6]), _limits(), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.ERROR
+    assert any("wavegen link lost" in m for m in errs)   # surfaced, not swallowed
+    assert wf_off.called                                 # fail-safe still ran
+    assert ctrl._writer._n_points == 1                   # first point preserved
+
+
+# --------------------------------------------------------------------------- #
 # danger-gate value types                                                      #
 # --------------------------------------------------------------------------- #
 def test_danger_gates_are_pure():

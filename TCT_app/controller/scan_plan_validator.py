@@ -103,6 +103,22 @@ _KNOWN_ACTION_PARAMS: dict[ActionType, frozenset[str]] = {
     ActionType.CAPTURE_PHOTO: frozenset({"settle_s", "label"}),
 }
 
+# Keys allowed INSIDE ACQUIRE_WAVEFORM's params["wavegen"] dict — exactly the
+# wavegen setters the executor forwards (P0'), named to match the YAML config
+# vocabulary (config_validator "waveform_generator": frequency_hz / pulse_width_s
+# / amplitude_V / offset_V) plus duty_cycle_pct (WaveformGenerator.set_duty_cycle
+# takes a percent; there is no config analogue).  Unlike the OUTER param check
+# (unknown → WARNING), an unknown NESTED key is an ERROR: a 'dutycycle' typo must
+# fail loudly at validate time, not ride along inert (C1 finding, P0'-owned).
+#   frequency_hz   -> set_frequency
+#   pulse_width_s  -> set_pulse_width
+#   duty_cycle_pct -> set_duty_cycle
+#   amplitude_V    -> set_amplitude
+#   offset_V       -> set_offset
+_KNOWN_WAVEGEN_KEYS: frozenset[str] = frozenset({
+    "frequency_hz", "pulse_width_s", "duty_cycle_pct", "amplitude_V", "offset_V",
+})
+
 
 # --------------------------------------------------------------------------- #
 # Public API                                                                   #
@@ -316,6 +332,8 @@ def _check_action_params(
         if navg is not None and _is_num(navg) and int(navg) < 1:
             issues.append(PlanIssue(
                 ERROR, path, f"n_averages must be >= 1 (got {navg!r})"))
+        if "wavegen" in params:
+            _check_wavegen_params(params["wavegen"], path, issues)
     if action.action == ActionType.CAPTURE_PHOTO:
         secs = params.get("settle_s")
         if secs is not None and _is_num(secs) and float(secs) < 0:
@@ -329,6 +347,71 @@ def _check_action_params(
                 WARNING, path,
                 f"unknown param '{key}' for {action.action.value} — typo? "
                 "It is ignored by the executor."))
+
+
+def _check_wavegen_params(
+    wavegen: Any, path: str, issues: list[PlanIssue]
+) -> None:
+    """Validate ACQUIRE_WAVEFORM's nested params['wavegen'] dict (P0').
+
+    Fail-closed on the CONTENTS the executor will apply per point (the outer
+    check only sees the 'wavegen' key):
+
+    * a non-mapping ``wavegen`` → ERROR (the executor iterates it as a dict);
+    * any key not in :data:`_KNOWN_WAVEGEN_KEYS` → ERROR (a 'dutycycle' typo is
+      loud, not inert — unlike the outer WARNING for unknown action params,
+      because a mistyped wavegen key silently DROPS a setting the operator
+      believes is applied);
+    * a non-numeric value → ERROR (the executor casts each to ``float``).
+
+    Range split (per the P0' brief).  These are STRUCTURAL-DOMAIN ERRORs —
+    values that are physically impossible independent of any hardware, exactly
+    the class the existing checks emit as ERROR (WAIT ``seconds >= 0``,
+    ``n_averages >= 1``, ``ramp_step_V > 0``):
+
+    * ``frequency_hz`` / ``pulse_width_s`` must be > 0;
+    * ``duty_cycle_pct`` must be strictly inside 0–100 %;
+    * ``amplitude_V`` (Vpp, a magnitude) must be >= 0.
+
+    :class:`PlanLimits` carries NO wavegen capability range (no generator
+    voltage/frequency ceiling), so there is no PlanLimits-derived ERROR bucket
+    to add without new config plumbing — out of scope for this day-sized beat.
+    Hardware-capability clamping (the frequency-dependent minimum pulse width /
+    duty floor) stays a runtime, driver-side WARNING (the driver already logs it
+    on apply), because it cannot be known here without the instrument.
+    """
+    if not isinstance(wavegen, dict):
+        issues.append(PlanIssue(
+            ERROR, path,
+            f"ACQUIRE_WAVEFORM params['wavegen'] must be a mapping of "
+            f"setting->value (got {type(wavegen).__name__})"))
+        return
+    for key, val in wavegen.items():
+        if key not in _KNOWN_WAVEGEN_KEYS:
+            issues.append(PlanIssue(
+                ERROR, path,
+                f"unknown wavegen setting '{key}' — typo? Valid settings are: "
+                f"{', '.join(sorted(_KNOWN_WAVEGEN_KEYS))}. Refusing "
+                "(a mistyped key would silently drop the setting)."))
+            continue
+        if not _is_num(val):
+            issues.append(PlanIssue(
+                ERROR, path,
+                f"wavegen '{key}' must be a number (got {val!r})"))
+            continue
+        v = float(val)
+        if key in ("frequency_hz", "pulse_width_s") and v <= 0:
+            issues.append(PlanIssue(
+                ERROR, path, f"wavegen '{key}' must be > 0 (got {v:g})"))
+        elif key == "duty_cycle_pct" and not (0.0 < v < 100.0):
+            issues.append(PlanIssue(
+                ERROR, path,
+                f"wavegen 'duty_cycle_pct' must be within (0, 100) % "
+                f"(got {v:g})"))
+        elif key == "amplitude_V" and v < 0:
+            issues.append(PlanIssue(
+                ERROR, path,
+                f"wavegen 'amplitude_V' (Vpp) must be >= 0 (got {v:g})"))
 
 
 # --------------------------------------------------------------------------- #

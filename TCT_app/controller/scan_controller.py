@@ -242,6 +242,12 @@ class ScanController:
         # plan executor re-asserts HV on the following resume (the compiled
         # BiasStep list is deduped, so a resume must re-establish bias itself).
         self._reassert_pending = False
+        # Per-run per-point wavegen COMMAND trace (P0' honesty stopgap until
+        # DA1's swept/ datasets): a list of {"point_index", "commanded"} recorded
+        # by _apply_wavegen_settings for each acquire that carried wavegen params,
+        # flushed into /run_info at run end.  Reset per run in _run_plan.  Values
+        # are COMMANDED, never measured.
+        self._wavegen_trace: list[dict] = []
 
         # Slow-control excursion latch (DECISIONS 2026-07-12 policy): the set of
         # channel names currently in an acknowledged WARN / UNAVAILABLE excursion.
@@ -1339,6 +1345,7 @@ class ScanController:
         """
         self._bias_read_failures = 0
         self._reassert_pending = False
+        self._wavegen_trace = []
         has_bias_step = False
         last_result: ScanResult | None = None
         last_bias_target: float | None = None
@@ -1410,6 +1417,12 @@ class ScanController:
                     acq_index += 1
                     point = ScanPoint(x_mm=pos.x_mm, y_mm=pos.y_mm,
                                       z_mm=pos.z_mm, index=acq_index)
+                    # P0': apply this point's wavegen settings BEFORE its
+                    # acquisition, per point in plan order (Kaya's duty-cycle
+                    # ramp).  A setter error propagates to the shared
+                    # except/finally fail-safe (rule 5) — never swallowed.
+                    self._apply_wavegen_settings(
+                        step.params.get("wavegen"), acq_index)
                     last_result = self._acquire_core(point, step.n_averages, bias)
                     if self._check_compliance(bias, context=f" at acquire {acq_index}"):
                         break
@@ -1501,6 +1514,10 @@ class ScanController:
             if has_bias_step:
                 # This run energized HV — leave it safe on EVERY exit path.
                 self._bias_failsafe(bias)
+            # Record the per-point wavegen command trace into run metadata on
+            # EVERY exit path (points taken before a fault keep their
+            # provenance), BEFORE _end_run() closes the writer.
+            self._flush_wavegen_trace()
             self._end_run()
             if self.on_finished:
                 self.on_finished()
@@ -1524,6 +1541,88 @@ class ScanController:
         z = cur.z_mm if step.z_mm is None else step.z_mm
         self._dev.motor.move_to(x, y, z)
         self._dev.motor.wait_until_ready()
+
+    def _apply_wavegen_settings(self, settings, acq_index: int) -> None:
+        """Apply an acquire step's ``params['wavegen']`` BEFORE its acquisition.
+
+        P0' (the direct wavegen-apply fix): ``ACQUIRE_WAVEFORM``'s
+        ``params['wavegen']`` was validated + compiled into ``AcquireStep.params``
+        but the executor dropped it.  This forwards it, PER POINT in plan order,
+        through the existing :class:`WaveformGenerator` setters just before
+        :meth:`_acquire_core` — so a plan can vary duty / frequency / amplitude
+        per point (Kaya's duty-cycle ramp).  Identical in classic and queued
+        runs (both drive :meth:`_run_plan`); ``assert_sequencer_compatible`` is
+        unaffected — no new step kind, the settings ride inside the existing
+        ``AcquireStep.params``.
+
+        A ``None`` / empty mapping is a no-op, so plans WITHOUT wavegen params
+        are byte-identical.  The settings are applied in a deterministic order —
+        frequency first (the duty floor and minimum pulse width are
+        frequency-dependent), then width / duty, then amplitude / offset.
+
+        Safety (EMITTING class — the wavegen drives the laser trigger): this
+        NEVER touches ``output_on`` / ``output_off``.  Arming stays exactly where
+        it was, inside :meth:`_acquire_core` (output_on → acquire → output_off);
+        no new gate is added here (``emission_interlock`` is P3's).  A setter that
+        raises is NOT swallowed: it propagates to :meth:`_run_plan`'s shared
+        ``except`` / ``finally``, which leaves HV, motion and the wavegen output
+        safe (rule 5 — never continue after a hardware fault).
+
+        Records the COMMANDED values (never a measured read-back) into
+        :attr:`_wavegen_trace` for the run-metadata honesty stopgap.
+        """
+        if not settings:
+            return
+        wfg = self._dev.waveform_generator
+        commanded: dict = {}
+        if "frequency_hz" in settings:
+            v = float(settings["frequency_hz"])
+            wfg.set_frequency(v)
+            commanded["frequency_hz"] = v
+        if "pulse_width_s" in settings:
+            v = float(settings["pulse_width_s"])
+            wfg.set_pulse_width(v)
+            commanded["pulse_width_s"] = v
+        if "duty_cycle_pct" in settings:
+            v = float(settings["duty_cycle_pct"])
+            wfg.set_duty_cycle(v)
+            commanded["duty_cycle_pct"] = v
+        if "amplitude_V" in settings:
+            v = float(settings["amplitude_V"])
+            wfg.set_amplitude(v)
+            commanded["amplitude_V"] = v
+        if "offset_V" in settings:
+            v = float(settings["offset_V"])
+            wfg.set_offset(v)
+            commanded["offset_V"] = v
+        if commanded:
+            self._wavegen_trace.append(
+                {"point_index": acq_index, "commanded": commanded})
+
+    def _flush_wavegen_trace(self) -> None:
+        """Write the per-point wavegen command trace into ``/run_info`` metadata.
+
+        The P0' honesty stopgap until DA1's ``swept/`` datasets: a JSON list of
+        ``{"point_index", "commanded"}`` recording what the executor COMMANDED at
+        each acquire that carried wavegen params — COMMANDED values, never
+        measured.  Written once, at run end (from the ``finally``), BEFORE
+        :meth:`_end_run` closes the writer, so points taken before an abort /
+        error keep their provenance.
+
+        Only written when the run actually commanded wavegen settings — a plan
+        without wavegen params writes no attr and stays byte-identical.
+        Best-effort: a metadata-write failure must never mask the original run
+        error or the fail-safe cleanup that already ran.
+        """
+        if not self._wavegen_trace:
+            return
+        try:
+            if self._writer is not None:
+                self._writer.set_run_metadata(
+                    "wavegen_command_trace", list(self._wavegen_trace))
+        except Exception:
+            logger.warning("Wavegen command-trace metadata write failed",
+                           exc_info=True)
 
     def _write_camera_frame(self, frame) -> None:
         """Persist one CAPTURE_PHOTO frame straight to the run's ``/camera`` group.
