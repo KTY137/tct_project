@@ -105,8 +105,31 @@ Times are ns; missing values are `NaN`.
 **`/slow_control/<channel>`** (f8, `(N,)`) — when `slow_control` is on. One dataset
 per configured channel (e.g. `temperature_C`, `humidity_pct`).
 
-**`/camera/frames`** (`(N, H, W)`, gzip) — when `camera_frame` is on. Per-point image;
-frames whose size differs from the first are skipped.
+**`/camera/`** — when `camera_frame` is on (or after `set_camera_calibration` is called).
+`M` = frames actually written (`M <= N`; see below).
+
+- `camera/frames` (frame dtype, gzip, shape `(M, H, W)`) — one entry per frame
+  **actually written**.
+- `camera/frame_point_index` (i8, shape `(M,)`) — `frame_point_index[k]` is the
+  `points/` row that `frames[k]` belongs to.
+- `camera` group attr `n_frames_omitted` (int) — count of dropped frames over
+  the whole run; always present (even `0`) whenever the `camera` group exists.
+- `camera` group attr `px_per_mm` (f8, optional) — from `set_camera_calibration`.
+- `camera` group attr `affine` (f8 array, optional) — flat array from
+  `set_camera_calibration` (shape is the caller's convention — see
+  `analysis/camera_calibration.py`).
+
+A frame is dropped (counted in `n_frames_omitted`, and logged via
+`logging.getLogger("data.hdf5_writer")` at `WARNING`) when: the grabbed frame
+is `None` (grab failure), its array has `ndim < 2`, or its shape differs from
+the first accepted frame's shape.
+
+**`camera/frames` is never zero-padded and may be shorter than `points/`.**
+`M <= N`: a dropped frame simply does not get an entry — the old behaviour of
+`resize()`-ing to the point count (silently backfilling a skipped point with
+an all-zero frame, indistinguishable from a real dark frame) is gone. Always
+use `frame_point_index` to map `frames[k]` back to `points/x_mm[frame_point_index[k]]`
+etc.; do **not** assume `frames[i]` corresponds to `points[i]`.
 
 ### Datasets (other scan types)
 
