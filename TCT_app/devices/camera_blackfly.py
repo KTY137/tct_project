@@ -519,14 +519,18 @@ class BlackflyCamera(BaseDevice):
         ps = self._pyspin
         if ps is None or self._cam is None:
             return
-        # TODO(manual needed): confirm the BinningHorizontalMode/BinningVerticalMode
-        # node names AND the "Average" enum entry spelling against the Spinnaker
-        # SFNC for the BFLY-U3-23S6M.  Taken from the GenICam SFNC standard +
-        # docs/research/camera_optics_setup.md (a source-reading hypothesis, not an
-        # in-repo datasheet); the camera's raw Sum-vs-Average default is unverified.
-        # TODO(bench): confirm 2x2 Average binning no longer produces a white frame
-        # on the real BFLY-U3-23S6M (serial 19112408) and that these nodes are
-        # writable while acquisition is stopped.
+        # Node/enum spelling CONFIRMED against GenICam SFNC 2.2 + the Spinnaker
+        # API (docs/research/camera_binning_nodes.md, 2026-07-13) — the names
+        # below are correct as written.  HOWEVER: Sum/Average mode selection is
+        # a Blackfly-S/ISP feature; the classic BFLY has no ISP and bins
+        # additively, so on the BFLY-U3-23S6M these nodes are EXPECTED ABSENT.
+        # The skip-at-INFO below is the PERMANENT correct path for this family
+        # (not a stopgap); the real white-frame fix is the display-side
+        # autoscale in camera_panel._to_display_8bit.
+        # TODO(bench): SpinView on the real BFLY-U3-23S6M (serial 19112408) —
+        # definitive per-unit check whether Binning*Mode exists / offers
+        # "Average", and that value nodes are writable while acquisition is
+        # stopped.
         for node_name, mode_attr in (
             ("BinningVerticalMode", "BinningVerticalMode_Average"),
             ("BinningHorizontalMode", "BinningHorizontalMode_Average"),
