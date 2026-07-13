@@ -327,31 +327,59 @@ class IsegBiasSupply(BiasSupplyBase):
         to zero — an auto-HV-enable we must never do.  An off channel only needs
         the idempotent 0 V + OFF writes.
 
-        Local state is updated only after the hardware has acknowledged.
+        The ramp-down and the ``:VOLT 0`` park are both VALUE writes and both a
+        COURTESY (a smooth descent); the ``:VOLT OFF`` disable is the SAFETY
+        GUARANTEE.  Each lives in its OWN try, so a transport that rejects value
+        writes but would accept ``:VOLT OFF`` still gets the disable issued — the
+        load-bearing step never lives behind the ramp.
+
+        Local state is updated only after the hardware has acknowledged; a failed
+        disable leaves the state UNKNOWN (believed-ON), never a false OFF.
         """
         last: Exception | None = None
         for attempt in range(self._SHUTDOWN_ATTEMPTS):
+            # Courtesy 1: walk the HV down gently while the output is still on.
             try:
                 if self.output_is_on_ch(channel):
-                    # Walk the HV down gently while the output is still enabled.
                     self.ramp_to_ch(channel, 0.0)
-                self._write(f":VOLT 0,(@{channel})")
-                self._write(f":VOLT OFF,(@{channel})")
-                st = self._chs(channel)
-                st["output_on"] = False
-                st["setpoint_V"] = 0.0
-                self.logger.info(
-                    "iseg CH%d ramped to 0 V and switched OFF (disconnect)", channel
+            except Exception as exc:
+                self.logger.warning(
+                    "iseg CH%d: gentle ramp-down attempt %d/%d failed (%s) — "
+                    "attempting the output-disable regardless.",
+                    channel, attempt + 1, self._SHUTDOWN_ATTEMPTS, exc,
                 )
-                return
+            # Courtesy 2: park the voltage register at 0 (also a value write).
+            zeroed = True
+            try:
+                self._write(f":VOLT 0,(@{channel})")
+            except Exception as exc:
+                zeroed = False
+                self.logger.warning(
+                    "iseg CH%d: 0 V park attempt %d/%d failed (%s) — attempting "
+                    "the output-disable regardless.",
+                    channel, attempt + 1, self._SHUTDOWN_ATTEMPTS, exc,
+                )
+            # SAFETY GUARANTEE: disable the output, isolated from every value
+            # write above so it is attempted even when the ramp/park could not.
+            try:
+                self._write(f":VOLT OFF,(@{channel})")
             except Exception as exc:
                 last = exc
                 self.logger.warning(
-                    "iseg CH%d: fail-safe ramp-down attempt %d/%d failed: %s",
+                    "iseg CH%d: output-disable attempt %d/%d failed: %s",
                     channel, attempt + 1, self._SHUTDOWN_ATTEMPTS, exc,
                 )
+                continue
+            st = self._chs(channel)
+            st["output_on"] = False
+            if zeroed:
+                st["setpoint_V"] = 0.0
+            self.logger.info(
+                "iseg CH%d switched OFF (disconnect)", channel
+            )
+            return
         raise DeviceError(
-            f"ramp-down failed after {self._SHUTDOWN_ATTEMPTS} attempts: {last}"
+            f"output-disable failed after {self._SHUTDOWN_ATTEMPTS} attempts: {last}"
         )
 
     # ------------------------------------------------------------------ #
@@ -431,12 +459,25 @@ class IsegBiasSupply(BiasSupplyBase):
         hardened against): the failure is logged at ERROR and the local state is
         left as-is, so the UI keeps showing the channel as ON — which is the
         truth, because we do not know that it is off.
+
+        The cosmetic ``:VOLT 0`` write is a COURTESY (a disabled output holds no
+        HV anyway); the ``:VOLT OFF`` disable is the SAFETY GUARANTEE.  Each gets
+        its OWN try so a dropped ``:VOLT 0`` frame — common on the USB-VCP
+        transport — can NEVER suppress the disable that follows.
         """
         st = self._chs(channel)
+        zeroed = True
         if not self.simulation and self._inst is not None:
             try:
-                self._write(f":VOLT 0,(@{channel})")
-                self._write(f":VOLT OFF,(@{channel})")
+                self._write(f":VOLT 0,(@{channel})")     # cosmetic
+            except Exception as exc:
+                zeroed = False
+                self.logger.warning(
+                    "iseg CH%d: cosmetic 0 V write failed (%s) — proceeding to "
+                    "the safety-critical output-disable regardless.", channel, exc,
+                )
+            try:
+                self._write(f":VOLT OFF,(@{channel})")   # the safety guarantee
             except Exception as exc:
                 self.logger.error(
                     "iseg CH%d: OUTPUT-OFF WRITE FAILED (%s) — the channel may "
@@ -445,7 +486,8 @@ class IsegBiasSupply(BiasSupplyBase):
                 )
                 return
         st["output_on"] = False
-        st["setpoint_V"] = 0.0
+        if zeroed:
+            st["setpoint_V"] = 0.0
         self.logger.info("iseg CH%d output OFF", channel)
 
     def read_ch(self, channel: int) -> BiasReading:

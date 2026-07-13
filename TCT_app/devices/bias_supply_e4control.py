@@ -207,29 +207,58 @@ class E4ControlBiasSupply(BiasSupplyBase):
 
         Retried once: ``setVoltage(0)`` / ``setOutput(False)`` are idempotent and
         drive the supply toward the SAME safe state, so re-issuing them after a
-        dropped frame cannot raise the voltage.  Local state is updated only once
-        the hardware has acknowledged.
+        dropped frame cannot raise the voltage.
+
+        ``rampVoltage(0)`` and ``setVoltage(0)`` are both a COURTESY (a smooth
+        descent); ``setOutput(False)`` is the SAFETY GUARANTEE.  Each lives in
+        its OWN try, so a transport that rejects value writes but would accept
+        the disable still gets it issued — the load-bearing step never lives
+        behind the ramp.  Local state is updated only once the hardware has
+        acknowledged; a failed disable leaves the state UNKNOWN (believed-ON),
+        never a false OFF.
         """
         last: Exception | None = None
         for attempt in range(self._SHUTDOWN_ATTEMPTS):
-            try:
-                with self.io_lock:
+            with self.io_lock:
+                # Courtesy 1: walk the HV down gently while the output is on.
+                try:
                     if self._output_on:
                         self._dev.rampVoltage(0)
+                except Exception as exc:
+                    logger.warning(
+                        "e4control: gentle ramp-down attempt %d/%d failed (%s) — "
+                        "attempting the output-disable regardless.",
+                        attempt + 1, self._SHUTDOWN_ATTEMPTS, exc,
+                    )
+                # Courtesy 2: park the register at 0 V (also a value write).
+                zeroed = True
+                try:
                     self._dev.setVoltage(0.0)
+                except Exception as exc:
+                    zeroed = False
+                    logger.warning(
+                        "e4control: 0 V park attempt %d/%d failed (%s) — "
+                        "attempting the output-disable regardless.",
+                        attempt + 1, self._SHUTDOWN_ATTEMPTS, exc,
+                    )
+                # SAFETY GUARANTEE: disable the output, isolated from every value
+                # write above so it is attempted even when the ramp/park could not.
+                try:
                     self._dev.setOutput(False)
-                self._output_on = False
+                except Exception as exc:
+                    last = exc
+                    logger.warning(
+                        "e4control: output-disable attempt %d/%d failed: %s",
+                        attempt + 1, self._SHUTDOWN_ATTEMPTS, exc,
+                    )
+                    continue
+            self._output_on = False
+            if zeroed:
                 self._setpoint_V = 0.0
-                logger.info("e4control output ramped to 0 V and switched OFF (disconnect)")
-                return
-            except Exception as exc:
-                last = exc
-                logger.warning(
-                    "e4control: fail-safe ramp-down attempt %d/%d failed: %s",
-                    attempt + 1, self._SHUTDOWN_ATTEMPTS, exc,
-                )
+            logger.info("e4control output switched OFF (disconnect)")
+            return
         raise DeviceError(
-            f"ramp-down failed after {self._SHUTDOWN_ATTEMPTS} attempts: {last}"
+            f"output-disable failed after {self._SHUTDOWN_ATTEMPTS} attempts: {last}"
         )
 
     # ------------------------------------------------------------------ #
@@ -276,21 +305,34 @@ class E4ControlBiasSupply(BiasSupplyBase):
         that was never achieved).  The failure is logged at ERROR and the state
         is left as-is, so the UI keeps showing the channel as ON — the truth,
         because we do not know that it is off.
+
+        The ``setVoltage(0)`` write is a COURTESY (a disabled output holds no HV
+        anyway); the ``setOutput(False)`` disable is the SAFETY GUARANTEE.  Each
+        gets its OWN try so a dropped 0 V frame can NEVER suppress the disable.
         """
+        zeroed = True
         if not self.simulation and self._dev is not None:
-            try:
-                with self.io_lock:
-                    self._dev.setVoltage(0.0)
-                    self._dev.setOutput(False)
-            except Exception as exc:
-                logger.error(
-                    "e4control: OUTPUT-OFF WRITE FAILED (%s) — the output may "
-                    "still be ENERGIZED; leaving local state ON rather than "
-                    "claiming an OFF we never achieved.", exc,
-                )
-                return
+            with self.io_lock:
+                try:
+                    self._dev.setVoltage(0.0)                # cosmetic
+                except Exception as exc:
+                    zeroed = False
+                    logger.warning(
+                        "e4control: cosmetic 0 V write failed (%s) — proceeding "
+                        "to the safety-critical output-disable regardless.", exc,
+                    )
+                try:
+                    self._dev.setOutput(False)               # the guarantee
+                except Exception as exc:
+                    logger.error(
+                        "e4control: OUTPUT-OFF WRITE FAILED (%s) — the output may "
+                        "still be ENERGIZED; leaving local state ON rather than "
+                        "claiming an OFF we never achieved.", exc,
+                    )
+                    return
         self._output_on = False
-        self._setpoint_V = 0.0
+        if zeroed:
+            self._setpoint_V = 0.0
         logger.info("e4control output OFF")
 
     def read(self) -> BiasReading:

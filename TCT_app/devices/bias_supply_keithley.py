@@ -214,29 +214,57 @@ class KeithleyBiasSupply(BiasSupplyBase):
         raise the voltage, so re-issuing them after a dropped frame is safe.
 
         The ramp is skipped when the output is already off — walking an idle
-        output to zero must never enable it (safety rule 1).  Local state is
-        updated only after the hardware has acknowledged.
+        output to zero must never enable it (safety rule 1).
+
+        The ramp-down and the 0 V source-level write are both a COURTESY (a
+        smooth descent); the ``output_off`` disable is the SAFETY GUARANTEE.
+        Each lives in its OWN try, so a transport that rejects value writes but
+        would accept the disable still gets it issued — the load-bearing step
+        never lives behind the ramp.  Local state is updated only after the
+        hardware has acknowledged; a failed disable leaves the state UNKNOWN
+        (believed-ON), never a false OFF.
         """
         last: Exception | None = None
         for attempt in range(self._SHUTDOWN_ATTEMPTS):
+            # Courtesy 1: walk the HV down gently while the output is still on.
             try:
                 if self._output_on:
-                    # Walk the HV down gently while the output is still enabled.
                     self.ramp_to(0.0)
+            except Exception as exc:
+                self.logger.warning(
+                    "Keithley: gentle ramp-down attempt %d/%d failed (%s) — "
+                    "attempting the output-disable regardless.",
+                    attempt + 1, self._SHUTDOWN_ATTEMPTS, exc,
+                )
+            # Courtesy 2: drive the source level to 0 V (also a value write).
+            zeroed = True
+            try:
                 self._write(self._cmds["src_volt"].format(v=0.0))
+            except Exception as exc:
+                zeroed = False
+                self.logger.warning(
+                    "Keithley: 0 V source write attempt %d/%d failed (%s) — "
+                    "attempting the output-disable regardless.",
+                    attempt + 1, self._SHUTDOWN_ATTEMPTS, exc,
+                )
+            # SAFETY GUARANTEE: disable the output, isolated from every value
+            # write above so it is attempted even when the ramp/park could not.
+            try:
                 self._write(self._cmds["output_off"])
-                self._output_on = False
-                self._setpoint_V = 0.0
-                self.logger.info("Keithley ramped to 0 V and switched OFF (disconnect)")
-                return
             except Exception as exc:
                 last = exc
                 self.logger.warning(
-                    "Keithley: fail-safe ramp-down attempt %d/%d failed: %s",
+                    "Keithley: output-disable attempt %d/%d failed: %s",
                     attempt + 1, self._SHUTDOWN_ATTEMPTS, exc,
                 )
+                continue
+            self._output_on = False
+            if zeroed:
+                self._setpoint_V = 0.0
+            self.logger.info("Keithley switched OFF (disconnect)")
+            return
         raise DeviceError(
-            f"ramp-down failed after {self._SHUTDOWN_ATTEMPTS} attempts: {last}"
+            f"output-disable failed after {self._SHUTDOWN_ATTEMPTS} attempts: {last}"
         )
 
     # ------------------------------------------------------------------ #
@@ -285,11 +313,23 @@ class KeithleyBiasSupply(BiasSupplyBase):
         ``_output_on`` flag: claiming an OFF that was never achieved is exactly
         the stale-flag bug this driver is being hardened against.  The failure is
         logged at ERROR and the local state is left as-is.
+
+        The 0 V source-level write is a COURTESY (a disabled output holds no HV
+        anyway); the ``output_off`` disable is the SAFETY GUARANTEE.  Each gets
+        its OWN try so a dropped 0 V frame can NEVER suppress the disable.
         """
+        zeroed = True
         if not self.simulation and self._inst is not None:
             try:
-                self._write(self._cmds["src_volt"].format(v=0.0))
-                self._write(self._cmds["output_off"])
+                self._write(self._cmds["src_volt"].format(v=0.0))   # cosmetic
+            except Exception as exc:
+                zeroed = False
+                self.logger.warning(
+                    "Keithley: cosmetic 0 V write failed (%s) — proceeding to "
+                    "the safety-critical output-disable regardless.", exc,
+                )
+            try:
+                self._write(self._cmds["output_off"])               # the guarantee
             except Exception as exc:
                 self.logger.error(
                     "Keithley: OUTPUT-OFF WRITE FAILED (%s) — the output may "
@@ -298,7 +338,8 @@ class KeithleyBiasSupply(BiasSupplyBase):
                 )
                 return
         self._output_on = False
-        self._setpoint_V = 0.0
+        if zeroed:
+            self._setpoint_V = 0.0
         self.logger.info("Keithley output OFF")
 
     def read(self) -> BiasReading:

@@ -143,21 +143,43 @@ class FakeIsegInst:
 
     ``status`` is the value ``:READ:CHAN:STAT?`` reports.  ``fail_writes``
     makes every write raise, modelling a dead/refusing link on teardown.
+    ``reject_value_writes`` refuses only ``:VOLT <number>`` writes (the ramp
+    steps and the cosmetic 0 V park) while still accepting ``:VOLT OFF`` — the
+    exact shape that must never be able to suppress the safety-critical disable.
+
+    ``attempts`` records EVERY write() call (including ones that raise), so a
+    test can prove the disable was *attempted* even on a fully-dead link;
+    ``writes`` records only the writes that actually landed.
     """
 
     def __init__(self, status: int = 0, fail_writes: bool = False,
-                 meas_V: float = 0.0, meas_I: float = 0.0):
+                 meas_V: float = 0.0, meas_I: float = 0.0,
+                 reject_value_writes: bool = False):
         self.status = status
         self.fail_writes = fail_writes
+        self.reject_value_writes = reject_value_writes
         self.meas_V = meas_V
         self.meas_I = meas_I
         self.writes: list[str] = []
+        self.attempts: list[str] = []          # every write() call, incl. raises
         self.closed = False
         self.closed_after: list[str] = []      # writes seen at close() time
 
+    @staticmethod
+    def _is_value_write(cmd: str) -> bool:
+        """A ``:VOLT <number>`` write (ramp step / 0 V park) — NOT ``:VOLT OFF/ON``."""
+        c = cmd.strip().upper()
+        if not c.startswith(":VOLT "):
+            return False
+        arg = c[len(":VOLT "):].lstrip()
+        return bool(arg) and arg[0] in "0123456789+-."
+
     def write(self, cmd: str) -> None:
+        self.attempts.append(cmd)
         if self.fail_writes:
             raise OSError("VISA write failed: link down")
+        if self.reject_value_writes and self._is_value_write(cmd):
+            raise OSError("VISA value write rejected: link refuses setpoints")
         self.writes.append(cmd)
 
     def query(self, cmd: str) -> str:
@@ -476,18 +498,30 @@ class TestScopeReadbackIsNotAnEcho:
 # --------------------------------------------------------------------------- #
 
 class FakeVisaInst:
-    """Stand-in for the pyvisa resource the Keithley driver holds."""
+    """Stand-in for the pyvisa resource the Keithley driver holds.
 
-    def __init__(self, fail_writes: bool = False, reply: str = "0.0,1e-9,0,0,0"):
+    ``reject_value_writes`` refuses only the ``:SOUR:VOLT...`` level writes (ramp
+    steps + cosmetic 0 V) while still accepting the ``:OUTP OFF`` disable.
+    ``attempts`` records every write() call (incl. raises); ``writes`` only the
+    landed ones.
+    """
+
+    def __init__(self, fail_writes: bool = False, reply: str = "0.0,1e-9,0,0,0",
+                 reject_value_writes: bool = False):
         self.fail_writes = fail_writes
+        self.reject_value_writes = reject_value_writes
         self.reply = reply
         self.writes: list[str] = []
+        self.attempts: list[str] = []
         self.closed = False
         self.closed_after: list[str] = []
 
     def write(self, cmd: str) -> None:
+        self.attempts.append(cmd)
         if self.fail_writes:
             raise OSError("VISA write failed: link down")
+        if self.reject_value_writes and cmd.strip().upper().startswith(":SOUR:VOLT"):
+            raise OSError("VISA value write rejected: link refuses setpoints")
         self.writes.append(cmd)
 
     def query(self, cmd: str) -> str:
@@ -508,23 +542,34 @@ def _live_keithley(inst: FakeVisaInst) -> KeithleyBiasSupply:
 
 
 class FakeE4Dev:
-    """Stand-in for the e4control device object (K2410 & friends)."""
+    """Stand-in for the e4control device object (K2410 & friends).
 
-    def __init__(self, fail_writes: bool = False, fail_limit: bool = False):
+    ``reject_value_writes`` refuses only the value moves (``setVoltage`` /
+    ``rampVoltage``) while still accepting ``setOutput(False)`` — the disable.
+    ``attempts`` records every value/ramp/output call (incl. raises); ``calls``
+    only the ones that landed.
+    """
+
+    def __init__(self, fail_writes: bool = False, fail_limit: bool = False,
+                 reject_value_writes: bool = False):
         self.fail_writes = fail_writes
         self.fail_limit = fail_limit
+        self.reject_value_writes = reject_value_writes
         self.calls: list[tuple[str, object]] = []
+        self.attempts: list[tuple[str, object]] = []
         self.closed = False
         self.closed_after: list[tuple[str, object]] = []
         self.voltage = 0.0
 
     def setVoltage(self, v: float) -> None:          # noqa: N802 (vendor API)
-        if self.fail_writes:
+        self.attempts.append(("setVoltage", v))
+        if self.fail_writes or self.reject_value_writes:
             raise OSError("e4control link down")
         self.voltage = v
         self.calls.append(("setVoltage", v))
 
     def setOutput(self, on: bool) -> None:           # noqa: N802
+        self.attempts.append(("setOutput", bool(on)))
         if self.fail_writes:
             raise OSError("e4control link down")
         self.calls.append(("setOutput", bool(on)))
@@ -538,7 +583,8 @@ class FakeE4Dev:
         self.calls.append(("setRampSpeed", (step, delay)))
 
     def rampVoltage(self, v: float) -> None:         # noqa: N802
-        if self.fail_writes:
+        self.attempts.append(("rampVoltage", v))
+        if self.fail_writes or self.reject_value_writes:
             raise OSError("e4control link down")
         self.voltage = v
         self.calls.append(("rampVoltage", v))
@@ -1031,3 +1077,184 @@ class TestIsegStatusDerivedFlags:
         r = _live_iseg(DeadLink()).read_ch(0)
         assert r.compliant is False
         assert r.tripped is None          # unknown, not a clean bill of health
+
+
+# --------------------------------------------------------------------------- #
+# 9. The HV DISABLE write is never gated on a preceding value write.           #
+#                                                                              #
+#    THE defect: output_off() and the disconnect ramp-down each put the         #
+#    cosmetic zero-volt write AND the actual :VOLT OFF / :OUTP OFF /             #
+#    setOutput(False) disable in ONE try — so a transient failure of the FIRST   #
+#    (dropped frames are common on the USB-VCP transport) suppressed the         #
+#    SECOND, and the single most safety-critical command in the app was silently #
+#    never sent.  The ramp is a COURTESY (smooth descent); OUTPUT-OFF is the     #
+#    GUARANTEE.  A failed courtesy must never suppress the guarantee.            #
+# --------------------------------------------------------------------------- #
+
+class TestIsegDisableNeverGatedOnValueWrite:
+    def test_output_off_rejected_zero_write_still_issues_the_disable(self):
+        """MAJOR 1: a dropped cosmetic :VOLT 0 must not swallow :VOLT OFF."""
+        inst = FakeIsegInst(reject_value_writes=True)
+        sup = _live_iseg(inst)
+        sup._chs(0)["output_on"] = True
+        sup._chs(0)["setpoint_V"] = -300.0
+
+        sup.output_off_ch(0)                         # fail-safe: must NOT raise
+
+        assert any(w.upper().startswith(":VOLT OFF") for w in inst.writes), \
+            "the disable must not live behind the cosmetic zero-volt write"
+        assert sup._chs(0)["output_on"] is False, \
+            "the disable landed — the OFF is truthful"
+
+    def test_output_off_dead_link_attempts_the_disable_and_stays_on(self):
+        """A fully-dead link: the disable was still ATTEMPTED, and a failed
+        disable leaves the state UNKNOWN (ON), never a false OFF."""
+        inst = FakeIsegInst(fail_writes=True)
+        sup = _live_iseg(inst)
+        sup._chs(0)["output_on"] = True
+
+        sup.output_off_ch(0)                         # fail-safe: must NOT raise
+
+        assert any(a.upper().startswith(":VOLT OFF") for a in inst.attempts), \
+            "the disable must be attempted even when the zero-volt write failed"
+        assert sup._chs(0)["output_on"] is True, \
+            "a failed disable must never claim a false OFF"
+
+    def test_disconnect_ramp_rejected_but_disable_accepted_switches_off(self):
+        """MAJOR 2 (Mary's repro): ON at -300 V, a link that rejects value
+        writes (ramp steps + 0 V park) but WOULD accept :VOLT OFF must still get
+        the disable issued — the load-bearing step never lives behind the ramp."""
+        inst = FakeIsegInst(reject_value_writes=True)
+        sup = _live_iseg(inst)
+        sup._chs(0)["output_on"] = True
+        sup._chs(0)["setpoint_V"] = -300.0
+
+        sup.disconnect()                             # disable reachable -> clean
+
+        assert any(w.upper().startswith(":VOLT OFF") for w in inst.writes), \
+            "the disable must be issued even when the ramp/park writes are rejected"
+        assert sup._chs(0)["output_on"] is False
+        assert inst.closed
+
+    def test_disconnect_dead_link_attempts_disable_and_is_loud(self):
+        """A fully-dead link: the disable was ATTEMPTED on every path, the
+        failure is LOUD (raise), and no false OFF is recorded."""
+        inst = FakeIsegInst(fail_writes=True)
+        sup = _live_iseg(inst)
+        sup._chs(0)["output_on"] = True
+        sup._chs(0)["setpoint_V"] = -300.0
+
+        with pytest.raises(DeviceError, match="(?i)may still be energized"):
+            sup.disconnect()
+
+        assert any(a.upper().startswith(":VOLT OFF") for a in inst.attempts), \
+            "the disable must be attempted even when the ramp raises"
+        assert sup._chs(0)["output_on"] is True, "never a false OFF on failure"
+        assert sup._chs(0)["setpoint_V"] == -300.0
+        assert inst.closed
+
+
+class TestKeithleyDisableNeverGatedOnValueWrite:
+    def test_output_off_rejected_zero_write_still_issues_the_disable(self):
+        inst = FakeVisaInst(reject_value_writes=True)
+        sup = _live_keithley(inst)
+        sup._output_on = True
+        sup._setpoint_V = -300.0
+
+        sup.output_off()                             # fail-safe: must NOT raise
+
+        assert any(":OUTP OFF" in w.upper() for w in inst.writes), \
+            "the disable must not live behind the cosmetic zero-volt write"
+        assert sup._output_on is False
+
+    def test_output_off_dead_link_attempts_the_disable_and_stays_on(self):
+        inst = FakeVisaInst(fail_writes=True)
+        sup = _live_keithley(inst)
+        sup._output_on = True
+
+        sup.output_off()                             # fail-safe: must NOT raise
+
+        assert any(":OUTP OFF" in a.upper() for a in inst.attempts), \
+            "the disable must be attempted even when the zero-volt write failed"
+        assert sup._output_on is True, "a failed disable must never claim a false OFF"
+
+    def test_disconnect_ramp_rejected_but_disable_accepted_switches_off(self):
+        inst = FakeVisaInst(reject_value_writes=True)
+        sup = _live_keithley(inst)
+        sup._output_on = True
+        sup._setpoint_V = -300.0
+
+        sup.disconnect()
+
+        assert any(":OUTP OFF" in w.upper() for w in inst.writes), \
+            "the disable must be issued even when the ramp/park writes are rejected"
+        assert sup._output_on is False
+        assert inst.closed
+
+    def test_disconnect_dead_link_attempts_disable_and_is_loud(self):
+        inst = FakeVisaInst(fail_writes=True)
+        sup = _live_keithley(inst)
+        sup._output_on = True
+        sup._setpoint_V = -300.0
+
+        with pytest.raises(DeviceError, match="(?i)may still be energized"):
+            sup.disconnect()
+
+        assert any(":OUTP OFF" in a.upper() for a in inst.attempts), \
+            "the disable must be attempted even when the ramp raises"
+        assert sup._output_on is True, "never a false OFF on failure"
+        assert sup._setpoint_V == -300.0
+        assert inst.closed
+
+
+class TestE4ControlDisableNeverGatedOnValueWrite:
+    def test_output_off_rejected_zero_write_still_issues_the_disable(self):
+        dev = FakeE4Dev(reject_value_writes=True)
+        sup = _live_e4c(dev)
+        sup._output_on = True
+        sup._setpoint_V = -300.0
+
+        sup.output_off()                             # fail-safe: must NOT raise
+
+        assert ("setOutput", False) in dev.calls, \
+            "the disable must not live behind the cosmetic zero-volt write"
+        assert sup._output_on is False
+
+    def test_output_off_dead_link_attempts_the_disable_and_stays_on(self):
+        dev = FakeE4Dev(fail_writes=True)
+        sup = _live_e4c(dev)
+        sup._output_on = True
+
+        sup.output_off()                             # fail-safe: must NOT raise
+
+        assert ("setOutput", False) in dev.attempts, \
+            "the disable must be attempted even when the zero-volt write failed"
+        assert sup._output_on is True, "a failed disable must never claim a false OFF"
+
+    def test_disconnect_ramp_rejected_but_disable_accepted_switches_off(self):
+        dev = FakeE4Dev(reject_value_writes=True)
+        sup = _live_e4c(dev)
+        sup._output_on = True
+        sup._setpoint_V = -300.0
+
+        sup.disconnect()
+
+        assert ("setOutput", False) in dev.calls, \
+            "the disable must be issued even when the ramp/park writes are rejected"
+        assert sup._output_on is False
+        assert dev.closed
+
+    def test_disconnect_dead_link_attempts_disable_and_is_loud(self):
+        dev = FakeE4Dev(fail_writes=True)
+        sup = _live_e4c(dev)
+        sup._output_on = True
+        sup._setpoint_V = -300.0
+
+        with pytest.raises(DeviceError, match="(?i)may still be energized"):
+            sup.disconnect()
+
+        assert ("setOutput", False) in dev.attempts, \
+            "the disable must be attempted even when the ramp raises"
+        assert sup._output_on is True, "never a false OFF on failure"
+        assert sup._setpoint_V == -300.0
+        assert dev.closed
