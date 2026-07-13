@@ -19,18 +19,19 @@ swaps to a compact run-header bar over segmented 2D-map / CCE modes.
 from __future__ import annotations
 
 import csv
+import json
 import logging
 import time
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QRectF
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QListWidget, QListWidgetItem, QPushButton,
     QDoubleSpinBox, QSpinBox, QFileDialog, QStackedWidget,
-    QSplitter, QToolButton,
+    QSplitter, QToolButton, QCheckBox, QApplication,
 )
 
 try:
@@ -45,18 +46,26 @@ try:
 except ImportError:
     _HAS_H5 = False
 
+from analysis.camera_calibration import AffineFit
 from analysis.cce import cce_vs_reference
 from analysis.efield_analysis import compute_cce_with_uncertainty, fit_depletion_voltage
 from analysis.map_slice import (
     display_unit_scale, mm_to_index, slice_grid_at_mm, strip_unit_suffix,
 )
+from analysis.mosaic_stitch import canvas_geometry, place_tiles, plan_grid
 from analysis.scan_grid import grid_extent
 from gui.panel_kit import (
-    Card, FigureCard, MetricGrid, MetricTile, SegmentedControl, panel_header,
+    Card, EmptyState, FigureCard, MetricGrid, MetricTile, SegmentedControl,
+    panel_header,
 )
 from gui.scan_map_view import QUANTITIES, QUANTITY_UNITS, ScanMapView
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
 from gui.style import DARK, PLOT_FG, PLOT_OVERLAY, SPACE_MD, SPACE_SM
+
+# Survey mode's mosaic mode ("map"/"cce"/"survey" -> _modes stack index) —
+# module-level so the segmented-control wiring and any future page reorder
+# stay in one place instead of a positional 0/1/2 guess at each call site.
+_SURVEY_MODE_INDEX = {"map": 0, "cce": 1, "survey": 2}
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +119,44 @@ def _flags_tile_content(fit) -> tuple[str, str]:
     return ", ".join(parts), state
 
 
+def _affine_from_stored(raw: "np.ndarray | None") -> AffineFit | None:
+    """Reconstruct an :class:`~analysis.camera_calibration.AffineFit` from
+    ``camera`` group attr ``affine`` (``data/hdf5_writer.py``'s
+    ``set_camera_calibration`` — "stored as a flat float64 array attr ...
+    the writer does not interpret its shape").
+
+    The only convention actually exercised anywhere in this codebase today
+    (``tests/test_data_writer.py::test_set_camera_calibration_attrs_round_trip``)
+    is a ``(2, 3)`` array: columns ``0:2`` are ``matrix_px_per_mm`` (2x2),
+    column ``2`` is ``offset_px`` (the classic 2x3 affine-matrix layout).
+    Since ``set_camera_calibration``'s caller (the A4b camera/motor
+    plumbing) has not landed yet, this is the reader-side half of that
+    convention — documented here so both sides agree once a real writer
+    call site exists. Any other shape (or ``None``) is honestly reported as
+    unparseable rather than guessed at; the caller falls back to nominal
+    (``affine=None``) placement — see Survey mode's calibration notice.
+
+    Only ``matrix_px_per_mm``/``offset_px`` are real; the remaining
+    dataclass fields (fit-quality diagnostics that were never persisted)
+    are filled with honest "no data" placeholders — never used by
+    :func:`~analysis.mosaic_stitch.place_tiles`'s placement math, which
+    only reads ``predict``/``image_to_object`` (matrix + offset).
+    """
+    if raw is None:
+        return None
+    arr = np.asarray(raw, dtype=np.float64)
+    if arr.shape != (2, 3):
+        return None
+    return AffineFit(
+        matrix_px_per_mm=arr[:, :2].copy(),
+        offset_px=arr[:, 2].copy(),
+        residuals_px=np.zeros((0, 2), dtype=np.float64),
+        rms_px=0.0,
+        max_abs_px=0.0,
+        rank=2,
+    )
+
+
 class AnalysisPanel(QWidget):
     """Load a completed run HDF5 file and re-analyse / re-plot.
 
@@ -125,6 +172,23 @@ class AnalysisPanel(QWidget):
         self._runs_dir = Path(runs_dir)
         self._data: dict = {}          # loaded HDF5 data arrays
         self._voltage_scan: dict = {}  # loaded 'voltage_scan/{voltage_V,charge_pC,current_A}'
+        # Survey (mosaic) state — see _load_h5's 'camera'/'run_info' reads
+        # and _build_survey_mode/_build_survey_mosaic. '_camera' holds the
+        # loaded camera group (frames/frame_pos_mm/px_per_mm/affine_fit/
+        # n_frames_omitted); '_survey_geom' is the safety['survey'] geometry
+        # block parsed out of run_info/scan_config JSON (None when absent —
+        # see SCAN_DATA_FORMAT.md's CAPTURE_PHOTO section), the position
+        # fallback for a photo-only survey written before camera/
+        # frame_pos_mm existed. '_survey_position_source' names which ladder
+        # rung the most recent _collect_survey_tiles() call actually used
+        # ("frame_pos_mm" / "geometry"); '_survey_n_pos_omitted' is that
+        # call's honest count of written-but-unplaceable frames (NaN
+        # position, or beyond the reconstructed grid).
+        self._camera: dict = {}
+        self._survey_geom: dict | None = None
+        self._survey_position_source: str | None = None
+        self._survey_n_pos_omitted: int = 0
+        self._survey_theme_mode: str = "dark"
         self._run_path: str = ""
         # How the loaded run ended (HDF5Writer root attrs 'outcome' /
         # 'abort_reason' — SCAN_DATA_FORMAT.md "Root attributes"). None
@@ -211,17 +275,19 @@ class AnalysisPanel(QWidget):
         lay.setSpacing(SPACE_SM)
 
         self._segmented = SegmentedControl(
-            [("map", "2D map"), ("cce", "CCE vs bias")], current="map")
+            [("map", "2D map"), ("cce", "CCE vs bias"), ("survey", "Survey")],
+            current="map")
         seg_row = QHBoxLayout()
         seg_row.addWidget(self._segmented)
         seg_row.addStretch(1)
         lay.addLayout(seg_row)
 
         self._modes = QStackedWidget()
-        self._modes.addWidget(self._build_map_mode())   # index 0
-        self._modes.addWidget(self._build_cce_mode())   # index 1
+        self._modes.addWidget(self._build_map_mode())      # index 0
+        self._modes.addWidget(self._build_cce_mode())      # index 1
+        self._modes.addWidget(self._build_survey_mode())   # index 2
         self._segmented.selection_changed.connect(
-            lambda key: self._modes.setCurrentIndex(0 if key == "map" else 1))
+            lambda key: self._modes.setCurrentIndex(_SURVEY_MODE_INDEX.get(key, 0)))
         lay.addWidget(self._modes, 1)
         return page
 
@@ -500,6 +566,93 @@ class AnalysisPanel(QWidget):
             self._reset_cce_fit_tiles("no run loaded")
         return page
 
+    def _build_survey_mode(self) -> QWidget:
+        """Mosaic Survey view (E6b part 2): stitch the run's ``camera/``
+        frames (via ``analysis.mosaic_stitch.place_tiles``) into one
+        real-mm-axed image. Building is an explicit user action ("Build
+        mosaic"), not automatic on load — this task's brief allows a
+        synchronous compute with a busy cursor (no new threading primitive;
+        a WorkerThread rework is a parallel beat) since ``place_tiles`` can
+        be non-trivial work for a real mosaic."""
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(SPACE_SM)
+
+        ctrl = QHBoxLayout()
+        self._chk_survey_refine = QCheckBox("Refine seams")
+        self._chk_survey_refine.setToolTip(
+            "analysis.mosaic_stitch.place_tiles(refine=True) — pairwise "
+            "FFT seam correction. Off (default) matches place_tiles's own "
+            "default: nominal calibrated placement only."
+        )
+        ctrl.addWidget(self._chk_survey_refine)
+        self._btn_build_survey = QPushButton("Build mosaic")
+        self._btn_build_survey.setProperty("state", "secondary")
+        set_button_icon(self._btn_build_survey, "mdi.grid")
+        self._btn_build_survey.clicked.connect(self._build_survey_mosaic)
+        ctrl.addWidget(self._btn_build_survey)
+        ctrl.addStretch(1)
+        self._chip_survey_cal = StatusChip("No run loaded", "neutral")
+        ctrl.addWidget(self._chip_survey_cal)
+        lay.addLayout(ctrl)
+
+        # Calibration/affine notice (§ requirement: "if affine is None or
+        # absent, say so in the UI") — always visible text, never
+        # tooltip-only, same "caption over tooltip" idiom as
+        # _update_ref_sigma_tile's q_term_included caveat.
+        self._lbl_survey_calib = QLabel("")
+        self._lbl_survey_calib.setObjectName("cardSubtitle")
+        self._lbl_survey_calib.setWordWrap(True)
+        lay.addWidget(self._lbl_survey_calib)
+
+        self._survey_stack = QStackedWidget()
+        if _HAS_PG:
+            self._survey_figure = FigureCard("Survey mosaic", "no data")
+            self._survey_plot = self._survey_figure.plot
+            self._survey_plot.setLabel("bottom", "X", units="mm")
+            self._survey_plot.setLabel("left", "Y", units="mm")
+            self._survey_plot.setAspectLocked(True)
+            self._survey_image_item = pg.ImageItem()
+            self._survey_plot.addItem(self._survey_image_item)
+            self._survey_empty = EmptyState(
+                "fa5s.th-large", "No mosaic built",
+                "Load a run with camera frames, then click "
+                "“Build mosaic”.",
+                theme_mode=self._survey_theme_mode,
+            )
+            self._survey_stack.addWidget(self._survey_empty)    # index 0
+            self._survey_stack.addWidget(self._survey_figure)   # index 1
+        else:  # pragma: no cover - exercised only without pyqtgraph installed
+            self._survey_figure = None
+            self._survey_plot = None
+            self._survey_image_item = None
+            self._survey_empty = None
+            self._survey_stack.addWidget(QLabel(
+                "pyqtgraph not installed — cannot display the mosaic.\n"
+                "Run:  pip install pyqtgraph"
+            ))
+        lay.addWidget(self._survey_stack, 1)
+
+        # E4 diagnostics readout row — n_clamped/mean_abs_offset_px from
+        # place_tiles(return_diagnostics=True), plus this view's own
+        # placement honesty counters (tiles placed / omitted at write time /
+        # omitted for lack of a usable position).
+        self._survey_tiles_grid = MetricGrid(columns=5, compact=True)
+        self._tile_survey_placed: MetricTile = self._survey_tiles_grid.add_tile(
+            ("Tiles placed", "—"))
+        self._tile_survey_omitted_write: MetricTile = self._survey_tiles_grid.add_tile(
+            ("Omitted (write)", "—"))
+        self._tile_survey_omitted_pos: MetricTile = self._survey_tiles_grid.add_tile(
+            ("Omitted (no pos)", "—"))
+        self._tile_survey_clamped: MetricTile = self._survey_tiles_grid.add_tile(
+            ("Seam clamps", "—"))
+        self._tile_survey_offset: MetricTile = self._survey_tiles_grid.add_tile(
+            ("Mean |offset|", "—"))
+        lay.addWidget(self._survey_tiles_grid)
+        self._reset_survey_tiles("no run loaded")
+        return page
+
     # ------------------------------------------------------------------ #
     # Recent runs (empty state)                                           #
     # ------------------------------------------------------------------ #
@@ -624,6 +777,11 @@ class AnalysisPanel(QWidget):
             # _replot_map's own _reset_slice_state() call; recomputed fresh
             # the next time "Plot CCE vs bias" runs.
             self._reset_cce_fit_tiles("not yet plotted")
+            # A new run's mosaic (if any was built) belongs to the PREVIOUS
+            # file — same "reset on load" reasoning as _reset_cce_fit_tiles
+            # above; the fresh run's own camera/geometry state was already
+            # loaded into self._camera/_survey_geom by _load_h5 just above.
+            self._reset_survey_state()
             self._stack.setCurrentIndex(1)
             return True
         except Exception as exc:
@@ -633,6 +791,8 @@ class AnalysisPanel(QWidget):
     def _load_h5(self, path: str) -> None:
         self._data = {}
         self._voltage_scan = {}
+        self._camera = {}
+        self._survey_geom = None
         with h5py.File(path, "r") as f:
             # Root attrs (SCAN_DATA_FORMAT.md): 'outcome' in
             # {finished, aborted, error, unknown} + free-text 'abort_reason'.
@@ -660,6 +820,53 @@ class AnalysisPanel(QWidget):
                 vs = f["voltage_scan"]
                 for key in vs:
                     self._voltage_scan[key] = vs[key][:]
+            self._load_camera_group(f)
+            self._load_survey_geometry(f)
+
+    def _load_camera_group(self, f: "h5py.File") -> None:
+        """Survey mode's data source (E6b part 2): the ``camera`` group
+        SCAN_DATA_FORMAT.md documents — ``frames``/``frame_pos_mm``
+        (position source ladder rung 1) plus the calibration attrs
+        ``set_camera_calibration`` writes. Absent group -> ``self._camera``
+        stays ``{}`` (an honest "no camera data" for ``_collect_survey_tiles``
+        to report), never a crash."""
+        if "camera" not in f:
+            return
+        cam = f["camera"]
+        if "frames" in cam:
+            self._camera["frames"] = cam["frames"][:]
+            self._camera["frame_shape"] = tuple(cam["frames"].shape[1:])
+        # Present whenever the camera group has >= 1 written frame
+        # (SCAN_DATA_FORMAT.md) — absent on an older file written before
+        # E6b part 1 (guard exactly as that doc instructs).
+        if "frame_pos_mm" in cam:
+            self._camera["frame_pos_mm"] = cam["frame_pos_mm"][:]
+        self._camera["n_frames_omitted"] = int(cam.attrs.get("n_frames_omitted", 0))
+        px_per_mm = cam.attrs.get("px_per_mm")
+        self._camera["px_per_mm"] = float(px_per_mm) if px_per_mm is not None else None
+        self._camera["affine_fit"] = _affine_from_stored(cam.attrs.get("affine"))
+
+    def _load_survey_geometry(self, f: "h5py.File") -> None:
+        """Position source ladder rung 2 (older files, or a photo-only
+        survey with no ``camera/frame_pos_mm`` at all): reconstruct tile
+        geometry from ``run_info/scan_config``'s ``safety['survey']`` block
+        (``controller/survey_plan.py``'s documented "KNOWN GAP" recovery
+        path — SCAN_DATA_FORMAT.md's CAPTURE_PHOTO section). Absent/
+        malformed JSON, a missing ``run_info`` group (``run_metadata``
+        saving off), or a missing ``safety``/``survey`` key all leave
+        ``self._survey_geom`` honestly ``None`` — never raises."""
+        if "run_info" not in f:
+            return
+        raw = f["run_info"].attrs.get("scan_config")
+        if not raw:
+            return
+        try:
+            scan_cfg = json.loads(raw)
+            survey = (scan_cfg.get("safety") or {}).get("survey")
+        except (ValueError, TypeError, AttributeError):
+            return
+        if isinstance(survey, dict) and "origin_mm" in survey and "area_mm" in survey:
+            self._survey_geom = survey
 
     # ------------------------------------------------------------------ #
     # 2D map                                                               #
@@ -1213,6 +1420,343 @@ class AnalysisPanel(QWidget):
         flash_button(self._btn_export_csv, "good", "Exported")
 
     # ------------------------------------------------------------------ #
+    # Survey (mosaic) mode — E6b part 2                                    #
+    # ------------------------------------------------------------------ #
+
+    def _reset_survey_state(self) -> None:
+        """New run loaded — a previously built mosaic belongs to a
+        different file's camera data; drop it back to the empty state
+        rather than leave a stale image on screen (same "a previous run's
+        state may not still apply" reasoning as ``_reset_slice_state``/
+        ``_reset_cce_fit_tiles``). Does NOT auto-rebuild — building is an
+        explicit action (see ``_build_survey_mode``)."""
+        if not (_HAS_PG and hasattr(self, "_survey_stack")):
+            return
+        self._survey_empty.set_label("No mosaic built")
+        self._survey_empty.set_hint(
+            "Load a run with camera frames, then click “Build mosaic”.")
+        self._survey_stack.setCurrentIndex(0)
+        self._lbl_survey_calib.setText("")
+        self._chip_survey_cal.set_status("No mosaic yet", "neutral")
+        self._reset_survey_tiles("no mosaic built")
+
+    def _reset_survey_tiles(self, reason: str) -> None:
+        if not hasattr(self, "_tile_survey_placed"):
+            return
+        for tile in (
+            self._tile_survey_placed, self._tile_survey_omitted_write,
+            self._tile_survey_omitted_pos, self._tile_survey_clamped,
+            self._tile_survey_offset,
+        ):
+            tile.set_value("—")
+            tile.set_state("normal")
+            tile.set_stale(True, reason)
+
+    def _show_survey_empty(self, label: str, hint: str) -> None:
+        """Route every "cannot build a mosaic" path (missing frames, no
+        position source, no pixel scale, a placement failure) through the
+        same honest EmptyState — no crash, no silent blank canvas."""
+        if not (_HAS_PG and hasattr(self, "_survey_stack")):
+            return
+        self._survey_empty.set_label(label)
+        self._survey_empty.set_hint(hint)
+        self._survey_stack.setCurrentIndex(0)
+        self._chip_survey_cal.set_status(label, "warn")
+        self._reset_survey_tiles(label)
+
+    @staticmethod
+    def _as_grayscale(frame: np.ndarray) -> np.ndarray:
+        """``place_tiles`` requires a 2-D tile image; a stored frame is
+        grayscale ``(H, W)`` for every camera backend this app ships
+        (``devices/camera_blackfly.py``), but a defensive ``(H, W, C)``
+        color frame is averaged over channels rather than rejected."""
+        arr = np.asarray(frame, dtype=np.float64)
+        if arr.ndim == 3:
+            arr = arr.mean(axis=-1)
+        return arr
+
+    def _survey_rect(self, geom: dict) -> tuple[float, float, float, float]:
+        """``safety['survey']``'s own ``(origin_mm, area_mm)`` as the
+        ``(x0, y0, x1, y1)`` rectangle :func:`~analysis.mosaic_stitch.
+        canvas_geometry`/:func:`~analysis.mosaic_stitch.plan_grid` expect —
+        see ``controller/survey_plan.py``'s schema docstring."""
+        x0, y0 = geom["origin_mm"]
+        w, h = geom["area_mm"]
+        return (float(x0), float(y0), float(x0) + float(w), float(y0) + float(h))
+
+    def _collect_survey_tiles(
+        self,
+    ) -> tuple[list[tuple[np.ndarray, tuple[float, float]]] | None, str]:
+        """Position source ladder (E6b brief): prefer ``camera/
+        frame_pos_mm`` (rung 1 — may contain NaN rows, each one an honest
+        gap, counted in ``self._survey_n_pos_omitted`` and never placed);
+        else reconstruct tile centres from ``safety['survey']`` geometry
+        (rung 2, older/photo-only-survey files); else an EmptyState
+        explaining there is no way to place these frames at all (rung 3).
+
+        Returns ``(tiles, source)`` — ``tiles`` is ``None`` once an
+        EmptyState has already been shown (nothing left to build); *source*
+        is ``"frame_pos_mm"``/``"geometry"`` for the caller's calibration
+        notice (unused on the ``None`` path).
+        """
+        frames = self._camera.get("frames")
+        if frames is None or len(frames) == 0:
+            self._show_survey_empty(
+                "No camera frames in this run",
+                "This run has no 'camera/frames' dataset (camera saving "
+                "was off, or every grab failed) — nothing to stitch."
+            )
+            return None, ""
+
+        n_frames = len(frames)
+        pos_mm = self._camera.get("frame_pos_mm")
+        n_pos_omitted = 0
+        tiles: list[tuple[np.ndarray, tuple[float, float]]] = []
+
+        if pos_mm is not None:
+            self._survey_position_source = "frame_pos_mm"
+            for k in range(n_frames):
+                x, y = float(pos_mm[k][0]), float(pos_mm[k][1])
+                if not (np.isfinite(x) and np.isfinite(y)):
+                    n_pos_omitted += 1
+                    continue
+                tiles.append((self._as_grayscale(frames[k]), (x, y)))
+        elif self._survey_geom is not None:
+            self._survey_position_source = "geometry"
+            try:
+                centers, _rows_cols = plan_grid(
+                    self._survey_rect(self._survey_geom),
+                    tuple(self._survey_geom["fov_mm"]),
+                    float(self._survey_geom["overlap_frac"]),
+                )
+            except (KeyError, ValueError, TypeError) as exc:
+                self._show_survey_empty(
+                    "Survey geometry unreadable",
+                    f"'run_info/scan_config' safety['survey'] block is "
+                    f"malformed: {exc}"
+                )
+                return None, ""
+            for k in range(n_frames):
+                if k >= len(centers):
+                    n_pos_omitted += 1
+                    continue
+                tiles.append((self._as_grayscale(frames[k]), centers[k]))
+        else:
+            self._show_survey_empty(
+                "No frame positions available",
+                "This run has no 'camera/frame_pos_mm' dataset and no "
+                "safety['survey'] geometry in run_info/scan_config — "
+                "there is no way to place these frames in mm space."
+            )
+            return None, ""
+
+        self._survey_n_pos_omitted = n_pos_omitted
+        if not tiles:
+            self._show_survey_empty(
+                "Every frame is unplaceable",
+                f"All {n_frames} written frame(s) have an unknown/NaN "
+                "position — nothing to stitch."
+            )
+            return None, ""
+        return tiles, self._survey_position_source
+
+    def _resolve_px_per_mm(self) -> tuple[float | None, str]:
+        """Pixel scale for placement, in priority order: the recorded
+        calibration's scalar ``px_per_mm`` attr; else the recorded affine's
+        own ``mean_px_per_mm``; else — for an uncalibrated photo-only
+        survey — inferred from the known tile pixel shape vs. the survey
+        plan's ``fov_mm`` (still "nominal", same honesty caveat as the
+        affine-absent case). ``None`` when nothing above yields a usable
+        (positive) scale at all."""
+        px = self._camera.get("px_per_mm")
+        if px is not None and px > 0:
+            return float(px), "calibration"
+        affine = self._camera.get("affine_fit")
+        if affine is not None:
+            try:
+                v = float(affine.mean_px_per_mm)
+                if v > 0:
+                    return v, "calibration"
+            except (ValueError, ZeroDivisionError):
+                pass
+        geom = self._survey_geom
+        frame_shape = self._camera.get("frame_shape")
+        if geom is not None and frame_shape is not None and len(frame_shape) == 2:
+            fov_w, fov_h = geom.get("fov_mm", (0.0, 0.0))
+            h_px, w_px = frame_shape
+            scales = [
+                float(w_px) / float(fov_w) if fov_w else 0.0,
+                float(h_px) / float(fov_h) if fov_h else 0.0,
+            ]
+            scales = [s for s in scales if s > 0]
+            if scales:
+                return float(np.mean(scales)), "survey_fov"
+        return None, "none"
+
+    def _survey_area_mm(
+        self, xs: list[float], ys: list[float], half_w_mm: float, half_h_mm: float,
+    ) -> tuple[float, float, float, float]:
+        """Bounding rectangle for :func:`~analysis.mosaic_stitch.
+        canvas_geometry`. The geometry ladder rung already covers the whole
+        planned raster exactly (``safety['survey']``'s own area); the
+        frame_pos_mm rung has no such rectangle, so it pads the raw tile
+        centres' bounding box by half a tile footprint per side — matching
+        how ``plan_grid`` itself sizes a raster so every tile's own edge
+        lands inside the canvas."""
+        if self._survey_position_source == "geometry" and self._survey_geom is not None:
+            return self._survey_rect(self._survey_geom)
+        x0, x1 = min(xs) - half_w_mm, max(xs) + half_w_mm
+        y0, y1 = min(ys) - half_h_mm, max(ys) + half_h_mm
+        return (x0, y0, x1, y1)
+
+    def _build_survey_mosaic(self) -> None:
+        if not _HAS_PG:
+            return
+        tiles, _source = self._collect_survey_tiles()
+        if tiles is None:
+            return   # _collect_survey_tiles already showed an EmptyState
+
+        px_per_mm, px_source = self._resolve_px_per_mm()
+        if px_per_mm is None:
+            self._show_survey_empty(
+                "No pixel scale available",
+                "No camera calibration (set_camera_calibration) and no "
+                "survey geometry to infer one from — cannot place tiles "
+                "in real mm coordinates."
+            )
+            return
+
+        affine = self._camera.get("affine_fit")
+        frame_h, frame_w = tiles[0][0].shape
+        half_w_mm = (frame_w / 2.0) / px_per_mm
+        half_h_mm = (frame_h / 2.0) / px_per_mm
+        xs = [c[0] for _img, c in tiles]
+        ys = [c[1] for _img, c in tiles]
+        area_mm = self._survey_area_mm(xs, ys, half_w_mm, half_h_mm)
+
+        try:
+            shape_px, origin_mm = canvas_geometry(area_mm, px_per_mm, affine=affine)
+        except ValueError as exc:
+            self._show_survey_empty("Mosaic build failed", str(exc))
+            return
+
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            canvas, _weight, diag = place_tiles(
+                shape_px, tiles, px_per_mm, origin_mm, affine=affine,
+                refine=self._chk_survey_refine.isChecked(),
+                return_diagnostics=True,
+            )
+        except ValueError as exc:
+            self._show_survey_empty("Mosaic build failed", str(exc))
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+
+        self._render_survey_canvas(canvas, origin_mm, shape_px, px_per_mm)
+        self._update_survey_calibration_notice(px_source, affine is not None)
+        self._update_survey_diagnostics(len(tiles), diag)
+
+    def _render_survey_canvas(
+        self, canvas: np.ndarray, origin_mm: tuple[float, float],
+        shape_px: tuple[int, int], px_per_mm: float,
+    ) -> None:
+        """Push *canvas* (mosaic_stitch's ``(row=Y, col=X)`` array — see its
+        module docstring "Canvas axis convention") onto the mm-axed
+        ``pg.ImageItem``. pyqtgraph's default ``imageAxisOrder`` is
+        'col-major' (``image[x_index, y_index]``, verified against this
+        venv's pyqtgraph 0.14) — the TRANSPOSE of mosaic_stitch's row-major
+        ``(Y, X)`` convention — so the array is transposed before display;
+        ``setRect`` then maps it onto the exact mm extent so axes read in
+        real millimetres, the same ``pos``/``scale`` contract
+        ``gui/scan_map_view.py`` uses via ``analysis.scan_grid.grid_extent``.
+        NaN gaps (an omitted/never-placed tile) render as the transparent
+        dark canvas showing through — pyqtgraph maps non-finite pixels to
+        alpha 0 (same NaN-honesty as ``ScanMapView._redraw``) — never
+        interpolated over.
+        """
+        h_px, w_px = shape_px
+        display = np.asarray(canvas).T
+        finite = canvas[~np.isnan(canvas)]
+        if finite.size:
+            vmin, vmax = float(np.nanmin(canvas)), float(np.nanmax(canvas))
+            if vmin == vmax:
+                vmax = vmin + 1e-9
+        else:
+            vmin, vmax = 0.0, 1.0
+        self._survey_image_item.setImage(display, autoLevels=False, levels=(vmin, vmax))
+        width_mm = w_px / px_per_mm
+        height_mm = h_px / px_per_mm
+        self._survey_image_item.setRect(
+            QRectF(origin_mm[0], origin_mm[1], width_mm, height_mm))
+        self._survey_plot.getPlotItem().autoRange()
+        self._survey_stack.setCurrentIndex(1)
+        self._survey_figure.set_subtitle(
+            f"{w_px}x{h_px} px  |  {px_per_mm:.4g} px/mm  |  "
+            f"origin ({origin_mm[0]:.3f}, {origin_mm[1]:.3f}) mm"
+        )
+
+    def _update_survey_calibration_notice(self, px_source: str, has_affine: bool) -> None:
+        """Always-visible calibration/affine notice — never tooltip-only
+        (E6b brief: "if affine is None or absent, say so in the UI")."""
+        if has_affine:
+            self._lbl_survey_calib.setText(
+                "Calibrated placement — rotation/shear-aware affine "
+                "(camera/affine) applied.")
+            self._chip_survey_cal.set_status("Calibrated", "good")
+        elif px_source == "calibration":
+            self._lbl_survey_calib.setText(
+                "Uncalibrated — nominal placement (place_tiles(affine=None)): "
+                "recorded scalar px/mm used, but this run has no rotation/"
+                "shear affine (camera/affine).")
+            self._chip_survey_cal.set_status("Uncalibrated", "warn")
+        else:
+            self._lbl_survey_calib.setText(
+                "Uncalibrated — nominal placement (place_tiles(affine=None)): "
+                "this run recorded no camera calibration at all; pixel scale "
+                "inferred from the survey FOV geometry instead.")
+            self._chip_survey_cal.set_status("Uncalibrated", "warn")
+
+    def _update_survey_diagnostics(self, n_placed: int, diag: dict) -> None:
+        """E4 diagnostics readout (``place_tiles(return_diagnostics=True)``)
+        plus this view's own placement-honesty counters."""
+        self._tile_survey_placed.set_value(str(n_placed))
+        self._tile_survey_placed.set_state("normal")
+        self._tile_survey_placed.set_stale(False, "")
+
+        n_write = int(self._camera.get("n_frames_omitted") or 0)
+        self._tile_survey_omitted_write.set_value(str(n_write))
+        self._tile_survey_omitted_write.set_state("warn" if n_write else "normal")
+        self._tile_survey_omitted_write.set_stale(False, "")
+        self._tile_survey_omitted_write.setToolTip(
+            "Frames dropped at WRITE time (grab failure / shape mismatch) — "
+            "camera group attr n_frames_omitted.")
+
+        n_pos = self._survey_n_pos_omitted
+        self._tile_survey_omitted_pos.set_value(str(n_pos))
+        self._tile_survey_omitted_pos.set_state("warn" if n_pos else "normal")
+        self._tile_survey_omitted_pos.set_stale(False, "")
+        self._tile_survey_omitted_pos.setToolTip(
+            "Written frames that could not be PLACED (NaN/unknown position, "
+            "or beyond the reconstructed survey grid) — shown as gaps.")
+
+        n_clamped = int(diag.get("n_clamped", 0))
+        self._tile_survey_clamped.set_value(str(n_clamped))
+        self._tile_survey_clamped.set_state("warn" if n_clamped else "normal")
+        self._tile_survey_clamped.set_stale(False, "")
+        self._tile_survey_clamped.setToolTip(
+            "Overlapping tile pairs whose seam-refinement correction hit "
+            "the ±25% clamp (0 when 'Refine seams' is off).")
+
+        mean_off = float(diag.get("mean_abs_offset_px", 0.0))
+        self._tile_survey_offset.set_value(f"{mean_off:.3f} px")
+        self._tile_survey_offset.set_state("normal")
+        self._tile_survey_offset.set_stale(False, "")
+        self._tile_survey_offset.setToolTip(
+            "Mean |applied seam-refinement offset| over placed tiles "
+            "(0 when 'Refine seams' is off).")
+
+    # ------------------------------------------------------------------ #
     # Theme                                                               #
     # ------------------------------------------------------------------ #
 
@@ -1220,6 +1764,19 @@ class AnalysisPanel(QWidget):
         """Delegate to the embedded shared map view (its own empty-state
         icon tint re-resolves; the map canvas itself is fixed-dark in both
         themes). CCE pens are theme-invariant by design — see
-        ``_build_cce_mode``."""
+        ``_build_cce_mode``. Survey mode's own cached pens/EmptyState follow
+        the same "fixed-dark canvas, re-resolve axis text + EmptyState
+        tint" idiom as ``ScanMapView.refresh_theme``."""
         if _HAS_PG and hasattr(self, "_map_view"):
             self._map_view.refresh_theme(mode)
+        if mode:
+            self._survey_theme_mode = str(mode)
+        if _HAS_PG and hasattr(self, "_survey_plot") and self._survey_plot is not None:
+            text_pen = pg.mkPen(PLOT_FG)
+            plot_item = self._survey_plot.getPlotItem()
+            for axis_name in ("bottom", "left"):
+                axis = plot_item.getAxis(axis_name)
+                axis.setPen(text_pen)
+                axis.setTextPen(text_pen)
+            if self._survey_empty is not None:
+                self._survey_empty.refresh_theme(self._survey_theme_mode)
