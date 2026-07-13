@@ -10,7 +10,7 @@
 The A/B/C/D classification is the ratified ground truth from the coupling
 analysis. Every file listed here was verified to exist in `TCT_app/tests/` on
 2026-07-13 — **no drift, no missing files, nothing invented.** Counts:
-**A = 48, B = 20, C = 40, D = 5 (113 total test files).**
+**A = 49, B = 21, C = 40, D = 5 (115 total test files).**
 
 | Bucket | Meaning | Migration behavior | Gate |
 |---|---|---|---|
@@ -79,6 +79,7 @@ do not remove them). One file per row; the filename cell is the parse target.
 | 46 | `test_oscilloscope_wedge_recovery.py` | scope CURVE? wedge recovery |
 | 47 | `test_camera_blackfly.py` | FLIR Blackfly simulated backend |
 | 48 | `test_routine_corpus.py` | routine corpus freeze gate (P2-entry) |
+| 49 | `test_capability_model.py` | capability spine data model (D1a, stdlib-only) |
 <!-- BUCKET_A_END -->
 
 ### The exact [A-green] run command
@@ -94,12 +95,7 @@ The bash/CI twin (from `TCT_app/`):
 
 ### Target branch and where the green tail is recorded
 
-- **Trunk = `design/cockpit-v5` until Phase 0.5 merges it to `main`.** Per the
-  roadmap, `origin/main` is a stale pre-restructure state; the live codebase
-  lives only on `design/cockpit-v5`. After Phase 0 is bench-green,
-  `design/cockpit-v5 -> main` becomes THE trunk and all `[A-green]` references
-  resolve to `main@post-merge`. Until then, run Bucket A against
-  `design/cockpit-v5`.
+- **Trunk = `main @ a7dca3f` (Phase 0.5 executed, 2026-07-13, merge bench-green with `polish-freeze` tag).** The live codebase is now on `main`. `design/cockpit-v5` retires after in-flight work lands (D1b adapters/registry, gate #4 bench run).
 - **The green tail is recorded in `.claude/session_state.md`** (the beat
   ledger — the "HEAD / TRUTH" section carries the last green bench set + pass
   count). Each `[A-green]` invocation appends its pytest output tail (pass
@@ -146,6 +142,7 @@ into `SAFETY_NORMATIVE_TESTS.md`).
 | 18 | `test_bias_all_off.py` | bias all-off contract |
 | 19 | `test_motor_transport_lock.py` | motor transport-lock contract (GRBL + PI serialization) |
 | 20 | `test_drs4_lock.py` | DRS4 board-transport lock contract |
+| 21 | `test_guarded_exchange_base.py` | guarded-exchange base machinery (G0, devices/base.py) |
 
 ---
 
