@@ -38,6 +38,26 @@ if TYPE_CHECKING:
 # How many history points to keep per channel
 _HISTORY_LEN = 600
 
+# Severity ranking used ONLY by the alarm banner's "worst status" reduction
+# below (_update_alarm_banner). AlarmStatus's own declaration order lists
+# UNAVAILABLE last, but a channel that is merely UNAVAILABLE must never
+# visually outrank a genuine ALARM_LOW/ALARM_HIGH reading on a *different*
+# channel -- doing so greys out a hard alarm into a quiet "Unavailable"
+# banner exactly when another sensor happens to be down (Mary's review:
+# alarm-masking bug, pre-existing before d03b5ff). No other code ranks
+# AlarmStatus by enum order -- scan_controller.py's slow-control policy
+# uses explicit set membership (`_WARN_STATUSES`/`_ALARM_STATUSES`/`is
+# AlarmStatus.UNAVAILABLE`), not `max()`/ordering -- so this ranking is
+# local to the banner and does not touch devices/slow_control_base.py.
+_BANNER_SEVERITY: dict[AlarmStatus, int] = {
+    AlarmStatus.OK:          0,
+    AlarmStatus.WARN_LOW:    1,
+    AlarmStatus.WARN_HIGH:   1,
+    AlarmStatus.UNAVAILABLE: 2,
+    AlarmStatus.ALARM_LOW:   3,
+    AlarmStatus.ALARM_HIGH:  3,
+}
+
 # The four headline dashboard tiles (design system §7 "Monitor: 4
 # alarm-colored tiles up top") and the channel-name fragments that claim
 # them. Matching is by substring against the configured channel key so a
@@ -408,11 +428,13 @@ class MonitorPanel(QWidget):
 
     def _update_alarm_banner(self, readings: dict[str, SlowControlReading]) -> None:
         worst = AlarmStatus.OK
-        priority = list(AlarmStatus)
         alarm_count = 0
+        unavailable_count = 0
         for r in readings.values():
-            if priority.index(r.status) > priority.index(worst):
+            if _BANNER_SEVERITY[r.status] > _BANNER_SEVERITY[worst]:
                 worst = r.status
+            if r.status == AlarmStatus.UNAVAILABLE:
+                unavailable_count += 1
             if r.status != AlarmStatus.OK:
                 alarm_count += 1
         # Quiet nominal (law 1): only abnormal states get colour; routine
@@ -424,7 +446,16 @@ class MonitorPanel(QWidget):
         if not readings:
             self._chip_alarm.set_status("No data", "unknown")
         elif worst in (AlarmStatus.ALARM_LOW, AlarmStatus.ALARM_HIGH):
-            self._chip_alarm.set_status("Alarm", "crit")
+            # A genuine hard alarm always escalates to the red "crit"
+            # pill -- concurrent UNAVAILABLE channels never soften or
+            # replace that (the bug this fixes). Their info must not
+            # vanish either, so it rides along as a plain-text suffix on
+            # the SAME headline rather than inventing a second colour --
+            # escalation to "crit" stays driven solely by the alarm.
+            text = "Alarm"
+            if unavailable_count:
+                text = f"Alarm · {unavailable_count} unavailable"
+            self._chip_alarm.set_status(text, "crit")
         elif worst in (AlarmStatus.WARN_LOW, AlarmStatus.WARN_HIGH):
             self._chip_alarm.set_status("Warning", "warn")
         elif worst == AlarmStatus.UNAVAILABLE:

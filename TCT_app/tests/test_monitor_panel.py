@@ -169,6 +169,26 @@ def test_alarm_escalates_header_chip():
     assert panel._chip_alarm.property("state") == "crit"
 
 
+def test_alarm_still_escalates_when_another_channel_is_unavailable():
+    """Mary's review: AlarmStatus lists UNAVAILABLE last, and a banner that
+    computes "worst" via naive enum-order max() lets an UNAVAILABLE channel
+    outrank -- and grey out -- a genuine ALARM_* reading on another channel.
+    A hard alarm must always win the banner, concurrent dropout or not, and
+    the dropout must still be visible (not silently swallowed)."""
+    _app()
+    panel, mgr = _panel()
+    mgr.set("temperature_C", 99.0, AlarmStatus.ALARM_HIGH)
+    mgr.set("humidity_pct", float("nan"), AlarmStatus.UNAVAILABLE)
+    panel._poll()
+    assert panel._chip_alarm.property("state") == "crit"
+    assert "Alarm" in panel._chip_alarm.text()
+    assert "unavailable" in panel._chip_alarm.text().lower()
+    assert "1" in panel._chip_alarm.text()
+    # The count chip's escalation must also follow the true alarm, not the
+    # concurrent dropout.
+    assert panel._chip_alarm_count.property("state") == "crit"
+
+
 def test_unavailable_reads_unknown_not_neutral():
     """Law 7: 'we don't know' is visually distinct from 'confirmed fine'."""
     _app()
