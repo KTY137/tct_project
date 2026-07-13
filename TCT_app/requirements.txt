@@ -22,6 +22,16 @@ h5py>=3.8
 PyYAML>=6.0
 Pillow>=10.0
 
+# Sensor-pose vision (vision/sensor_align.py) — ArUco DICT_4X4_50 fiducial
+# detection + pose estimation for the alignment beat (E7b/E7c). Pinned to the
+# last opencv-python-headless release built against the numpy 1.x C-ABI (see
+# docs/research/sensor_alignment_cv.md) so it carries zero numpy-2 ABI risk
+# against the numpy<2 pin above; also the first release exposing the modern
+# cv2.aruco.ArucoDetector API (moved into base opencv's objdetect in 4.7).
+# Optional at runtime: vision/ lazy-imports cv2 and degrades cleanly (see
+# vision.sensor_align.is_available()) so the app keeps running without it.
+opencv-python-headless==4.9.0.80
+
 # Instrument I/O
 pyvisa>=1.13          # VISA oscilloscope / waveform generator (USB + LAN)
 pyserial>=3.5         # GRBL/Marlin motor stage, e4control 'usb' transport
