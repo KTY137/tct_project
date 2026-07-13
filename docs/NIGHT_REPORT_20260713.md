@@ -190,5 +190,13 @@ sollten denselben Audit bekommen.
   Mary-Concurrency-Review des Fixes lief bei diesem Addendum noch (Verdict
   folgt im Ledger; bei Findings folgt ein Fix-Commit — der Bench-Beweis
   steht unabhängig davon).
-- E4-Retry (Affine-Mosaik) + Codex S1 (Style-Audit): weiterhin in flight —
-  Ergebnisse landen im Ledger und in der Tagschicht-Queue.
+- **10:4x — E4 GELANDET (`1e5850c`):** Affine-Placement + Seam-Refinement
+  verdrahtet (inkl. Wrap-Fix: der nominale Versatz lag außerhalb des
+  FFT-darstellbaren Bereichs — ohne Fix sähe jeder echte Seam-Fehler wie ein
+  Ausreißer aus). Wave-5 Schritte 1–2 damit komplett; E5-Report + E6b-View
+  sind die Tagschicht-Opener. **Mary: APPROVE auch auf den Teardown-Fix**
+  (Mechanismus von ihr empirisch per PySide6-Probe verifiziert).
+- **Morgen-Gate: `1e5850c` GRÜN — 1704 passed, 1 xfailed, 37 s. HEAD =
+  verifiziertes Set = origin. 43 Commits diese Session.**
+- Codex S1 (Style-Audit): weiterhin in flight — Ergebnis landet im Ledger
+  und in der Tagschicht-Queue.

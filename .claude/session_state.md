@@ -184,9 +184,9 @@ green.
 
 ## BENCH
 
-Green sets: `88907a4` (1349) · `ee9f48d` (1372) · **`41a8ab2` (1691 passed,
-1 xfailed, 45 s) — FINAL NIGHT GATE GREEN, PUSHED (origin = 41a8ab2, 40
-commits this session).** The intermediate red on `a68e289` (ALL-OFF
+Green sets: `88907a4` (1349) · `ee9f48d` (1372) · `41a8ab2` (1691) ·
+**`1e5850c` (1704 passed, 1 xfailed, 37 s) — MORNING STATE: HEAD = verified
+set = origin. 43 commits this session, all pushed.** The intermediate red on `a68e289` (ALL-OFF
 teardown race, wait-on-itself) was root-caused and fixed in `41a8ab2`
 (bound-method teardown → GUI-thread queued; sibling in bias_panel fixed
 too). **Mary verdict on 41a8ab2: APPROVE** (mechanism empirically verified
