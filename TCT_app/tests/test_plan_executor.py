@@ -1014,23 +1014,30 @@ def test_danger_gates_are_pure():
 #     never arm→every-ramp — the armed-envelope-expiry bug.                     #
 # --------------------------------------------------------------------------- #
 def test_kaya_regression_aged_arm_still_finishes(sim):
-    """Kaya's case: dry-run renders the envelope, the operator reads it, presses
-    Execute 31 s later.  With the FIXED production wiring the envelope carries NO
-    wall-clock expiry (``arm_envelope_for`` no longer stamps ``timeout_s``), so
-    the aged arm still FINISHES — where before the gate re-checked ``is_expired``
-    at every ramp and silently ABORTED the first BiasStep ('not confirmed', no
-    dialog)."""
+    """Kaya's case: the arm renders the envelope, the operator reads it, presses
+    Execute 31 s later.  Production now stamps a GENEROUS 180 s expiry (tct_gui's
+    provider, Mary's rider) bounding the arm→START window only — 31 s sits
+    comfortably inside it, so the aged arm still FINISHES.  With the OLD 30 s
+    wiring 31 s was already PAST expiry (and, worse, the clock started at the
+    preview and was re-checked at EVERY ramp), so the run silently ABORTED the
+    first BiasStep ('not confirmed', no dialog).  The restored 180 s backs up the
+    GUI latch at the controller boundary WITHOUT re-breaking this case."""
     dm, ctrl, sm = sim
+    ch = dm.bias_supply
     plan = _bias_plan(-30.0, points=2)
-    env = ctrl.arm_envelope_for(plan)                 # exactly what tct_gui builds now
-    assert env.expiry_monotonic is None               # P0: no clock stamped at all
-    assert env.is_expired() is False                  # ...so nothing to lapse, ever
+    # Exactly what tct_gui's provider builds now (arm_envelope_for(plan,
+    # timeout_s=180.0) → envelope_from_plan on the resolved channel), aged 31 s to
+    # model Kaya's arm→Execute gap: PAST the old 30 s threshold, WELL WITHIN 180 s.
+    env = envelope_from_plan(plan, ch.channel, timeout_s=180.0,
+                             now=time.monotonic() - 31.0)
+    assert env.expiry_monotonic is not None           # the 180 s clock IS stamped
+    assert env.is_expired() is False                  # ...but 31 s ≪ 180 s: still fresh
 
     ctrl.arm_hv(True)
     ctrl.start_plan(plan, _limits(), ArmedEnvelopeGate(env))
     ctrl._thread.join(timeout=20)
 
-    assert sm.state is AppState.FINISHED              # today: was ABORTED
+    assert sm.state is AppState.FINISHED              # old 30 s wiring: was ABORTED
     assert ctrl._writer._n_points == 2
     assert ctrl._hv_armed is False
 
@@ -1077,6 +1084,45 @@ def test_stale_armed_envelope_refused_loudly_at_start(sim):
 
     ctrl.arm_hv(True)
     with pytest.raises(RuntimeError, match="expired"):
+        ctrl.start_plan(plan, _limits(), ArmedEnvelopeGate(stale))
+
+    assert sm.state is AppState.READY                 # no state change
+    assert ctrl._thread is None                       # no worker launched
+    assert ctrl._hv_armed is False                    # arm latch cleared by the refusal
+    assert not ch.ramp_to.called                      # no hardware touched
+
+
+def test_production_timeout_bounds_arm_to_start(sim):
+    """Mary's rider: the production provider stamps a GENEROUS 180 s expiry
+    (``tct_gui`` wires ``arm_envelope_for(plan, timeout_s=180.0)``), so the
+    controller-side arm→START freshness check is LIVE in production, not dormant
+    (which it would be if the envelope carried no clock at all).  Two edges:
+
+    (1) the 180 s clock is actually stamped ~180 s out — the value the provider
+        passes flows through ``arm_envelope_for`` → ``envelope_from_plan``; and
+    (2) an arm aged PAST 180 s is refused LOUDLY at ``start_plan`` — a
+        ``RuntimeError`` naming the expiry and telling the operator to re-arm —
+        before any state change or hardware, with the HV arm latch cleared."""
+    dm, ctrl, sm = sim
+    ch = dm.bias_supply
+    ch.ramp_to = mock.Mock(wraps=ch.ramp_to)
+    plan = _bias_plan(-30.0, points=2)
+
+    # (1) The production default (180 s) is wired: a fresh arm carries a clock
+    #     ~180 s out — not None (a dormant check), not the old 30 s.
+    t0 = time.monotonic()
+    fresh = ctrl.arm_envelope_for(plan, timeout_s=180.0)   # exactly the provider call
+    assert fresh.expiry_monotonic is not None
+    assert abs((fresh.expiry_monotonic - t0) - 180.0) < 5.0
+    assert fresh.is_expired() is False
+
+    # (2) The same envelope the provider builds, aged PAST 180 s, is refused
+    #     LOUDLY at start (re-arm guidance) — no state change, no hardware.
+    stale = envelope_from_plan(plan, ch.channel, timeout_s=180.0,
+                               now=time.monotonic() - 181.0)
+    assert stale.is_expired() is True
+    ctrl.arm_hv(True)
+    with pytest.raises(RuntimeError, match="re-arm"):
         ctrl.start_plan(plan, _limits(), ArmedEnvelopeGate(stale))
 
     assert sm.state is AppState.READY                 # no state change

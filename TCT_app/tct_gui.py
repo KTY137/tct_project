@@ -583,16 +583,26 @@ class TCTMainWindow(QMainWindow):
         self._planner_panel.start_plan_requested.connect(coord.start_plan)
         self._planner_panel.execute_plan_requested.connect(coord.execute_plan)
         self._planner_panel.abort_requested.connect(coord.abort)
-        # The single-plan envelope carries NO wall-clock expiry (timeout_s=None),
-        # matching the sequencer's overnight-queue philosophy: freshness is a
-        # GUI concern (the arm→Execute latch, design law 5) plus the fail-closed
-        # arm→start check at ScanController.start_plan — never a clock that bounds
-        # the RUN'S duration.  A stamped-at-derivation expiry was the armed-
-        # envelope-expiry bug (Kaya, 2026-07-13): it started counting at the dry-
-        # run preview, survived a completed run, and re-checked at every ramp, so
-        # a slow operator or a 2nd Execute aborted silently mid-run.
+        # The single-plan envelope carries a GENEROUS 180 s expiry that bounds the
+        # arm→START window ONLY — the human's gap between the Arm hold and pressing
+        # Execute (a comfortable superset of the ~10 s Arm→Execute GUI latch, design
+        # law 5).  It NEVER bounds the RUN'S duration.  The clock is derived FRESH at
+        # the arm press (planner_panel._on_latch_armed → _derive_envelope(fresh=True),
+        # 665319e P2a), so the 180 s counts from ARM, and start_plan consumes the
+        # expiry EXACTLY ONCE (arm→start), refusing a stale arm LOUDLY with "re-arm
+        # and start again."  This timer therefore backs up the GUI latch at the
+        # controller boundary: the arm→start check is LIVE in production, not dormant.
+        #
+        # Why not the old 30 s?  It carried TWO independent bugs, BOTH fixed in
+        # 665319e: the 30 s was stamped at envelope DERIVATION (the dry-run preview,
+        # not the arm press) AND re-checked at EVERY ramp — so it counted down from
+        # the wrong moment and could strand a mid-run ramp (Kaya's silent-abort).
+        # With expiry now started at the arm press and checked once at start, a wide
+        # 180 s window bounds only the operator's arm→Start gap and cannot re-open
+        # that failure (pinned by test_kaya_regression_aged_arm_still_finishes /
+        # test_production_timeout_bounds_arm_to_start).
         self._planner_panel.set_envelope_provider(
-            lambda plan: self._scanner.arm_envelope_for(plan)
+            lambda plan: self._scanner.arm_envelope_for(plan, timeout_s=180.0)
         )
 
         # Bias panel → coordinator (voltage scan also starts from the bias panel).
