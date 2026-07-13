@@ -224,6 +224,13 @@ class DeviceManager:
                 f"Available: {list(INTENSITY_BACKENDS)}"
             )
         if mon_backend == "scope_channel":
+            # Reuse the DUT waveform-analysis baseline-sample count
+            # (analysis.baseline_samples) for the reference channel so both are
+            # baseline-corrected identically.  Absent → the monitor's own default
+            # (20), so legacy configs are unchanged.  No new config key — this
+            # reuses the existing analysis: block, so config_validator is
+            # untouched (Paul D4, option b).
+            a_cfg = cfg.get("analysis", {}) or {}
             self.intensity_monitor: IntensityMonitorBase = ScopeChannelMonitor(
                 scope=self.scope,
                 channel=mon_cfg.get("channel", 1),
@@ -232,6 +239,7 @@ class DeviceManager:
                 integration_window_s=tuple(
                     mon_cfg.get("charge_integration_window_s", [20e-9, 150e-9])
                 ),
+                baseline_samples=int(a_cfg.get("baseline_samples", 20)),
             )
         else:
             self.intensity_monitor = SimulatedIntensityMonitor()
