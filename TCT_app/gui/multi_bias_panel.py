@@ -58,6 +58,11 @@ class MultiBiasPanel(QWidget):
         self._panels: list[BiasPanel] = []
         self._off_thread: QThread | None = None
         self._off_worker: _SupplyCallWorker | None = None
+        # Manual-danger lock state (A5.1), forwarded to every child panel and
+        # re-applied to channels enumerated later by rebuild() — the same
+        # "survives a rebuild" contract the injected gate has.  The global
+        # ALL OUTPUTS OFF is never gated by it (cockpit law 5).
+        self._danger_locked = False
         self._build_ui()
         self._build_tabs(self._channels)
 
@@ -100,6 +105,10 @@ class MultiBiasPanel(QWidget):
         self._panels = []
         for ch in self._channels:
             panel = BiasPanel(ch, gate=self._gate)
+            # A channel enumerated while a sequence already owns the hardware
+            # must come up locked, exactly as it comes up gated.
+            if self._danger_locked:
+                panel.set_manual_danger_locked(True)
             self._panels.append(panel)
             self._tabs.addTab(panel, f"CH{getattr(ch, 'channel', '?')}")
         self._refresh_summary()
@@ -135,6 +144,19 @@ class MultiBiasPanel(QWidget):
     @property
     def primary_panel(self) -> BiasPanel | None:
         return self._panels[0] if self._panels else None
+
+    def set_manual_danger_locked(self, locked: bool) -> None:
+        """Forward the manual-danger lock to every channel's BiasPanel while a
+        Scan Sequencer run owns the hardware (``tct_gui._on_sequence_active``).
+
+        Each child locks its own HV-ENERGIZING controls; the global
+        ``ALL OUTPUTS OFF`` here and each child's per-channel Output OFF stay
+        live — a stop is never gated (cockpit law 5).  The state is stored so a
+        channel enumerated later by :meth:`rebuild` inherits the current lock,
+        exactly as the injected gate survives a rebuild."""
+        self._danger_locked = bool(locked)
+        for panel in self._panels:
+            panel.set_manual_danger_locked(self._danger_locked)
 
     def on_vscan_point(self, voltage_V: float, charge_pC: float, current_A: float) -> None:
         """Forward a bias+waveform scan point to the primary channel's plot."""

@@ -472,3 +472,85 @@ def test_main_window_injects_the_shared_gate_into_the_motor_panel():
     assert "QtDangerGate(parent=self)" in src
     # The gate must be built before the panels that take it by injection.
     assert src.index("QtDangerGate(parent=self)") < src.index("MotorPanel(")
+
+
+# --------------------------------------------------------------------------- #
+# 9. Manual-danger lock (A5.1) — a Scan Sequencer run owns the stage: every     #
+#    motion-START control locks, but STOP stays ONE TAP and FUNCTIONAL          #
+# --------------------------------------------------------------------------- #
+
+def test_manual_danger_lock_disables_motion_but_keeps_stop_live():
+    """The headline A5.1 guarantee for the motor panel: locking disables every
+    motion-START control, but the emergency STOP stays enabled AND actually
+    fires while locked (a panicking operator's control is never greyed out)."""
+    app = _app()
+    motor = _SpyMotor()
+    panel = MotorPanel(motor, gate=AutoConfirmGate())
+    try:
+        panel.set_manual_danger_locked(True)
+        # Every motion-START control (jog / step / move-to / home / center /
+        # zero — the whole _motion_widgets set) is disabled ...
+        for label in ("Home all", "Move to", "Center", "Zero here"):
+            assert not _button(panel, label).isEnabled(), label
+        assert all(not w.isEnabled() for w in panel._motion_widgets)
+        # ... but STOP is untouched by the lock AND fires while locked (law 5).
+        stop = _button(panel, "STOP")
+        assert stop.isEnabled()
+        assert stop not in panel._motion_widgets
+        stop.click()
+        _pump(app, 0.1)
+        assert motor.stop_calls == 1, "STOP was blocked while the panel was locked"
+    finally:
+        _dispose(panel)
+
+
+def test_manual_danger_unlock_restores_motion_controls():
+    app = _app()
+    motor = _SpyMotor()
+    panel = MotorPanel(motor, gate=AutoConfirmGate())
+    try:
+        panel.set_manual_danger_locked(True)
+        panel.set_manual_danger_locked(False)
+        assert all(w.isEnabled() for w in panel._motion_widgets)
+        # ...and a real move reaches the driver again after unlock.
+        _button(panel, "Home all").click()
+        assert _pump_until(app, lambda: motor.home_calls > 0), \
+            "a move was still blocked after unlock"
+    finally:
+        _dispose(panel)
+
+
+def test_manual_danger_unlock_composes_with_busy_never_blanket_enables():
+    """Unlock restores the panel's OWN busy-aware state, not a blanket enable: a
+    control disabled because a move is in flight stays disabled after unlock."""
+    app = _app()
+    motor = _SpyMotor()
+    panel = MotorPanel(motor, gate=AutoConfirmGate())
+    try:
+        panel._set_busy(True)              # simulate an in-flight move (no thread)
+        panel.set_manual_danger_locked(True)
+        panel.set_manual_danger_locked(False)
+        # Still busy → motion controls must remain disabled after the unlock.
+        assert not _button(panel, "Home all").isEnabled()
+        panel._set_busy(False)             # move finished
+        assert _button(panel, "Home all").isEnabled()
+    finally:
+        _dispose(panel)
+
+
+def test_manual_danger_lock_tooltips_motion_but_not_stop():
+    app = _app()
+    motor = _SpyMotor()
+    panel = MotorPanel(motor, gate=AutoConfirmGate())
+    try:
+        center = _button(panel, "Center")
+        original = center.toolTip()
+        assert original                    # Center ships a real tooltip
+        panel.set_manual_danger_locked(True)
+        assert center.toolTip() == "locked while a sequence runs"
+        # STOP never carries the lock tooltip — it is not a locked control.
+        assert _button(panel, "STOP").toolTip() != "locked while a sequence runs"
+        panel.set_manual_danger_locked(False)
+        assert center.toolTip() == original
+    finally:
+        _dispose(panel)

@@ -497,3 +497,118 @@ def test_main_window_injects_one_gate_into_the_bias_panels():
     assert "QtDangerGate(parent=self)" in src
     # The gate must be built before the panels that take it by injection.
     assert src.index("QtDangerGate(parent=self)") < src.index("MultiBiasPanel(")
+
+
+# --------------------------------------------------------------------------- #
+# 8. Manual-danger lock (A5.1) — a Scan Sequencer run owns the HV: every        #
+#    HV-ENERGIZING control locks, but OFF / ALL-OFF stay ONE TAP + FUNCTIONAL   #
+# --------------------------------------------------------------------------- #
+
+def test_manual_danger_lock_disables_energize_but_keeps_output_off_live():
+    """The headline A5.1 guarantee for the bias panel: locking disables every
+    HV-ENERGIZING control, but the per-channel Output OFF stays enabled AND
+    actually fires while locked (the kill switch is never greyed out)."""
+    app = _app()
+    supply = _SpySupply()
+    panel = BiasPanel(supply, gate=AutoConfirmGate())
+    try:
+        _expand_sweeps(panel)              # so the IV/vscan parents are enabled
+        panel.set_manual_danger_locked(True)
+        # Every HV-ENERGIZING control is disabled ...
+        for w in (panel._btn_apply, panel._btn_set_comp, panel._spin_comp,
+                  panel._btn_iv, panel._btn_vscan):
+            assert not w.isEnabled()
+        # ... but the per-channel Output OFF stays enabled AND fires while locked.
+        assert panel._btn_off.isEnabled()
+        panel._btn_off.click()
+        assert _pump_until(app, lambda: supply.output_off_calls > 0), \
+            "Output OFF was blocked while the panel was locked"
+        assert supply.ramp_calls and supply.ramp_calls[0][0] == 0.0
+    finally:
+        _dispose(panel)
+
+
+def test_manual_danger_unlock_restores_energize_controls():
+    app = _app()
+    supply = _SpySupply()
+    panel = BiasPanel(supply, gate=AutoConfirmGate())
+    try:
+        _expand_sweeps(panel)
+        panel.set_manual_danger_locked(True)
+        panel.set_manual_danger_locked(False)
+        for w in (panel._btn_apply, panel._btn_set_comp, panel._spin_comp,
+                  panel._btn_iv, panel._btn_vscan):
+            assert w.isEnabled()
+    finally:
+        _dispose(panel)
+
+
+def test_manual_danger_unlock_does_not_reenable_collapsed_sweeps():
+    """Unlock restores the panel's OWN state, not a blanket enable: the IV/vscan
+    buttons stay effectively disabled while the sweeps card is collapsed (their
+    parent body is disabled), lock or no lock."""
+    app = _app()
+    supply = _SpySupply()
+    panel = BiasPanel(supply, gate=AutoConfirmGate())
+    try:
+        # sweeps card stays COLLAPSED (its body is disabled) the whole time
+        assert not panel._btn_iv.isEnabled()
+        panel.set_manual_danger_locked(True)
+        panel.set_manual_danger_locked(False)
+        assert not panel._btn_iv.isEnabled(), \
+            "unlock blanket-enabled a control the collapsed card should keep off"
+        assert not panel._btn_vscan.isEnabled()
+        # The always-visible ramp control, by contrast, is live again.
+        assert panel._btn_apply.isEnabled()
+    finally:
+        _dispose(panel)
+
+
+def test_manual_danger_lock_tooltips_energize_but_not_output_off():
+    app = _app()
+    supply = _SpySupply()
+    panel = BiasPanel(supply, gate=AutoConfirmGate())
+    try:
+        off_tip = panel._btn_off.toolTip()
+        panel.set_manual_danger_locked(True)
+        assert panel._btn_apply.toolTip() == "locked while a sequence runs"
+        # The kill switch keeps its own tooltip — never the lock text.
+        assert panel._btn_off.toolTip() == off_tip
+        panel.set_manual_danger_locked(False)
+        assert panel._btn_apply.toolTip() != "locked while a sequence runs"
+    finally:
+        _dispose(panel)
+
+
+def test_multi_bias_lock_forwards_to_children_and_keeps_all_off_live():
+    """MultiBiasPanel.set_manual_danger_locked forwards to every channel tab, and
+    the global ALL OUTPUTS OFF stays enabled AND functional while locked."""
+    app = _app()
+    drv = SimulatedBiasSupply(channel_count=2, voltage_range_V=1000.0)
+    drv.connect()
+    panel = MultiBiasPanel([BiasChannel(drv, 0), BiasChannel(drv, 1)],
+                           gate=AutoConfirmGate())
+    try:
+        for ch in (0, 1):
+            drv.output_on_ch(ch)
+            drv.set_voltage_ch(ch, -100.0)
+
+        panel.set_manual_danger_locked(True)
+        # Every child's energize path is locked, its own Output OFF stays live.
+        for child in panel._panels:
+            assert not child._btn_apply.isEnabled()
+            assert child._btn_off.isEnabled()
+        # ... and the global ALL OUTPUTS OFF stays live AND functional.
+        assert panel._btn_all_off.isEnabled()
+        panel._btn_all_off.click()
+        assert _pump_until(
+            app,
+            lambda: not drv.output_is_on_ch(0) and not drv.output_is_on_ch(1),
+        ), "ALL OUTPUTS OFF was blocked while the panel was locked"
+        assert _pump_until(app, lambda: panel._off_thread is None)   # fully settled
+
+        panel.set_manual_danger_locked(False)
+        for child in panel._panels:
+            assert child._btn_apply.isEnabled()
+    finally:
+        _dispose(panel)

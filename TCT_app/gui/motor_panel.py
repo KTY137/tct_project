@@ -162,6 +162,13 @@ class MotorPanel(QWidget):
         # STOP are ungated by design (see the module docstring).
         self._gate = gate
         self._motion_widgets: list[QWidget] = []   # disabled while a move runs
+        # Manual-danger lock (A5.1): True while a Scan Sequencer run owns the
+        # stage (tct_gui._on_sequence_active).  It gates every motion-START
+        # control (jog / step / move-to / home / center / zero) — NEVER STOP
+        # (cockpit law 5).  Composed with the busy state in _apply_motion_enabled
+        # so neither gate re-enables a control past the other.
+        self._danger_locked = False
+        self._motion_busy_state = False
         self._task_thread: QThread | None = None
         self._task: _MotorTask | None = None
         # Kind of the in-flight async op ("home"/"zero"/None). Home and Zero
@@ -594,6 +601,12 @@ class MotorPanel(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(split)
 
+        # Pre-lock tooltips for every motion-START control, captured once so the
+        # manual-danger lock restores them verbatim on unlock.  STOP is NOT in
+        # _motion_widgets, so it is never tooltipped or disabled by the lock
+        # (cockpit law 5).
+        self._orig_tooltips = {w: w.toolTip() for w in self._motion_widgets}
+
     # ------------------------------------------------------------------ #
     # Axis-rail styling (gui.style.axis_color) — re-run by refresh_theme() #
     # ------------------------------------------------------------------ #
@@ -953,10 +966,47 @@ class MotorPanel(QWidget):
         self._stage_view.set_limits(self._limits_user_frame())
 
     def _set_busy(self, busy: bool) -> None:
-        for w in self._motion_widgets:
-            w.setEnabled(not busy)
+        self._motion_busy_state = bool(busy)
+        self._apply_motion_enabled()
         self._chip_motion.set_status("Moving..." if busy else "Idle",
                                      "busy" if busy else "neutral")
+
+    def _apply_motion_enabled(self) -> None:
+        """Enable the motion-START controls only when the stage is neither busy
+        with an in-flight op NOR held by the manual-danger lock.  The two gates
+        compose here so a finishing move can never re-enable a control past an
+        active sequence lock (and unlock restores the busy-correct set)."""
+        enabled = not self._motion_busy_state and not self._danger_locked
+        for w in self._motion_widgets:
+            w.setEnabled(enabled)
+
+    # ------------------------------------------------------------------ #
+    # Manual-danger lock (Scan Sequencer owns the stage) — A5.1           #
+    # ------------------------------------------------------------------ #
+
+    _LOCK_TOOLTIP = "locked while a sequence runs"
+
+    def set_manual_danger_locked(self, locked: bool) -> None:
+        """Lock/unlock every motion-START control while a Scan Sequencer run
+        owns the stage (``tct_gui._on_sequence_active``).
+
+        LOCKED disables jog, the step-size presets, the absolute Move to, Home,
+        Center and Zero here (and tooltips them ``"locked while a sequence
+        runs"``).  It NEVER touches STOP — an emergency stop can only make the
+        setup safer, so it stays one tap all through a sequence (cockpit law 5).
+
+        Compose-safe seam: re-applied through the panel's own busy-aware
+        :meth:`_apply_motion_enabled`, so a move finishing mid-sequence can never
+        re-enable a motion control past the lock, and UNLOCK restores exactly the
+        busy-correct enabled set (never a blanket enable)."""
+        locked = bool(locked)
+        if locked == self._danger_locked:
+            return
+        self._danger_locked = locked
+        self._apply_motion_enabled()
+        for w in self._motion_widgets:
+            w.setToolTip(self._LOCK_TOOLTIP if locked
+                         else self._orig_tooltips.get(w, ""))
 
     def _test_connection(self) -> None:
         """Run the backend's firmware handshake and show the reply."""

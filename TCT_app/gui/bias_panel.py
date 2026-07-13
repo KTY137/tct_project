@@ -223,6 +223,12 @@ class BiasPanel(QWidget):
         self._op_thread: QThread | None = None
         self._op_worker: _SupplyCallWorker | None = None
         self._io_busy = False
+        # Manual-danger lock (A5.1): True while a Scan Sequencer run owns the
+        # hardware (tct_gui._on_sequence_active).  It gates every HV-ENERGIZING
+        # control here — NEVER the Output OFF (0 V) kill switch (cockpit law 5).
+        # Composed with the busy interlock inside _set_io_busy so neither gate
+        # can re-enable an energize control past the other.
+        self._danger_locked = False
         self._last_polarity: str | None = None
         self._pol_supported = False
         # Presentation-only HV-state bookkeeping (design system §6): the
@@ -487,6 +493,17 @@ class BiasPanel(QWidget):
 
         self._on_compliance_changed(self._spin_comp.value())
         self._restyle_bias_axis()
+
+        # Controls the manual-danger lock disables while a sequence runs — every
+        # HV-ENERGIZING path (ramp, compliance apply/edit, IV / bias+waveform
+        # sweeps, polarity flip).  The Output OFF kill switch is deliberately
+        # ABSENT (law 5).  Their pre-lock tooltips are captured once so unlock
+        # restores them verbatim (see set_manual_danger_locked).
+        self._armed_widgets = [
+            self._spin_comp, self._btn_set_comp, self._btn_apply,
+            self._btn_iv, self._btn_vscan, self._btn_polarity,
+        ]
+        self._orig_tooltips = {w: w.toolTip() for w in self._armed_widgets}
 
     def _ensure_sweep_plots(self, checked: bool) -> None:
         """Build the IV / charge-vs-bias plots the first time the advanced
@@ -907,12 +924,55 @@ class BiasPanel(QWidget):
 
     def _set_io_busy(self, busy: bool) -> None:
         self._io_busy = busy
-        for widget in (self._btn_set_comp, self._btn_apply, self._btn_off,
+        # Energize / arm controls: disabled while a supply call is in flight OR
+        # while the manual-danger lock is held (a sequence owns the hardware).
+        # The two gates compose here so a finishing supply call can never
+        # re-enable an energize control past an active sequence lock.
+        armed_ok = not busy and not self._danger_locked
+        for widget in (self._btn_set_comp, self._btn_apply,
                        self._btn_iv, self._btn_vscan):
-            widget.setEnabled(not busy)
-        # Polarity button follows both the busy state and whether the supply
+            widget.setEnabled(armed_ok)
+        # Editing the current limit re-arms it → an energize-class change gated
+        # by the sequence lock.  It starts no supply call, so it follows only the
+        # lock, never `busy` (its Apply button carries the busy interlock).
+        self._spin_comp.setEnabled(not self._danger_locked)
+        # The per-channel kill switch (Output OFF, 0 V) is NEVER gated by the
+        # sequence lock (cockpit law 5) — only by the in-panel busy interlock so
+        # a second supply call can't race the first.  One tap, all sequence long.
+        self._btn_off.setEnabled(not busy)
+        # Polarity button follows the busy + lock gates and whether the supply
         # reports the channel reversible (tracked from the poll thread).
-        self._btn_polarity.setEnabled(self._pol_supported and not busy)
+        self._btn_polarity.setEnabled(self._pol_supported and armed_ok)
+
+    # ------------------------------------------------------------------ #
+    # Manual-danger lock (Scan Sequencer owns the hardware) — A5.1        #
+    # ------------------------------------------------------------------ #
+
+    _LOCK_TOOLTIP = "locked while a sequence runs"
+
+    def set_manual_danger_locked(self, locked: bool) -> None:
+        """Lock/unlock every HV-ENERGIZING control while a Scan Sequencer run
+        owns the hardware (``tct_gui._on_sequence_active``).
+
+        LOCKED disables the ramp, compliance apply/edit, IV sweep, bias+waveform
+        sweep and polarity-flip controls (and tooltips them
+        ``"locked while a sequence runs"``).  It NEVER touches the per-channel
+        Output OFF (0 V) kill switch — a stop can only make the setup safer, so
+        it stays one tap all through a sequence (cockpit law 5).
+
+        Compose-safe seam: the lock is a second gate re-applied through the
+        panel's own busy-aware :meth:`_set_io_busy`, so a supply call finishing
+        mid-sequence can never re-enable an energize control past the lock, and
+        UNLOCK restores exactly the busy/polarity-correct enabled set (never a
+        blanket enable of a control that should stay disabled)."""
+        locked = bool(locked)
+        if locked == self._danger_locked:
+            return
+        self._danger_locked = locked
+        self._set_io_busy(self._io_busy)   # re-apply enabled state through the seam
+        for w in self._armed_widgets:
+            w.setToolTip(self._LOCK_TOOLTIP if locked
+                         else self._orig_tooltips.get(w, ""))
 
     def _on_polarity_polled(self, polarity, supports: bool) -> None:
         """Update the read-only polarity indicator + switch-button visibility
@@ -921,7 +981,10 @@ class BiasPanel(QWidget):
         self._pol_supported = bool(supports)
         self._lbl_polarity.setText(self._POL_SYMBOLS.get(self._last_polarity, "—"))
         self._btn_polarity.setVisible(self._pol_supported)
-        self._btn_polarity.setEnabled(self._pol_supported and not self._io_busy)
+        # Compose with the sequence lock: a polarity poll arriving mid-sequence
+        # must not re-enable the (energize-class) switch button.
+        self._btn_polarity.setEnabled(
+            self._pol_supported and not self._io_busy and not self._danger_locked)
 
     def _on_switch_polarity(self) -> None:
         """Confirm, then reverse HV polarity off the GUI thread (DANGEROUS).

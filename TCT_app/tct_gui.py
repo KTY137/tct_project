@@ -1589,14 +1589,20 @@ class TCTMainWindow(QMainWindow):
     def _on_sequence_active(self, active: bool) -> None:
         """A Scan Sequencer run armed (True) / ended (False).
 
-        Mary req 2: the manual HV (bias) and motion (motor) danger panels are
-        locked for the duration so an unattended run owns the hardware — jog is
-        RATIFIED-ungated but jogging (or any manual ramp / move / home) during an
-        unattended sequence contends for the same axis / HV channel (Mary's
-        concurrency hazard), so the whole panel is disabled at the composition
-        root.  The sequence's own always-live Abort is the single stop while it
-        runs (the manual OFF/STOP would only contend), and the coordinator fails
-        closed + parks safe on any error regardless.
+        Mary req 2 (A5.1 refinement): the manual HV (bias) and motion (motor)
+        danger panels take a *surgical* manual-danger lock for the duration so an
+        unattended run owns the hardware — every control that could ENERGIZE or
+        START MOTION (manual ramp / IV / vscan / polarity / compliance;
+        jog / step / move-to / home / center / zero) is disabled, because it
+        would contend for the same axis / HV channel mid-sequence (Mary's
+        concurrency hazard).  But the panels' EMERGENCY de-energize/stop
+        affordances — per-channel Output OFF, the global ALL OUTPUTS OFF, and the
+        motor STOP — stay LIVE the whole time (cockpit design law 5, "instant
+        stop"): a panicking operator at 3 a.m. reaches for the control they know,
+        and a stop can only make the setup safer.  (The container-level
+        ``setEnabled(not active)`` A5 shipped greyed those out too — the bug this
+        beat fixes.)  Each panel composes the lock with its own busy/connection
+        enable logic (see ``set_manual_danger_locked``).
 
         Mary req 3: the flag also flips the coordinator's modal error/warn shims
         to the non-blocking status bus (see :meth:`_show_error_dialog`).
@@ -1609,10 +1615,10 @@ class TCTMainWindow(QMainWindow):
         locked = self._sequence_active
         bias = getattr(self, "_bias_panel", None)
         if bias is not None:
-            bias.setEnabled(not locked)
+            bias.set_manual_danger_locked(locked)
         motor = getattr(self, "_motor_panel", None)
         if motor is not None:
-            motor.setEnabled(not locked)
+            motor.set_manual_danger_locked(locked)
 
     def _sequencer_channel(self) -> int:
         """Primary bias-supply channel index the combined sequence HV envelope is

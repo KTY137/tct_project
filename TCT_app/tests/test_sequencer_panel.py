@@ -11,10 +11,16 @@ The two BINDING safety seams that live in ``tct_gui`` (not the panel) are pinned
 here too, via the unbound-method-on-a-fake-``self`` idiom
 tests/test_bias_trip_visibility.py already uses:
 
-* req 2 — ``sequence_active`` locks the manual HV/motion danger panels and
-  UNCONDITIONALLY re-enables at every terminal (including a failure path);
+* req 2 (A5.1) — ``sequence_active`` drives each panel's surgical
+  ``set_manual_danger_locked`` (energize/motion-START controls lock; the
+  emergency OFF/STOP affordances stay live — cockpit law 5) and UNCONDITIONALLY
+  unlocks at every terminal (including a failure path);
 * req 3 — the coordinator's modal error/warn shims reroute to the non-blocking
   status bus while a sequence runs and restore afterwards.
+
+The per-panel *always-live* guarantee (OFF/STOP fire while locked, unlock
+restores the panel's own busy-correct state) is pinned where the controls live:
+tests/test_bias_danger_gate.py and tests/test_motor_danger_gate.py.
 
 Idiom: ``QT_QPA_PLATFORM=offscreen``, a shared ``QApplication.instance()``, no
 pytest-qt.
@@ -92,17 +98,21 @@ class ParkSpy:
         self.calls += 1
 
 
-class EnableSpy:
-    """A stand-in danger panel that records its enabled state (Qt-compatible)."""
+class LockSpy:
+    """A stand-in danger panel that records its manual-danger-lock state.
+
+    A5.1: the composition root no longer blanket-``setEnabled``\\ s the panels
+    (that greyed out the emergency OFF/STOP too); it calls the surgical
+    ``set_manual_danger_locked`` seam instead — this spy pins that the wiring
+    drives THAT method, True at arm and (unconditionally) False at every
+    terminal.  The always-live behaviour of the real controls is verified in the
+    panels' own danger-gate tests."""
 
     def __init__(self) -> None:
-        self.enabled = True
+        self.locked = False
 
-    def setEnabled(self, value: bool) -> None:  # noqa: N802 - Qt signature
-        self.enabled = bool(value)
-
-    def isEnabled(self) -> bool:  # noqa: N802 - Qt signature
-        return self.enabled
+    def set_manual_danger_locked(self, locked: bool) -> None:
+        self.locked = bool(locked)
 
 
 def _ready_sm() -> StateMachine:
@@ -300,16 +310,17 @@ def test_loader_error_surfaces_and_preserves_queue(tmp_path, monkeypatch):
 # --------------------------------------------------------------------------- #
 def test_on_sequence_active_locks_and_unlocks_manual_danger_panels():
     from tct_gui import TCTMainWindow
-    bias, motor = EnableSpy(), EnableSpy()
+    bias, motor = LockSpy(), LockSpy()
     main = SimpleNamespace(_sequence_active=False, _bias_panel=bias, _motor_panel=motor)
 
     TCTMainWindow._on_sequence_active(main, True)
     assert main._sequence_active is True
-    assert bias.enabled is False and motor.enabled is False
+    # A5.1: the surgical lock is driven, NOT a blanket panel setEnabled.
+    assert bias.locked is True and motor.locked is True
 
     TCTMainWindow._on_sequence_active(main, False)
     assert main._sequence_active is False
-    assert bias.enabled is True and motor.enabled is True     # unconditional
+    assert bias.locked is False and motor.locked is False     # unconditional
 
 
 # --------------------------------------------------------------------------- #
@@ -324,16 +335,16 @@ def test_manual_danger_reenables_after_failure_path():
     coord.load([("r0", _plan("r0")), ("r1", _plan("r1"))])
     coord.build_gate(channel=0)
 
-    bias, motor = EnableSpy(), EnableSpy()
+    bias, motor = LockSpy(), LockSpy()
     main = SimpleNamespace(_sequence_active=False, _bias_panel=bias, _motor_panel=motor)
     coord.sequence_active.connect(lambda a: TCTMainWindow._on_sequence_active(main, a))
 
     coord.arm_and_start()
-    assert bias.enabled is False and motor.enabled is False   # locked at arm
+    assert bias.locked is True and motor.locked is True       # locked at arm
 
     fake.error_run("driver fault")          # entry 0 fails → fail-closed halt
     assert main._sequence_active is False
-    assert bias.enabled is True and motor.enabled is True     # re-enabled anyway
+    assert bias.locked is False and motor.locked is False     # unlocked anyway
 
 
 # --------------------------------------------------------------------------- #
@@ -381,3 +392,70 @@ def test_sequence_active_wired_in_build_central():
     assert "SequencerPanel(" in src
     assert "sequence_active.connect(self._on_sequence_active)" in src
     assert "park_safe=self._scanner.park_safe" in src
+
+
+# --------------------------------------------------------------------------- #
+# (11) A5.1 integration — the real coordinator signal drives the surgical lock  #
+#      on REAL panels: energize/motion lock, OFF/ALL-OFF/STOP stay live, and a   #
+#      True→False round-trip (via a FAILURE terminal) restores the real state.  #
+# --------------------------------------------------------------------------- #
+def test_real_panels_surgical_lock_round_trip_via_coordinator_signal():
+    from PySide6.QtWidgets import QPushButton
+
+    from controller.danger_gate import AutoConfirmGate
+    from devices.bias_channel import BiasChannel
+    from devices.bias_supply_simulated import SimulatedBiasSupply
+    from devices.motor_simulated import SimulatedMotorStage
+    from gui.motor_panel import MotorPanel
+    from gui.multi_bias_panel import MultiBiasPanel
+    from tct_gui import TCTMainWindow
+
+    app = _app()
+    sm = _ready_sm()
+    fake = FakeScanCoordinator(sm)
+    coord = SequenceCoordinator(fake, sm, park_safe=ParkSpy())
+    coord.load([("r0", _plan("r0")), ("r1", _plan("r1"))])
+    coord.build_gate(channel=0)
+
+    gate = AutoConfirmGate()
+    motor = MotorPanel(SimulatedMotorStage(), gate=gate)
+    bias = MultiBiasPanel([BiasChannel(SimulatedBiasSupply(), 0)], gate=gate)
+    child = bias._panels[0]
+
+    def _stop_btn() -> QPushButton:
+        return next(b for b in motor.findChildren(QPushButton)
+                    if b.objectName() == "dangerBtn" and b.text() == "STOP")
+
+    # Exactly the production wiring: the coordinator's sequence_active signal
+    # drives TCTMainWindow._on_sequence_active on a namespace holding real panels.
+    main = SimpleNamespace(_sequence_active=False, _bias_panel=bias, _motor_panel=motor)
+    coord.sequence_active.connect(lambda a: TCTMainWindow._on_sequence_active(main, a))
+    try:
+        # baseline: everything live
+        assert child._btn_apply.isEnabled() and child._btn_off.isEnabled()
+        assert bias._btn_all_off.isEnabled()
+        assert all(w.isEnabled() for w in motor._motion_widgets)
+        assert _stop_btn().isEnabled()
+
+        coord.arm_and_start()
+        # energize + motion-START controls are locked ...
+        assert not child._btn_apply.isEnabled()
+        assert not child._spin_comp.isEnabled()
+        assert not any(w.isEnabled() for w in motor._motion_widgets)
+        # ... but EVERY emergency de-energize / stop affordance stays LIVE (law 5)
+        assert child._btn_off.isEnabled()
+        assert bias._btn_all_off.isEnabled()
+        assert _stop_btn().isEnabled()
+
+        fake.error_run("driver fault")          # fail-closed terminal
+        assert main._sequence_active is False
+        # unconditional unlock restores the panels' own busy-correct enabled state
+        assert child._btn_apply.isEnabled() and child._spin_comp.isEnabled()
+        assert all(w.isEnabled() for w in motor._motion_widgets)
+        assert child._btn_off.isEnabled() and _stop_btn().isEnabled()
+    finally:
+        motor.shutdown()
+        bias.shutdown()
+        motor.deleteLater()
+        bias.deleteLater()
+        app.processEvents()
