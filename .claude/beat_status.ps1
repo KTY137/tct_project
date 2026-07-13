@@ -88,4 +88,5 @@ foreach ($line in $dirty) {
 
 Write-Host ""
 Write-Host "Rules: stage explicit paths only. Never 'git commit -am'. Never stage a CLAIMED path." -ForegroundColor DarkGray
+Write-Host "Roadmap-stage commit? Run .claude\check_bucket_a.ps1 first -- Bucket-A test files must be byte-unchanged ([A-green] gate)." -ForegroundColor DarkGray
 Write-Host ""

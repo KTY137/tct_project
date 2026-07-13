@@ -1,0 +1,19 @@
+name: focus_stack
+description: 'Focus stack: step stage_z, grab one camera frame per plane (R3).'
+root:
+- type: loop
+  axis: stage_z
+  start: -0.2
+  stop: 0.2
+  step: 0.05
+  settle_s: 0.1
+  n_averages: null
+  snake: false
+  reduce: null
+  children:
+  - type: action
+    action: capture_photo
+    params:
+      settle_s: 0.2
+      label: focus
+safety: {}
