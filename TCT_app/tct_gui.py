@@ -20,7 +20,10 @@ from PySide6.QtWidgets import (
     QFrame, QDockWidget, QPlainTextEdit, QScrollArea,
 )
 
-from gui.style import apply_theme, load_theme_customization
+from gui.style import (
+    apply_theme, apply_window_opacity, get_window_opacity,
+    load_theme_customization,
+)
 from gui.detachable_tabs import DetachableTabWidget
 
 from controller.device_manager import DeviceManager
@@ -230,6 +233,12 @@ class TCTMainWindow(QMainWindow):
         self._build_menu_and_toolbar()
         self._build_central()
         self._restore_window_state()
+        # Real (compositor) window translucency, from the persisted
+        # theme/window_opacity — applied to THIS window here so a launch with a
+        # saved opacity comes up translucent instead of snapping when the theme
+        # is next touched. Already clamped to the 0.80 safety floor by
+        # load_theme_customization.
+        self.setWindowOpacity(get_window_opacity())
         # App-wide status/notification bus → status bar (one-time connect).
         from gui.status_bus import STATUS
         STATUS.message.connect(self._on_status_message)
@@ -821,6 +830,13 @@ class TCTMainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             apply_theme(app, self._theme_mode)
+            # Re-assert the persisted window opacity on every top-level window
+            # (main window, dialogs, detached panels) — apply_theme only
+            # regenerates the QSS, and a window created since the last apply
+            # (a torn-off tab, the Settings dialog) would otherwise sit opaque
+            # over a translucent shell. Clamped to the 0.80 safety floor in
+            # style.set_window_opacity.
+            apply_window_opacity(app)
         # Keep the QML chrome (if built) in lockstep with the QSS theme: swap the
         # Theme singleton's active palette so its bound QML properties repaint.
         if getattr(self, "_qml_chrome", None) is not None:

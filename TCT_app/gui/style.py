@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import re
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPalette
 
 # ---------------------------------------------------------------------------
@@ -1493,6 +1494,26 @@ _BASE_RADII: tuple = (RADIUS_SM, RADIUS_MD, RADIUS_LG)
 
 DEFAULT_GLASS_AMOUNT = 1.0
 
+# ---------------------------------------------------------------------------
+# WINDOW OPACITY (Kaya, round 2, 2026-07-13) — the knob "Glass" could never be.
+#
+# The glass amount below is a PRE-BLEND of opaque chrome tokens: QSS has no
+# backdrop blur, so it can only change how much two greys differ — it can never
+# make the window see-through, which is what the word "glass" promises. Kaya:
+# "irgendwie funkt das opaque teil net so." Correct: it was named for something
+# it cannot do (the slider is "Surface tint" now — law 8 applies to our own UI
+# copy). REAL translucency is the compositor's job:
+# ``QWidget.setWindowOpacity`` (DWM does it natively on Win11), whole window
+# including its content.
+#
+# The 0.80 floor is a SAFETY CLAMP, not taste: an HV-live chip and an Abort
+# button must stay legible at EVERY reachable setting (rules 2/5). There is no
+# path to a ghost cockpit — a hand-edited QSettings value of 0.2 is CLAMPED on
+# load, never obeyed (test_theme_editor.py).
+MIN_WINDOW_OPACITY = 0.80
+MAX_WINDOW_OPACITY = 1.0
+DEFAULT_WINDOW_OPACITY = 1.0
+
 # The four pre-blend strengths that ARE the "glass" material (the same
 # alphas the "Round-2 material tokens" inline definitions in LIGHT/DARK use
 # — see docs/research/apple_vibrancy_qt_feasibility.md: glass = pre-blended
@@ -1542,6 +1563,54 @@ EDITABLE_TOKENS: tuple[str, ...] = tuple(_OVERRIDE_FANOUT)
 
 _HEX6_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
+# ---------------------------------------------------------------------------
+# BUILT-IN PRESETS (Kaya round 2: "ich will mehr theme presets")
+#
+# Ported verbatim from the v5 playground's `P` map
+# (artifacts_claude/v5/src/themes.body.html) — designed and eyeball-checked
+# there; nothing here is invented. They live in THIS module because it is the
+# only gui/ file allowed to contain hex literals (tests/test_no_inline_hex_gui.py)
+# and because tokens are style.py's job; gui/theme_editor.py is pure view.
+#
+# Keys are EDITABLE_TOKENS *group* names (not raw palette keys) — they fan out
+# through _OVERRIDE_FANOUT exactly like a user's own picks, which is why a
+# preset can never reach a safety token: `danger`/`armed`/`sim`/`error` are not
+# groups, apply_theme_overrides raises on them, and sanitize/validate reject any
+# preset that names one (laws 1/2/6). The safety palette is IDENTICAL in all
+# five presets, by construction.
+#
+# "Cockpit Dark" and "Lab Light" carry NO overrides on purpose: they ARE the
+# shipped themes (the ratified v5 look), so selecting them restores the app
+# exactly as it ships rather than a near-copy. The playground's own glass values
+# for those two are likewise not ported — the shipped default is the reference.
+# `well` reproduces the playground's derivation (blend(bg, panel, 0.6)) instead
+# of a hand-typed value, so the wells track their preset's canvas/panel.
+def _preset_well(canvas: str, panel: str) -> str:
+    return _blend(canvas, panel, 0.6)
+
+
+BUILTIN_PRESETS: tuple[dict, ...] = (
+    {"name": "Cockpit Dark", "mode": "dark", "glass": DEFAULT_GLASS_AMOUNT,
+     "overrides": {}},
+    {"name": "Graphite", "mode": "dark", "glass": 0.60, "overrides": {
+        "canvas": "#0e0f11", "panel": "#17181c", "text": "#eceef1",
+        "muted": "#9a9fa8", "hairline": "#26282e", "accent": "#7aa7d9",
+        "well": _preset_well("#0e0f11", "#17181c"),
+    }},
+    {"name": "Deep Violet", "mode": "dark", "glass": 0.82, "overrides": {
+        "canvas": "#0b0a14", "panel": "#151327", "text": "#eae8f5",
+        "muted": "#9d98b5", "hairline": "#262239", "accent": "#8f7aff",
+        "well": _preset_well("#0b0a14", "#151327"),
+    }},
+    {"name": "Lab Light", "mode": "light", "glass": DEFAULT_GLASS_AMOUNT,
+     "overrides": {}},
+    {"name": "Paper", "mode": "light", "glass": 0.55, "overrides": {
+        "canvas": "#f2efe9", "panel": "#fffdf8", "text": "#1c1a15",
+        "muted": "#5d5850", "hairline": "#e2ddd2", "accent": "#3e6b8f",
+        "well": _preset_well("#f2efe9", "#fffdf8"),
+    }},
+)
+
 # Radius S/M/L scale (theme editor "Radius" segment): (RADIUS_SM, RADIUS_MD,
 # RADIUS_LG) triples. "m" is the shipped default (spec §2 "Radii 8/12/16");
 # RADIUS_XS/RADIUS_PILL never change.
@@ -1556,9 +1625,11 @@ _SETTINGS_GLASS_KEY = "theme/glass_amount"
 _SETTINGS_OVERRIDES_KEY = "theme/overrides"
 _SETTINGS_TYPOGRAPHY_KEY = "theme/typography"
 _SETTINGS_RADIUS_KEY = "theme/radius_scale"
+_SETTINGS_WINDOW_OPACITY_KEY = "theme/window_opacity"
 
 # Live customization state (module-level; reset via reset_theme_customization).
 _glass_amount: float = DEFAULT_GLASS_AMOUNT
+_window_opacity: float = DEFAULT_WINDOW_OPACITY
 _overrides: dict[str, dict[str, str]] = {"light": {}, "dark": {}}
 _typography: dict = {"sans": None, "mono": None, "hinting": None, "base_px": None}
 _radius_scale: str = "m"
@@ -1623,6 +1694,72 @@ def set_glass_amount(amount: float) -> float:
 
 def get_glass_amount() -> float:
     return _glass_amount
+
+
+def set_window_opacity(value) -> float:
+    """Set the real (compositor) window opacity and return the value actually
+    set — CLAMPED to [MIN_WINDOW_OPACITY, MAX_WINDOW_OPACITY].
+
+    The clamp is a safety rail, not input validation: below the floor an HV-live
+    chip or an Abort button starts blending into whatever is behind the window.
+    Garbage (None, "", "0.2abc") falls back to fully opaque — the safe end.
+    Callers still need :func:`apply_window_opacity` to push it onto the windows.
+    """
+    global _window_opacity
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = DEFAULT_WINDOW_OPACITY
+    if value != value:                      # NaN — no ordering, clamp by hand
+        value = DEFAULT_WINDOW_OPACITY
+    _window_opacity = max(MIN_WINDOW_OPACITY, min(MAX_WINDOW_OPACITY, value))
+    return _window_opacity
+
+
+def get_window_opacity() -> float:
+    return _window_opacity
+
+
+def apply_window_opacity(app=None, opacity: float | None = None) -> float:
+    """Push the current window opacity onto EVERY top-level window of *app*.
+
+    Every window inherits it, so the cockpit stays coherent: the main window,
+    the Settings/Theme dialogs, and a torn-off panel (``detachable_tabs``'
+    ``_DetachedWindow``, a real top-level QMainWindow) all sit at the same
+    translucency instead of one floating opaque slab over a translucent shell.
+    Windows created *later* pick it up at construction — see
+    ``_DetachedWindow.__init__``.
+
+    Returns the applied opacity. Safe to call with no QApplication (no-op).
+    """
+    from PySide6.QtWidgets import QApplication
+
+    value = _window_opacity if opacity is None else set_window_opacity(opacity)
+    app = app if app is not None else QApplication.instance()
+    if app is None:
+        return value
+    for w in app.topLevelWidgets():
+        if w.isWindow() and not _is_transient_window(w):
+            w.setWindowOpacity(value)
+    return value
+
+
+# Window TYPE lives as a value inside WindowType_Mask (Window=0x1, Dialog=0x3,
+# Popup=0x9, ...) — those are NOT orthogonal bits, so a naive
+# `flags & Qt.WindowType.Popup` truth-test misclassifies a plain QMainWindow as
+# a popup (and PySide6's QFlags truthiness makes it worse). Mask and compare.
+_TRANSIENT_WINDOW_TYPES = frozenset({
+    int(Qt.WindowType.Popup),
+    int(Qt.WindowType.ToolTip),
+    int(Qt.WindowType.SplashScreen),
+})
+
+
+def _is_transient_window(w) -> bool:
+    """Menus / tooltips / splashes are transient chrome, not windows the
+    operator looks *through* — fading them is an artifact, not translucency."""
+    wtype = int(w.windowFlags()) & int(Qt.WindowType.WindowType_Mask)
+    return wtype in _TRANSIENT_WINDOW_TYPES
 
 
 def apply_theme_overrides(overrides: dict | None, mode: str = "dark", *,
@@ -1753,10 +1890,11 @@ def reset_theme_customization() -> None:
     """Restore every user-tunable theme knob (palette overrides, glass
     amount, typography, radius) to the shipped defaults. Does NOT touch
     QSettings — persistence stays the theme editor's decision."""
-    global _glass_amount
+    global _glass_amount, _window_opacity
     _overrides["light"] = {}
     _overrides["dark"] = {}
     _glass_amount = DEFAULT_GLASS_AMOUNT
+    _window_opacity = DEFAULT_WINDOW_OPACITY
     apply_typography(sans=None, mono=None, hinting=None, base_px=None)
     apply_radius_scale("m")
     _recompute_palettes()
@@ -1772,6 +1910,7 @@ def save_theme_customization(settings=None) -> None:
     QSettings("TCT", "TCTSetup") (or an injected *settings* for tests)."""
     s = settings if settings is not None else _default_settings()
     s.setValue(_SETTINGS_GLASS_KEY, float(_glass_amount))
+    s.setValue(_SETTINGS_WINDOW_OPACITY_KEY, float(_window_opacity))
     s.setValue(_SETTINGS_OVERRIDES_KEY, json.dumps(_overrides))
     s.setValue(_SETTINGS_TYPOGRAPHY_KEY, json.dumps(_typography))
     s.setValue(_SETTINGS_RADIUS_KEY, _radius_scale)
@@ -1785,7 +1924,7 @@ def load_theme_customization(settings=None) -> None:
     Every field parses defensively and overrides pass sanitize_overrides, so
     a hand-edited registry can neither unlock the safety palette nor wedge
     startup."""
-    global _glass_amount
+    global _glass_amount, _window_opacity
     s = settings if settings is not None else _default_settings()
     # A load DEFINES the customization state; it never inherits leftovers from
     # whatever was loaded/applied before. An ABSENT key means "shipped default",
@@ -1800,6 +1939,14 @@ def load_theme_customization(settings=None) -> None:
             _glass_amount = max(0.0, min(1.0, float(raw_glass)))
         except (TypeError, ValueError):
             _glass_amount = DEFAULT_GLASS_AMOUNT
+    # Window opacity goes through set_window_opacity, so the 0.80 SAFETY FLOOR
+    # is enforced on the persisted value too: a hand-edited registry entry of
+    # 0.2 is clamped to 0.80, never obeyed. Absent -> fully opaque.
+    raw_opacity = s.value(_SETTINGS_WINDOW_OPACITY_KEY, None)
+    if raw_opacity is None:
+        _window_opacity = DEFAULT_WINDOW_OPACITY
+    else:
+        set_window_opacity(raw_opacity)
     try:
         blob = json.loads(str(s.value(_SETTINGS_OVERRIDES_KEY, "") or "{}"))
     except (TypeError, ValueError):

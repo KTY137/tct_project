@@ -10,6 +10,8 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QMainWindow, QTabWidget, QToolButton, QWidget
 
+from gui import style
+
 
 class _DetachedWindow(QMainWindow):
     """Floating host for a single torn-off tab page."""
@@ -20,6 +22,10 @@ class _DetachedWindow(QMainWindow):
         self.setWindowFlag(Qt.WindowType.Window, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setWindowTitle(title)
+        # Inherit the cockpit's window opacity (theme/window_opacity, clamped to
+        # the 0.80 safety floor): a torn-off panel is part of the same cockpit,
+        # so it must not float as an opaque slab over a translucent shell.
+        self.setWindowOpacity(style.get_window_opacity())
         self.setCentralWidget(content)
         # Reparenting hides a widget in Qt — show it again or the window is blank.
         content.show()

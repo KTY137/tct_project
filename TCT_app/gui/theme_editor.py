@@ -1,19 +1,36 @@
 """Theme editor dialog (View ▸ Theme…) — browse presets and configure the
-theme: colors, fonts, corner radius, and the glass<->opaque material amount
-(Kaya request 2026-07-12).
+theme: colors, fonts, corner radius, the surface tint, and the real window
+opacity (Kaya requests 2026-07-12 / round 2 2026-07-13).
+
+TWO MATERIAL KNOBS, AND THEY ARE NOT THE SAME THING (round 2)
+-------------------------------------------------------------
+* **Surface tint** (was "Glass amount") — the chrome/strip/edge PRE-BLEND.
+  Same knob as before, honest name: QSS has no backdrop blur, so it can only
+  tint opaque surfaces. It can never make the window see-through, which is
+  exactly what the old name promised and why Kaya reported it "funkt net".
+* **Window opacity** — ``setWindowOpacity``, REAL compositor translucency
+  (DWM on Win11), whole window including content. Floor 0.80 is a SAFETY
+  clamp (``style.MIN_WINDOW_OPACITY``): an HV-live chip and the Abort button
+  must stay legible at every reachable setting. Every top-level window follows
+  it (dialogs, torn-off panels) so the cockpit stays coherent.
 
 All state lives in ``gui/style.py``'s override layer (apply_theme_overrides /
-set_glass_amount / apply_typography / apply_radius_scale) — this dialog is
-pure view/wiring on top of it, persisted via QSettings("TCT", "TCTSetup")
-under ``theme/*``. Applying routes through the SAME machinery as the View
-menu's dark-mode toggle (tct_gui._toggle_theme, via the ``applyRequested``
-signal), so QSS regeneration, the QML Theme singleton, and every panel's
-``refresh_theme`` all fire exactly as they do today.
+set_glass_amount / set_window_opacity / apply_typography / apply_radius_scale)
+— this dialog is pure view/wiring on top of it, persisted via
+QSettings("TCT", "TCTSetup") under ``theme/*``. Applying routes through the SAME
+machinery as the View menu's dark-mode toggle (tct_gui._toggle_theme, via the
+``applyRequested`` signal), so QSS regeneration, the QML Theme singleton, and
+every panel's ``refresh_theme`` all fire exactly as they do today.
+
+Five built-in presets (Cockpit Dark · Graphite · Deep Violet · Lab Light ·
+Paper) come from ``style.BUILTIN_PRESETS`` — token sets ported from the v5
+playground. Window opacity is deliberately NOT part of a preset: it is a window
+property, not a palette token.
 
 Safety palette (danger/armed/sim/error — laws 1/2/6) is rendered as locked,
-read-only swatches with no color-dialog path; ``style.sanitize_overrides``
-additionally drops any such key from a loaded preset JSON, so there is no
-override path even by hand-editing the registry.
+read-only swatches with no color-dialog path; a preset whose overrides name any
+safety token is REJECTED outright on load (``_sanitize_preset`` returns None),
+so there is no override path even by hand-editing the registry.
 
 This dialog is also the first consumer of the settings-row grammar: label on
 the left, compact control on the right (``_settings_row`` below).
@@ -66,30 +83,55 @@ _SWATCH_W, _SWATCH_H = 44, 22
 
 
 def builtin_presets() -> list[dict]:
-    """The two shipped presets — the untouched token sets of each theme."""
-    return [
-        {"name": "Cockpit Dark", "mode": "dark", "overrides": {},
-         "glass": style.DEFAULT_GLASS_AMOUNT,
-         "typography": {"sans": None, "mono": None, "hinting": None, "base_px": None},
-         "radius": "m", "builtin": True},
-        {"name": "Lab Light", "mode": "light", "overrides": {},
-         "glass": style.DEFAULT_GLASS_AMOUNT,
-         "typography": {"sans": None, "mono": None, "hinting": None, "base_px": None},
-         "radius": "m", "builtin": True},
-    ]
+    """The five shipped presets — Cockpit Dark (default) · Graphite · Deep
+    Violet · Lab Light · Paper.
+
+    Token sets live in ``style.BUILTIN_PRESETS`` (ported from the v5 playground;
+    style.py is the only gui module allowed hex literals). Each one goes through
+    :func:`_sanitize_preset` like any other preset, so a built-in gets exactly
+    the same safety validation as a hand-edited JSON blob — a built-in that ever
+    named a safety token would be rejected here, not trusted for being ours.
+    """
+    presets: list[dict] = []
+    for spec in style.BUILTIN_PRESETS:
+        preset = _sanitize_preset({
+            "name": spec["name"],
+            "mode": spec["mode"],
+            "overrides": dict(spec["overrides"]),
+            "glass": spec["glass"],
+            "typography": {"sans": None, "mono": None, "hinting": None,
+                           "base_px": None},
+            "radius": "m",
+        })
+        if preset is None:                      # unreachable unless a token set
+            continue                            # regresses — see the test
+        preset["builtin"] = True
+        presets.append(preset)
+    return presets
 
 
 def _sanitize_preset(item) -> dict | None:
-    """Validate one preset dict from JSON. Safety-token overrides are
-    silently dropped (style.sanitize_overrides); malformed presets return
-    None and are skipped entirely."""
+    """Validate one preset dict from JSON. Returns None for a REJECTED preset
+    (skipped entirely, never laundered into the list).
+
+    Rejection cases: malformed/not a dict, no name, and — the safety one — any
+    preset whose ``overrides`` name a locked safety token (danger/armed/sim/
+    error + the crit/warn aliases). Laws 1/2/6: the safety palette is not
+    negotiable, and a preset that tries to repaint it is not a preset with one
+    bad key, it is a preset we do not trust. Dropping the key and keeping the
+    rest would silently hand the operator a theme that tried to hide a trip.
+    """
     if not isinstance(item, dict):
         return None
     name = str(item.get("name") or "").strip()
     if not name:
         return None
     mode = "dark" if str(item.get("mode", "dark")).lower() == "dark" else "light"
-    overrides = style.sanitize_overrides(item.get("overrides"))
+    raw_overrides = item.get("overrides")
+    if isinstance(raw_overrides, dict) and any(
+            str(k).lower() in style.SAFETY_TOKENS for k in raw_overrides):
+        return None                              # REJECTED — safety palette
+    overrides = style.sanitize_overrides(raw_overrides)
     try:
         glass = max(0.0, min(1.0, float(item.get("glass", style.DEFAULT_GLASS_AMOUNT))))
     except (TypeError, ValueError):
@@ -167,6 +209,10 @@ class ThemeEditorDialog(QDialog):
         # Drafts — uncommitted control state; committed only by _apply().
         self._draft_overrides: dict[str, str] = dict(style.theme_overrides(self._mode))
         self._draft_glass: float = style.get_glass_amount()
+        # Window opacity is a WINDOW property, not a palette token: it is not
+        # part of a preset (presets are token sets), it is its own persisted
+        # knob under theme/window_opacity. Selecting a preset never changes it.
+        self._draft_window_opacity: float = style.get_window_opacity()
 
         self._swatches: dict[str, QPushButton] = {}
         self._locked_swatches: dict[str, QLabel] = {}
@@ -239,11 +285,18 @@ class ThemeEditorDialog(QDialog):
 
     def _build_material_card(self) -> Card:
         card = Card("Material")
+
+        # ── Surface tint (was "Glass amount") ─────────────────────────────
+        # Renamed, same knob: it drives the SAME chrome/strip/edge pre-blend as
+        # before. The old name promised see-through and could not deliver it —
+        # QSS has no backdrop blur (law 8 applies to our own UI copy, so the
+        # hint below says out loud what it does and points at the knob that
+        # actually makes the window translucent).
         self._glass_slider = QSlider(Qt.Orientation.Horizontal)
         self._glass_slider.setRange(0, 100)
         self._glass_slider.setFixedWidth(180)
         self._glass_slider.setToolTip(
-            "0% = fully opaque surfaces, 100% = the full glass material")
+            "0% = fully opaque surfaces, 100% = the full tinted material")
         self._glass_value_label = QLabel("100%")
         # Live preview, throttled: a full restyle is a global QSS repolish,
         # so drag updates debounce (250 ms) and release applies immediately.
@@ -259,10 +312,43 @@ class ThemeEditorDialog(QDialog):
         hl.setSpacing(SPACE_SM)
         hl.addWidget(self._glass_slider)
         hl.addWidget(self._glass_value_label)
-        card.add_widget(_settings_row("Glass amount", holder))
-        hint = QLabel("Plots and the camera stay opaque at any glass amount.")
+        card.add_widget(_settings_row("Surface tint", holder))
+        hint = QLabel(
+            "Qt cannot blur behind a window — this tints the chrome surfaces. "
+            "For see-through, use Window opacity.")
         hint.setObjectName("metricTileCaption")
+        hint.setWordWrap(True)
         card.add_widget(hint)
+
+        # ── Window opacity — the REAL translucency knob ────────────────────
+        # setWindowOpacity is compositor-level (DWM on Win11): the whole window,
+        # content included. Floor is style.MIN_WINDOW_OPACITY (0.80) and that is
+        # a SAFETY clamp — an HV-live chip and the Abort button must stay
+        # legible at every reachable setting, so the slider cannot even express
+        # a ghost cockpit.
+        lo = int(round(style.MIN_WINDOW_OPACITY * 100))
+        hi = int(round(style.MAX_WINDOW_OPACITY * 100))
+        self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self._opacity_slider.setRange(lo, hi)
+        self._opacity_slider.setSingleStep(1)
+        self._opacity_slider.setFixedWidth(180)
+        self._opacity_slider.setToolTip(
+            f"{lo}% = most translucent allowed, {hi}% = fully opaque")
+        self._opacity_value_label = QLabel(f"{hi}%")
+        self._opacity_slider.valueChanged.connect(self._on_opacity_changed)
+        o_holder = QWidget()
+        ol = QHBoxLayout(o_holder)
+        ol.setContentsMargins(0, 0, 0, 0)
+        ol.setSpacing(SPACE_SM)
+        ol.addWidget(self._opacity_slider)
+        ol.addWidget(self._opacity_value_label)
+        card.add_widget(_settings_row("Window opacity", o_holder))
+        o_hint = QLabel(
+            f"Real see-through, whole window. Floor is {lo}% so HV and abort "
+            "controls stay legible. Detached panels and dialogs follow.")
+        o_hint.setObjectName("metricTileCaption")
+        o_hint.setWordWrap(True)
+        card.add_widget(o_hint)
         return card
 
     def _build_colors_card(self) -> Card:
@@ -348,12 +434,23 @@ class ThemeEditorDialog(QDialog):
             swatch.setStyleSheet(self._swatch_css(p[token], p))
             swatch.setToolTip(f"{p[token]} — safety palette, fixed by laws 1/2/6")
 
+    def _sync_opacity_control(self) -> None:
+        """Push the opacity draft onto its slider without firing a preview.
+        The slider's own range already enforces the safety floor, but the draft
+        goes through set_window_opacity, so a clamped value shows as clamped."""
+        pct = int(round(self._draft_window_opacity * 100))
+        self._opacity_slider.blockSignals(True)
+        self._opacity_slider.setValue(pct)
+        self._opacity_slider.blockSignals(False)
+        self._opacity_value_label.setText(f"{self._opacity_slider.value()}%")
+
     def _sync_controls_from_drafts(self) -> None:
         """Push draft state into every control without firing live previews."""
         self._glass_slider.blockSignals(True)
         self._glass_slider.setValue(int(round(self._draft_glass * 100)))
         self._glass_slider.blockSignals(False)
         self._glass_value_label.setText(f"{int(round(self._draft_glass * 100))}%")
+        self._sync_opacity_control()
         typo = style.typography()
         for combo, key in ((self._sans_combo, "sans"), (self._mono_combo, "mono"),
                            (self._hinting_combo, "hinting")):
@@ -395,6 +492,15 @@ class ThemeEditorDialog(QDialog):
     def _on_glass_changed(self, value: int) -> None:
         self._glass_value_label.setText(f"{value}%")
         self._glass_timer.start()
+
+    def _on_opacity_changed(self, value: int) -> None:
+        """Live, un-debounced: unlike the tint slider this needs no QSS
+        regeneration — it is one setWindowOpacity call per top-level window, so
+        the drag can track the value directly. Persisted only on Apply (same
+        contract as the tint preview)."""
+        self._opacity_value_label.setText(f"{value}%")
+        self._draft_window_opacity = style.set_window_opacity(value / 100.0)
+        style.apply_window_opacity()
 
     def _sync_glass_from_slider(self) -> None:
         """The slider is the source of truth for the glass draft — Apply /
@@ -516,6 +622,11 @@ class ThemeEditorDialog(QDialog):
         style.apply_theme_overrides(dict(self._draft_overrides), self._mode,
                                     merge=False)
         style.set_glass_amount(self._draft_glass)
+        # Window opacity: the slider is the source of truth (its range already
+        # enforces the safety floor); set_window_opacity clamps regardless.
+        self._draft_window_opacity = style.set_window_opacity(
+            self._opacity_slider.value() / 100.0)
+        style.apply_window_opacity()
         style.apply_typography(
             sans=self._sans_combo.currentData(),
             mono=self._mono_combo.currentData(),
@@ -538,6 +649,7 @@ class ThemeEditorDialog(QDialog):
             self._mode = mode
             self._draft_overrides = dict(style.theme_overrides(mode))
             self._draft_glass = style.get_glass_amount()
+            self._draft_window_opacity = style.get_window_opacity()
             self._sync_controls_from_drafts()
         else:
             self._refresh_all_swatches()
