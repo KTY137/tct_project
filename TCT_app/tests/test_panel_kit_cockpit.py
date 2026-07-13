@@ -276,6 +276,61 @@ def test_figure_card_and_plot_have_no_graphics_effect():
 
 
 # --------------------------------------------------------------------------- #
+# Panel-glass opt-in registry (experimental) — HARD RULE 3 guard: the switch    #
+# is opt-in per instance and NEVER touches a plot/camera/danger pane.           #
+# --------------------------------------------------------------------------- #
+
+def test_glass_pane_registry_is_opt_in_and_excludes_plot_containers():
+    import pytest
+
+    _app()
+    plain = Card("Plain settings")
+    fig = FigureCard("Live map")
+
+    # Opt-in default: nothing carries the property until explicitly registered
+    # AND switched on.
+    assert not plain.property("glassPane")
+    assert not fig.property("glassPane")
+
+    # A plot container (FigureCard) is refused registration outright — panel
+    # glass is banned on plot/camera surfaces by construction (hard rule 3).
+    with pytest.raises(ValueError):
+        panel_kit.register_glass_pane(fig)
+
+    # The safe pane opts in; the switch flips ONLY registered panes.
+    panel_kit.register_glass_pane(plain)
+    assert plain in panel_kit.registered_glass_panes()
+    try:
+        panel_kit.set_panel_glass(True)
+        assert plain.property("glassPane") == "true"
+        # The unregistered plot container never gets it, even with the switch on.
+        assert not fig.property("glassPane")
+
+        panel_kit.set_panel_glass(False)
+        assert not plain.property("glassPane")
+    finally:
+        panel_kit.set_panel_glass(False)
+
+
+def test_set_panel_glass_survives_a_destroyed_registered_pane():
+    """A registered pane can be torn down while the switch is still toggled —
+    set_panel_glass must skip the dead C++ object, not raise."""
+    from shiboken6 import isValid
+
+    _app()
+    card = Card("Transient")
+    panel_kit.register_glass_pane(card)
+    card.deleteLater()
+    del card
+    # Force the pending deletion so the wrapper points at a dead C++ object.
+    _app().processEvents()
+    # Must not raise even though a registered wrapper may now be invalid.
+    panel_kit.set_panel_glass(True)
+    panel_kit.set_panel_glass(False)
+    assert all(isValid(w) for w in panel_kit.registered_glass_panes())
+
+
+# --------------------------------------------------------------------------- #
 # MetricTile / MetricGrid                                                     #
 # --------------------------------------------------------------------------- #
 

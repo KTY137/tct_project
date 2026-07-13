@@ -149,6 +149,53 @@ def test_translucent_attribute_set_only_after_both_dwm_calls_succeed(monkeypatch
 
 
 # --------------------------------------------------------------------------- #
+# DWM fix (Prometheus item a): the QMainWindow CENTRAL widget (#mainShell) must #
+# also go translucent, or the top-level's translucency never reaches DWM.       #
+# --------------------------------------------------------------------------- #
+
+def test_central_widget_translucency_set_and_cleared_symmetrically(monkeypatch):
+    """A QMainWindow's client is painted by its central #mainShell child, not
+    the window — so the child must carry WA_TranslucentBackground too, set on
+    apply and cleared on reset, symmetric with the top-level."""
+    from PySide6.QtWidgets import QMainWindow, QWidget
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    _app()
+    win = QMainWindow()
+    central = QWidget()
+    win.setCentralWidget(central)
+    try:
+        assert central.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+        assert backdrop.apply_backdrop(win, "acrylic") is True
+        assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+        assert central.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+
+        assert backdrop.apply_backdrop(win, "none") is True
+        assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+        assert central.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+    finally:
+        win.deleteLater()
+
+
+def test_plain_dialog_has_no_central_widget_step(monkeypatch):
+    """A flat QDialog IS the widget covering its own client, so the central-
+    widget step must be a clean no-op there (it has no centralWidget)."""
+    from PySide6.QtWidgets import QDialog
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    _app()
+    dlg = QDialog()
+    try:
+        assert backdrop.apply_backdrop(dlg, "mica") is True
+        assert dlg.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+        assert backdrop._canvas_widgets(dlg) == [dlg]
+    finally:
+        dlg.deleteLater()
+
+
+# --------------------------------------------------------------------------- #
 # Unsupported host                                                           #
 # --------------------------------------------------------------------------- #
 
@@ -667,3 +714,66 @@ def test_detached_window_construction_skips_backdrop_when_none(monkeypatch):
         assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
     finally:
         win.deleteLater()
+
+
+# --------------------------------------------------------------------------- #
+# DWM fix (Prometheus item c): a layered (<100%) window suppresses the DWM     #
+# material, so apply_window_opacity must PIN every window to fully opaque while #
+# a backdrop is active — the stored preference is kept and returns on "none".  #
+# --------------------------------------------------------------------------- #
+
+def test_apply_window_opacity_pinned_to_full_while_backdrop_active(monkeypatch):
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    win = QMainWindow()
+    try:
+        style.set_window_backdrop("acrylic")
+        style.set_window_opacity(0.85)          # the stored preference...
+        style.apply_window_opacity(app)         # ...but the window is pinned full
+        assert win.windowOpacity() == pytest.approx(1.0, abs=1.0 / 255.0)
+        # Preference is NOT destroyed — only the pushed value is pinned.
+        assert style.get_window_opacity() == pytest.approx(0.85)
+
+        # Turning the backdrop off restores the stored opacity on the window.
+        style.set_window_backdrop("none")
+        style.apply_window_opacity(app)
+        assert win.windowOpacity() == pytest.approx(0.85, abs=1.0 / 255.0)
+    finally:
+        win.deleteLater()
+
+
+def test_apply_window_opacity_not_pinned_when_backdrop_is_none(monkeypatch):
+    """Byte-identical-when-off guard: with the shipped "none" backdrop the pin
+    is inert — a translucent window stays translucent exactly as before."""
+    from PySide6.QtWidgets import QMainWindow
+
+    app = _app()
+    win = QMainWindow()
+    try:
+        assert style.get_window_backdrop() == "none"
+        style.set_window_opacity(0.9)
+        style.apply_window_opacity(app)
+        assert win.windowOpacity() == pytest.approx(0.9, abs=1.0 / 255.0)
+    finally:
+        win.deleteLater()
+
+
+# --------------------------------------------------------------------------- #
+# DWM fix (Prometheus item b): main.py requests an alpha-carrying default       #
+# window surface BEFORE the QApplication, so a QMainWindow client can carry     #
+# per-pixel alpha to DWM. Scoped/merged so it never clobbers the plot/QML stack.#
+# --------------------------------------------------------------------------- #
+
+def test_default_surface_format_requests_alpha_for_translucency():
+    from PySide6.QtGui import QSurfaceFormat
+    import main
+
+    before = QSurfaceFormat.defaultFormat()
+    try:
+        main._enable_translucent_window_surface()
+        assert QSurfaceFormat.defaultFormat().alphaBufferSize() >= 8
+    finally:
+        QSurfaceFormat.setDefaultFormat(before)

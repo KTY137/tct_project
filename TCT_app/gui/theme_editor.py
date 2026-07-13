@@ -62,12 +62,12 @@ import json
 from PySide6.QtCore import Qt, QSettings, QTimer, Signal
 from PySide6.QtGui import QColor, QFontDatabase
 from PySide6.QtWidgets import (
-    QColorDialog, QComboBox, QDialog, QHBoxLayout, QInputDialog, QLabel,
-    QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSlider,
+    QCheckBox, QColorDialog, QComboBox, QDialog, QHBoxLayout, QInputDialog,
+    QLabel, QListWidget, QListWidgetItem, QPushButton, QScrollArea, QSlider,
     QSpinBox, QVBoxLayout, QWidget,
 )
 
-from gui import app_settings, backdrop, style
+from gui import app_settings, backdrop, panel_kit, style
 from gui.panel_kit import Card, SegmentedControl
 from gui.style import RADIUS_XS, SPACE_MD, SPACE_SM, SPACE_XS
 
@@ -251,6 +251,7 @@ class ThemeEditorDialog(QDialog):
         self._load_presets_into_list(select="Cockpit Dark" if self._mode == "dark"
                                      else "Lab Light")
         self._sync_controls_from_drafts()
+        self._init_panel_glass()
 
     # ------------------------------------------------------------------ #
     # UI construction                                                    #
@@ -282,10 +283,21 @@ class ThemeEditorDialog(QDialog):
         column = QVBoxLayout(column_host)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(SPACE_MD)
-        column.addWidget(self._build_material_card())
-        column.addWidget(self._build_colors_card())
-        column.addWidget(self._build_typography_card())
-        column.addWidget(self._build_radius_card())
+        # Capture the cards so the experimental "Panel glass" switch can opt
+        # them into the panel-glass registry — this dialog's OWN cards are the
+        # seed registry so Kaya can SEE the effect tonight; operational panels
+        # join in a later tuning beat. Every one is a plain settings card (no
+        # plot/camera/danger surface), so registering them is safe by
+        # construction (register_glass_pane refuses plot containers regardless).
+        self._glass_cards = [
+            self._build_material_card(),
+            self._build_colors_card(),
+            self._build_typography_card(),
+            self._build_radius_card(),
+        ]
+        for glass_card in self._glass_cards:
+            column.addWidget(glass_card)
+            panel_kit.register_glass_pane(glass_card)
         column.addStretch(1)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -326,7 +338,10 @@ class ThemeEditorDialog(QDialog):
         self._glass_slider.setRange(0, 100)
         self._glass_slider.setFixedWidth(180)
         self._glass_slider.setToolTip(
-            "0% = fully opaque surfaces, 100% = the full tinted material")
+            "Mixes the pre-blended fake-glass surface tones (chrome, status "
+            "strip, machined edges). It does NOT control real transparency or "
+            "blur — those are Window opacity and Backdrop below. "
+            "0% = fully opaque surfaces, 100% = the full tinted material.")
         self._glass_value_label = QLabel("100%")
         # Live preview, throttled: a full restyle is a global QSS repolish,
         # so drag updates debounce (250 ms) and release applies immediately.
@@ -379,6 +394,19 @@ class ThemeEditorDialog(QDialog):
         o_hint.setObjectName("metricTileCaption")
         o_hint.setWordWrap(True)
         card.add_widget(o_hint)
+        # Visible clamp note (Task 1c): a DWM backdrop material and a layered
+        # (<100%) window are mutually exclusive — the uniform alpha SUPPRESSES
+        # the material (Kaya's live 98% was the proof). So while a backdrop is
+        # active the opacity slider is pinned to 100% and disabled; say WHY
+        # rather than silently forcing it. Shown/hidden by
+        # _sync_opacity_enabled_for_backdrop once the backdrop combo exists.
+        self._opacity_backdrop_note = QLabel(
+            "Pinned to 100% while a Backdrop material is active — a translucent "
+            "window suppresses Mica/Acrylic (they cannot both show at once).")
+        self._opacity_backdrop_note.setObjectName("metricTileCaption")
+        self._opacity_backdrop_note.setWordWrap(True)
+        self._opacity_backdrop_note.setVisible(False)
+        card.add_widget(self._opacity_backdrop_note)
 
         # ── Backdrop — Windows 11 DWM system material ───────────────────────
         # A THIRD, independent knob (gui/backdrop.py): real compositor material
@@ -409,6 +437,31 @@ class ThemeEditorDialog(QDialog):
         b_hint.setObjectName("metricTileCaption")
         b_hint.setWordWrap(True)
         card.add_widget(b_hint)
+
+        # ── Panel glass (experimental) — the one user-facing opt-in switch ──
+        # Turns REGISTERED safe panes (this dialog's own cards to start; a
+        # small registry that panels join in a later tuning beat) to real
+        # glass — an rgba tint (gui/style.py PANEL_GLASS_ALPHA + the
+        # glassPane QSS) so a DWM backdrop bleeds through the card itself.
+        # Plots, the camera view and danger-well surfaces are EXCLUDED by
+        # construction: the property is opt-in per instance
+        # (gui.panel_kit.register_glass_pane refuses a plot container), never a
+        # blanket selector. A window-level knob — auto-persisted on toggle.
+        self._panel_glass_check = QCheckBox()
+        self._panel_glass_check.setToolTip(
+            "Experimental. Registered cards trade their opaque fill for a "
+            "translucent tint so a Backdrop material bleeds through the card "
+            "itself. Registry-limited for now (this dialog's cards); plots, "
+            "camera and danger controls are excluded by design.")
+        self._panel_glass_check.toggled.connect(self._on_panel_glass_toggled)
+        card.add_widget(_settings_row("Panel glass (experimental)",
+                                      self._panel_glass_check))
+        pg_hint = QLabel(
+            "Real glass on registered panels only. Plots, camera and danger "
+            "surfaces never get it.")
+        pg_hint.setObjectName("metricTileCaption")
+        pg_hint.setWordWrap(True)
+        card.add_widget(pg_hint)
         return card
 
     def _build_colors_card(self) -> Card:
@@ -519,6 +572,7 @@ class ThemeEditorDialog(QDialog):
         self._glass_value_label.setText(f"{int(round(self._draft_glass * 100))}%")
         self._sync_opacity_control()
         self._sync_backdrop_control()
+        self._sync_opacity_enabled_for_backdrop()
         typo = style.typography()
         for combo, key in ((self._sans_combo, "sans"), (self._mono_combo, "mono"),
                            (self._hinting_combo, "hinting")):
@@ -564,23 +618,85 @@ class ThemeEditorDialog(QDialog):
     def _on_opacity_changed(self, value: int) -> None:
         """Live, un-debounced: unlike the tint slider this needs no QSS
         regeneration — it is one setWindowOpacity call per top-level window, so
-        the drag can track the value directly. Persisted only on Apply (same
-        contract as the tint preview)."""
+        the drag can track the value directly. AUTO-PERSISTED (not draft-only):
+        window opacity is live WINDOW state, not a draft styling token, so it is
+        written immediately (under the same key load_theme_customization reads),
+        never reverting when the dialog is closed without Apply."""
         self._opacity_value_label.setText(f"{value}%")
         self._draft_window_opacity = style.set_window_opacity(value / 100.0)
         style.apply_window_opacity()
+        self._persist_window_opacity()
 
     def _on_backdrop_changed(self, _index: int) -> None:
-        """Live preview, same immediacy as opacity — one DWM call per window,
-        no QSS regeneration needed. Persisted only on Apply (same contract as
-        every other Material control). This only ever touches the backdrop
-        fan-out; the apply-order contract (backdrop before opacity) matters
-        where BOTH are pushed out together (startup, _apply() below, the
-        dark-mode toggle) — a lone backdrop change does not need to re-touch
-        opacity, which is an independent Qt property untouched by it."""
+        """Live preview + AUTO-PERSIST + opacity pin. The backdrop is live
+        WINDOW state, not a draft styling token: persist it immediately (Kaya
+        persistence bug 2026-07-13 — closing the dialog, with or without Apply,
+        must never revert a chosen backdrop) under the SAME key
+        load_theme_customization reads. Then re-sync the opacity control: a DWM
+        material and a layered (<100%) window are mutually exclusive, so while a
+        material is active the opacity slider is pinned to 100% and disabled
+        (Task 1c). The apply-order contract (backdrop before opacity) is
+        preserved — apply_window_backdrop fires before apply_window_opacity."""
         kind = self._backdrop_combo.currentData()
         self._draft_backdrop = style.set_window_backdrop(kind)
+        self._persist_window_backdrop()
         style.apply_window_backdrop()
+        self._sync_opacity_enabled_for_backdrop()
+        style.apply_window_opacity()
+
+    def _persist_window_backdrop(self) -> None:
+        """Write the backdrop kind straight to the store (auto-persist)."""
+        self._settings.setValue(
+            app_settings.THEME_WINDOW_BACKDROP_KEY, self._draft_backdrop)
+        self._settings.sync()
+
+    def _persist_window_opacity(self) -> None:
+        """Write the window opacity straight to the store (auto-persist)."""
+        self._settings.setValue(
+            app_settings.THEME_WINDOW_OPACITY_KEY, float(self._draft_window_opacity))
+        self._settings.sync()
+
+    def _sync_opacity_enabled_for_backdrop(self) -> None:
+        """Enable/disable the opacity slider and its clamp note to match the
+        current backdrop draft: a live DWM material needs a fully-opaque window
+        (a layered <100% window suppresses it), so while one is active the
+        slider is pinned to 100% and disabled with a visible note explaining
+        why — never a silent clamp (Task 1c)."""
+        active = self._draft_backdrop != "none"
+        self._opacity_slider.setEnabled(not active)
+        self._opacity_backdrop_note.setVisible(active)
+        if active:
+            self._force_opacity_to_full()
+
+    def _force_opacity_to_full(self) -> None:
+        """Pin window opacity to 100% (slider display + draft + global state +
+        store) — used when a backdrop material becomes active."""
+        self._opacity_slider.blockSignals(True)
+        self._opacity_slider.setValue(100)
+        self._opacity_slider.blockSignals(False)
+        self._opacity_value_label.setText("100%")
+        self._draft_window_opacity = style.set_window_opacity(1.0)
+        self._persist_window_opacity()
+
+    def _on_panel_glass_toggled(self, checked: bool) -> None:
+        """Experimental "Panel glass" switch — live AND auto-persisted (a
+        window-level knob, not a draft styling token, same contract as the
+        backdrop/opacity handlers). Sets glassPane=true on REGISTERED safe panes
+        only (gui.panel_kit.set_panel_glass); plots/camera/danger panes are
+        excluded by construction (they are never registered)."""
+        panel_kit.set_panel_glass(checked)
+        app_settings.set_theme_panel_glass_enabled(checked, self._settings)
+        self._settings.sync()
+
+    def _init_panel_glass(self) -> None:
+        """Apply the persisted panel-glass switch to this dialog's now-registered
+        cards at construction, and reflect it in the checkbox — without firing
+        the toggled handler (persistence is already correct on disk)."""
+        enabled = app_settings.theme_panel_glass_enabled(self._settings)
+        self._panel_glass_check.blockSignals(True)
+        self._panel_glass_check.setChecked(enabled)
+        self._panel_glass_check.blockSignals(False)
+        panel_kit.set_panel_glass(enabled)
 
     def _sync_glass_from_slider(self) -> None:
         """The slider is the source of truth for the glass draft — Apply /

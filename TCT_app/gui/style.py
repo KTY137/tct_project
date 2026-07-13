@@ -708,6 +708,20 @@ def set_chip_state(chip, state: str) -> None:
 BACKDROP_CANVAS_ALPHA = 0.82
 
 
+# Panel-glass opt-in (experimental, Kaya-ratified 2026-07-13): how translucent
+# a REGISTERED "safe" pane's own surface becomes when the theme editor's
+# "Panel glass (experimental)" switch is on, so a real DWM backdrop can bleed
+# through the CARD itself (not just the window's unclaimed canvas). Driven by a
+# per-instance ``glassPane=true`` dynamic property (QSS below) set ONLY on panes
+# explicitly opted in via ``gui.panel_kit.register_glass_pane`` — deliberately
+# NOT a blanket ``QFrame#cardPane`` selector, which cannot tell a plot/camera/
+# danger-well pane from a plain one and so would violate the "content stays
+# opaque" hard rule for the widgets that actually matter (live readouts). Like
+# BACKDROP_CANVAS_ALPHA this is a PLACEHOLDER for Kaya's live tuning — real DWM
+# blur cannot be judged from an offscreen capture.
+PANEL_GLASS_ALPHA = 0.55
+
+
 def _canvas_fill(p: dict) -> str:
     """QMainWindow/QDialog/#mainShell background — opaque ``p['bg']`` (BYTE-
     IDENTICAL to before this existed) unless a real backdrop material is the
@@ -1412,6 +1426,20 @@ QFrame#channelCard {{
     border-radius: {RADIUS_SM}px;
 }}
 
+/* Panel glass (experimental, OPT-IN) — a per-instance ``glassPane=true``
+   dynamic property (set only by gui.panel_kit.set_panel_glass on panes
+   REGISTERED via register_glass_pane, driven by the theme editor's "Panel
+   glass" switch) trades a safe pane's opaque fill for an rgba() tint of the
+   active "panel" colour, so a DWM backdrop bleeds through the card itself.
+   Attribute selectors outrank the bare #cardPane / QGroupBox rules above, so
+   this wins wherever the property is set and is completely inert (no widget
+   carries it) otherwise. HARD exclusion by construction: nothing registers a
+   plot/camera/danger-well pane (a FigureCard is refused outright), so those
+   never get the property — guard: tests/test_panel_kit_cockpit.py. See
+   PANEL_GLASS_ALPHA / docs/design/glass_gap_findings.md §6. */
+QFrame#cardPane[glassPane="true"] {{ background: {_rgba(p['panel'], PANEL_GLASS_ALPHA)}; }}
+QGroupBox[glassPane="true"] {{ background: {_rgba(p['panel'], PANEL_GLASS_ALPHA)}; }}
+
 /* Eyebrow — a small caption label above a heading/value.  QSS cannot
    uppercase text, so the panel should pass already-uppercased text; letter-
    spacing gives it the tracking real small-caps captions need to read
@@ -2105,9 +2133,18 @@ def apply_window_opacity(app=None, opacity: float | None = None) -> float:
     app = app if app is not None else QApplication.instance()
     if app is None:
         return value
+    # A DWM system backdrop material and a LAYERED window (setWindowOpacity < 1,
+    # WS_EX_LAYERED) are mutually exclusive: the uniform per-window alpha
+    # suppresses the material outright (apply_window_backdrop's interaction
+    # matrix, row 4 — Kaya's live 98% was the proof the acrylic "vanished").
+    # So while a material is active, PIN every window to fully opaque. The
+    # stored preference (_window_opacity, returned below) is left untouched, so
+    # the user's translucency returns the moment the backdrop is set back to
+    # "none". See gui/theme_editor.py for the matching UI clamp + visible note.
+    effective = 1.0 if _window_backdrop != "none" else value
     for w in app.topLevelWidgets():
         if w.isWindow() and not _is_transient_window(w):
-            w.setWindowOpacity(value)
+            w.setWindowOpacity(effective)
     return value
 
 
@@ -2216,9 +2253,29 @@ def apply_window_backdrop_to(window, kind: str | None = None) -> str:
     applied = backdrop.apply_backdrop(window, resolved)
     if resolved == "none":
         _reassert_window_palette(window)
+        _repaint_central_widget(window)
     elif applied:
         window.update()
+        _repaint_central_widget(window)
     return resolved
+
+
+def _repaint_central_widget(window) -> None:
+    """Schedule a repaint of a ``QMainWindow``'s central widget (``#mainShell``)
+    after its translucent-canvas prep was (re)touched by
+    ``gui.backdrop._prepare_window_canvas`` / ``_clear_window_canvas`` — the
+    opaque child that actually covers a QMainWindow client, mirroring the
+    top-level ``window.update()`` belt-and-braces (9cdc970). ``window.update()``
+    alone does not repaint children, so an already-shown ``#mainShell`` needs
+    its own nudge to redraw into the now-translucent (or now-opaque again)
+    surface. A no-op on a plain ``QWidget``/``QDialog`` (no ``centralWidget``)
+    or a ``QMainWindow`` that has none yet."""
+    getter = getattr(window, "centralWidget", None)
+    if not callable(getter):
+        return
+    central = getter()
+    if central is not None:
+        central.update()
 
 
 def apply_window_backdrop(app=None) -> str:

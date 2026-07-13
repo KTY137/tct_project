@@ -22,6 +22,7 @@ Design rules (matching ``gui/style.py`` and every existing panel):
 """
 from __future__ import annotations
 
+import weakref
 from collections.abc import Iterable
 
 import pyqtgraph as pg
@@ -61,6 +62,9 @@ __all__ = [
     "CollapsibleCard",
     "SegmentedControl",
     "EmptyState",
+    "register_glass_pane",
+    "registered_glass_panes",
+    "set_panel_glass",
 ]
 
 
@@ -914,3 +918,59 @@ class EmptyState(QWidget):
             self._theme_mode = str(mode)
         self._apply_icon()
         self._apply_variant_ink()
+
+
+# --------------------------------------------------------------------------- #
+# Panel-glass opt-in registry (experimental) — the one user-facing switch      #
+# lives in the theme editor; panes must OPT IN here to ever go glass.          #
+# --------------------------------------------------------------------------- #
+
+# WeakSet: a closed/destroyed pane drops out automatically and is never kept
+# alive by this module (mirrors gui/backdrop._backdrop_applied_windows).
+_GLASS_PANE_REGISTRY: "weakref.WeakSet[QWidget]" = weakref.WeakSet()
+
+
+def register_glass_pane(widget: QWidget) -> None:
+    """Opt *widget* (a ``Card`` / ``QGroupBox`` / ``#cardPane`` frame) INTO the
+    experimental "Panel glass" switch: only panes registered here get
+    ``glassPane=true`` (the rgba tint in ``gui/style.py``, ``PANEL_GLASS_ALPHA``)
+    when :func:`set_panel_glass` turns the switch on.
+
+    HARD exclusion (cockpit_style_overhaul.md §1 rule 3 / design law 8 — "no
+    translucency over a live camera/plot"): a pane hosting a pyqtgraph plot, the
+    camera live view, or a danger-well surface must NEVER be registered. A
+    :class:`FigureCard` (the kit's plot container) is refused outright as a
+    construction-time guard; every other plot/camera/danger pane is excluded by
+    simply never being registered — the property is opt-in per instance, there
+    is no blanket selector — and a guard test pins that those never carry the
+    property (``tests/test_panel_kit_cockpit.py``).
+    """
+    if isinstance(widget, FigureCard):
+        raise ValueError(
+            "panel glass is banned on plot/figure containers "
+            "(cockpit hard rule 3 — no translucency over a live plot/camera)")
+    _GLASS_PANE_REGISTRY.add(widget)
+
+
+def registered_glass_panes() -> list[QWidget]:
+    """Live snapshot of the opted-in safe panes (dead widgets auto-drop)."""
+    return list(_GLASS_PANE_REGISTRY)
+
+
+def set_panel_glass(enabled: bool) -> None:
+    """Turn the experimental panel-glass tint ON/OFF for every REGISTERED safe
+    pane (and only those), repolishing each so the ``glassPane`` QSS selector
+    re-evaluates immediately. Defensive against a pane whose C++ object was
+    already destroyed (registered then torn down while the switch toggles)."""
+    from gui.style import repolish
+    try:
+        from shiboken6 import isValid
+    except Exception:                       # pragma: no cover - shiboken always present
+        def isValid(_w):  # type: ignore[misc]
+            return True
+    flag = "true" if enabled else ""
+    for w in list(_GLASS_PANE_REGISTRY):
+        if not isValid(w):
+            continue
+        w.setProperty("glassPane", flag)
+        repolish(w)

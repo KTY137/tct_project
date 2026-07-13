@@ -48,7 +48,7 @@ from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication, QPalette
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QMainWindow, QWidget
 
 logger = logging.getLogger(__name__)
 
@@ -200,30 +200,65 @@ def _native_hwnd(window: QWidget) -> Optional[int]:
 # Qt-side canvas prep — candidate A/B, see module docstring                  #
 # --------------------------------------------------------------------------- #
 
+def _canvas_widgets(window: QWidget) -> list[QWidget]:
+    """The widget(s) whose background must go translucent for a DWM material to
+    reach the compositor.
+
+    Always the top-level window; ADDITIONALLY the ``QMainWindow`` central
+    widget (``#mainShell`` — ``tct_gui.py``). A ``QMainWindow``'s client area is
+    painted by that opaque child, not by the window itself, so making only the
+    top-level translucent never carries per-pixel alpha down to DWM — the
+    translucent regions fall straight through to a crisp desktop, no blur (the
+    "alpha hole punched, no material behind" failure — see
+    ``docs/research/dwm_backdrop_blur_recipe.md`` item 1). A flat ``QDialog``
+    needs no such step because it *is* the widget covering its own client.
+    """
+    widgets = [window]
+    if isinstance(window, QMainWindow):
+        central = window.centralWidget()
+        if central is not None:
+            widgets.append(central)
+    return widgets
+
+
+def _set_canvas_translucent(widget: QWidget, translucent: bool) -> None:
+    """Toggle one widget between the translucent-canvas prep (so a DWM material
+    shows through its own unclaimed background) and the fail-safe opaque state.
+    The ``_CANVAS_MODE`` candidate switch (see the module docstring) applies
+    identically to the window and its central widget."""
+    if _CANVAS_MODE == "no_system_background":
+        widget.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, translucent)
+        return
+    if translucent:
+        widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        palette = widget.palette()
+        palette.setColor(QPalette.ColorRole.Window, Qt.GlobalColor.transparent)
+        widget.setPalette(palette)
+        widget.setAutoFillBackground(False)
+    else:
+        widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        widget.setPalette(QPalette())
+        widget.setAutoFillBackground(True)
+
+
 def _prepare_window_canvas(window: QWidget) -> None:
     """Let the backdrop paint through the window's own unclaimed background.
 
-    Only touches the top-level widget passed in — child panels/plots keep
-    their own opaque QSS untouched (design law).
+    Touches the top-level widget AND (for a ``QMainWindow``) its central
+    ``#mainShell`` child — but NOT the panels/plots/camera inside, which keep
+    their own opaque QSS untouched (design law). The child that actually covers
+    a ``QMainWindow`` client must be translucent too, or the top-level's
+    translucency never reaches DWM (see :func:`_canvas_widgets`).
     """
-    if _CANVAS_MODE == "no_system_background":
-        window.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-        return
-    window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-    palette = window.palette()
-    palette.setColor(QPalette.ColorRole.Window, Qt.GlobalColor.transparent)
-    window.setPalette(palette)
-    window.setAutoFillBackground(False)
+    for w in _canvas_widgets(window):
+        _set_canvas_translucent(w, True)
 
 
 def _clear_window_canvas(window: QWidget) -> None:
-    """Undo :func:`_prepare_window_canvas` when a backdrop is reset to "none"."""
-    if _CANVAS_MODE == "no_system_background":
-        window.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
-        return
-    window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-    window.setPalette(QPalette())
-    window.setAutoFillBackground(True)
+    """Undo :func:`_prepare_window_canvas` (window + central widget) when a
+    backdrop is reset to "none" — symmetric with the prep above."""
+    for w in _canvas_widgets(window):
+        _set_canvas_translucent(w, False)
 
 
 # --------------------------------------------------------------------------- #
@@ -281,7 +316,13 @@ def apply_backdrop(window: QWidget, kind: str) -> bool:
 
     # Both native calls succeeded — only now is it safe to make the Qt side
     # translucent (fail-safe ordering: never a translucent window with no
-    # backdrop material actually behind it).
+    # backdrop material actually behind it). Log the HRESULTs at INFO so a
+    # *silent* rejection (S_OK returned but nothing renders) is still visible
+    # in the log — the DWM path can return S_OK yet not composite the material.
+    logger.info(
+        "backdrop: applied kind=%s (DwmExtendFrameIntoClientArea hr=%s, "
+        "DwmSetWindowAttribute SYSTEMBACKDROP_TYPE=%s hr=%s)",
+        kind, extend_hr, _KIND_TO_DWMSBT[kind], attr_hr)
     _prepare_window_canvas(window)
     _backdrop_applied_windows.add(window)
     return True

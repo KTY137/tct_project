@@ -20,6 +20,7 @@ THEME_TYPOGRAPHY_KEY = "theme/typography"
 THEME_RADIUS_SCALE_KEY = "theme/radius_scale"
 THEME_WINDOW_OPACITY_KEY = "theme/window_opacity"
 THEME_WINDOW_BACKDROP_KEY = "theme/window_backdrop"
+THEME_PANEL_GLASS_KEY = "theme/panel_glass"
 THEME_PRESETS_KEY = "theme/presets"
 
 
@@ -112,6 +113,20 @@ def theme_window_opacity_value(store=None) -> Any:
 
 def theme_window_backdrop_value(store=None) -> Any:
     return _store(store).value(THEME_WINDOW_BACKDROP_KEY, None)
+
+
+def theme_panel_glass_enabled(store=None) -> bool:
+    """Experimental "Panel glass" switch (gui/theme_editor.py) — whether
+    REGISTERED safe panes carry the ``glassPane`` tint. A window-level knob,
+    auto-persisted on change (not a draft styling token), default OFF."""
+    raw = _store(store).value(THEME_PANEL_GLASS_KEY, False)
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in ("true", "1", "yes", "on")
+
+
+def set_theme_panel_glass_enabled(enabled: bool, store=None) -> None:
+    _store(store).setValue(THEME_PANEL_GLASS_KEY, bool(enabled))
 
 
 def theme_overrides_json(store=None) -> str:

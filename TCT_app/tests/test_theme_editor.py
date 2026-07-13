@@ -36,7 +36,7 @@ import pytest
 from PySide6.QtCore import QSettings
 
 import gui.backdrop as backdrop
-from gui import style
+from gui import app_settings, style
 
 
 @pytest.fixture(autouse=True)
@@ -1070,3 +1070,154 @@ def test_reset_theme_customization_restores_canvas_passthrough_default():
     style.reset_theme_customization()
     assert style.get_window_backdrop() == "none"
     assert style._canvas_fill(style.palette("dark")) == style.palette("dark")["bg"]
+
+
+# =========================================================================== #
+# Task 3 (Kaya UX): the Surface-tint slider tooltip must say plainly it mixes   #
+# pre-blended fake-glass surface tones, NOT real transparency/blur.             #
+# =========================================================================== #
+
+def test_surface_tint_tooltip_disclaims_real_transparency(tmp_path):
+    dlg = _dialog(tmp_path)
+    tip = dlg._glass_slider.toolTip().lower()
+    assert "blur" in tip
+    assert "not" in tip
+    assert "opacity" in tip and "backdrop" in tip
+
+
+# =========================================================================== #
+# Task 1c: a live DWM material and a layered (<100%) window are mutually        #
+# exclusive — while a backdrop is active the opacity slider is pinned to 100%   #
+# and disabled, with a VISIBLE note (never a silent clamp).                     #
+# =========================================================================== #
+
+def test_backdrop_pins_and_disables_opacity_with_a_visible_note(tmp_path, monkeypatch):
+    _force_backdrop_supported(monkeypatch)
+    _install_recording_dwm(monkeypatch)
+    dlg = _dialog(tmp_path)
+    # Default (no backdrop): opacity is fully editable and the note is hidden.
+    assert dlg._opacity_slider.isEnabled() is True
+    assert dlg._opacity_backdrop_note.isHidden() is True
+
+    dlg._opacity_slider.setValue(88)               # a translucent preference...
+    idx = dlg._backdrop_combo.findData("acrylic")
+    dlg._backdrop_combo.setCurrentIndex(idx)       # ...suppressed by the material
+    assert dlg._opacity_slider.isEnabled() is False
+    assert dlg._opacity_slider.value() == 100
+    assert dlg._opacity_backdrop_note.isHidden() is False
+    assert style.get_window_opacity() == pytest.approx(1.0)
+
+    # Back to none: the slider re-enables and the note hides again.
+    dlg._backdrop_combo.setCurrentIndex(dlg._backdrop_combo.findData("none"))
+    assert dlg._opacity_slider.isEnabled() is True
+    assert dlg._opacity_backdrop_note.isHidden() is True
+    style.reset_theme_customization()
+
+
+# =========================================================================== #
+# Task 1c + Adam's persistence follow-up: backdrop (and opacity) AUTO-APPLY and #
+# AUTO-PERSIST on change — a chosen backdrop must survive the dialog lifecycle  #
+# and a simulated restart, WITH or WITHOUT pressing Apply.                      #
+# =========================================================================== #
+
+def test_backdrop_auto_persists_on_combo_change_without_apply(tmp_path):
+    """The reported bug's regression guard: pick acrylic in the combo, destroy
+    the dialog WITHOUT Apply, simulate a restart (reset globals + reload from
+    the store) — the store holds acrylic, get_window_backdrop() returns it, and
+    a freshly built dialog shows it."""
+    settings = _tmp_settings(tmp_path)
+    from gui.theme_editor import ThemeEditorDialog
+
+    dlg = ThemeEditorDialog(mode="dark", settings=settings)
+    dlg._backdrop_combo.setCurrentIndex(dlg._backdrop_combo.findData("acrylic"))
+    # Persisted immediately, no Apply click:
+    assert settings.value("theme/window_backdrop") == "acrylic"
+    dlg.deleteLater()
+
+    # Simulated restart: in-memory globals cleared, reloaded from the store.
+    style.reset_theme_customization()
+    style.load_theme_customization(settings)
+    assert style.get_window_backdrop() == "acrylic"
+
+    dlg2 = ThemeEditorDialog(mode="dark", settings=settings)
+    assert dlg2._draft_backdrop == "acrylic"
+    assert dlg2._backdrop_combo.currentData() == "acrylic"
+    dlg2.deleteLater()
+    style.reset_theme_customization()
+
+
+def test_backdrop_still_persists_with_apply_across_restart(tmp_path):
+    """The exact flow Kaya used (WITH Apply) must persist just the same."""
+    settings = _tmp_settings(tmp_path)
+    from gui.theme_editor import ThemeEditorDialog
+
+    dlg = ThemeEditorDialog(mode="dark", settings=settings)
+    dlg._backdrop_combo.setCurrentIndex(dlg._backdrop_combo.findData("acrylic"))
+    dlg._apply()
+    assert style.get_window_backdrop() == "acrylic"
+    assert settings.value("theme/window_backdrop") == "acrylic"
+    dlg.deleteLater()
+
+    style.reset_theme_customization()
+    style.load_theme_customization(settings)
+    assert style.get_window_backdrop() == "acrylic"
+    style.reset_theme_customization()
+
+
+def test_window_opacity_auto_persists_on_slider_change_without_apply(tmp_path):
+    settings = _tmp_settings(tmp_path)
+    from gui.theme_editor import ThemeEditorDialog
+
+    dlg = ThemeEditorDialog(mode="dark", settings=settings)
+    dlg._opacity_slider.setValue(88)               # no Apply
+    assert settings.value("theme/window_opacity") is not None
+    dlg.deleteLater()
+
+    style.reset_theme_customization()
+    style.load_theme_customization(settings)
+    assert style.get_window_opacity() == pytest.approx(0.88)
+    style.reset_theme_customization()
+
+
+# =========================================================================== #
+# Task 2: the "Panel glass (experimental)" switch flags REGISTERED safe panes   #
+# (this dialog's own cards) and auto-persists; plots/camera/danger excluded.    #
+# =========================================================================== #
+
+def test_panel_glass_switch_flags_registered_dialog_cards_and_persists(tmp_path):
+    import gui.panel_kit as panel_kit
+
+    settings = _tmp_settings(tmp_path)
+    from gui.theme_editor import ThemeEditorDialog
+
+    dlg = ThemeEditorDialog(mode="dark", settings=settings)
+    try:
+        # The dialog registered its own four cards on construction.
+        assert len(dlg._glass_cards) == 4
+        for card in dlg._glass_cards:
+            assert card in panel_kit.registered_glass_panes()
+            assert not card.property("glassPane")   # opt-in default: off
+
+        dlg._panel_glass_check.setChecked(True)
+        for card in dlg._glass_cards:
+            assert card.property("glassPane") == "true"
+        assert app_settings.theme_panel_glass_enabled(settings) is True
+
+        dlg._panel_glass_check.setChecked(False)
+        for card in dlg._glass_cards:
+            assert not card.property("glassPane")
+        assert app_settings.theme_panel_glass_enabled(settings) is False
+    finally:
+        dlg._panel_glass_check.setChecked(False)
+        panel_kit.set_panel_glass(False)
+        dlg.deleteLater()
+
+
+def test_panel_glass_qss_uses_rgba_panel_tint():
+    p = style.palette("dark")
+    qss = style.build_qss(p)
+    assert 'QFrame#cardPane[glassPane="true"]' in qss
+    assert 'QGroupBox[glassPane="true"]' in qss
+    assert 0.0 < style.PANEL_GLASS_ALPHA < 1.0
+    tint = style._rgba(p["panel"], style.PANEL_GLASS_ALPHA)
+    assert tint in qss
