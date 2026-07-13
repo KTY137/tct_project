@@ -1,6 +1,6 @@
 # Bench Verification Checklist
 
-**Last updated:** 2026-07-12  
+**Last updated:** 2026-07-13  
 **For use in:** next lab session  
 **Safety notes:**
 - HV items below (§ iseg) require explicit user authorization before proceeding.
@@ -527,6 +527,181 @@ Source: `docs/research/camera_optics_setup.md` (verified live 2026-07-10).
 | R5 | **Frozen PyInstaller build:** Build a snapshot with PyInstaller; app launches without "missing QtQuick" error. Shell.qml loads error-free. | No plugin/resource missing errors; QML engine boots cold on a fresh machine. | Smoke test for release build integrity. |
 
 **Decision rule (per `docs/research/qml_hybrid_standard_decision.md`):** Steps R1-R3 + R5 green on the iGPU → ratify shell as standard, with QWidgets+safety single-impl as standing rule for panels. F2 fails → ratify with "classic shell is the supported RDP/remote mode" (design already permits this via env-var fallback).
+
+---
+
+## 12. Metrology Bench Protocol — Stage↔Camera (Workstream B3)
+
+**Last updated:** 2026-07-13 · **Requires Kaya at the bench** (every step commands stage motion or
+needs hands on the optics). Feeds: `docs/research/metrology_feasibility.md` §7 (the measured-results
+table) and the M2 go/no-go. Existing code only — anything that would need new code is marked
+"(needs beat …)" instead of pretended.
+
+**Ground rules for the whole section:**
+- Motion is danger-gated (`controller/danger_gate.py`) or typed explicitly by the operator at a
+  REPL — never scripted unattended (CLAUDE.md safety rules 1–2).
+- REPL steps run from `TCT_app\` in the app venv **with the GUI app closed** (camera/COM port have
+  a single owner).
+- Evidence directory: create `artifacts_claude\metrology\<yyyymmdd>\` first
+  (`scripts/metrology_report.py:write_report` does NOT create parent directories).
+- Every measured number is transcribed into `docs/research/metrology_feasibility.md` §7
+  (quantity, value, date, artifact path) — that table is the record, not the terminal scrollback.
+- REPL session preamble (shared by steps 0–3). `ConsoleGate` is a session-local shim typed by the
+  operator — the explicit CLI confirmation of safety rule 2, not app code (wiring a real gate +
+  `calibrate_affine` into a GUI "Stage Metrology" page is a separate beat, design
+  `docs/design/camera_survey_metrology.md` §E.8):
+
+  ```python
+  # from TCT_app\ in the app venv, app CLOSED
+  import numpy as np
+  from controller.device_manager import DeviceManager
+  from controller.repeatability import RepeatabilityTester
+
+  class ConsoleGate:                       # session-local; rule-2 CLI confirmation
+      def confirm(self, action):
+          print(action.summary); print(action.detail)
+          return input("Type YES to allow this motion: ").strip() == "YES"
+
+  dev = DeviceManager("configs/devices.yaml")
+  dev.motor.connect(); dev.camera.connect()
+  dev.motor.home()                         # explicit operator command — the stage WILL move
+  tester = RepeatabilityTester(dev.motor, dev.camera, gate=ConsoleGate())
+  ```
+
+### 12a. Step 0 — Measure relay magnification M (prerequisite for every µm number)
+
+**What to check:**
+- Place a known-pitch target at the DUT/laser focal plane (§7b parfocality): AmScope MR095
+  (10 µm div / 1 mm — the $17 tier) preferred; today's paper print is acceptable for a FIRST
+  estimate only (~1 % printer-scale honesty — flag it in the record).
+- Focus using the Camera panel live view (§7f known-good settings), then close the app and grab a
+  frame in the REPL session above:
+
+  ```python
+  frame = np.asarray(dev.camera.get_frame())
+  np.save(r"..\artifacts_claude\metrology\<yyyymmdd>\step0_reticle_frame.npy", frame)
+  ```
+
+- Read the pixel coordinates of the FIRST and LAST clearly visible division line spanning `N_div`
+  divisions of pitch `p_mm` (any viewer with a pixel cursor works; `pyqtgraph.image(frame)` from
+  the same venv gives one).
+- Compute: `px_per_mm = |u_last − u_first| / (N_div * p_mm)`; `M = px_per_mm / 170.65`
+  (IMX249 5.86 µm pixels; `px_per_mm ≈ 170.6·M`, `docs/design/camera_survey_metrology.md` §0).
+- If the target permits, rotate ~90° and repeat along the other image axis; expect agreement to
+  ~1 % (larger disagreement = tilt or anisotropy — record it, do not average it away).
+
+**Expected result:**
+- `M`, `px_per_mm`, target identity/pitch, and the saved `.npy` frame recorded in
+  `metrology_feasibility.md` §7. Unlocks the µm columns of every later step.
+
+**Closes:** feasibility-memo unknown 1; supersedes the scale part of §7d (which stays for the
+post-ROI distortion pass).
+
+### 12b. Step 1 — Noise floor + N-cycle return-to-target repeatability
+
+**What to check:**
+- **Noise floor (REPL only — the GUI approach spinbox has min 0.1 mm,
+  `gui/calibration_panel.py:261`, so a zero-excursion run cannot be started from the panel):**
+
+  ```python
+  floor = tester.run(n=20, approach_mm=0.0, settle_s=0.4, px_per_mm=<step0 value>)
+  print(floor.summary())
+  np.save(r"..\artifacts_claude\metrology\<yyyymmdd>\step1_floor_shifts_px.npy",
+          np.array(floor.shifts_px))
+  ```
+
+  Zero-distance moves ⇒ the scatter is pure registration + vibration — the floor every other
+  number is compared against.
+- **Return-to-target repeatability** (same shape, real excursion; direction cycles
+  +X, +Y, −X, −Y per `RepeatabilityTester.run`, so this scatter is the POOLED multi-direction
+  number — per-direction grouping / a clean unidirectional-only mode is **(needs beat:
+  per-direction stats, design §B.0-3)**; per-axis backlash comes from step 2 instead):
+
+  ```python
+  rep = tester.run(n=20, approach_mm=5.0, settle_s=0.4, px_per_mm=<step0 value>)
+  print(rep.summary())
+  np.save(r"..\artifacts_claude\metrology\<yyyymmdd>\step1_rep_shifts_px.npy",
+          np.array(rep.shifts_px))
+  ```
+
+- GUI alternative (no saved arrays, summary text only): Calibration panel → Repeatability group
+  (`gui/calibration_panel.py:_run_repeatability`; requires Connect All + homed stage + the
+  main-window gate). Persisting `RepeatabilityResult` arrays from the panel is
+  **(needs beat: result persistence)**.
+- Check `n_low_quality` in both results — nonzero means frames were excluded by the
+  `prepare_metrology_roi` quality gate (feasibility unknown 8: texture adequacy).
+
+**Expected result:**
+- `floor` std ≈ the registration class (~0.05–0.1 px ⇒ sub-µm at M ≥ 1); `rep` std/p2p in µm is
+  OUR first real repeatability number (prior-art prediction: ±5–15 µm class, memo §2 row b).
+- Evidence: two `.npy` arrays + both `summary()` texts in the bench log + §7 table rows 3–4.
+
+**Closes:** feasibility-memo unknowns 2, 3, 8.
+
+### 12c. Step 2 — Backlash staircase + affine fit (`calibrate_affine`)
+
+**What to check:**
+- Jog to a textured, in-focus region near the middle of travel first (Motor panel or REPL
+  `dev.motor.move_to(...)` — typed explicitly).
+- No GUI path exists for `calibrate_affine` (grep 2026-07-13: wired only in tests) — REPL, same
+  session **(needs beat: Stage Metrology page, design §E.8)**:
+
+  ```python
+  cal = tester.calibrate_affine(nx=3, ny=3, step_mm=0.5, settle_s=0.5, tolerance_um=5.0)
+  print(cal.notes)
+  from scripts.metrology_report import write_report
+  write_report(cal, r"..\artifacts_claude\metrology\<yyyymmdd>\step2_affine_report.html",
+               tolerance_um=5.0)
+  ```
+
+- Staircase geometry: 3×3 grid, 0.5 mm steps ⇒ 1×1 mm extent, 30 commanded positions, ONE gate
+  confirmation for the whole staircase; the stage is left at the last point (no auto-return).
+- Step-size guard: neighbour image shift = `step_mm × px_per_mm` must stay well under half the
+  frame (phase correlation aliases past it, `repeatability.py` TODO(bench) note). 0.5 mm is safe
+  for M ≤ 2; use `step_mm=0.2` if step 0 measured M ≥ 4.
+- `tolerance_um=5.0` is the working gate from the B1 ±5 µm prior — informational, Kaya judges.
+
+**Expected result:**
+- `cal.affine` is not None; `cal.notes` reads like
+  `"30 pts; rms 0.xxx px (x.xx um); backlash N pair(s): X=aa.aa um, Y=bb.bb um"` — the
+  `backlash_mm` fields are the per-axis mean forward-minus-return discrepancy in stage mm
+  (`controller/repeatability.py:fit_stage_camera_affine`; both axes measurable by construction,
+  `tests/test_affine_selfcal.py::test_calibrate_affine_reports_backlash_on_both_axes_on_sim`).
+  `"backlash unmeasured (no matched forward/return pair)"` means too many low-quality exclusions —
+  re-illuminate/re-focus and rerun.
+- The HTML report shows: PASS/FAIL banner vs 5 µm, Scale X/Y (px/mm — cross-check against step 0:
+  the ratio staircase-scale / reticle-scale is the steps-per-mm truth, feasibility unknown 6),
+  rotation/shear, RMS + max residual (linearity), residual quiver, and a `Backlash (mm)` row.
+- Evidence: the HTML report (the primary artifact) + §7 table rows 5–6.
+
+**Closes:** feasibility-memo unknowns 4, 5, 6.
+
+### 12d. Step 3 — 30-minute drift series (fixed target, ~30 s cadence)
+
+**What to check:**
+- Stage parked on the step-2 target; do not touch the bench during the series.
+- Record temperature at start / 15 min / end: camera TEMP readout (§7f) + room thermometer; note
+  any HVAC/door events. (Automatic wall-clock timestamps + a temperature channel inside
+  `RepeatabilityResult` are **(needs beat: timestamped drift series)** — until then the cadence is
+  `settle_s` + move/grab overhead, which is good enough for a µm/h slope.)
+
+  ```python
+  drift = tester.run(n=60, approach_mm=0.0, settle_s=30.0, px_per_mm=<step0 value>)
+  np.save(r"..\artifacts_claude\metrology\<yyyymmdd>\step3_drift_shifts_px.npy",
+          np.array(drift.shifts_px))
+  ```
+
+  (~30–35 min: 60 zero-move cycles, one frame per ~30 s, all registered against the fixed
+  reference frame.)
+
+**Expected result:**
+- `drift.shifts_px` vs cycle index shows a smooth trend, not random scatter; slope × cadence ⇒
+  µm/hour, and against the ΔT notes ⇒ µm/°C. Prior-art prediction: ~1.3 µm/°C class (B1 §2) —
+  ours may differ; that is the point.
+- Evidence: the `.npy` array + temperature notes in the bench log + §7 table row 7. This number
+  sets the re-registration cadence for any ≤2 µm ambition (memo verdict V3).
+
+**Closes:** feasibility-memo unknown 7. Together, 12a–12d give M2 everything memo §6 lists.
 
 ---
 
