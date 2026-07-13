@@ -227,6 +227,100 @@ def test_compiled_params_are_deep_copied_from_live_plan():
     assert step.params["wavegen"] is not acq.params["wavegen"]
 
 
+def test_every_visit_of_a_leaf_is_isolated_from_the_live_plan():
+    """The isolation property holds for EVERY visit of a multi-visit leaf.
+
+    The snapshot is taken once per leaf and shared across its visits (see
+    ``test_one_params_snapshot_per_leaf_not_per_visit``), so this is the test
+    that pins the property that memoization must not break: no compiled step —
+    not the first visit, not the hundredth — may alias the live plan's nested
+    ``wavegen`` mapping."""
+    acq = _acq(wavegen={"duty_cycle_pct": 0.2})
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0, 1.0, 2.0],
+                     children=[acq, _save()])
+    plan = ScanPlan(root=[loop])
+    acqs = [s for s in compile_plan(plan) if isinstance(s, AcquireStep)]
+    assert len(acqs) == 3                       # the leaf really was visited 3x
+
+    plan.root[0].children[0].params["wavegen"]["duty_cycle_pct"] = 99.9
+    assert all(s.params["wavegen"]["duty_cycle_pct"] == 0.2 for s in acqs)
+    assert all(s.params["wavegen"] is not acq.params["wavegen"] for s in acqs)
+
+
+def test_one_params_snapshot_per_leaf_not_per_visit():
+    """Regression (RISK, perf): the params deepcopy is per LEAF, not per VISIT.
+
+    ``compile_plan`` runs on the GUI thread (``ScanController.start_plan``), and
+    ``PlanLimits.max_points`` legally admits 250k leaf visits — a deepcopy per
+    *visit* costs ~0.65 s on a 90k-acquire plan and freezes the UI at scan start
+    for no benefit.  All visits of one leaf therefore share ONE frozen snapshot;
+    this identity assertion is the cheap, non-flaky guard against a silent
+    regression to per-visit copying (a wall-clock bound would be flaky under a
+    loaded test runner)."""
+    acq = _acq(wavegen={"duty_cycle_pct": 0.2})
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[float(i) for i in range(50)],
+                     children=[acq, _save()])
+    acqs = [s for s in compile_plan(ScanPlan(root=[loop]))
+            if isinstance(s, AcquireStep)]
+    assert len(acqs) == 50
+    assert len({id(s.params) for s in acqs}) == 1      # exactly one deepcopy
+
+    # Two DIFFERENT leaves never share a snapshot (the memo is keyed per leaf).
+    a1, a2 = _acq(wavegen={"duty_cycle_pct": 0.2}), _acq(wavegen={"duty_cycle_pct": 0.4})
+    two = LoopBlock(axis=Axis.STAGE_X, values=[0.0], children=[a1, a2, _save()])
+    s1, s2 = [s for s in compile_plan(ScanPlan(root=[two]))
+              if isinstance(s, AcquireStep)]
+    assert s1.params is not s2.params
+    assert s1.params["wavegen"]["duty_cycle_pct"] == 0.2
+    assert s2.params["wavegen"]["duty_cycle_pct"] == 0.4
+
+
+def test_live_edit_between_two_visits_of_one_leaf_never_reaches_a_step():
+    """Hostile case: the live plan is mutated *during* the compile walk.
+
+    Drives ``compile_plan`` through a plan proxy that edits the leaf's live
+    ``wavegen`` mapping after the first visit is yielded.  Both compiled steps
+    must still carry the ORIGINAL, once-snapshotted value: the snapshot is a
+    real deep copy taken from the live plan, so no compiled step can ever be
+    reached by a mutation of that plan — whenever it happens."""
+    acq = _acq(wavegen={"duty_cycle_pct": 0.2})
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0, 1.0], children=[acq])
+    plan = ScanPlan(root=[loop])
+
+    class _MutatingPlan:
+        """Plan proxy: mutates the LIVE action params between leaf visits."""
+        def iter_leaf_contexts_ex(self):
+            for i, item in enumerate(plan.iter_leaf_contexts_ex()):
+                if i == 1:                       # after visit 0 was compiled
+                    acq.params["wavegen"]["duty_cycle_pct"] = 99.9
+                yield item
+
+    acqs = [s for s in compile_plan(_MutatingPlan()) if isinstance(s, AcquireStep)]
+    assert len(acqs) == 2
+    assert acq.params["wavegen"]["duty_cycle_pct"] == 99.9      # mutation DID run
+    assert [s.params["wavegen"]["duty_cycle_pct"] for s in acqs] == [0.2, 0.2]
+
+
+def test_recompile_picks_up_a_live_plan_edit():
+    """The snapshot memo is per-CALL, never module-level.
+
+    A cache that outlived the call would (a) hand a later compile a stale
+    snapshot and (b) key on a possibly-recycled ``id()``.  Editing the plan and
+    recompiling must therefore compile the NEW value — an operator who edits a
+    parameter and restarts the scan gets what they see in the planner."""
+    acq = _acq(wavegen={"duty_cycle_pct": 0.2})
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0], children=[acq])
+    plan = ScanPlan(root=[loop])
+
+    first = next(s for s in compile_plan(plan) if isinstance(s, AcquireStep))
+    acq.params["wavegen"]["duty_cycle_pct"] = 0.9
+    second = next(s for s in compile_plan(plan) if isinstance(s, AcquireStep))
+
+    assert first.params["wavegen"]["duty_cycle_pct"] == 0.2     # old snapshot frozen
+    assert second.params["wavegen"]["duty_cycle_pct"] == 0.9    # new compile re-reads
+    assert first.params is not second.params
+
+
 def test_all_action_types_map_to_steps():
     loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0], children=[
         ActionBlock(action=ActionType.WAIT, params={"seconds": 2.5}),

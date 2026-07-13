@@ -1569,16 +1569,18 @@ class ScanController:
         ``except`` / ``finally``, which leaves HV, motion and the wavegen output
         safe (rule 5 — never continue after a hardware fault).
 
-        Defensive finiteness guard (fail closed, defence in depth): every value
-        is checked with :func:`math.isfinite` BEFORE it is commanded.  A
-        ``NaN``/``+/-inf`` raises :class:`ValueError` *before* the setter runs and
-        before the value enters :attr:`_wavegen_trace`, so a non-finite setpoint
-        can neither reach the hardware nor surface as a non-standard
-        ``NaN``/``Infinity`` JSON token in the command-trace metadata.  The
-        validator already rejects such plans on paper (:func:`_check_wavegen_params`);
-        this guard is the last line if a plan is executed un-validated.  It stays
-        setter-only in spirit — it reads and checks, it does not add any new
-        hardware command.
+        Defensive value guard (fail closed, defence in depth): every value goes
+        through :meth:`_finite_wavegen_arg`, which rejects a non-number (``bool``
+        and ``str`` included — mirroring the validator's ``_is_num``, because
+        ``float()`` would happily turn ``'1e5'`` and ``True`` into commandable
+        numbers) and then a non-finite ``NaN``/``+/-inf``.  The raise lands
+        *before* the setter runs and before the value enters
+        :attr:`_wavegen_trace`, so a bad setpoint can neither reach the hardware
+        nor surface as a non-standard ``NaN``/``Infinity`` JSON token in the
+        command-trace metadata.  The validator already rejects such plans on
+        paper (:func:`_check_wavegen_params`); this guard is the last line if a
+        plan is executed un-validated.  It stays setter-only in spirit — it reads
+        and checks, it does not add any new hardware command.
 
         Records the COMMANDED values (never a measured read-back) into
         :attr:`_wavegen_trace` for the run-metadata honesty stopgap.
@@ -1627,15 +1629,35 @@ class ScanController:
 
     @staticmethod
     def _finite_wavegen_arg(name: str, raw) -> float:
-        """Cast a wavegen setting to ``float`` and fail closed on non-finite.
+        """Validate a wavegen setting: real number, finite — else fail closed.
 
-        Raises :class:`ValueError` on ``NaN``/``+/-inf`` BEFORE the caller
-        commands the generator, so a non-finite setpoint can neither reach the
-        hardware nor be appended to :attr:`_wavegen_trace` (keeping the
-        command-trace JSON free of ``NaN``/``Infinity`` tokens).  The raise
-        propagates to :meth:`_run_plan`'s shared ``except`` / ``finally``, which
-        leaves HV, motion and the wavegen output safe (rule 5).
+        Two checks, in this order:
+
+        1. **Type** — mirrors the validator's ``_is_num``: ``int``/``float``
+           only, ``bool`` explicitly rejected (it *is* an ``int``).  ``float()``
+           alone is far too lenient for a guard on the un-validated path:
+           ``float('1e5')`` is ``100000.0`` and ``float(True)`` is ``1.0``, so a
+           string or a boolean from a hand-edited plan would sail through and be
+           *commanded* to the generator.  The validator rejects both on paper;
+           this guard is what holds when a plan is executed un-validated, so it
+           must not be weaker than the validator.
+        2. **Finiteness** — ``NaN``/``+/-inf`` are rejected BEFORE the caller
+           commands the generator, so a non-finite setpoint can neither reach the
+           hardware nor be appended to :attr:`_wavegen_trace` (keeping the
+           command-trace JSON free of ``NaN``/``Infinity`` tokens).
+
+        Raises: :class:`TypeError` (not a real number), :class:`ValueError`
+        (non-finite), and — from a pathological ``__float__`` /
+        out-of-range conversion — :class:`OverflowError`.  Every one of them is a
+        *fail-closed* exit: it is raised BEFORE any setter and before the trace
+        append, and propagates to :meth:`_run_plan`'s shared ``except`` /
+        ``finally``, which leaves HV, motion and the wavegen output safe
+        (rule 5 — never continue after a hardware-facing fault).
         """
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise TypeError(
+                f"wavegen setting '{name}' must be a number (got {raw!r}) — "
+                "refusing to command the generator (fail-closed before setter)")
         v = float(raw)
         if not math.isfinite(v):
             raise ValueError(

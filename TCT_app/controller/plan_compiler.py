@@ -153,6 +153,16 @@ def compile_plan(plan: ScanPlan) -> list[Step]:
     cur_z: float | None = None
     cur_bias: float | None = None
 
+    # One frozen params snapshot PER LEAF (not per leaf *visit*) — see
+    # _snapshot_params.  Deliberately a call-LOCAL dict: it is keyed on
+    # id(action), and an id is only unique while its object is alive.  The plan
+    # (and therefore every ActionBlock in it) is alive for the whole call, so
+    # the keys cannot collide here; a module-level cache could hand a later
+    # compile a stale snapshot under a recycled id.  Local also means each
+    # compile_plan() call re-reads the live plan — an edit between two compiles
+    # is picked up, exactly as before.
+    param_snapshots: dict[int, dict] = {}
+
     for ctx, action, meta in plan.iter_leaf_contexts_ex():
         # --- bias first (outer regime), only on change ---------------------
         if "bias_V" in ctx:
@@ -197,13 +207,10 @@ def compile_plan(plan: ScanPlan) -> list[Step]:
         if at == ActionType.ACQUIRE_WAVEFORM:
             steps.append(AcquireStep(
                 n_averages=_effective_n_averages(params, meta),
-                # DEEP copy: a shallow dict(params) would leave the nested
-                # 'wavegen' mapping shared with the live plan object, so a
-                # post-validation mutation of plan.root[...].params['wavegen']
-                # would silently change the commanded hardware values without
-                # re-validation.  The compiled step is a frozen, self-contained
-                # snapshot — params are small plain data, so deepcopy is cheap.
-                params=copy.deepcopy(params),
+                # Deep-copied ONCE per leaf, then reused for every visit of that
+                # leaf — the snapshot never aliases the live plan (see
+                # _snapshot_params for why sharing it across visits is safe).
+                params=_snapshot_params(action, params, param_snapshots),
             ))
         elif at == ActionType.SAVE_POINT:
             steps.append(SaveStep())
@@ -227,6 +234,43 @@ def compile_plan(plan: ScanPlan) -> list[Step]:
 # --------------------------------------------------------------------------- #
 # helpers                                                                      #
 # --------------------------------------------------------------------------- #
+
+def _snapshot_params(action, params: dict, memo: dict[int, dict]) -> dict:
+    """Return the frozen deep-copied ``params`` snapshot for *action*.
+
+    **Why a deep copy at all** (the property this must preserve): a shallow
+    ``dict(params)`` would leave the nested ``'wavegen'`` mapping shared with the
+    live plan object, so a post-validation mutation of
+    ``plan.root[...].params['wavegen']`` would silently change the values the
+    executor commands to hardware — with no re-validation.  The snapshot is
+    therefore still a real :func:`copy.deepcopy` taken from the live plan.
+
+    **Why once per leaf, not once per leaf VISIT** (the perf fix): a leaf inside
+    an N-point loop nest is visited N times, and the old code deep-copied on
+    every visit.  On a 90k-acquire plan that is ~0.65 s of pure deepcopy, paid on
+    the GUI thread (``compile_plan`` runs inside
+    ``ScanController.start_plan``), and ``PlanLimits.max_points`` legally admits
+    250k visits.  One copy per leaf makes the cost proportional to the plan
+    *text*, not to the grid size.
+
+    **Why sharing one snapshot across visits is safe:** nothing mutates
+    ``Step.params`` after compile (the executor only reads it — ``.get`` /
+    membership), and no code compares step params by identity, so two
+    :class:`AcquireStep`\\ s from the same leaf sharing one dict cannot alias the
+    LIVE plan — which is the only property the deep copy exists to guarantee.
+    If a future consumer ever wants to *write* to ``step.params``, it must copy
+    first (or this memo must go).
+
+    *memo* must be local to a single :func:`compile_plan` call: ``id()`` is only
+    unique among live objects, and only the in-flight plan is guaranteed alive.
+    """
+    key = id(action)
+    snap = memo.get(key)
+    if snap is None:
+        snap = copy.deepcopy(params)
+        memo[key] = snap
+    return snap
+
 
 def _effective_n_averages(params: dict, meta: LeafMeta) -> int:
     """Effective averages for an acquire: action param overrides loop context.

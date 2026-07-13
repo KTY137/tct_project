@@ -23,6 +23,12 @@ is recorded and Kaya-ratified).
   corpus contains at least five plans before running any comparison, so an empty
   or truncated corpus fails loudly instead of passing vacuously. Six are frozen
   here; five is the floor.
+- **The gate is a test, not a promise.** `tests/test_routine_corpus.py` enforces
+  every invariant on this page: corpus size >= 5, equal file-NAME sets between
+  `routines/` and this corpus, per-file `read_bytes()` equality, and 0 ERROR /
+  0 WARNING for each plan under the bench-realistic limits below. (Before
+  2026-07-13 this README asserted the freeze and nothing enforced it — the
+  corpus could drift or empty out with a green suite.)
 - **Byte-diff results land in the ledger.** Each replay run appends its result
   (corpus size, per-file byte-diff verdict, commit SHA, date) to
   `.claude/session_state.md` / the roadmap ledger — the durable-evidence rule.
@@ -55,6 +61,16 @@ built-in template lacks that dwell); giving the code template the same
 post-bias-change settle is a follow-up in the `gui/planner_panel.py`-owning
 beat. R7 (duty-cycle characterization) joins the corpus only after P0' makes
 `params["wavegen"]` non-inert — see the C1 proposal.
+
+Dwell note (R1 + R5, 2026-07-13): both bias-settle WAIT nodes carry a YAML
+comment stating what the 0.5 s actually covers — the HV-filter RC and the
+depletion-capacitance (Cdet) charging after the ramp (µs–ms) — and what it does
+**not**: leakage-current / polarization / trapped-charge settling in an
+irradiated sensor, which takes seconds to minutes. An operator reusing R5 on an
+irradiated device must raise it, or the CCE points are taken on a drifting
+baseline. The comment lives in the file bytes only: the canonical serializer
+(`ScanPlan.load_yaml(...).to_yaml()`) drops comments, so re-saving R1/R5 through
+the planner strips it — one more reason the corpus gate compares BYTES.
 
 ## How they were authored / validated
 

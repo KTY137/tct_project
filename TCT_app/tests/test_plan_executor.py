@@ -947,6 +947,51 @@ def test_apply_wavegen_non_finite_raises_before_commanding(sim, bad):
     assert ctrl._wavegen_trace == []       # nothing recorded into the trace
 
 
+@pytest.mark.parametrize("bad", ["1e5", True, False, None, [1.0], {"v": 1.0}])
+def test_apply_wavegen_non_number_raises_before_commanding(sim, bad):
+    """Type guard (NIT): a non-NUMBER wavegen value is rejected before the setter.
+
+    ``float()`` is lenient — ``float('1e5') == 100000.0`` and ``float(True) ==
+    1.0`` — so a finiteness-only guard would happily COMMAND a string or a
+    boolean from a hand-edited plan.  The guard mirrors the validator's
+    ``_is_num`` (int/float, bool excluded), so the last-line guard on the
+    un-validated path is never weaker than the paper gate.  Fail closed: nothing
+    commanded, nothing traced."""
+    dm, ctrl, sm = sim
+    freq = mock.Mock(wraps=dm.waveform_generator.set_frequency)
+    dm.waveform_generator.set_frequency = freq
+    ctrl._wavegen_trace = []
+
+    with pytest.raises((TypeError, ValueError)):
+        ctrl._apply_wavegen_settings({"frequency_hz": bad}, 0)
+
+    assert not freq.called
+    assert ctrl._wavegen_trace == []
+
+
+def test_apply_wavegen_bad_value_leaves_earlier_setters_traced_only_on_success(sim):
+    """The guard raises BEFORE the trace append, so a partially-applied setting
+    never fabricates a 'commanded' record for the value that was refused.
+
+    frequency is applied first (good), duty second (a string -> refused): the
+    generator saw exactly the frequency, and nothing was traced for the acquire
+    (the trace append happens only after ALL settings passed the guard)."""
+    dm, ctrl, sm = sim
+    freq = mock.Mock(wraps=dm.waveform_generator.set_frequency)
+    duty = mock.Mock(wraps=dm.waveform_generator.set_duty_cycle)
+    dm.waveform_generator.set_frequency = freq
+    dm.waveform_generator.set_duty_cycle = duty
+    ctrl._wavegen_trace = []
+
+    with pytest.raises((TypeError, ValueError)):
+        ctrl._apply_wavegen_settings(
+            {"frequency_hz": 1000.0, "duty_cycle_pct": "50"}, 0)
+
+    assert freq.called                     # the good setter ran (setter order)
+    assert not duty.called                 # the refused one never reached hardware
+    assert ctrl._wavegen_trace == []       # no trace row for a refused apply
+
+
 # --------------------------------------------------------------------------- #
 # danger-gate value types                                                      #
 # --------------------------------------------------------------------------- #

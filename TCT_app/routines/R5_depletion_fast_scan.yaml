@@ -14,6 +14,7 @@ root:
   - type: action
     action: wait
     params:
+      # 0.5 s covers the HV-filter RC and the depletion-capacitance (Cdet) charging after the ramp; it is NOT a leakage/polarization/trapped-charge settle (seconds to minutes) — increase it for irradiated sensors.
       seconds: 0.5
       reason: bias settle
   - type: action
