@@ -208,12 +208,16 @@ WEIGHT_PANEL_TITLE = 650           # in operational panels)
 FONT_BODY_PX = 13                  # explanatory prose — sentence-case, never
 WEIGHT_BODY = 450                  # uppercase (law 3) — (range 12.5-13/w400-450)
 
-FONT_METRIC_LABEL_PX = 10          # tiny tracked mono uppercase "instrument
+FONT_METRIC_LABEL_PX = 11          # tiny tracked mono uppercase "instrument
 WEIGHT_METRIC_LABEL = 600          # engraving" label (MetricTile/ReadoutCell
 TRACKING_METRIC_LABEL_EM = 0.08    # title, chip text) — tracking is a MAXIMUM
-TRACKING_METRIC_LABEL_PX = 1       # (<=.08em); Qt QSS letter-spacing takes a
-                                    # px length, not em — 1px is the closest
-                                    # legible step at a 10px face.
+TRACKING_METRIC_LABEL_PX = 0       # (<=.08em); Codex S1 audit (2026-07-13,
+                                    # docs/design/codex_style_audit_20260713.md
+                                    # item 1): 10px/1px tracked read as
+                                    # over-engraved when the role repeats
+                                    # across a whole panel; 11px/0px keeps the
+                                    # tracked-mono-uppercase identity without
+                                    # the etched look.
 
 FONT_VALUE_PX = 26                 # primary/hero metric value (range 24-28),
 FONT_VALUE_COMPACT_PX = 18         # mono, tabular; compact variant is the
@@ -348,12 +352,16 @@ LIGHT = {
     # added so new code can read/write the name the design contract actually
     # uses instead of the legacy good/warn/crit vocabulary.
     "danger": DANGER_LIGHT, "armed": ARMED_LIGHT,
-    "canvas": "#E9EDF4", "bg": "#E9EDF4",
+    # Codex S1 audit (2026-07-13) item 2: canvas nudged one step darker so
+    # panel/raised/well read as a real material ladder instead of a flat pale
+    # grey stack; bg/material_strong stay byte-synced to canvas (pre-existing
+    # alias convention — see their own comments).
+    "canvas": "#E6EBF3", "bg": "#E6EBF3",
     # material/material_strong: toolbar/menu/status-bar chrome. Synced to
     # panel/canvas (v5) rather than a third hand-picked tone, so the ribbon
     # reads as the SAME surface ladder as every card instead of a separately
     # drifting grey.
-    "material": "#FFFFFF", "material_strong": "#E9EDF4",
+    "material": "#FFFFFF", "material_strong": "#E6EBF3",
     "panel": "#FFFFFF",
     # border/border_strong: kept as their own keys for existing call sites,
     # synced 1:1 to hairline/hairline_strong (the two concepts were already
@@ -361,7 +369,7 @@ LIGHT = {
     "border": "#D9DFEA", "border_strong": "#BFC9DA",
     "hairline": "#D9DFEA", "hairline_strong": "#BFC9DA",
     "specular": "rgba(255, 255, 255, 0.85)",
-    "toplight": "#F4F7FB",
+    "toplight": "#F8FAFD",
     "text": "#131A28", "muted": "#525D72", "faint": "#949DB0",
     "on_accent": "#ffffff",
     # tint/active: accent-tinted wash, blended (see ``_blend``) at the
@@ -378,7 +386,7 @@ LIGHT = {
     # (QPushButton/QToolButton/QComboBox/statusChip all key off it). Genuine
     # input wells (QLineEdit/QSpinBox/...) are repointed to "well" directly
     # at their own QSS rule below instead of overloading this token.
-    "field": "#F4F7FB",
+    "field": "#F8FAFD",
     # pressed/disabled_bg: a control being pushed in / greyed out both read
     # as "recessed" — the spec's "sunk" surface, rather than two more
     # one-off hand-picked tones.
@@ -394,9 +402,12 @@ LIGHT = {
     # same-tone no-op and only their sibling `border-color` rule actually
     # shifts on hover, matching the v5 artifact's own `.btn:hover` (border
     # colour only, no background change).
-    "panel_2": "#F4F7FB", "raised": "#F4F7FB", "panel_3": "#eef0f4",
-    "sunk": "#E2E7F0", "well": "#EDF1F7",
-    "hover": "#F4F7FB",
+    # Codex S1 audit item 2: raised (+its panel_2/field/hover/toplight/chrome
+    # aliases, kept byte-synced by convention) and well nudged for material
+    # contrast against the darker canvas above.
+    "panel_2": "#F8FAFD", "raised": "#F8FAFD", "panel_3": "#eef0f4",
+    "sunk": "#E2E7F0", "well": "#E8EEF6",
+    "hover": "#F8FAFD",
     # Round-2 material tokens (all DERIVED via _blend — one source of truth):
     #   chrome — the frosted rail/topbar strip: the artifact's
     #     ``color-mix(in srgb, var(--panel-2) 74%, var(--panel))`` (.rail),
@@ -411,7 +422,7 @@ LIGHT = {
     #   edge_shade — the darker top edge of a SUNKEN surface (inputs,
     #     segmented tracks, progress troughs): the inverse cue, approximating
     #     the artifact's ``inset 0 1px 2px rgba(0,0,0,.14-.2)``.
-    "chrome": _blend("#F4F7FB", "#FFFFFF", 0.74),
+    "chrome": _blend("#F8FAFD", "#FFFFFF", 0.74),
     "strip": _blend("#E2E7F0", "#FFFFFF", 0.55),
     "edge": _blend("#FFFFFF", "#D9DFEA", 0.85),
     "edge_shade": _blend("#000000", "#D9DFEA", 0.16),
@@ -433,28 +444,31 @@ DARK = {
     "canvas": "#0A0D13", "bg": "#0A0D13",
     "material": "#121824", "material_strong": "#0A0D13",
     "panel": "#121824",
-    "border": "#222B3E", "border_strong": "#334159",
-    "hairline": "#222B3E", "hairline_strong": "#334159",
+    # Codex S1 audit item 2: dark hairline/border nudged lighter for material
+    # separation against panel; hairline_strong unchanged.
+    "border": "#27344A", "border_strong": "#334159",
+    "hairline": "#27344A", "hairline_strong": "#334159",
     "specular": "rgba(255, 255, 255, 0.045)",
-    "toplight": "#192134",
+    "toplight": "#1B253A",
     "text": "#E9EDF5", "muted": "#98A1B5", "faint": "#5B657A",
     "on_accent": "#04222c",
     "tint": _blend(ACCENT_DARK, "#121824", 0.13),
     "active": _blend(ACCENT_DARK, "#121824", 0.13),
-    "field": "#192134",
+    "field": "#1B253A",
     "pressed": "#0C1019", "disabled_bg": "#0C1019",
-    # See the matching comments in LIGHT above.
-    "panel_2": "#192134", "raised": "#192134", "panel_3": "#2b2b31",
-    "sunk": "#0C1019", "well": "#0E1420",
-    "hover": "#192134",
+    # See the matching comments in LIGHT above. Codex S1 audit item 2: raised
+    # (+aliases) and well nudged for material contrast against panel/canvas.
+    "panel_2": "#1B253A", "raised": "#1B253A", "panel_3": "#2b2b31",
+    "sunk": "#0C1019", "well": "#0B111C",
+    "hover": "#1B253A",
     # Round-2 material tokens — see the matching comments in LIGHT above.
     # Dark "edge" uses a slightly higher alpha than the 0.045 specular token:
     # a 1px border line has far less area than the artifact's inset highlight
     # band, so it needs a touch more ink to read at all on a real display.
-    "chrome": _blend("#192134", "#121824", 0.74),
+    "chrome": _blend("#1B253A", "#121824", 0.74),
     "strip": _blend("#0C1019", "#121824", 0.55),
-    "edge": _blend("#FFFFFF", "#222B3E", 0.10),
-    "edge_shade": _blend("#000000", "#222B3E", 0.30),
+    "edge": _blend("#FFFFFF", "#27344A", 0.10),
+    "edge_shade": _blend("#000000", "#27344A", 0.30),
     "plot_grid": None, "plot_overlay": None,
 }
 
@@ -679,14 +693,19 @@ QComboBox QAbstractItemView {{
    own numbers): raised surface, a VISIBLE hairline-strong border with the
    specular top edge (machined-edge material — the borderless tonal blob of
    round 1 is what read as "flat"), w560 label, hover = border to accent
-   (no fill change), padding 8/16 vs the artifact's 9/16. */
+   (no fill change), padding 8/16 vs the artifact's 9/16.
+   Codex S1 audit (2026-07-13, item 4): the base rule below is denser
+   (w540, padding 6/12) so default/secondary/ghost buttons read less like a
+   stock Qt control; primary/motion/danger commands keep the ORIGINAL larger
+   affordance via an explicit padding/weight override right after their
+   colour rule, so the higher-stakes actions do not shrink. */
 QPushButton {{
     background: {p['field']};
     border: 1px solid {p['hairline_strong']};
     border-top-color: {p['edge']};
     border-radius: {RADIUS_SM}px;
-    padding: {SPACE_SM - 1}px {SPACE_LG}px;
-    font-weight: 560;
+    padding: {SPACE_SM - 2}px {SPACE_MD}px;
+    font-weight: 540;
 }}
 QPushButton:hover {{ border-color: {p['accent']}; background: {p['hover']}; }}
 QPushButton:pressed {{ background: {p['active']}; }}
@@ -696,6 +715,7 @@ QPushButton:disabled {{
 }}
 QPushButton:default, QPushButton[state="primary"] {{
     background: {p['accent']}; color: {p['on_accent']}; border: 1px solid {p['accent']};
+    padding: {SPACE_SM - 1}px {SPACE_LG}px; font-weight: 560;
 }}
 QPushButton:default:hover, QPushButton[state="primary"]:hover {{ background: {p['accent_strong']}; }}
 QPushButton[state="primary"]:pressed {{ background: {_darken(p['accent_strong'], 0.15)}; }}
@@ -755,6 +775,7 @@ QPushButton[state="ghost"]:disabled {{ color: {p['faint']}; background: transpar
 QPushButton[state="motion"] {{
     background: transparent; color: {p['armed']};
     border: 1.5px solid {_rgba(p['armed'], 0.55)}; font-weight: 620;
+    padding: {SPACE_SM - 1}px {SPACE_LG}px;
 }}
 QPushButton[state="motion"]:hover {{
     background: {_rgba(p['armed'], 0.14)}; border-color: {p['armed']};
@@ -994,9 +1015,13 @@ QSlider::handle:disabled {{
     background: {p['disabled_bg']}; border-color: {p['hairline']};
 }}
 
-/* Tables (device/monitor panels) */
+/* Tables (device/monitor panels). Codex S1 audit (2026-07-13, item 5): header
+   background moved from `material` (same tone as the surrounding chrome, so
+   the header read as flush with the toolbar rather than as part of the
+   table) to `strip` (the recessed status-strip wash), giving the header a
+   distinct row-grammar tone. */
 QHeaderView::section {{
-    background: {p['material']}; color: {p['muted']};
+    background: {p['strip']}; color: {p['muted']};
     font-weight: 600; font-size: {FONT_XS}px; letter-spacing: 0;
     padding: {SPACE_XS}px {SPACE_SM}px; border: none;
     border-bottom: 1px solid {p['hairline']}; border-right: 1px solid {p['hairline']};
@@ -1015,8 +1040,11 @@ QListWidget, QTreeWidget, QListView, QTreeView {{
     border-radius: {RADIUS_SM}px;
     selection-background-color: {_rgba(p['accent'], 0.22)}; selection-color: {p['text']};
 }}
-QTreeWidget::item, QListWidget::item {{ padding: 3px 2px; }}
-QTreeWidget::item:hover, QListWidget::item:hover {{ background: {p['field']}; }}
+/* Codex S1 audit item 5: richer row grammar — more breathing room per item,
+   and a neutral `raised` hover wash (no accent tint: hover is "you are
+   here", not a state) instead of the button-toned `field`. */
+QTreeWidget::item, QListWidget::item {{ padding: 4px 6px; }}
+QTreeWidget::item:hover, QListWidget::item:hover {{ background: {p['raised']}; }}
 
 /* Danger action button (STOP / immediate hardware abort). Same red language
    as the toolbar Disconnect button, under its own name so any panel can mark
@@ -1028,6 +1056,7 @@ QTreeWidget::item:hover, QListWidget::item:hover {{ background: {p['field']}; }}
 QPushButton#dangerBtn, QPushButton[state="danger"] {{
     background: {p['crit']}; color: white; border: 1px solid {p['crit']};
     font-weight: 700;
+    padding: {SPACE_SM - 1}px {SPACE_LG}px;
 }}
 QPushButton#dangerBtn:hover, QPushButton[state="danger"]:hover {{
     background: {_darken(p['crit'], 0.12)}; border-color: {_darken(p['crit'], 0.12)};

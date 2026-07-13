@@ -105,6 +105,10 @@ def test_v5_palette_values_match_polish_artifact():
     # Ratified design-system v4 tokens (docs/design/cockpit_design_system.md
     # section 2, sourced verbatim from tct_cockpit_design_v4_final.html). If a
     # future artifact refresh changes these, update spec + here together.
+    # LIGHT["bg"] is the one exception: Codex S1 audit (2026-07-13, item 2,
+    # docs/design/codex_style_audit_20260713.md) ratified a one-step-darker
+    # light canvas for surface-ladder contrast; DARK["bg"] is unchanged by
+    # that beat.
     assert DARK["bg"] == "#0A0D13"
     assert DARK["panel"] == "#121824"
     assert DARK["accent"] == "#5AA9FF"
@@ -112,7 +116,7 @@ def test_v5_palette_values_match_polish_artifact():
     assert DARK["warn"] == "#FFB84D"
     assert DARK["crit"] == "#FF5A61"
 
-    assert LIGHT["bg"] == "#E9EDF4"
+    assert LIGHT["bg"] == "#E6EBF3"
     assert LIGHT["accent"] == "#2A6FE0"
     assert LIGHT["good"] == "#128A63"
     assert LIGHT["warn"] == "#B26F00"
