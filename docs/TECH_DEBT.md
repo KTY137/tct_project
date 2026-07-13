@@ -137,3 +137,10 @@ Severity: **BLOCKER** (unsafe / broken) > **RISK** (latent bug / safety-adjacent
 | TODO(bench) | (Noah) Stage-Metrology GUI page wiring calibrate_affine + result persistence (BENCH_CHECKLIST §12c currently uses a REPL ConsoleGate shim — explicit CLI confirm per safety rule 2, flagged not hidden). | `TCT_app/gui/` | Noah | 2026-07-13 |
 | TODO(bench) | (Jonathan) wall-clock timestamps + temperature channel in RepeatabilityResult for the §12d drift series. | `TCT_app/controller/repeatability.py` | Jonathan | 2026-07-13 |
 | RISK | (Paul) Oscilloscope.set_averaging silently no-ops on non-Tek vendors — C3 candidate needs a fail-closed PlanLimits availability flag (camera_available pattern) before any plan-reachable use. | `TCT_app/devices/oscilloscope.py` | Paul | 2026-07-13 |
+| ANNOYANCE | Tests that start QThreads should call their own shutdown/quit teardown; the sessionfinish reaper is a backstop, not a license. | `TCT_app/tests/`, `TCT_app/gui/` | Noah | 2026-07-13 |
+| ANNOYANCE | Leak guard is honest only in SERIAL runs; xdist follow-up: surface worker at-exit crashes via pytest workeroutput/testnodedown. | `TCT_app/tests/conftest.py` | Noah | 2026-07-13 |
+| TODO(sweep) | Sweep sibling tests for no-op `_pump_until(lambda: True)` predicates (one fixed in 031bc53). | `TCT_app/tests/` | Noah | 2026-07-13 |
+| NIT | Reaper relies on shiboken6 isValid semantics; re-verify on PySide6 upgrades. | `TCT_app/tests/conftest.py` | Noah | 2026-07-13 |
+| TODO(coverage) | P2-entry replay pytest consuming tests/fixtures/routine_corpus/ (assert size>=5, byte-diff) does not exist yet. | `TCT_app/tests/` | Abel | 2026-07-13 |
+| NOTE | [A-green] stage-base discipline: first migration-stage base ref must be taken AFTER P0'/P1 land so their legitimate bucket-A test edits sit inside the baseline. | `docs/test_bucket_map.md` | Adam | 2026-07-13 |
+| ANNOYANCE | PlanLimits has no wavegen capability fields yet — hardware clamping stays a runtime driver warning (P1/D1 candidate). | `TCT_app/controller/scan_plan_validator.py` | Abel | 2026-07-13 |
