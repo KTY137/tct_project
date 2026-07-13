@@ -278,3 +278,108 @@ def test_save_camera_frame_shares_drop_counter_and_index_space_with_save_point(t
         assert f["camera"].attrs["n_frames_omitted"] == 2
     assert any("ndim" in r.message for r in caplog.records)
     assert any("None" in r.message or "grab failed" in r.message for r in caplog.records)
+
+
+# =========================================================================== #
+# camera/frame_pos_mm (E6b): per-frame stage position, honest-absence,
+# index-aligned with frames/frame_point_index (M-long, never zero-backfilled).
+# =========================================================================== #
+
+def test_save_camera_frame_with_pos_mm_writes_aligned_row(tmp_path):
+    frame_a = np.full((3, 3), 10, dtype=np.uint16)
+    frame_b = np.full((3, 3), 20, dtype=np.uint16)
+
+    writer = HDF5Writer(tmp_path / "run_00030", save_options=SaveOptions())
+    writer.open()
+    writer.save_camera_frame(frame_a, pos_mm=(1.5, 2.5, 0.1))
+    writer.save_camera_frame(frame_b, pos_mm=(3.5, 4.5, 0.2))
+    writer.close()
+
+    with h5py.File(tmp_path / "run_00030" / "waveforms.h5", "r") as f:
+        pos = f["camera/frame_pos_mm"][:]
+        assert pos.shape == (2, 3)
+        np.testing.assert_allclose(pos[0], [1.5, 2.5, 0.1])
+        np.testing.assert_allclose(pos[1], [3.5, 4.5, 0.2])
+        assert list(f["camera/frame_pos_mm"].attrs["columns"]) == ["x_mm", "y_mm", "z_mm"]
+
+
+def test_save_camera_frame_without_pos_mm_is_honest_nan_never_zero(tmp_path):
+    """pos_mm=None (the default) must land as NaN, NOT a fake (0, 0, 0) --
+    the same honesty contract as the rest of the camera group."""
+    frame = np.full((2, 2), 7, dtype=np.uint16)
+
+    writer = HDF5Writer(tmp_path / "run_00031", save_options=SaveOptions())
+    writer.open()
+    writer.save_camera_frame(frame)  # pos_mm omitted
+    writer.close()
+
+    with h5py.File(tmp_path / "run_00031" / "waveforms.h5", "r") as f:
+        row = f["camera/frame_pos_mm"][0]
+        assert np.all(np.isnan(row))
+        assert not np.any(row == 0.0)  # never mistakable for a real (0,0,0)
+
+
+def test_camera_frame_pos_mm_mixed_run_known_and_unknown_stay_aligned(tmp_path):
+    """A run mixing per-point frames (position always known, from save_point's
+    own `point`) with standalone survey frames (position sometimes withheld)
+    keeps frame_pos_mm exactly M rows long and aligned with frame_point_index,
+    same as frames/frame_point_index themselves."""
+    good = np.full((2, 2), 1, dtype=np.uint16)
+
+    writer = HDF5Writer(tmp_path / "run_00032", save_options=SaveOptions(camera_frame=True))
+    writer.open()
+    writer.save_point(_make_result(x_mm=0.0, y_mm=10.0, z_mm=0.5, camera_frame=good))  # frame 0
+    writer.save_camera_frame(good, pos_mm=(1.0, 20.0, 0.6))                             # frame 1
+    writer.save_camera_frame(good)                                                      # frame 2, unknown pos
+    writer.close()
+
+    with h5py.File(tmp_path / "run_00032" / "waveforms.h5", "r") as f:
+        pos = f["camera/frame_pos_mm"][:]
+        assert pos.shape == (3, 3)
+        # frame 0: per-point path auto-populates from the point it belongs to.
+        np.testing.assert_allclose(pos[0], [0.0, 10.0, 0.5])
+        # frame 1: explicit standalone pos_mm.
+        np.testing.assert_allclose(pos[1], [1.0, 20.0, 0.6])
+        # frame 2: withheld -> honest NaN, still a row (M stays 3, aligned).
+        assert np.all(np.isnan(pos[2]))
+        assert list(f["camera/frame_point_index"][:]) == [0, 1, 1]
+
+
+def test_camera_frame_pos_mm_short_tuple_pads_missing_axis_with_nan(tmp_path):
+    """A caller passing only (x, y) -- e.g. a 2-D-only stage read -- must not
+    crash the append; the missing z lands as NaN, not a silent 0.0."""
+    frame = np.full((2, 2), 3, dtype=np.uint16)
+
+    writer = HDF5Writer(tmp_path / "run_00033", save_options=SaveOptions())
+    writer.open()
+    writer.save_camera_frame(frame, pos_mm=(5.0, 6.0))
+    writer.close()
+
+    with h5py.File(tmp_path / "run_00033" / "waveforms.h5", "r") as f:
+        row = f["camera/frame_pos_mm"][0]
+        np.testing.assert_allclose(row[:2], [5.0, 6.0])
+        assert np.isnan(row[2])
+
+
+def test_old_file_without_frame_pos_mm_dataset_still_reads_fine(tmp_path):
+    """Backward compatibility: a file written before E6b (no frame_pos_mm
+    dataset at all) must not break a reader that only touches the datasets
+    that already existed -- frame_pos_mm is purely additive."""
+    good = np.full((2, 2), 1, dtype=np.uint16)
+
+    writer = HDF5Writer(tmp_path / "run_00034", save_options=SaveOptions(camera_frame=True))
+    writer.open()
+    writer.save_point(_make_result(x_mm=0.0, camera_frame=good))
+    writer.close()
+
+    # Simulate a pre-E6b file by deleting the new dataset after the fact.
+    path = tmp_path / "run_00034" / "waveforms.h5"
+    with h5py.File(path, "a") as f:
+        del f["camera/frame_pos_mm"]
+
+    with h5py.File(path, "r") as f:
+        assert "frame_pos_mm" not in f["camera"]
+        # Everything that existed pre-E6b is untouched and still reads fine.
+        assert f["camera/frames"].shape == (1, 2, 2)
+        assert list(f["camera/frame_point_index"][:]) == [0]
+        assert f["camera"].attrs["n_frames_omitted"] == 0

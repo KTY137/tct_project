@@ -118,6 +118,18 @@ per configured channel (e.g. `temperature_C`, `humidity_pct`).
 - `camera` group attr `affine` (f8 array, optional) — flat array from
   `set_camera_calibration` (shape is the caller's convention — see
   `analysis/camera_calibration.py`).
+- `camera/frame_pos_mm` (f8, shape `(M, 3)`, columns `[x_mm, y_mm, z_mm]`,
+  dataset attr `columns` names them) — the stage position each written frame
+  was grabbed at, index-aligned with `frames`/`frame_point_index` (row `k`
+  ↔ `frames[k]`). Present whenever the `camera` group has at least one
+  written frame (both `HDF5Writer.save_point`'s implicit per-point grab and
+  the standalone `save_camera_frame` write it — see CAPTURE_PHOTO below).
+  **A frame with unknown position gets a `(NaN, NaN, NaN)` row, never a
+  dropped row and never a fake `(0, 0, 0)`** — `frame_pos_mm` stays exactly
+  `M` rows long like its siblings, so it never desyncs with them; check
+  `np.isnan(...)` per row rather than assuming every frame's position is
+  known. (Older files written before this dataset existed simply lack it —
+  guard reads with `"frame_pos_mm" in f["camera"]`.)
 
 A frame is dropped (counted in `n_frames_omitted`, and logged via
 `logging.getLogger("data.hdf5_writer")` at `WARNING`) when: the grabbed frame
@@ -130,6 +142,42 @@ the first accepted frame's shape.
 an all-zero frame, indistinguishable from a real dark frame) is gone. Always
 use `frame_point_index` to map `frames[k]` back to `points/x_mm[frame_point_index[k]]`
 etc.; do **not** assume `frames[i]` corresponds to `points[i]`.
+
+#### CAPTURE_PHOTO — standalone photo captures (e.g. camera surveys/mosaics)
+
+A `CAPTURE_PHOTO` plan step (`controller/scan_plan.py` `ActionType.CAPTURE_PHOTO`,
+built e.g. by `controller/survey_plan.plan_survey` for a snake-raster camera
+survey) is a **passive, non-acquiring** capture: it settles, grabs one frame,
+and writes it through `HDF5Writer.save_camera_frame(frame, pos_mm=...)` (the
+executor supplies the current stage position — see below) — **not** through
+`save_point`. Consequences for the file:
+
+- It writes **only** the `/camera` group (`frames`, `frame_point_index`,
+  `frame_pos_mm`) — no `waveforms`, `analysis`, `bias`, or `points/` row.
+  Routing a photo-only capture through `save_point` would either crash (a
+  zero-size chunk on the mandatory `waveforms` dataset) or desync the
+  waveforms/points parallel arrays, so it deliberately does not.
+- It does **not** advance the point counter — `frame_point_index[k]` for a
+  CAPTURE_PHOTO frame **names the point row this frame will belong to once a
+  later `SAVE_POINT` at the same coordinate is written**; it does not require
+  that row to already exist yet.
+- **Dangling-tag caveat:** a plan that calls CAPTURE_PHOTO and then never
+  writes a matching `SAVE_POINT` for that coordinate (run ends early, moves
+  on without saving, or — the common case — a **photo-only survey that has
+  no acquire/save step at all**, so `points/` stays empty for the whole run)
+  leaves `frame_point_index[k] >= len(points/x_mm)`. Readers must
+  bounds-check `frame_point_index` against `points/` length before indexing
+  with it — do not assume it is always a valid row.
+- **Position for a photo-only survey (no `points/` rows to hold it) comes
+  from `camera/frame_pos_mm` instead**: `controller/scan_controller.py`'s
+  `_write_camera_frame` reads the stage's current position (the move already
+  landed before the settle+grab) and passes it through, so
+  `frame_pos_mm[k]` is populated even though `frame_point_index[k]` may be
+  dangling. A survey's tile geometry is *also* independently reconstructable
+  from `run_info/scan_config`'s `safety.survey` block (`area_mm`, `fov_mm`,
+  `overlap_frac`, `origin_mm`, `rows`, `cols`, snake order) — see
+  `controller/survey_plan.py` — `frame_pos_mm` is the direct per-frame record,
+  the `safety.survey` geometry is the derivable cross-check.
 
 ### Datasets (other scan types)
 

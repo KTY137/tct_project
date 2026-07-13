@@ -1546,9 +1546,22 @@ class ScanController:
         the per-point ``save_options.camera_frame`` toggle (that governs the
         implicit per-acquire grab in :meth:`_acquire_core`); silently discarding
         an operator's explicit photo step would be dishonest.
+
+        Also tags the frame with the CURRENT stage position (E6b), the same
+        way :meth:`_acquire_core`'s ``AcquireStep`` reads it — this is exactly
+        the "photo-only survey has no ``points/`` row" gap
+        ``controller/survey_plan.py`` flags: the frame's move already landed
+        (the settle sleep above ran), so the position IS known here even
+        though no point row exists to hold it. A motor read failure is not
+        swallowed into a fake position: it propagates like any other
+        mid-plan hardware fault (the CAPTURE_PHOTO step's own no-try/except
+        policy, documented at its call site above).
         """
         if self._writer is not None:
-            self._writer.save_camera_frame(frame)
+            pos = self._dev.motor.get_position()
+            self._writer.save_camera_frame(
+                frame, pos_mm=(pos.x_mm, pos.y_mm, pos.z_mm)
+            )
 
     def _move_action(self, steps: list) -> DangerAction:
         """Build the ONE run-level stage-motion confirmation.

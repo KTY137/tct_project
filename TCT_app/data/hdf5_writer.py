@@ -171,7 +171,14 @@ class HDF5Writer:
             # every grab fails still gets an honest n_frames_omitted on close.
             cam = f.require_group("camera")
             if result.camera_frame is not None:
-                self._save_camera_frame(cam, idx, result.camera_frame)
+                # point is already known here (it is `points/` row `idx`,
+                # written above), so it costs nothing to tag this frame's
+                # true position too — same honesty contract as the
+                # standalone save_camera_frame() path below.
+                self._save_camera_frame(
+                    cam, idx, result.camera_frame,
+                    pos_mm=(point.x_mm, point.y_mm, point.z_mm),
+                )
             else:
                 self._n_frames_omitted += 1
                 logger.warning(
@@ -217,7 +224,7 @@ class HDF5Writer:
         if affine is not None:
             grp.attrs["affine"] = np.asarray(affine, dtype="f8")
 
-    def save_camera_frame(self, frame: Any) -> None:
+    def save_camera_frame(self, frame: Any, pos_mm: Any = None) -> None:
         """Persist one standalone camera frame (e.g. a CAPTURE_PHOTO plan step).
 
         Appends to ``camera/frames`` and tags it with the CURRENT point index
@@ -228,6 +235,17 @@ class HDF5Writer:
         ``None`` / ``ndim < 2`` / shape-mismatch frame is counted in
         ``n_frames_omitted`` and logged rather than zero-backfilled.  The
         ``camera`` group is created on first use.
+
+        *pos_mm* is the optional ``(x_mm, y_mm, z_mm)`` stage position the
+        frame was grabbed at (e.g. from a photo-only survey, where ``points/``
+        stays empty — see ``controller/survey_plan.py``'s "KNOWN GAP" note).
+        When an accepted frame is written, ``camera/frame_pos_mm`` gets exactly
+        one row (index-aligned with ``frames``/``frame_point_index``, so it
+        stays ``M``-long too): the given ``(x, y, z)`` cast to float, or
+        ``(NaN, NaN, NaN)`` when *pos_mm* is ``None`` (E6b honesty contract —
+        an unknown position is an explicit NaN row, never a fake ``(0, 0, 0)``
+        and never a skipped row that would desync the three ``M``-indexed
+        arrays). See :meth:`_save_camera_frame` and SCAN_DATA_FORMAT.md.
 
         Unlike :meth:`save_point`, this writes ONLY the camera group: a
         standalone photo has no waveform / analysis / bias row, and routing it
@@ -250,7 +268,7 @@ class HDF5Writer:
         """
         f = self._require_open()
         cam = f.require_group("camera")
-        self._save_camera_frame(cam, self._n_points, frame)
+        self._save_camera_frame(cam, self._n_points, frame, pos_mm=pos_mm)
         f.flush()
 
     def _save_waveforms(self, f: h5py.File, idx: int, result: Any) -> None:
@@ -268,7 +286,9 @@ class HDF5Writer:
         self._append_array(grp, "ref_ch1", idx, ref.astype("f4"), (self._waveform_len,))
         self._append_array(grp, "dut_ch2", idx, dut.astype("f4"), (self._waveform_len,))
 
-    def _save_camera_frame(self, grp: h5py.Group, point_idx: int, frame: Any) -> None:
+    def _save_camera_frame(
+        self, grp: h5py.Group, point_idx: int, frame: Any, pos_mm: Any = None
+    ) -> None:
         """Append one frame, or count+log why it was dropped.
 
         ``camera/frames`` is indexed by *frame count*, not point index: a
@@ -277,6 +297,13 @@ class HDF5Writer:
         SCAN_DATA_FORMAT.md). Every drop path here increments
         ``self._n_frames_omitted`` and logs the reason — a dropped frame must
         never be byte-indistinguishable from a real one.
+
+        *pos_mm* (optional ``(x_mm, y_mm, z_mm)``) is written to
+        ``camera/frame_pos_mm`` in lockstep with ``frames``/``frame_point_index``
+        (one row per ACCEPTED frame, ``M``-long, never appended on a drop —
+        the three arrays stay index-aligned). A ``None`` component or a
+        ``None`` *pos_mm* itself becomes ``NaN`` in that row — an unknown
+        position is explicit, never a fabricated ``(0, 0, 0)`` (E6b).
         """
         arr = np.asarray(frame)
         if arr.ndim < 2:
@@ -298,6 +325,11 @@ class HDF5Writer:
         frame_idx = self._n_frames_written
         self._append_array(grp, "frames", frame_idx, arr, self._camera_shape)
         self._append_scalar(grp, "frame_point_index", frame_idx, point_idx, dtype="i8")
+        xyz = list(pos_mm) if pos_mm is not None else [None, None, None]
+        xyz = (xyz + [None, None, None])[:3]  # tolerate a short/long caller tuple
+        pos_row = np.array([_nan_if_none(v) for v in xyz], dtype="f8")
+        self._append_array(grp, "frame_pos_mm", frame_idx, pos_row, (3,))
+        grp["frame_pos_mm"].attrs["columns"] = ["x_mm", "y_mm", "z_mm"]
         self._n_frames_written += 1
 
     def _append_scalar(
