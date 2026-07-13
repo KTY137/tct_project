@@ -175,3 +175,39 @@ available for proprietary alignment task; classical CV sufficient; headless
 variant eliminates Qt plugin conflicts endemic to GUI-heavy PySide6 apps.
 Affects: new `TCT_app/vision/` package, `analysis/` interface, requirements.txt.
 Status: APPROVED — ready for build.
+
+## 2026-07-13 — v6 glass material direction RATIFIED
+
+visionOS-glassmorphism references (design_assets/, 8 images) adopted as the
+v6 material north star on top of the v5 composition system. Ratified against
+the A/B decision artifact (artifacts_claude/tct_bias_glass_ab.html — side A =
+byte-exact style.py DARK tokens, side B = glass target): deeper radii (cards
+16->20), specular hairlines (dark alpha 0.045 -> ~0.14), glass-equivalent
+surface ladder via pre-blended color-mix, chip/pill grammar, fluent eased
+motion. HARD LAW carried over: danger controls (kill switch, ARM latch, trip
+banner) stay opaque and color-stable in every skin — glass ends at the safety
+boundary. Kaya approved the artifact and delegated implementation decisions
+to Adam ("du entscheidest, alles für das peak design", 2026-07-13).
+Affects: gui/style.py tokens (both themes), gui/panel_kit.py, later an
+animation-kit beat. Status: APPROVED — token beat in flight.
+
+## 2026-07-13 — QML-hybrid boundary RATIFIED (shell default stays probe-gated)
+
+Boundary per Prometheus memo (docs/research/qml_hybrid_standard_decision.md):
+QML is the standard for shell chrome + light motion ornaments ONLY; QWidgets
+remain the standard for all 13 panels; full per-panel QML migration REJECTED.
+SAFETY TIGHTENING: no safety-critical control (NOT-AUS, ARM, kill switch,
+DangerGate) is ever reimplemented in QML — single-implementation QWidgets.
+No live MultiEffect/ShaderEffect glass as a standard (does not render on the
+software/RDP path; unrealistic at 60 fps on the Intel iGPU) — the glass LOOK
+ships via pre-blended tokens + window-level DWM backdrop. The classic ribbon
+shell is FROZEN as functional fallback (QML-load failure, RDP): maintained,
+but no longer a design target — ends the double-design cost observed in W3
+(style.py + Shell.qml paid twice for one change). Flipping TCT_QML_SHELL to
+default ON stays gated on the decisive probe on the real laptop (RHI/
+GLViewWidget coexistence, detach, <5% idle CPU, one RDP session) — probe spec
+in the memo; queued as a Kaya bench-checklist item. Decision taken by Adam
+under Kaya's explicit delegation (2026-07-13).
+Affects: gui/qml_shell.py, gui/qml/Shell.qml (design target), style.py QSS
+(fallback, frozen), review routing for shell beats.
+Status: APPROVED — boundary in force; shell default pending probe.
