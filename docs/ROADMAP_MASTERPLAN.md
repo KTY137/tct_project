@@ -240,7 +240,11 @@ one concrete ask must not be held hostage by the spine) — a day-sized
 direct patch applying params['wavegen'] PER-POINT in the executor (the
 grammar attaches wavegen params per ACQUIRE action; a run-level-only
 shortcut is forbidden per Codex MAJOR-2), recording a per-point command
-trace as the honesty stopgap; [Bench][Mary]** →
+trace as the honesty stopgap; **P0' also OWNS the C1-found validation
+gap: the validator checks only the outer 'wavegen' key, never the dict
+CONTENTS — P0' adds key/range validation so a typo like 'dutycycle'
+fails loudly instead of staying inert** (docs/design/
+planner_routines_v2.md §1); [Bench][Mary]** →
 P1 re-lands the same behavior AS the capability pilot (S; gated on
 behavior-equality against P0') — ordered AFTER (or bundled WITH) DA1's
 swept/-writer slice (bounce-1 F4): the pilot's proof-of-done includes
