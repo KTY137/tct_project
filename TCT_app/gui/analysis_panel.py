@@ -70,6 +70,13 @@ class AnalysisPanel(QWidget):
         self._data: dict = {}          # loaded HDF5 data arrays
         self._voltage_scan: dict = {}  # loaded 'voltage_scan/{voltage_V,charge_pC,current_A}'
         self._run_path: str = ""
+        # How the loaded run ended (HDF5Writer root attrs 'outcome' /
+        # 'abort_reason' — SCAN_DATA_FORMAT.md "Root attributes"). None
+        # before any load, or for a file written before this attr existed.
+        # An analyst can read these directly; a dedicated UI treatment
+        # (e.g. a status chip) is a follow-up, not done here.
+        self._run_outcome: str | None = None
+        self._run_abort_reason: str = ""
         self._build_ui()
         self._refresh_recent_runs()
 
@@ -506,7 +513,16 @@ class AnalysisPanel(QWidget):
             self._load_h5(path)
             self._run_path = path
             self._lbl_file.setText(Path(path).name)
-            self._lbl_file.setToolTip(path)
+            tooltip = path
+            # Outcome is surfaced in the tooltip (readable, not yet a
+            # dedicated status treatment — see _run_outcome docstring); a
+            # clean 'finished' run or an old file with no outcome attr at
+            # all keeps the plain path tooltip, matching prior behaviour.
+            if self._run_outcome and self._run_outcome != "finished":
+                tooltip += f"\noutcome: {self._run_outcome}"
+                if self._run_abort_reason:
+                    tooltip += f"\nreason: {self._run_abort_reason}"
+            self._lbl_file.setToolTip(tooltip)
             self._chip_file.set_status("File loaded", "good")
             n_arrays = len(self._data) + len(self._voltage_scan)
             self._chip_dataset.set_status(
@@ -523,6 +539,12 @@ class AnalysisPanel(QWidget):
         self._data = {}
         self._voltage_scan = {}
         with h5py.File(path, "r") as f:
+            # Root attrs (SCAN_DATA_FORMAT.md): 'outcome' in
+            # {finished, aborted, error, unknown} + free-text 'abort_reason'.
+            # Absent on files written before this existed -> None/"", read
+            # honestly as "we don't know" rather than assumed clean.
+            self._run_outcome = f.attrs.get("outcome")
+            self._run_abort_reason = f.attrs.get("abort_reason", "")
             if "points" in f:
                 pts = f["points"]
                 for key in pts:

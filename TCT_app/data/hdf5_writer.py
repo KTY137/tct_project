@@ -20,6 +20,14 @@ class HDF5Writer:
     scans can keep running in simulation and during partial hardware setup.
     """
 
+    #: Legal values for the ``outcome`` root attribute — see :meth:`set_outcome`.
+    VALID_OUTCOMES = frozenset({"finished", "aborted", "error"})
+    #: Written when :meth:`close` runs without a prior :meth:`set_outcome` call
+    #: (crash, killed process, forgotten call site).  Deliberately NOT one of
+    #: ``VALID_OUTCOMES`` and never "finished" — an unrecorded outcome must
+    #: read as "we don't know what happened", never as quiet success.
+    UNKNOWN_OUTCOME = "unknown"
+
     def __init__(
         self,
         run_dir: str | Path,
@@ -36,6 +44,11 @@ class HDF5Writer:
         self._z_focus_n = 0
         self._waveform_len: int | None = None
         self._camera_shape: tuple[int, ...] | None = None
+        # Set only via set_outcome(); left None if the caller never calls it
+        # (crash / killed process / a bug), in which case close() writes
+        # UNKNOWN_OUTCOME rather than silently defaulting to success.
+        self._outcome: str | None = None
+        self._abort_reason: str = ""
 
     def open(self) -> None:
         self.run_dir.mkdir(parents=True, exist_ok=True)
@@ -47,10 +60,43 @@ class HDF5Writer:
                 grp.attrs[key] = self._serialise_attr(value)
             grp.attrs["start_time"] = self._file.attrs["start_time"]
 
+    def set_outcome(self, outcome: str, reason: str | None = None) -> None:
+        """Record how the run ended; written into the file by :meth:`close`.
+
+        *outcome* must be one of :attr:`VALID_OUTCOMES` (``"finished"``,
+        ``"aborted"``, ``"error"``).  *reason* is free text — an abort/error
+        cause such as "operator abort", "bias compliance trip", or a latched
+        HV-trip message; leave it ``None``/empty for a clean finish.
+
+        Call this **before** :meth:`close`.  It only records the caller's
+        intent in memory; nothing touches disk until ``close()`` runs, so
+        calling it more than once (a caller changing its mind, or a retry) is
+        fine — the last call wins.  A writer that is closed WITHOUT this ever
+        having been called writes :attr:`UNKNOWN_OUTCOME`, never
+        ``"finished"`` — see :meth:`close`.
+        """
+        if outcome not in self.VALID_OUTCOMES:
+            raise ValueError(
+                f"invalid outcome {outcome!r}; must be one of "
+                f"{sorted(self.VALID_OUTCOMES)}"
+            )
+        self._outcome = outcome
+        self._abort_reason = reason or ""
+
     def close(self) -> None:
         if self._file is None:
             return
         self._file.attrs["stop_time"] = datetime.now().isoformat(timespec="seconds")
+        # Outcome/abort_reason are ROOT attrs (like start_time/stop_time), NOT
+        # gated behind the optional `run_metadata` group: they are integrity
+        # information, not reconstructable scan metadata, so they must survive
+        # even when run_metadata saving is off.  A writer closed without a
+        # prior set_outcome() call (crash, killed process, a missed call site)
+        # writes UNKNOWN_OUTCOME — the honest default for "we don't know how
+        # this run ended" is never "finished". This is the guarantee that a
+        # crashed/killed run can never masquerade as a clean one.
+        self._file.attrs["outcome"] = self._outcome or self.UNKNOWN_OUTCOME
+        self._file.attrs["abort_reason"] = self._abort_reason
         self._file.flush()
         self._file.close()
         self._file = None

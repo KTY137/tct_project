@@ -40,10 +40,36 @@ A single `.h5` file written incrementally. Open with `h5py`, `PyTables`, MATLAB
 `h5read`, or HDFView.
 
 ### Root attributes
-| Attr         | Type | Notes |
-|--------------|------|-------|
-| `start_time` | str  | `YYYY-MM-DDTHH:MM:SS` when the file was opened |
-| `stop_time`  | str  | when the writer closed |
+| Attr           | Type | Notes |
+|----------------|------|-------|
+| `start_time`   | str  | `YYYY-MM-DDTHH:MM:SS` when the file was opened |
+| `stop_time`    | str  | when the writer closed |
+| `outcome`      | str  | how the run ended — see "Run outcome" below |
+| `abort_reason` | str  | free text; empty for a clean `finished` run |
+
+#### Run outcome — how did this run end?
+
+Before this existed, a trip-aborted run was **byte-for-byte indistinguishable**
+from a scan that simply finished early: the file carried only `start_time` /
+`stop_time`, and `run_info` only ever held the *pre-run* config snapshot.
+`outcome` closes that gap. Written by `HDF5Writer.close()` from
+`ScanController._end_run` (`HDF5Writer.set_outcome(outcome, reason=None)`,
+called once, right before `close()`), so it is present on **every** run
+regardless of which optional groups (`run_metadata` included) were enabled —
+this is integrity information, not reconstructable scan metadata, so it is a
+root attr rather than nested under `/run_info`.
+
+| `outcome`  | Meaning |
+|------------|---------|
+| `finished` | Clean end of the scan/sweep — `abort_reason` is empty. |
+| `aborted`  | Operator abort, a denied danger-gate confirmation, a bias compliance/hardware trip, or a slow-control ALARM fail-safe. `abort_reason` names the cause (e.g. contains `"trip"`, `"Compliance"`, `"ALARM"`, or `"Operator abort"`). |
+| `error`    | An unhandled exception during the run. `abort_reason` carries `str(exc)`. |
+| `unknown`  | **The writer was closed without ever recording an outcome** — a crash, a killed process, or (in principle) a bug that skipped the call. This is the honest default, not a fallback to `finished`: an analyst seeing `unknown` should treat the run the same as `aborted`/`error` — trust only the points actually on disk, and do not assume the scan covered its full configured range. |
+
+**Analyst guidance:** always check `outcome` before treating a run as a
+complete dataset. `aborted` / `error` / `unknown` all mean the file may hold
+fewer points than `run_info/scan_config` describes — data already written is
+valid and preserved, but the run did not necessarily reach its planned end.
 
 ### `/run_info` (group, attrs) — when `run_metadata` is on
 Self-describing metadata so a run is interpretable without external context:

@@ -38,6 +38,17 @@ from data.hdf5_writer import HDF5Writer
 
 logger = logging.getLogger(__name__)
 
+# Terminal AppState -> HDF5Writer outcome string (see ScanController._end_run).
+# Deliberately a plain dict.get() with an "unknown" default in the caller: a
+# state machine that somehow ends outside {FINISHED, ABORTED, ERROR} (the
+# bounded settle helpers log a warning but never raise) must never be read as
+# a clean finish either.
+_STATE_OUTCOME = {
+    AppState.FINISHED: "finished",
+    AppState.ABORTED: "aborted",
+    AppState.ERROR: "error",
+}
+
 
 @dataclass
 class ScanConfig:
@@ -213,6 +224,13 @@ class ScanController:
         # the pre-existing design).
         self._current_scan_type: str | None = None
 
+        # Free-text reason for the run's terminal state, for the HDF5 outcome
+        # record (see _end_run / HDF5Writer.set_outcome).  None for a clean
+        # finish.  Set via _fire_error (every internal fault path funnels
+        # through it) or abort()'s own reason argument; reset per run in
+        # _begin_run so a prior run's reason never leaks into the next file.
+        self._last_run_reason: str | None = None
+
         # Per-run HV arm latch (plan executor).  Only ever set True by
         # arm_hv(True) after a real user confirmation; cleared at the end of
         # every run so arming is never sticky across runs.
@@ -295,6 +313,9 @@ class ScanController:
         # Fresh slow-control excursion latch per run — an excursion from a prior
         # run never suppresses the first pause of this one.
         self._sc_latched.clear()
+        # A fresh run starts with no terminal-state reason; a clean finish
+        # never inherits the previous run's abort/error text.
+        self._last_run_reason = None
         # Publish the active scan type for the GUI's run-state facade; cleared
         # in _end_run's finally so it is non-None exactly while a run runs.
         self._current_scan_type = scan_type
@@ -315,9 +336,21 @@ class ScanController:
         before the finished callback), so the GUI can hand the run off to
         analysis.  The path is published even on an aborted/errored run — data
         taken before the fault is preserved and still openable.
+
+        Also records how the run ended: every run body resolves its terminal
+        state (:meth:`_settle_terminal_state` / :meth:`_settle_error_state`)
+        BEFORE its ``finally`` calls here, so ``self._sm.state`` is already
+        FINISHED/ABORTED/ERROR.  That plus whatever reason the fault path
+        recorded (:attr:`_last_run_reason`, set by :meth:`_fire_error` or
+        ``abort()``) is the file's only record of outcome — without it a
+        trip-aborted run and a clean short one are byte-for-byte identical.
         """
         try:
             if self._writer is not None:
+                self._writer.set_outcome(
+                    _STATE_OUTCOME.get(self._sm.state, "unknown"),
+                    reason=self._last_run_reason,
+                )
                 self._writer.close()
         except Exception:
             logger.warning("Writer close failed", exc_info=True)
@@ -561,10 +594,33 @@ class ScanController:
         self._pause_event.set()
         self._sm.transition(AppState.RUNNING)
 
-    def abort(self) -> None:
+    def abort(self, reason: str | None = None) -> None:
+        """Operator/GUI abort request.
+
+        *reason* is optional free text for the HDF5 outcome record (falls
+        back to a generic "Operator abort" so a bare ``abort()`` — every
+        existing caller — still leaves an honest, non-empty reason in the
+        file rather than an unexplained ``aborted``).
+        """
+        self._last_run_reason = reason or "Operator abort"
         self._abort_event.set()
         self._pause_event.set()  # unblock if paused
         self._dev.motor.stop()
+
+    def _fire_error(self, msg: str) -> None:
+        """Record *msg* as this run's terminal-state reason, then forward it.
+
+        Every internal fault path (an unhandled exception, a bias compliance/
+        hardware-fault abort, a slow-control ALARM abort, a denied danger
+        confirmation) funnels through here instead of calling ``on_error``
+        directly, so the text written into the HDF5 outcome record
+        (:attr:`_last_run_reason`, consumed by :meth:`_end_run`) is EXACTLY
+        what the operator saw on screen — one source of truth, never a second
+        message that can drift from the GUI's.
+        """
+        self._last_run_reason = msg
+        if self.on_error:
+            self.on_error(msg)
 
     def start_z_focus_scan(
         self,
@@ -794,8 +850,7 @@ class ScanController:
             logger.exception("Scan error")
             # on_error FIRST: a settle that raced a GUI pause/resume must never
             # swallow the operator's only view of the original fault.
-            if self.on_error:
-                self.on_error(str(exc))
+            self._fire_error(str(exc))
             self._settle_error_state()
         finally:
             # Fail-safe rule 5 ('stop motion'): halt any in-flight stage move on
@@ -913,8 +968,7 @@ class ScanController:
             logger.exception("Z-focus amplitude scan error")
             # on_error BEFORE the settle — a settle racing a GUI pause/resume
             # must never swallow the fault message.
-            if self.on_error:
-                self.on_error(str(exc))
+            self._fire_error(str(exc))
             self._settle_error_state()
         finally:
             try:
@@ -1030,8 +1084,7 @@ class ScanController:
         except Exception as exc:
             logger.exception("Z-focus edge scan error")
             # on_error BEFORE the settle (see _settle_error_state).
-            if self.on_error:
-                self.on_error(str(exc))
+            self._fire_error(str(exc))
             self._settle_error_state()
         finally:
             try:
@@ -1122,12 +1175,11 @@ class ScanController:
                     # and transitioned FINISHED — the GUI then painted the green
                     # "Scan finished" banner over a compliance trip.
                     self._abort_event.set()
-                    if self.on_error:
-                        self.on_error(
-                            f"Compliance trip at {reading.voltage_V:.1f} V — "
-                            f"I = {reading.current_A*1e6:.2f} µA.\n"
-                            "Bias ramped back to 0 V."
-                        )
+                    self._fire_error(
+                        f"Compliance trip at {reading.voltage_V:.1f} V — "
+                        f"I = {reading.current_A*1e6:.2f} µA.\n"
+                        "Bias ramped back to 0 V."
+                    )
                     break
 
                 charges = []
@@ -1162,8 +1214,7 @@ class ScanController:
         except Exception as exc:
             logger.exception("Voltage scan error")
             # on_error BEFORE the settle (see _settle_error_state).
-            if self.on_error:
-                self.on_error(str(exc))
+            self._fire_error(str(exc))
             self._settle_error_state()
         finally:
             # Isolated best-effort blocks: a wavegen fault must not skip the
@@ -1332,8 +1383,7 @@ class ScanController:
             # on_error FIRST (same rule as the classic loops): a state settle
             # that loses a race with a GUI pause/resume must never swallow the
             # operator's only view of the original fault.
-            if self.on_error:
-                self.on_error(str(exc))
+            self._fire_error(str(exc))
             # PAUSED cannot transition straight to ERROR (a ManualPauseStep can
             # leave us there); _settle_error_state promotes through RUNNING,
             # can()-guards every edge and swallows a lost race, so a terminal
@@ -1485,8 +1535,7 @@ class ScanController:
         """
         logger.info("Danger confirmation denied: %s", msg)
         self._abort_event.set()
-        if self.on_error:
-            self.on_error(msg)
+        self._fire_error(msg)
         if has_bias_step:
             self._bias_failsafe(bias)
 
@@ -1575,12 +1624,11 @@ class ScanController:
             return False
         logger.error("%s%s — aborting the run (fail-safe)", fault, context)
         self._abort_event.set()
-        if self.on_error:
-            self.on_error(
-                f"{fault}{context}.\n"
-                "Scan ABORTED — bias ramped to 0 V and the output opened.\n"
-                "Data taken before the fault is preserved."
-            )
+        self._fire_error(
+            f"{fault}{context}.\n"
+            "Scan ABORTED — bias ramped to 0 V and the output opened.\n"
+            "Data taken before the fault is preserved."
+        )
         self._bias_failsafe(bias)
         return True
 
@@ -1627,12 +1675,11 @@ class ScanController:
             return False
         logger.warning("Compliance hit during scan%s — aborting", context)
         self._abort_event.set()
-        if self.on_error:
-            self.on_error(
-                f"Bias compliance trip{context} "
-                f"({reading.voltage_V:.1f} V, I={reading.current_A*1e6:.2f} µA).\n"
-                "Scan aborted. Bias ramped to 0 V."
-            )
+        self._fire_error(
+            f"Bias compliance trip{context} "
+            f"({reading.voltage_V:.1f} V, I={reading.current_A*1e6:.2f} µA).\n"
+            "Scan aborted. Bias ramped to 0 V."
+        )
         self._bias_failsafe(bias)
         return True
 
@@ -1917,8 +1964,7 @@ class ScanController:
         self._motor_stop_safe()
         if bias is not None and getattr(bias, "connected", False):
             self._bias_failsafe(bias)     # ramp to 0 V + output off
-        if self.on_error:
-            self.on_error(reason)
+        self._fire_error(reason)
 
     def _safe_slow_channels(self) -> list:
         """The slow-control channel objects (for threshold lookup), or []."""
