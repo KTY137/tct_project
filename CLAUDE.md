@@ -104,11 +104,18 @@ python -m pytest tests/ -q   # tests — must pass headless, no hardware
   danger-gate/confirmation work, dispatch `ui-ux-dev` with `model: opus`
   (his real bug class is concurrency); Sonnet stays his default for
   layout/theming/panels.
-- **Judgment-beat override (Kaya-ratified 2026-07-13):** any beat that
-  carries real discretion — design-system decisions, data-format/contract
-  changes, "entscheide im Zweifel selbst" briefs — runs on **Opus**
-  regardless of the agent's default tier; purely mechanical beats stay on
-  the agent default or a free lane.
+- **Judgment-beat override (Kaya-ratified 2026-07-13, upgraded to Fable
+  same evening):** any beat that carries real discretion — design-system
+  decisions, data-format/contract changes, "entscheide im Zweifel
+  selbst" briefs — runs on **Fable** (`model: fable`) regardless of the
+  agent's default tier; purely mechanical beats stay on the agent
+  default or a free lane. **Architecture agents (master-plan design,
+  migration-stage design) always run on Fable.** Adam may additionally
+  choose Fable per-dispatch for unusually consequential beats. Mary
+  stays on Opus (explicitly decided). The master roadmap lives at
+  `docs/ROADMAP_MASTERPLAN.md` (Kaya-approved 2026-07-13; its U-track
+  header supersedes the QML-hybrid-boundary DECISIONS entry per the
+  governance note therein).
 - When a task needs an instrument manual, protocol spec, library behavior, or physics
   reference that is not already in the repo, dispatch **`researcher`** *first* and pass
   its notes (saved under `docs/research/`) to the implementing agent. Subagents cannot

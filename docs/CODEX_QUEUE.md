@@ -452,6 +452,31 @@ sandbox-environment-specific — and only you can observe it from inside.
 - `TCT_app\.venv\Scripts\python.exe` appears to be the standard PSF venv launcher and not the broken component: size `268568`, SHA256 `B2C836C52CDF063180B9EE76F67AC42946101B79AC457F3494035A67C090D961`, file/product version `3.10.11`, company `Python Software Foundation`, internal name `Python Launcher`, original filename `py.exe`. The launcher starts, reads `pyvenv.cfg`, then fails when redirecting to the Store-alias base interpreter.
 - RECOMMENDATION: crew-side fix should recreate this venv from a non-Store 64-bit CPython 3.10 installed at a normal executable path visible to this lane, such as `%LOCALAPPDATA%\Programs\Python\Python310\python.exe` or `C:\Python310\python.exe`, then reinstall the existing requirements with numpy still `<2` and the vendored PySpin constraint intact. Before recreating, verify from this lane that the chosen base responds to `path\to\python.exe --version` and preferably appears in `where.exe python` or is passed explicitly. Do not patch `pyvenv.cfg` to another WindowsApps alias.
 
+## S2 — Adversarial review of the master roadmap (round 1 of 2; advisory, no code edits)
+
+**Status: OPEN** · Effort: M · Source: Kaya finalization protocol (2026-07-13); model request: Codex 5.6 Sol (use it if your CLI can pin models; otherwise note which model ran)
+
+Read `docs/ROADMAP_MASTERPLAN.md` in full — the Kaya-approved master plan
+(capability spine, 8-domain staged roadmap, UI migration, seed strategy).
+It has survived 4 internal review rounds (their findings are documented
+in its own bounce ledger — read that section so you do NOT repeat them).
+
+- Task: a genuinely adversarial review from a NON-Claude perspective.
+  Attack: (1) anything the four internal reviewers all missed because
+  they share training/context (blind-spot hunting is your explicit
+  job); (2) the capability-model design vs your own knowledge of
+  instrument-control frameworks; (3) the staging/gates as an outsider
+  would read them — ambiguities an executor could exploit; (4) any
+  claim about Qt/QML/Windows/Linux behavior you know to be wrong or
+  version-fragile; (5) effort classifications (S/M/L/XL) that smell
+  off by an order of magnitude.
+- Write ONE file: `docs/design/codex_masterplan_review_r1.md` (~100
+  lines max): findings ranked (BLOCKER/MAJOR/MINOR), each with a
+  concrete failure case and a 1-2 sentence amendment. "Plan holds" is a
+  valid verdict per section if you name what you checked.
+- No app-code edits. No commit. Set S2 DONE with findings per Handback.
+  (Round 2 will review the integrated delta as task S3.)
+
 ## S1 — Visual style audit from rendered panels (advisory, no code edits)
 
 **Status: DONE - Wrote rendered-panel style audit; fresh capture blocked by broken venv.** · Effort: M · Source: Kaya request 2026-07-13 (night shift)
