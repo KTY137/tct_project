@@ -44,6 +44,8 @@ import re
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QFont, QPalette
 
+from gui import backdrop
+
 # ---------------------------------------------------------------------------
 # Scales — reference these instead of magic numbers so spacing/rounding/type
 # stay coherent across every panel.  They are plain module constants; the QSS
@@ -1626,10 +1628,15 @@ _SETTINGS_OVERRIDES_KEY = "theme/overrides"
 _SETTINGS_TYPOGRAPHY_KEY = "theme/typography"
 _SETTINGS_RADIUS_KEY = "theme/radius_scale"
 _SETTINGS_WINDOW_OPACITY_KEY = "theme/window_opacity"
+_SETTINGS_WINDOW_BACKDROP_KEY = "theme/window_backdrop"
 
 # Live customization state (module-level; reset via reset_theme_customization).
 _glass_amount: float = DEFAULT_GLASS_AMOUNT
 _window_opacity: float = DEFAULT_WINDOW_OPACITY
+# Windows 11 DWM system backdrop material — see gui/backdrop.py. Preference
+# state only; whether it actually renders is decided at apply time by
+# backdrop.is_backdrop_supported(). "none" everywhere else in the module.
+_window_backdrop: str = "none"
 _overrides: dict[str, dict[str, str]] = {"light": {}, "dark": {}}
 _typography: dict = {"sans": None, "mono": None, "hinting": None, "base_px": None}
 _radius_scale: str = "m"
@@ -1742,6 +1749,121 @@ def apply_window_opacity(app=None, opacity: float | None = None) -> float:
         if w.isWindow() and not _is_transient_window(w):
             w.setWindowOpacity(value)
     return value
+
+
+def set_window_backdrop(kind) -> str:
+    """Set the persisted backdrop-material preference and return the value
+    actually set.
+
+    Mirrors :func:`set_window_opacity`'s fail-opaque philosophy: garbage
+    (``None``, ``""``, a typo, a kind name from a future/past codebase
+    rename) is never trusted as-is — it falls back to ``"none"``, the safe/
+    opaque end, instead of raising or reaching a half-applied state. This is
+    a preference only; whether it actually renders as a real DWM material is
+    decided at apply time by :func:`gui.backdrop.is_backdrop_supported` —
+    this setter never touches ctypes/DWM/any window.
+    """
+    global _window_backdrop
+    key = kind.strip().lower() if isinstance(kind, str) else ""
+    _window_backdrop = key if key in backdrop.BACKDROP_KINDS else "none"
+    return _window_backdrop
+
+
+def get_window_backdrop() -> str:
+    return _window_backdrop
+
+
+def _reassert_window_palette(window) -> None:
+    """Re-sync one top-level window after a backdrop reset — the C1 risk
+    note fix (see :func:`apply_window_backdrop_to`).
+
+    ``gui.backdrop.apply_backdrop(window, "none")`` (via
+    ``gui/backdrop.py._clear_window_canvas``) already resets the window's
+    palette with a blank ``QPalette()`` — that module stays theme-blind on
+    purpose, it just undoes its own translucent-canvas prep, it does not
+    know what the "right" palette is. This function re-plays that same
+    blank reset (colour-wise a no-op: backdrop.py already left the window in
+    this state, or never touched it at all) and then forces an immediate
+    style repolish (:func:`repolish`), so a reset never has to wait for some
+    unrelated event to trigger the repaint that clears a stray default-Qt-
+    grey frame.
+
+    Verified empirically (headless, offscreen) before picking this over the
+    more obvious ``window.setPalette(app.palette())``: handing a widget a
+    FULL palette copy sets ``Qt.WA_SetPalette`` (nonzero ``resolveMask()``)
+    and, on its own, stops that widget tracking any LATER bare
+    ``QApplication.setPalette()`` call — a stickier bug than the flash being
+    fixed here. A blank ``QPalette()`` does not set that attribute by
+    itself. The :func:`repolish` call below still ends up setting
+    ``WA_SetPalette`` anyway (Qt's stylesheet engine bakes a resolved
+    palette into any widget it polishes under an active app stylesheet) —
+    but that is harmless in THIS app specifically, because every theme
+    change goes through :func:`apply_theme`'s ``app.setStyleSheet(...)``,
+    and a stylesheet change unconditionally re-polishes the whole widget
+    tree regardless of ``WA_SetPalette`` (confirmed the same way: toggling
+    to the other mode right after this reset still updates the window).
+
+    MUST NOT run while a real backdrop material is applied — a live mica/
+    acrylic window needs its transparent Window-role palette
+    (``gui.backdrop._prepare_window_canvas``) for the DWM material to show
+    through. Callers only invoke this for ``kind == "none"``.
+    """
+    window.setPalette(QPalette())
+    repolish(window)
+
+
+def apply_window_backdrop_to(window, kind: str | None = None) -> str:
+    """Apply the given (or current) backdrop kind to a SINGLE top-level
+    window and keep it theme-coherent.
+
+    Used both by :func:`apply_window_backdrop`'s app-wide fan-out below and
+    by callers that only ever touch one window at construction time
+    (``gui.detachable_tabs._DetachedWindow``, ``tct_gui.TCTMainWindow``
+    startup) — mirrors the ``set_window_opacity`` / direct
+    ``setWindowOpacity`` split those callers already use for the opacity
+    knob. ``gui/backdrop.py`` stays theme-blind; this is where style.py
+    re-syncs the window's palette after a reset (see
+    :func:`_reassert_window_palette`).
+    """
+    resolved = _window_backdrop if kind is None else kind
+    backdrop.apply_backdrop(window, resolved)
+    if resolved == "none":
+        _reassert_window_palette(window)
+    return resolved
+
+
+def apply_window_backdrop(app=None) -> str:
+    """Push the current backdrop kind onto EVERY top-level window of *app*,
+    mirroring :func:`apply_window_opacity`'s fan-out (same
+    ``_is_transient_window`` skip — menus/tooltips/splashes stay untouched).
+
+    Apply-order contract: callers apply the backdrop BEFORE
+    :func:`apply_window_opacity` (see ``tct_gui`` startup / ``_toggle_theme``
+    and ``gui.detachable_tabs._DetachedWindow.__init__``). The two knobs stay
+    functionally independent — this only fixes which one's Qt-side setup
+    runs first, not a rendering guarantee for how a layered (alpha-blended)
+    window interacts with a DWM backdrop material. That interaction has to be
+    eyeballed on a real Win11 22H2+ display, not reasoned about in code.
+
+    On any unsupported host (anything other than Windows 11 22H2+ running
+    the real "windows" Qt platform — in particular this whole offscreen test
+    suite) :func:`gui.backdrop.apply_backdrop` is a clean no-op per window, so
+    this function is always safe to call.
+
+    Windows created *later* pick up the current kind at construction — see
+    :func:`apply_window_backdrop_to`. Safe to call with no QApplication
+    (no-op).
+    """
+    from PySide6.QtWidgets import QApplication
+
+    kind = _window_backdrop
+    app = app if app is not None else QApplication.instance()
+    if app is None:
+        return kind
+    for w in app.topLevelWidgets():
+        if w.isWindow() and not _is_transient_window(w):
+            apply_window_backdrop_to(w, kind)
+    return kind
 
 
 # Window TYPE lives as a value inside WindowType_Mask (Window=0x1, Dialog=0x3,
@@ -1888,13 +2010,17 @@ def radius_scale() -> str:
 
 def reset_theme_customization() -> None:
     """Restore every user-tunable theme knob (palette overrides, glass
-    amount, typography, radius) to the shipped defaults. Does NOT touch
-    QSettings — persistence stays the theme editor's decision."""
-    global _glass_amount, _window_opacity
+    amount, typography, radius, window backdrop) to the shipped defaults.
+    Does NOT touch QSettings — persistence stays the theme editor's
+    decision. Does NOT touch any live window either (mirrors
+    ``_window_opacity``) — callers that need the reset visible re-apply it
+    (``apply_window_backdrop`` / ``apply_window_opacity``)."""
+    global _glass_amount, _window_opacity, _window_backdrop
     _overrides["light"] = {}
     _overrides["dark"] = {}
     _glass_amount = DEFAULT_GLASS_AMOUNT
     _window_opacity = DEFAULT_WINDOW_OPACITY
+    _window_backdrop = "none"
     apply_typography(sans=None, mono=None, hinting=None, base_px=None)
     apply_radius_scale("m")
     _recompute_palettes()
@@ -1911,6 +2037,7 @@ def save_theme_customization(settings=None) -> None:
     s = settings if settings is not None else _default_settings()
     s.setValue(_SETTINGS_GLASS_KEY, float(_glass_amount))
     s.setValue(_SETTINGS_WINDOW_OPACITY_KEY, float(_window_opacity))
+    s.setValue(_SETTINGS_WINDOW_BACKDROP_KEY, _window_backdrop)
     s.setValue(_SETTINGS_OVERRIDES_KEY, json.dumps(_overrides))
     s.setValue(_SETTINGS_TYPOGRAPHY_KEY, json.dumps(_typography))
     s.setValue(_SETTINGS_RADIUS_KEY, _radius_scale)
@@ -1924,7 +2051,7 @@ def load_theme_customization(settings=None) -> None:
     Every field parses defensively and overrides pass sanitize_overrides, so
     a hand-edited registry can neither unlock the safety palette nor wedge
     startup."""
-    global _glass_amount, _window_opacity
+    global _glass_amount, _window_opacity, _window_backdrop
     s = settings if settings is not None else _default_settings()
     # A load DEFINES the customization state; it never inherits leftovers from
     # whatever was loaded/applied before. An ABSENT key means "shipped default",
@@ -1947,6 +2074,15 @@ def load_theme_customization(settings=None) -> None:
         _window_opacity = DEFAULT_WINDOW_OPACITY
     else:
         set_window_opacity(raw_opacity)
+    # Backdrop kind goes through set_window_backdrop, so garbage/an unknown
+    # kind (a hand-edited registry, a kind retired in a future rename) falls
+    # back to "none" — fail-opaque, same philosophy as the opacity clamp
+    # above. Absent -> "none" (shipped default, nothing changes visually).
+    raw_backdrop = s.value(_SETTINGS_WINDOW_BACKDROP_KEY, None)
+    if raw_backdrop is None:
+        _window_backdrop = "none"
+    else:
+        set_window_backdrop(raw_backdrop)
     try:
         blob = json.loads(str(s.value(_SETTINGS_OVERRIDES_KEY, "") or "{}"))
     except (TypeError, ValueError):

@@ -21,8 +21,8 @@ from PySide6.QtWidgets import (
 )
 
 from gui.style import (
-    apply_theme, apply_window_opacity, get_window_opacity,
-    load_theme_customization,
+    apply_theme, apply_window_backdrop, apply_window_backdrop_to,
+    apply_window_opacity, get_window_opacity, load_theme_customization,
 )
 from gui.detachable_tabs import DetachableTabWidget
 
@@ -233,6 +233,15 @@ class TCTMainWindow(QMainWindow):
         self._build_menu_and_toolbar()
         self._build_central()
         self._restore_window_state()
+        # Windows 11 DWM system backdrop material (Mica/Acrylic), from the
+        # persisted theme/window_backdrop — applied to THIS window BEFORE
+        # window opacity (apply-order contract: backdrop first, then
+        # setWindowOpacity — see gui.style.apply_window_backdrop) so a launch
+        # with a saved backdrop comes up with the material already painting
+        # instead of snapping in on the next theme touch. A true no-op pre-
+        # Win11 22H2 / non-Windows / headless (offscreen has no DWM) — ships
+        # "none" by default, so this changes nothing until Kaya opts in.
+        apply_window_backdrop_to(self)
         # Real (compositor) window translucency, from the persisted
         # theme/window_opacity — applied to THIS window here so a launch with a
         # saved opacity comes up translucent instead of snapping when the theme
@@ -830,6 +839,14 @@ class TCTMainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             apply_theme(app, self._theme_mode)
+            # Re-assert the persisted backdrop material on every top-level
+            # window BEFORE opacity (apply-order contract — see
+            # gui.style.apply_window_backdrop's docstring). A window created
+            # since the last apply (a torn-off tab, the Settings dialog)
+            # would otherwise sit without the current material, and a
+            # backdrop reset needs to run before its own re-themed palette
+            # is asserted anyway.
+            apply_window_backdrop(app)
             # Re-assert the persisted window opacity on every top-level window
             # (main window, dialogs, detached panels) — apply_theme only
             # regenerates the QSS, and a window created since the last apply

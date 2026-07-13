@@ -4,6 +4,13 @@ The suite runs under ``QT_QPA_PLATFORM=offscreen`` (no DWM, no real compositor),
 so every test either drives the injectable support probes to exercise the
 matrix, or monkeypatches the ``_dwm_*`` native-call functions with recording
 stubs so no test ever touches ctypes/dwmapi.
+
+Beat C2 additionally covers the ``gui/style.py`` wiring on top of this core
+(settings persistence, the app-wide fan-out, the apply-order contract with
+window opacity, and the C1 risk-note fix for a backdrop reset) — style.py
+owns the theme and reaches into this module's monkeypatch seams the same way
+the core tests above do, so those tests live here rather than duplicating the
+``_force_supported``/``_recording_dwm`` helpers into ``test_theme_editor.py``.
 """
 from __future__ import annotations
 
@@ -16,6 +23,18 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QWidget
 
 import gui.backdrop as backdrop
+from gui import style
+
+
+@pytest.fixture(autouse=True)
+def _reset_style_backdrop_state():
+    """gui/style.py's window_backdrop (and everything else
+    ``reset_theme_customization`` covers) is module-global state — restore
+    the shipped defaults after every test in this file, same idiom as
+    ``tests/test_theme_editor.py``'s ``_reset_style_state``. Unconditional
+    (cheap) so a test author never has to remember it."""
+    yield
+    style.reset_theme_customization()
 
 
 def _app() -> QApplication:
@@ -241,3 +260,304 @@ def test_dwm_set_attribute_raises_fails_safe(monkeypatch):
 
 def test_backdrop_kinds_tuple():
     assert backdrop.BACKDROP_KINDS == ("none", "mica", "acrylic")
+
+
+# --------------------------------------------------------------------------- #
+# gui.style wiring (Beat C2) -- settings persistence                         #
+# --------------------------------------------------------------------------- #
+
+def test_window_backdrop_defaults_to_none():
+    assert style.get_window_backdrop() == "none"
+
+
+def test_set_window_backdrop_round_trips_the_valid_kinds():
+    for kind in backdrop.BACKDROP_KINDS:
+        assert style.set_window_backdrop(kind) == kind
+        assert style.get_window_backdrop() == kind
+
+
+@pytest.mark.parametrize("garbage", [None, "", "   ", "glass", "MICA_TYPO", 42, object()])
+def test_set_window_backdrop_falls_back_to_none_on_garbage(garbage):
+    """Mirrors set_window_opacity's fail-opaque philosophy: garbage is never
+    trusted as-is, it drops to the safe/opaque end ("none"), never raises."""
+    style.set_window_backdrop("mica")
+    assert style.set_window_backdrop(garbage) == "none"
+    assert style.get_window_backdrop() == "none"
+
+
+def test_set_window_backdrop_is_case_and_whitespace_insensitive():
+    assert style.set_window_backdrop(" Mica ".strip()) == "mica"
+    assert style.set_window_backdrop("ACRYLIC") == "acrylic"
+
+
+def test_window_backdrop_round_trips_through_qsettings(tmp_path):
+    from PySide6.QtCore import QSettings
+
+    settings = QSettings(str(tmp_path / "backdrop_roundtrip.ini"), QSettings.Format.IniFormat)
+    style.set_window_backdrop("acrylic")
+    style.save_theme_customization(settings)
+
+    style.reset_theme_customization()
+    assert style.get_window_backdrop() == "none"        # reset really did reset
+
+    style.load_theme_customization(settings)
+    assert style.get_window_backdrop() == "acrylic"
+
+
+def test_hostile_persisted_backdrop_is_dropped_to_none_not_obeyed(tmp_path):
+    """A hand-edited registry entry naming an unknown kind (a typo, a kind
+    retired in a future rename) is never obeyed -- same fail-opaque contract
+    as a live call to set_window_backdrop with garbage."""
+    from PySide6.QtCore import QSettings
+
+    settings = QSettings(str(tmp_path / "backdrop_hostile.ini"), QSettings.Format.IniFormat)
+    settings.setValue("theme/window_backdrop", "acrylic-glow-9000")
+
+    style.load_theme_customization(settings)
+    assert style.get_window_backdrop() == "none"
+
+
+def test_absent_backdrop_key_means_shipped_default(tmp_path):
+    """An ABSENT key means the shipped default, not "keep whatever was
+    already loaded" -- same contract test_theme_editor.py already runs for
+    window_opacity (load_theme_customization DEFINES the state)."""
+    from PySide6.QtCore import QSettings
+
+    settings = QSettings(str(tmp_path / "backdrop_absent.ini"), QSettings.Format.IniFormat)
+    style.set_window_backdrop("mica")
+    style.load_theme_customization(settings)
+    assert style.get_window_backdrop() == "none"
+
+
+# --------------------------------------------------------------------------- #
+# gui.style wiring (Beat C2) -- apply_window_backdrop fan-out                #
+# --------------------------------------------------------------------------- #
+
+def test_apply_window_backdrop_fans_out_to_top_levels_and_skips_transients(monkeypatch):
+    from PySide6.QtWidgets import QDialog, QMainWindow, QMenu
+
+    _force_supported(monkeypatch)
+    calls = _recording_dwm(monkeypatch)
+    app = _app()
+    win, dlg, menu = QMainWindow(), QDialog(), QMenu()
+    try:
+        style.set_window_backdrop("mica")
+        kind = style.apply_window_backdrop(app)
+
+        assert kind == "mica"
+        assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+        assert dlg.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+        # Transient chrome (menus/tooltips/splashes) is skipped -- same
+        # _is_transient_window rule apply_window_opacity already uses.
+        assert menu.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+        assert ("set_attr", 38, backdrop.DWMSBT_MAINWINDOW) in calls
+    finally:
+        win.deleteLater()
+        dlg.deleteLater()
+        menu.deleteLater()
+
+
+def test_apply_window_backdrop_to_targets_a_single_window(monkeypatch):
+    """The single-window helper detachable_tabs/tct_gui startup use -- must
+    not touch any OTHER top-level window."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    _app()
+    win, other = QMainWindow(), QMainWindow()
+    try:
+        assert style.apply_window_backdrop_to(win, "acrylic") == "acrylic"
+        assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+        assert other.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+    finally:
+        win.deleteLater()
+        other.deleteLater()
+
+
+def test_apply_window_backdrop_default_arg_resolves_via_qapplication_instance(monkeypatch):
+    """No explicit app= -- must fall back to QApplication.instance() (the
+    real call sites in tct_gui/theme_editor never pass one) and still reach
+    every live top-level window, exactly like the explicit-app case above."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    _app()
+    win = QMainWindow()
+    try:
+        style.set_window_backdrop("mica")
+        kind = style.apply_window_backdrop()   # no app= argument at all
+
+        assert kind == "mica"
+        assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+    finally:
+        win.deleteLater()
+
+
+# --------------------------------------------------------------------------- #
+# gui.style wiring (Beat C2) -- apply-order contract (backdrop before        #
+# opacity, see gui.style.apply_window_backdrop's docstring)                  #
+# --------------------------------------------------------------------------- #
+
+def test_apply_order_backdrop_before_opacity(monkeypatch):
+    """Both fan-outs called in the SAME order tct_gui startup / _toggle_theme
+    and the theme editor's _apply() use them: the backdrop's native DWM call
+    for a window must land before that window's setWindowOpacity call."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    calls = _recording_dwm(monkeypatch)
+    orig_set_opacity = QMainWindow.setWindowOpacity
+
+    def recording_set_opacity(self, value):
+        calls.append(("opacity", value))
+        return orig_set_opacity(self, value)
+
+    monkeypatch.setattr(QMainWindow, "setWindowOpacity", recording_set_opacity)
+
+    app = _app()
+    win = QMainWindow()
+    try:
+        style.set_window_backdrop("acrylic")
+        style.set_window_opacity(0.9)
+
+        style.apply_window_backdrop(app)     # apply-order contract: first...
+        style.apply_window_opacity(app)      # ...then opacity.
+
+        kinds = [c[0] for c in calls]
+        assert "set_attr" in kinds and "opacity" in kinds
+        assert kinds.index("set_attr") < kinds.index("opacity")
+    finally:
+        win.deleteLater()
+
+
+# --------------------------------------------------------------------------- #
+# gui.style wiring (Beat C2) -- C1 risk-note fix: no default-grey flash      #
+# --------------------------------------------------------------------------- #
+
+def test_backdrop_reset_to_none_reapplies_theme_palette_no_flash(monkeypatch):
+    """apply_backdrop(window, "none") (gui.backdrop._clear_window_canvas)
+    resets the window's own QPalette to a bare default -- style.py's
+    apply_window_backdrop_to must immediately re-sync it to the CURRENT
+    theme palette and force a repolish, never leaving a stray default-Qt-
+    grey frame. See gui.style._reassert_window_palette."""
+    from PySide6.QtWidgets import QMainWindow
+    from PySide6.QtGui import QPalette
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    style.apply_theme(app, "dark")
+    win = QMainWindow()
+    try:
+        style.set_window_backdrop("mica")
+        style.apply_window_backdrop(app)
+        assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+
+        repolish_calls = []
+        monkeypatch.setattr(style, "repolish", lambda w: repolish_calls.append(w))
+
+        style.set_window_backdrop("none")
+        style.apply_window_backdrop(app)
+
+        assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+        assert win in repolish_calls, "reset must force an immediate QSS repolish"
+        # Never Qt's own built-in default grey -- the CURRENT theme canvas.
+        got = win.palette().color(QPalette.ColorRole.Window).name().lower()
+        want = style.DARK["bg"].lower()
+        assert got == want
+    finally:
+        win.deleteLater()
+
+
+def test_backdrop_reset_without_a_prior_apply_still_reapplies_palette(monkeypatch):
+    """The true-no-op path in gui.backdrop (kind "none" on a window that was
+    never given a real backdrop) must still get the style.py resync -- it is
+    unconditional on kind == "none", not gated on backdrop.py having actually
+    changed anything (see apply_window_backdrop_to)."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    style.apply_theme(app, "light")
+    win = QMainWindow()
+    try:
+        repolish_calls = []
+        monkeypatch.setattr(style, "repolish", lambda w: repolish_calls.append(w))
+
+        style.set_window_backdrop("none")
+        style.apply_window_backdrop(app)
+
+        assert win in repolish_calls
+    finally:
+        win.deleteLater()
+
+
+def test_backdrop_reassert_never_runs_while_a_real_material_is_applied(monkeypatch):
+    """The palette resync must NEVER fire for kind != "none" -- a live mica/
+    acrylic window needs its transparent Window-role palette
+    (gui.backdrop._prepare_window_canvas) for the DWM material to show
+    through; resyncing would silently paint over it."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    win = QMainWindow()
+    try:
+        repolish_calls = []
+        monkeypatch.setattr(style, "repolish", lambda w: repolish_calls.append(w))
+
+        style.set_window_backdrop("mica")
+        style.apply_window_backdrop(app)
+
+        assert repolish_calls == []
+        assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+    finally:
+        win.deleteLater()
+
+
+# --------------------------------------------------------------------------- #
+# gui.style wiring (Beat C2) -- detached windows pick up the current kind    #
+# --------------------------------------------------------------------------- #
+
+def test_detached_window_construction_applies_current_backdrop(monkeypatch):
+    """gui/detachable_tabs._DetachedWindow is created AFTER the setting is
+    applied, so -- mirroring window opacity's existing contract -- it must
+    pick the backdrop kind up at construction, backdrop before opacity."""
+    from PySide6.QtWidgets import QLabel
+    from gui.detachable_tabs import _DetachedWindow
+
+    _force_supported(monkeypatch)
+    calls = _recording_dwm(monkeypatch)
+    _app()
+
+    style.set_window_backdrop("acrylic")
+    style.set_window_opacity(0.85)
+    win = _DetachedWindow(QLabel("panel"), "Motor Stage")
+    try:
+        assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+        assert ("set_attr", 38, backdrop.DWMSBT_TRANSIENTWINDOW) in calls
+        assert win.windowOpacity() == pytest.approx(0.85, abs=1.0 / 255.0)
+    finally:
+        win.deleteLater()
+
+
+def test_detached_window_construction_skips_backdrop_when_none(monkeypatch):
+    """Ship default: a detached window built with the shipped "none" kind
+    never touches DWM at all."""
+    from PySide6.QtWidgets import QLabel
+    from gui.detachable_tabs import _DetachedWindow
+
+    _force_supported(monkeypatch)
+    calls = _recording_dwm(monkeypatch)
+    _app()
+
+    win = _DetachedWindow(QLabel("panel"), "Motor Stage")
+    try:
+        assert calls == []
+        assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+    finally:
+        win.deleteLater()

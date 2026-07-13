@@ -35,6 +35,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtCore import QSettings
 
+import gui.backdrop as backdrop
 from gui import style
 
 
@@ -47,6 +48,26 @@ def _reset_style_state():
 def _app():
     from PySide6.QtWidgets import QApplication
     return QApplication.instance() or QApplication([])
+
+
+def _install_recording_dwm(monkeypatch: pytest.MonkeyPatch, extend_hr: int = 0,
+                            attr_hr: int = 0) -> list[tuple]:
+    """Local copy of tests/test_backdrop.py's ``_recording_dwm`` helper — the
+    Backdrop-combo tests below need it too, and duplicating ~12 lines beats
+    importing one test module from another."""
+    calls: list[tuple] = []
+
+    def fake_extend(hwnd):
+        calls.append(("extend", hwnd))
+        return extend_hr
+
+    def fake_set_attr(hwnd, attribute, value):
+        calls.append(("set_attr", attribute, value))
+        return attr_hr
+
+    monkeypatch.setattr(backdrop, "_dwm_extend_frame", fake_extend)
+    monkeypatch.setattr(backdrop, "_dwm_set_window_attribute", fake_set_attr)
+    return calls
 
 
 def _tmp_settings(tmp_path) -> QSettings:
@@ -666,3 +687,131 @@ def test_new_presets_carry_a_full_token_set():
     by_name = {p["name"]: p for p in style.BUILTIN_PRESETS}
     for name in ("Graphite", "Deep Violet", "Paper"):
         assert set(by_name[name]["overrides"]) == needed, name
+
+
+# =========================================================================== #
+# ROUND 3 (beat C2): the "Backdrop" combo — Windows 11 DWM system material    #
+# =========================================================================== #
+# The DWM/ctypes mechanics (support probe, native calls, apply/reset,
+# app-wide fan-out, apply-order-vs-opacity, the C1 risk-note palette fix, and
+# detached-window construction) are all covered in tests/test_backdrop.py,
+# which already owns the _force_supported/_recording_dwm monkeypatch seams.
+# This section is scoped to what is genuinely THIS dialog's own behaviour:
+# the combo widget reacting to backdrop.is_backdrop_supported().
+
+def _force_backdrop_supported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop, "_version_probe", lambda: 22621)
+    monkeypatch.setattr(backdrop, "_platform_probe", lambda: "windows")
+
+
+def _force_backdrop_unsupported(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backdrop, "_platform_probe", lambda: "offscreen")
+
+
+def test_backdrop_combo_disabled_with_tooltip_when_unsupported(tmp_path, monkeypatch):
+    """The real offscreen test host is already unsupported by construction,
+    but force it explicitly so this stays true regardless of what CI happens
+    to run on."""
+    _force_backdrop_unsupported(monkeypatch)
+    dlg = _dialog(tmp_path)
+    assert dlg._backdrop_combo.isEnabled() is False
+    tooltip = dlg._backdrop_combo.toolTip()
+    assert "22H2" in tooltip or "22621" in tooltip
+    assert tooltip.strip() != ""
+
+
+def test_backdrop_combo_enabled_and_live_previewing_when_supported(tmp_path, monkeypatch):
+    """When the probes say a real backdrop is available, the combo is
+    enabled, its tooltip stops being the "why disabled" explanation, and
+    picking a value live-previews through the SAME apply_window_backdrop
+    fan-out the dialog's Apply button uses (no need to click Apply)."""
+    _force_backdrop_supported(monkeypatch)
+    _recording_dwm = _install_recording_dwm(monkeypatch)
+    dlg = _dialog(tmp_path)
+    assert dlg._backdrop_combo.isEnabled() is True
+    assert "22H2" not in dlg._backdrop_combo.toolTip()
+
+    idx = dlg._backdrop_combo.findData("mica")
+    dlg._backdrop_combo.setCurrentIndex(idx)
+
+    assert style.get_window_backdrop() == "mica"
+    assert dlg._draft_backdrop == "mica"
+    assert ("set_attr", 38, backdrop.DWMSBT_MAINWINDOW) in _recording_dwm
+    style.reset_theme_customization()
+
+
+def test_backdrop_combo_defaults_to_none_and_lists_the_three_kinds(tmp_path):
+    dlg = _dialog(tmp_path)
+    items = [dlg._backdrop_combo.itemData(i) for i in range(dlg._backdrop_combo.count())]
+    assert items == ["none", "mica", "acrylic"]
+    assert dlg._backdrop_combo.currentData() == "none"
+    assert dlg._draft_backdrop == "none"
+
+
+def test_backdrop_choice_persists_even_while_the_combo_is_disabled(tmp_path, monkeypatch):
+    """Ship law: the pick is saved regardless of whether THIS host can render
+    it — a laptop dev session must be able to configure the setting for the
+    Win11 22H2 bench it will actually run on."""
+    _force_backdrop_unsupported(monkeypatch)
+    settings = _tmp_settings(tmp_path)
+    from gui.theme_editor import ThemeEditorDialog
+    dlg = ThemeEditorDialog(mode="dark", settings=settings)
+    assert dlg._backdrop_combo.isEnabled() is False
+
+    idx = dlg._backdrop_combo.findData("acrylic")
+    dlg._backdrop_combo.setCurrentIndex(idx)   # programmatic set still fires
+    dlg._apply()
+
+    assert style.get_window_backdrop() == "acrylic"
+    style.reset_theme_customization()
+    style.load_theme_customization(settings)
+    assert style.get_window_backdrop() == "acrylic"
+    style.reset_theme_customization()
+
+
+def test_backdrop_combo_survives_headless_construction_and_theme_switch(tmp_path):
+    """Same smoke shape as test_dialog_theme_switch_smoke_and_mode_retarget:
+    headless construction + a real mode switch must not crash and must keep
+    the combo in sync with the draft."""
+    dlg = _dialog(tmp_path, mode="dark")
+    style.set_window_backdrop("mica")
+    dlg.refresh_theme("light")
+    assert dlg._draft_backdrop == "mica"
+    assert dlg._backdrop_combo.currentData() == "mica"
+    dlg.refresh_theme("dark")
+    assert dlg._backdrop_combo.currentData() == "mica"
+    style.reset_theme_customization()
+
+
+def test_backdrop_applied_before_opacity_from_the_dialogs_apply_button(tmp_path, monkeypatch):
+    """_apply() must push backdrop before opacity too -- not just the
+    tct_gui.py fan-out call sites tests/test_backdrop.py covers."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_backdrop_supported(monkeypatch)
+    calls = _install_recording_dwm(monkeypatch)
+    orig_set_opacity = QMainWindow.setWindowOpacity
+
+    def recording_set_opacity(self, value):
+        calls.append(("opacity", value))
+        return orig_set_opacity(self, value)
+
+    monkeypatch.setattr(QMainWindow, "setWindowOpacity", recording_set_opacity)
+
+    dlg = _dialog(tmp_path)
+    win = QMainWindow()
+    try:
+        idx = dlg._backdrop_combo.findData("mica")
+        dlg._backdrop_combo.setCurrentIndex(idx)
+        dlg._opacity_slider.setValue(85)
+        calls.clear()
+
+        dlg._apply()
+
+        kinds = [c[0] for c in calls]
+        assert "set_attr" in kinds and "opacity" in kinds
+        assert kinds.index("set_attr") < kinds.index("opacity")
+    finally:
+        win.deleteLater()
+        style.reset_theme_customization()

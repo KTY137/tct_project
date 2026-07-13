@@ -22,6 +22,13 @@ class _DetachedWindow(QMainWindow):
         self.setWindowFlag(Qt.WindowType.Window, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setWindowTitle(title)
+        # Inherit the cockpit's window backdrop material (theme/window_backdrop)
+        # BEFORE opacity, per the apply-order contract (see
+        # gui.style.apply_window_backdrop's docstring) — a torn-off panel is
+        # part of the same cockpit, so it should carry the same Mica/Acrylic
+        # material. A true no-op pre-Win11 22H2 / non-Windows / headless, and
+        # ships "none" by default.
+        style.apply_window_backdrop_to(self)
         # Inherit the cockpit's window opacity (theme/window_opacity, clamped to
         # the 0.80 safety floor): a torn-off panel is part of the same cockpit,
         # so it must not float as an opaque slab over a translucent shell.

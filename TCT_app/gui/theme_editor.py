@@ -1,9 +1,10 @@
 """Theme editor dialog (View ▸ Theme…) — browse presets and configure the
-theme: colors, fonts, corner radius, the surface tint, and the real window
-opacity (Kaya requests 2026-07-12 / round 2 2026-07-13).
+theme: colors, fonts, corner radius, the surface tint, the real window
+opacity (Kaya requests 2026-07-12 / round 2 2026-07-13), and the Windows 11
+DWM backdrop material (round 3, beat C2).
 
-TWO MATERIAL KNOBS, AND THEY ARE NOT THE SAME THING (round 2)
--------------------------------------------------------------
+THREE MATERIAL KNOBS, AND THEY ARE NOT THE SAME THING (round 3)
+---------------------------------------------------------------
 * **Surface tint** (was "Glass amount") — the chrome/strip/edge PRE-BLEND.
   Same knob as before, honest name: QSS has no backdrop blur, so it can only
   tint opaque surfaces. It can never make the window see-through, which is
@@ -13,14 +14,23 @@ TWO MATERIAL KNOBS, AND THEY ARE NOT THE SAME THING (round 2)
   clamp (``style.MIN_WINDOW_OPACITY``): an HV-live chip and the Abort button
   must stay legible at every reachable setting. Every top-level window follows
   it (dialogs, torn-off panels) so the cockpit stays coherent.
+* **Backdrop** — ``gui/backdrop.py``'s DWM system material (Mica/Acrylic)
+  painting through the window's own UNCLAIMED background, not the content —
+  every panel keeps its opaque QSS surface (law 8). Needs Windows 11 22H2+
+  (build 22621) on the real "windows" Qt platform
+  (``backdrop.is_backdrop_supported()``); the combo is disabled with a
+  tooltip everywhere else (in particular this whole offscreen test suite),
+  but the *choice* still persists so it takes effect the moment it becomes
+  available. Independent of both knobs above — see the apply-order note in
+  ``gui.style.apply_window_backdrop``.
 
 All state lives in ``gui/style.py``'s override layer (apply_theme_overrides /
-set_glass_amount / set_window_opacity / apply_typography / apply_radius_scale)
-— this dialog is pure view/wiring on top of it, persisted via
-QSettings("TCT", "TCTSetup") under ``theme/*``. Applying routes through the SAME
-machinery as the View menu's dark-mode toggle (tct_gui._toggle_theme, via the
-``applyRequested`` signal), so QSS regeneration, the QML Theme singleton, and
-every panel's ``refresh_theme`` all fire exactly as they do today.
+set_glass_amount / set_window_opacity / set_window_backdrop / apply_typography /
+apply_radius_scale) — this dialog is pure view/wiring on top of it, persisted
+via QSettings("TCT", "TCTSetup") under ``theme/*``. Applying routes through the
+SAME machinery as the View menu's dark-mode toggle (tct_gui._toggle_theme, via
+the ``applyRequested`` signal), so QSS regeneration, the QML Theme singleton,
+and every panel's ``refresh_theme`` all fire exactly as they do today.
 
 Five built-in presets (Cockpit Dark · Graphite · Deep Violet · Lab Light ·
 Paper) come from ``style.BUILTIN_PRESETS`` — token sets ported from the v5
@@ -51,7 +61,7 @@ from PySide6.QtWidgets import (
     QSpinBox, QVBoxLayout, QWidget,
 )
 
-from gui import style
+from gui import backdrop, style
 from gui.panel_kit import Card, SegmentedControl
 from gui.style import RADIUS_XS, SPACE_MD, SPACE_SM, SPACE_XS
 
@@ -213,6 +223,9 @@ class ThemeEditorDialog(QDialog):
         # part of a preset (presets are token sets), it is its own persisted
         # knob under theme/window_opacity. Selecting a preset never changes it.
         self._draft_window_opacity: float = style.get_window_opacity()
+        # Same story for the backdrop material — its own persisted knob under
+        # theme/window_backdrop, not a preset field.
+        self._draft_backdrop: str = style.get_window_backdrop()
 
         self._swatches: dict[str, QPushButton] = {}
         self._locked_swatches: dict[str, QLabel] = {}
@@ -349,6 +362,36 @@ class ThemeEditorDialog(QDialog):
         o_hint.setObjectName("metricTileCaption")
         o_hint.setWordWrap(True)
         card.add_widget(o_hint)
+
+        # ── Backdrop — Windows 11 DWM system material ───────────────────────
+        # A THIRD, independent knob (gui/backdrop.py): real compositor material
+        # (Mica/Acrylic) behind the window's own UNCLAIMED background — content
+        # (plots, camera, every panel surface) always stays opaque, law 8.
+        # Needs Win11 22H2+ on the real "windows" Qt platform; disabled with an
+        # explanatory tooltip everywhere else, but the pick still persists so
+        # it takes effect the moment it becomes available.
+        self._backdrop_combo = QComboBox()
+        for label, value in (("None", "none"), ("Mica", "mica"), ("Acrylic", "acrylic")):
+            self._backdrop_combo.addItem(label, value)
+        self._backdrop_supported = backdrop.is_backdrop_supported()
+        self._backdrop_combo.setEnabled(self._backdrop_supported)
+        if self._backdrop_supported:
+            self._backdrop_combo.setToolTip(
+                "Windows 11 system backdrop material behind the window chrome.")
+        else:
+            self._backdrop_combo.setToolTip(
+                "Needs Windows 11 22H2+ (build 22621) running on a real "
+                "display — unavailable here (unsupported OS/build, or a "
+                "non-native Qt platform such as this headless test run). "
+                "Your choice is still saved for when it is available.")
+        self._backdrop_combo.currentIndexChanged.connect(self._on_backdrop_changed)
+        card.add_widget(_settings_row("Backdrop", self._backdrop_combo))
+        b_hint = QLabel(
+            "Mica/Acrylic material behind the window's own background. "
+            "Content — plots, camera, every panel — always stays opaque.")
+        b_hint.setObjectName("metricTileCaption")
+        b_hint.setWordWrap(True)
+        card.add_widget(b_hint)
         return card
 
     def _build_colors_card(self) -> Card:
@@ -444,6 +487,13 @@ class ThemeEditorDialog(QDialog):
         self._opacity_slider.blockSignals(False)
         self._opacity_value_label.setText(f"{self._opacity_slider.value()}%")
 
+    def _sync_backdrop_control(self) -> None:
+        """Push the backdrop draft onto its combo without firing a preview."""
+        idx = self._backdrop_combo.findData(self._draft_backdrop)
+        self._backdrop_combo.blockSignals(True)
+        self._backdrop_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self._backdrop_combo.blockSignals(False)
+
     def _sync_controls_from_drafts(self) -> None:
         """Push draft state into every control without firing live previews."""
         self._glass_slider.blockSignals(True)
@@ -451,6 +501,7 @@ class ThemeEditorDialog(QDialog):
         self._glass_slider.blockSignals(False)
         self._glass_value_label.setText(f"{int(round(self._draft_glass * 100))}%")
         self._sync_opacity_control()
+        self._sync_backdrop_control()
         typo = style.typography()
         for combo, key in ((self._sans_combo, "sans"), (self._mono_combo, "mono"),
                            (self._hinting_combo, "hinting")):
@@ -501,6 +552,18 @@ class ThemeEditorDialog(QDialog):
         self._opacity_value_label.setText(f"{value}%")
         self._draft_window_opacity = style.set_window_opacity(value / 100.0)
         style.apply_window_opacity()
+
+    def _on_backdrop_changed(self, _index: int) -> None:
+        """Live preview, same immediacy as opacity — one DWM call per window,
+        no QSS regeneration needed. Persisted only on Apply (same contract as
+        every other Material control). This only ever touches the backdrop
+        fan-out; the apply-order contract (backdrop before opacity) matters
+        where BOTH are pushed out together (startup, _apply() below, the
+        dark-mode toggle) — a lone backdrop change does not need to re-touch
+        opacity, which is an independent Qt property untouched by it."""
+        kind = self._backdrop_combo.currentData()
+        self._draft_backdrop = style.set_window_backdrop(kind)
+        style.apply_window_backdrop()
 
     def _sync_glass_from_slider(self) -> None:
         """The slider is the source of truth for the glass draft — Apply /
@@ -622,6 +685,11 @@ class ThemeEditorDialog(QDialog):
         style.apply_theme_overrides(dict(self._draft_overrides), self._mode,
                                     merge=False)
         style.set_glass_amount(self._draft_glass)
+        # Backdrop BEFORE opacity — apply-order contract, see
+        # gui.style.apply_window_backdrop's docstring.
+        self._draft_backdrop = style.set_window_backdrop(
+            self._backdrop_combo.currentData())
+        style.apply_window_backdrop()
         # Window opacity: the slider is the source of truth (its range already
         # enforces the safety floor); set_window_opacity clamps regardless.
         self._draft_window_opacity = style.set_window_opacity(
@@ -650,6 +718,7 @@ class ThemeEditorDialog(QDialog):
             self._draft_overrides = dict(style.theme_overrides(mode))
             self._draft_glass = style.get_glass_amount()
             self._draft_window_opacity = style.get_window_opacity()
+            self._draft_backdrop = style.get_window_backdrop()
             self._sync_controls_from_drafts()
         else:
             self._refresh_all_swatches()
