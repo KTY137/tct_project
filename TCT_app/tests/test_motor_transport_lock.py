@@ -415,6 +415,75 @@ class TestPIStopIsNeverQueued:
         m.stop()                                 # must not raise
 
 
+class TestPIDisconnectStopsFirst:
+    """disconnect() must stop the stage BEFORE it closes the GCS session.
+
+    Mirrors GRBLMotorStage.disconnect (motor_grbl.py:345), which calls stop()
+    first.  Without it, a disconnect that arrives while the stage is moving
+    tears down the session and leaves the PI stage moving with nothing left to
+    stop it.  stop() gates on self._gcs, so the ordering constraint is that
+    stop() runs while the session is still reachable — i.e. before disconnect
+    nulls self._gcs.
+    """
+
+    def test_disconnect_sends_stp_before_closing_the_session(self):
+        m = _pi_stage()
+        gcs = m._gcs                       # disconnect nulls m._gcs — keep the stub
+        gcs._moving_polls = 2              # the stage is (fake-)moving at teardown
+
+        m.disconnect()
+
+        assert "STP" in gcs.calls, "disconnect did not stop the stage"
+        assert "CloseConnection" in gcs.calls, "disconnect did not close the session"
+        assert gcs.calls.index("STP") < gcs.calls.index("CloseConnection"), (
+            "disconnect closed the GCS session BEFORE stopping the stage — a "
+            "mid-move disconnect leaves the PI stage moving with no session to "
+            "stop it"
+        )
+        # STP went out under the transport lock (it was free during teardown).
+        assert gcs.unguarded == [], f"teardown touched the session unguarded: {gcs.unguarded}"
+        assert m._gcs is None and not m.connected and not m.homed
+
+    def test_second_disconnect_is_a_clean_noop(self):
+        """Already-stopped/disconnected: a repeat disconnect must not re-touch
+        the (already closed) session and must not raise."""
+        m = _pi_stage()
+        gcs = m._gcs
+        m.disconnect()
+        calls_after_first = list(gcs.calls)
+
+        m.disconnect()                     # session already gone → pure no-op
+
+        assert gcs.calls == calls_after_first, (
+            f"second disconnect touched the closed session: "
+            f"{gcs.calls[len(calls_after_first):]}"
+        )
+        assert m._gcs is None and not m.connected
+
+    def test_disconnect_without_a_session_is_a_clean_noop(self):
+        m = PIMotorStage(simulation=False)  # never connected — no GCS session
+        m.disconnect()                      # must not raise
+        assert m._gcs is None and not m.connected
+
+    def test_disconnect_completes_even_if_stop_raises(self):
+        """A raising stop() must never abort the teardown — the session still
+        gets closed and the stage still ends up disconnected."""
+        m = _pi_stage()
+        gcs = m._gcs
+
+        def _boom() -> None:
+            raise RuntimeError("STP exploded")
+
+        m.stop = _boom                      # type: ignore[method-assign]
+
+        m.disconnect()                      # must swallow the stop failure
+
+        assert "CloseConnection" in gcs.calls, (
+            "a raising stop() aborted disconnect — the session was never closed"
+        )
+        assert m._gcs is None and not m.connected and not m.homed
+
+
 class TestPINoHardwareOnConstruction:
     def test_constructor_opens_no_session(self):
         m = PIMotorStage(simulation=False)

@@ -161,9 +161,23 @@ class PIMotorStage(MotorStageBase):
         logger.info("PI stage connected on %s", self._serial_port)
 
     def disconnect(self) -> None:
+        # Stop FIRST — mirror GRBLMotorStage.disconnect (motor_grbl.py:345).  A
+        # disconnect that arrives mid-move must not leave the PI stage moving
+        # with no session left to stop it, so we issue the emergency stop while
+        # the GCS session is still reachable.  stop() reads self._gcs and gates
+        # on it being non-None (it does NOT gate on self._connected), so it must
+        # run BEFORE the swap below that nulls self._gcs — nulling first would
+        # make the stop a silent no-op.  stop() is already bounded-acquire and
+        # non-raising (it swallows STP failures internally), but we still guard
+        # the call so a stop failure can never abort the teardown.
+        try:
+            self.stop()
+        except Exception:
+            pass
         gcs, self._gcs = self._gcs, None
-        # Mark disconnected first: a poller that is queued on the transport lock
-        # must not fire another exchange into a session we are tearing down.
+        # Mark disconnected before CloseConnection: a poller that is queued on
+        # the transport lock must not fire another exchange into a session we
+        # are tearing down.
         self._connected = False
         self._homed = False
         if gcs is not None:
