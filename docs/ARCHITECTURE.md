@@ -838,6 +838,20 @@ Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 - 2026-07-12 — **5730644 (fix/safety):** `ScanController._refuse_if_active()` fail-closed guard on all four start entry points (start/start_plan/start_z_focus_scan/start_voltage_scan); `scan_coordinator.start_scan` now surfaces RuntimeError on rejection.
 
+- 2026-07-13 — **84d3a1f (docs): Kaya-approved master roadmap into the repo.** NEW `docs/ROADMAP_MASTERPLAN.md` (capability spine, 8-domain staged roadmap, seed strategy). CLAUDE.md Fable-tier governance (judgment beats Opus→Fable; architecture agents always Fable); `docs/CODEX_QUEUE.md` S2 route. Roadmap ratifies v5 cockpit shell + metrology + survey + affine-placement gates.
+
+- 2026-07-13 — **d0f650f (docs): Codex bounce R1 integrated into the roadmap.** CapabilityBinding staged lifecycle + transport reservation, per-U-stage QML safety event-authority gate, P0' per-point oracle, per-point timing + atomic completion marker, dual-shell QSettings namespacing, PORT1 M/L, D1a/D1b split; 2 items ⚑-flagged for Kaya decision.
+
+- 2026-07-13 — **a028c87 (docs): Codex bounce R2 cleanup pass.** 5 text reconciliations; finalization protocol COMPLETE; both ⚑ items reclassified as forced (Kaya chooses shape, not whether).
+
+- 2026-07-13 — **327026d (docs/research): B1 metrology mechanics facts.** Printer-stage reality: microstep sag under load, belt ±5µm, thermal 1.3µm/°C; reticle shortlist $17–$955; ISO-230-2-style protocol; 18 sources. Feeds `metrology_feasibility.md` (B2).
+
+- 2026-07-13 — **f6c569f (docs/design): C1 planner_routines_v2.md proposal.** 7 candidate axes incl. crew-missed REPEAT; 10-routine gallery, R1–R6 = P2 corpus fixtures at zero implementation; found the nested params['wavegen'] validation gap → P0' scope amended in the roadmap.
+
+- 2026-07-13 — **efad307 (docs): PLATFORM_SEED.md v0.1.0-draft.** Mamoru-verified lift manifest, 22 claims verified + 4 count fixes; §6 flags remote_control_plan.md "Trusted-operator" tension with safety-is-local — remote ruled OUT of the seed pending Kaya/Mary.
+
+- 2026-07-13 — **1927377 (docs/research): B2 metrology_feasibility.md + B3 BENCH_CHECKLIST §12 protocol.** Error budget as f(M); verdict: camera-MEASURED metrology is the realistic class; 2µm only as relative claim, never open-loop. §12a–d protocol (mechanics reality → reticle shortlist, calibration workflow, repeatability stats, drift series). Adopted orphaned `dwm_backdrop_blur_recipe.md` (Prometheus, was never staged with the Echtglas beat).
+
 - 2026-07-04 — Initial bookkeep created from source inspection (main, tct_gui,
   state_machine, scan_controller, device_manager, base device, hdf5_writer,
   SCAN_DATA_FORMAT.md). Some sections marked TODO for deepening.
