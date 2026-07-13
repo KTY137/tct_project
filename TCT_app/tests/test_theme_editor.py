@@ -384,6 +384,49 @@ def test_same_mode_refresh_keeps_drafts(tmp_path):
     assert dlg._draft_overrides == {"accent": "#987654"}
 
 
+def test_footer_buttons_stay_enabled_and_current_after_two_theme_toggles(tmp_path, monkeypatch):
+    """C3 guard pattern (2026-07-13 "theme window buttons" bug report):
+    construct the dialog, toggle theme twice (mirroring tct_gui._toggle_theme:
+    apply_theme + apply_window_backdrop + apply_window_opacity +
+    refresh_theme, exercised here with a real active backdrop material so the
+    apply_window_backdrop_to reapply-without-repaint fix in gui/style.py is
+    actually on the code path), and assert every footer button is still
+    enabled, still fires its clicked signal, and every editable swatch still
+    resolves its colour from the CURRENT (not stale) palette."""
+    from PySide6.QtCore import Qt as _Qt
+    from PySide6.QtTest import QTest
+
+    _force_backdrop_supported(monkeypatch)
+    _install_recording_dwm(monkeypatch)
+    style.set_window_backdrop("mica")
+    dlg = _dialog(tmp_path, mode="dark")
+    dlg.show()
+
+    def _toggle(mode):
+        app = _app()
+        style.apply_theme(app, mode)
+        style.apply_window_backdrop(app)
+        style.apply_window_opacity(app)
+        dlg.refresh_theme(mode)
+
+    _toggle("light")
+    _toggle("dark")
+
+    apply_clicks = []
+    dlg._btn_apply.clicked.connect(lambda: apply_clicks.append(1))
+    for name in ("_btn_apply", "_btn_save_preset", "_btn_reset", "_btn_close"):
+        btn = getattr(dlg, name)
+        assert btn.isEnabled(), name
+
+    QTest.mouseClick(dlg._btn_apply, _Qt.MouseButton.LeftButton)
+    assert apply_clicks == [1], "Apply button must still fire clicked after two toggles"
+
+    p = style.palette("dark")
+    for token, swatch in dlg._swatches.items():
+        assert dlg._draft_overrides.get(token, p[token]) in swatch.styleSheet()
+    style.reset_theme_customization()
+
+
 # =========================================================================== #
 # ROUND 2 (Kaya 2026-07-13): real window opacity, 5 presets, honest naming     #
 # =========================================================================== #
@@ -963,3 +1006,67 @@ def test_dialog_construction_applies_current_backdrop_and_opacity(tmp_path, monk
     # count — the construction-time application call is the first one.
     assert "backdrop" in calls and "opacity" in calls
     assert calls.index("backdrop") < calls.index("opacity")
+
+
+# =========================================================================== #
+# Glass-gap fix (2026-07-13): the window's own canvas (QMainWindow/QDialog/   #
+# #mainShell — gui.style.build_qss/_canvas_fill) lets a real DWM backdrop     #
+# material show through via an rgba() alpha fill, instead of unconditionally  #
+# painting an opaque hex directly over the transparent Window-role palette    #
+# gui.backdrop._prepare_window_canvas sets up. See                           #
+# docs/design/glass_gap_findings.md for the full barrier list/mechanism.      #
+# =========================================================================== #
+
+def test_canvas_fill_is_byte_identical_when_backdrop_is_none():
+    """Byte-identical-when-off guard: the shipped default (backdrop == "none")
+    must render EXACTLY as before this fix existed."""
+    assert style.get_window_backdrop() == "none"
+    for mode in ("dark", "light"):
+        p = style.palette(mode)
+        assert style._canvas_fill(p) == p["bg"]
+        qss = style.build_qss(p)
+        assert f"QMainWindow, QDialog {{ background: {p['bg']}; }}" in qss
+        assert f"QWidget#mainShell {{ background: {p['bg']}; }}" in qss
+        assert "rgba(" not in qss.split("QMainWindow, QDialog")[1][:80]
+
+
+def test_canvas_fill_becomes_rgba_alpha_when_backdrop_active():
+    """The actual fix: once a real backdrop material is the user's chosen
+    preference, the canvas rule stops being a flat opaque hex and starts
+    letting DWM through via rgba() alpha."""
+    for kind in ("mica", "acrylic"):
+        style.set_window_backdrop(kind)
+        p = style.palette("dark")
+        fill = style._canvas_fill(p)
+        assert fill.startswith("rgba(")
+        assert fill != p["bg"]
+        assert 0.0 < style.BACKDROP_CANVAS_ALPHA < 1.0
+        qss = style.build_qss(p)
+        assert f"QMainWindow, QDialog {{ background: {fill}; }}" in qss
+        assert f"QWidget#mainShell {{ background: {fill}; }}" in qss
+    style.reset_theme_customization()
+
+
+def test_canvas_fill_never_touches_panel_or_readout_surfaces():
+    """Scope guard: the passthrough is canvas-only. QFrame#cardPane (every
+    panel-kit Card, including ones hosting a pyqtgraph plot or the camera
+    view) must stay a fully opaque hex regardless of backdrop state -- a QSS
+    selector cannot tell a plot-hosting card from a plain one, so the "content
+    stays opaque" hard rule requires leaving the panel role alone entirely."""
+    style.set_window_backdrop("acrylic")
+    for mode in ("dark", "light"):
+        p = style.palette(mode)
+        qss = style.build_qss(p)
+        idx = qss.index("QFrame#cardPane")
+        block = qss[idx: idx + 200]
+        assert f"background: {p['panel']};" in block
+        assert "rgba(" not in block
+    style.reset_theme_customization()
+
+
+def test_reset_theme_customization_restores_canvas_passthrough_default():
+    style.set_window_backdrop("mica")
+    assert style._canvas_fill(style.palette("dark")).startswith("rgba(")
+    style.reset_theme_customization()
+    assert style.get_window_backdrop() == "none"
+    assert style._canvas_fill(style.palette("dark")) == style.palette("dark")["bg"]

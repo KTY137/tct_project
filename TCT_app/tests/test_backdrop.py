@@ -520,6 +520,112 @@ def test_backdrop_reassert_never_runs_while_a_real_material_is_applied(monkeypat
 
 
 # --------------------------------------------------------------------------- #
+# Theme-editor button-corruption fix (2026-07-13): a reissued active-material #
+# apply (every _toggle_theme call does this for every top-level window, incl.#
+# ThemeEditorDialog/SettingsWindow) must force a repaint -- see              #
+# apply_window_backdrop_to's docstring for the full mechanism.               #
+# --------------------------------------------------------------------------- #
+
+def test_active_material_apply_forces_a_repaint(monkeypatch):
+    """First apply of a real material must schedule a repaint (window.update())
+    so an already-shown window's re-touched WA_TranslucentBackground/palette
+    does not leave stale pixels behind until the next unrelated paint event."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    _app()
+    win = QMainWindow()
+    try:
+        update_calls = []
+        monkeypatch.setattr(QMainWindow, "update", lambda self: update_calls.append(self))
+
+        assert style.apply_window_backdrop_to(win, "mica") == "mica"
+        assert win in update_calls
+    finally:
+        win.deleteLater()
+
+
+def test_active_material_reapply_forces_a_repaint_every_time_not_a_repolish(monkeypatch):
+    """The actual bug shape: EVERY theme toggle re-applies the SAME already-
+    active kind (see apply_window_backdrop's app-wide fan-out) -- the repaint
+    must fire on every one of those reissues, not just the first, and it must
+    go through window.update(), never style.repolish() (the sibling test
+    above pins repolish() to the palette-reset "none" path only -- reusing it
+    here would silently paint over the transparent Window-role palette the
+    DWM material needs, exactly what that test guards against)."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    _app()
+    win = QMainWindow()
+    try:
+        update_calls = []
+        monkeypatch.setattr(QMainWindow, "update", lambda self: update_calls.append(self))
+        repolish_calls = []
+        monkeypatch.setattr(style, "repolish", lambda w: repolish_calls.append(w))
+
+        style.set_window_backdrop("mica")
+        style.apply_window_backdrop_to(win)             # first apply
+        assert win in update_calls
+
+        update_calls.clear()
+        style.apply_window_backdrop_to(win)             # reissue, same kind
+        assert win in update_calls, "a same-kind reissue must still repaint"
+        assert repolish_calls == []
+    finally:
+        win.deleteLater()
+
+
+def test_unsupported_host_active_kind_never_forces_a_repaint(monkeypatch):
+    """Byte-identical-when-off guard: on a host that cannot apply the material
+    at all (nothing changed), apply_window_backdrop_to must not touch
+    window.update() either -- no observable side effect beyond today's
+    behaviour when the backdrop mechanism is a true no-op."""
+    from PySide6.QtWidgets import QMainWindow
+
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop, "_version_probe", lambda: 22000)   # too old
+    monkeypatch.setattr(backdrop, "_platform_probe", lambda: "windows")
+    _recording_dwm(monkeypatch)
+    _app()
+    win = QMainWindow()
+    try:
+        update_calls = []
+        monkeypatch.setattr(QMainWindow, "update", lambda self: update_calls.append(self))
+
+        assert style.apply_window_backdrop_to(win, "mica") == "mica"
+        assert update_calls == []
+    finally:
+        win.deleteLater()
+
+
+def test_backdrop_none_repaint_behaviour_is_unchanged(monkeypatch):
+    """Byte-identical-when-off guard for the "none" branch itself: this fix
+    only touches the kind != "none" path -- the shipped default (backdrop
+    off) must keep going through _reassert_window_palette/repolish exactly as
+    before, never window.update()."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    _app()
+    win = QMainWindow()
+    try:
+        update_calls = []
+        monkeypatch.setattr(QMainWindow, "update", lambda self: update_calls.append(self))
+        repolish_calls = []
+        monkeypatch.setattr(style, "repolish", lambda w: repolish_calls.append(w))
+
+        assert style.apply_window_backdrop_to(win, "none") == "none"
+        assert update_calls == []
+        assert win in repolish_calls
+    finally:
+        win.deleteLater()
+
+
+# --------------------------------------------------------------------------- #
 # gui.style wiring (Beat C2) -- detached windows pick up the current kind    #
 # --------------------------------------------------------------------------- #
 

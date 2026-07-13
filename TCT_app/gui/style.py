@@ -689,7 +689,39 @@ def set_chip_state(chip, state: str) -> None:
     repolish(chip)
 
 
+
+# Backdrop canvas passthrough (glass-gap fix, 2026-07-13): how much the
+# window's OWN unclaimed background (the QMainWindow/QDialog/#mainShell
+# canvas fill immediately below) lets a REAL DWM backdrop material (Mica/
+# Acrylic — gui/backdrop.py) show through once one is active. Deliberately
+# NOT extended to QFrame#cardPane/#channelCard (the "panel" role) or any
+# readout/text/plot/camera/danger surface — those keep painting fully
+# opaque QSS exactly as gui/backdrop.py's own module docstring already
+# documents ("every panel surface keep painting through their own opaque
+# QSS ... only the window's own unclaimed background shows the OS backdrop
+# material"); a QSS selector cannot tell a plot-hosting card from a plain
+# one, so touching the panel role risks the "content stays opaque" hard
+# rule for the widgets that actually matter. See
+# docs/design/glass_gap_findings.md for the full barrier list and why this
+# stays canvas-only. Tunable by Kaya's own eyeball (real DWM blur cannot be
+# judged from an offscreen capture) — the number itself is a placeholder.
+BACKDROP_CANVAS_ALPHA = 0.82
+
+
+def _canvas_fill(p: dict) -> str:
+    """QMainWindow/QDialog/#mainShell background — opaque ``p['bg']`` (BYTE-
+    IDENTICAL to before this existed) unless a real backdrop material is the
+    user's persisted preference, in which case it becomes an ``rgba()`` alpha
+    fill so DWM can actually show through the window's own canvas — see the
+    ``BACKDROP_CANVAS_ALPHA`` comment above for scope. Guard:
+    tests/test_theme_editor.py's canvas-passthrough tests."""
+    if get_window_backdrop() == "none":
+        return p["bg"]
+    return _rgba(p["bg"], BACKDROP_CANVAS_ALPHA)
+
+
 def build_qss(p: dict) -> str:
+    canvas_fill = _canvas_fill(p)
     return f"""
 * {{
     font-family: {SANS_FAMILY};
@@ -713,9 +745,16 @@ def build_qss(p: dict) -> str:
    (see `_apply_app_palette`) is the belt-and-braces backstop for anything
    shown as its own window without being one of those (e.g. a panel grabbed
    standalone by scripts/capture_panels.py).
-   Guard: tests/test_style_no_label_box.py. */
-QMainWindow, QDialog {{ background: {p['bg']}; }}
-QWidget#mainShell {{ background: {p['bg']}; }}
+   Guard: tests/test_style_no_label_box.py.
+   HISTORY (2026-07-13, the glass-gap fix): `canvas_fill` (computed above,
+   see `_canvas_fill`) is `p['bg']` byte-identical UNLESS a real DWM backdrop
+   material is active, in which case it is an rgba() alpha fill so the
+   backdrop can show through the window's own unclaimed background — the
+   ONE thing `gui.backdrop._prepare_window_canvas`'s transparent Window-role
+   palette was ALWAYS meant to expose, but this rule used to paint a fully
+   opaque hex directly over it regardless. */
+QMainWindow, QDialog {{ background: {canvas_fill}; }}
+QWidget#mainShell {{ background: {canvas_fill}; }}
 
 /* Text-ish widgets are transparent — they sit ON a surface, they are not one.
    Explicit (not merely "inherited by omission") so that re-introducing a
@@ -2145,11 +2184,40 @@ def apply_window_backdrop_to(window, kind: str | None = None) -> str:
     knob. ``gui/backdrop.py`` stays theme-blind; this is where style.py
     re-syncs the window's palette after a reset (see
     :func:`_reassert_window_palette`).
+
+    Theme-editor button corruption fix (2026-07-13): every ``_toggle_theme``
+    call re-runs this for EVERY top-level window, unconditionally, even when
+    the resolved kind is unchanged from what is already applied — the DWM
+    reissue is deliberate (see the apply-order-contract tests in
+    ``tests/test_backdrop.py``/``tests/test_theme_editor.py``, which assert
+    the native calls fire on every apply, not just the first). While a real
+    material is active, that reissue calls ``gui.backdrop._prepare_window_canvas``
+    again, which re-touches ``WA_TranslucentBackground`` and replaces the
+    window's OWN QPalette (Window role forced transparent) on an ALREADY
+    shown, live-composited window. Nothing after that re-touch tells Qt to
+    repaint: unlike the "none" branch below (whose ``_reassert_window_palette``
+    forces an immediate :func:`repolish` specifically so a reset "never has to
+    wait for some unrelated event to trigger the repaint that clears a stray
+    default-Qt-grey frame" — the C1 risk note), the active-material branch had
+    no equivalent safety net. On Windows, resetting a layered window's
+    translucency attribute/palette can make DWM rebuild the surface; without a
+    forced repaint request the widget tree already painted moments earlier (by
+    ``apply_theme``'s stylesheet set, which always runs first) has no
+    guarantee of being redrawn into that new surface before the next
+    unrelated paint event — a stale/garbled frame (exactly "corrupted
+    styling") until the user interacts with it. ``window.update()`` (not
+    :func:`repolish` — ``tests/test_backdrop.py::
+    test_backdrop_reassert_never_runs_while_a_real_material_is_applied`` pins
+    that ``repolish`` must never fire on this branch, since THAT primitive is
+    reserved for the palette-reset case) schedules the missing repaint without
+    touching the palette the DWM material needs to show through.
     """
     resolved = _window_backdrop if kind is None else kind
-    backdrop.apply_backdrop(window, resolved)
+    applied = backdrop.apply_backdrop(window, resolved)
     if resolved == "none":
         _reassert_window_palette(window)
+    elif applied:
+        window.update()
     return resolved
 
 
