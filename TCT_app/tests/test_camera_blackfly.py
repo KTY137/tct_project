@@ -16,10 +16,13 @@ No test touches real hardware; the simulation smoke test uses the default
 simulated backend.
 """
 import logging
+import os
 import types
 
 import numpy as np
 import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from devices.camera_blackfly import (  # noqa: E402
     BlackflyCamera,
@@ -178,6 +181,69 @@ class TestBinningWritabilityGuard:
 
 
 # --------------------------------------------------------------------------- #
+# Binning MODE — prefer Average over Sum (Kaya's "white screen at binning 2/4") #
+# --------------------------------------------------------------------------- #
+
+class _FakeCamWithModes(_FakeCam):
+    """Fake QuickSpin cam that also exposes the binning-mode enum nodes."""
+
+    def __init__(self, h_writable=True, v_writable=True,
+                 mode_writable=True, mode_available=True):
+        super().__init__(h_writable=h_writable, v_writable=v_writable)
+        self.BinningHorizontalMode = _FakeNode(
+            writable=mode_writable, available=mode_available)
+        self.BinningVerticalMode = _FakeNode(
+            writable=mode_writable, available=mode_available)
+
+
+def _fake_pyspin_with_modes():
+    ns = _fake_pyspin()
+    # Enum entry constants (opaque ints, like the real PySpin module).
+    ns.BinningHorizontalMode_Average = 1
+    ns.BinningVerticalMode_Average = 1
+    return ns
+
+
+class TestBinningModeAverage:
+    def test_set_binning_selects_average_mode_on_hw(self):
+        cam = _FakeCamWithModes()
+        c = BlackflyCamera(simulation=False)
+        c._cam = cam
+        c._pyspin = _fake_pyspin_with_modes()
+        c._acquiring = False
+
+        c.set_binning(2)
+
+        assert cam.BinningVerticalMode.value == 1     # Average enum written
+        assert cam.BinningHorizontalMode.value == 1
+        assert c._binning_mode == "Average"
+
+    def test_missing_mode_node_is_skipped_not_raised(self, caplog):
+        # A model without the mode nodes must not break set_binning.
+        cam = _FakeCam()                              # no *Mode attributes
+        c = BlackflyCamera(simulation=False)
+        c._cam = cam
+        c._pyspin = _fake_pyspin_with_modes()
+        c._acquiring = False
+        with caplog.at_level(logging.INFO, logger="devices.camera_blackfly"):
+            c.set_binning(2)                          # must NOT raise
+        assert cam.BinningVertical.value == 2
+        assert "absent" in caplog.text.lower()
+        assert c._binning_mode == "Average"           # state still updated
+
+    def test_missing_enum_constant_is_skipped(self, caplog):
+        cam = _FakeCamWithModes()
+        c = BlackflyCamera(simulation=False)
+        c._cam = cam
+        c._pyspin = _fake_pyspin()                    # no *_Average constants
+        c._acquiring = False
+        with caplog.at_level(logging.INFO, logger="devices.camera_blackfly"):
+            c.set_binning(2)
+        assert cam.BinningVerticalMode.value is None  # enum absent → skipped
+        assert "enum entry absent" in caplog.text.lower()
+
+
+# --------------------------------------------------------------------------- #
 # Simulation path stays green (default runnable, no hardware)                  #
 # --------------------------------------------------------------------------- #
 
@@ -197,4 +263,59 @@ class TestSimulationPath:
         c.connect()
         c.set_binning(2)                          # _cam is None → benign no-op
         assert c._binning == 2
+        c.disconnect()
+
+    def test_set_binning_selects_average_mode_on_sim(self):
+        c = BlackflyCamera(simulation=True)
+        c.connect()
+        assert c._binning_mode == "Sum"           # camera's raw default
+        c.set_binning(2)
+        assert c._binning == 2
+        assert c._binning_mode == "Average"       # driver prefers Average
+        c.disconnect()
+
+    def test_sim_binning_reduces_frame_dimensions(self):
+        c = BlackflyCamera(simulation=True)
+        c.connect()
+        full, _ = c.get_frame_with_meta()
+        c.set_binning(2)
+        binned, meta = c.get_frame_with_meta()
+        assert binned.shape[0] == full.shape[0] // 2
+        assert binned.shape[1] == full.shape[1] // 2
+        assert meta.width == binned.shape[1]      # meta tracks binned size
+        c.disconnect()
+
+    def test_sim_sum_saturates_but_average_does_not(self):
+        """The sim must reproduce the Sum-vs-Average intensity distinction so a
+        regression that drops the mode selection is caught: Sum at 2x2 pins the
+        beam to the format max, Average keeps it in range."""
+        c = BlackflyCamera(simulation=True, pixel_format="Mono16")
+        c.connect()
+        c._binning = 2
+
+        c._binning_mode = "Sum"
+        summed, _ = c.get_frame_with_meta()
+        c._binning_mode = "Average"
+        averaged, _ = c.get_frame_with_meta()
+
+        assert summed.max() == 65535              # Sum saturates the beam core
+        assert averaged.max() < 65535             # Average stays in range
+        c.disconnect()
+
+    def test_sim_sum_frame_not_white_after_display_path(self):
+        """Binning-2 Sum-mode sim frame → the panel display path (autoscale)
+        must NOT yield a uniform white screen: background stays dark, only the
+        saturated beam clips (the robustness fix for Kaya's white-screen bug)."""
+        from gui.camera_panel import CameraPanel
+
+        c = BlackflyCamera(simulation=True, pixel_format="Mono16")
+        c.connect()
+        c._binning = 2
+        c._binning_mode = "Sum"                   # force the raw-default bug
+        frame, _ = c.get_frame_with_meta()
+
+        disp = CameraPanel._to_display_8bit(frame)
+        assert disp.dtype == np.uint8
+        assert disp.min() < 32                    # dark background survives
+        assert not np.all(disp == 255)            # not a white screen
         c.disconnect()

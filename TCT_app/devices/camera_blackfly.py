@@ -9,7 +9,8 @@ Features implemented
 * Continuous acquisition (one BeginAcquisition per session, not per frame)
 * GenICam chunk data — FrameID, Timestamp, ExposureTime, Gain, BlackLevel
 * ROI  (OffsetX / OffsetY / Width / Height)
-* Symmetric binning  (1, 2, 4)
+* Symmetric binning  (1, 2, 4) — Average reduction mode (not Sum) to avoid
+  saturating the frame when binned
 * Pixel format selection  (Mono8 | Mono16)
 * Gamma  (enable/disable + value)
 * Black-level correction
@@ -185,6 +186,12 @@ class BlackflyCamera(BaseDevice):
         self._gamma_enabled = gamma_enabled
         self._gamma_value   = gamma_value
         self._binning       = int(binning)
+        # Reduction operation for binned pixels.  "Sum" is the camera's raw
+        # factory default and quadruples intensity at 2x2 (→ saturated-white
+        # frames); set_binning() prefers "Average" so a bin keeps intensity in
+        # range.  Tracked as state so the simulated backend reproduces the same
+        # Sum-vs-Average distinction (see _apply_binning()).
+        self._binning_mode  = "Sum"
         self._fps_target    = float(fps)
         self._auto_exposure = False
         self._auto_gain     = False
@@ -475,8 +482,15 @@ class BlackflyCamera(BaseDevice):
         node is an expected condition, logged at INFO and skipped, not an error.
         Vertical is set first because on FLIR USB3 cameras it commonly drives the
         (read-only) horizontal value.
+
+        The binning *mode* is forced to Average (see ``_set_binning_mode_average``):
+        the camera's raw default is Sum, which quadruples counts at 2x2 and pinned
+        the frame white (Kaya's bench "white screen at binning 2/4").  ``_binning_mode``
+        is updated as driver state regardless of the hardware path so the simulated
+        backend reproduces the same distinction.
         """
         self._binning = int(n)
+        self._binning_mode = "Average"
         with self.io_lock:
             if self._cam is None:
                 return
@@ -485,8 +499,48 @@ class BlackflyCamera(BaseDevice):
                 self._stop_acquisition()
             self._set_node_if_writable(self._cam.BinningVertical, n, "BinningVertical")
             self._set_node_if_writable(self._cam.BinningHorizontal, n, "BinningHorizontal")
+            self._set_binning_mode_average()
             if was:
                 self._start_acquisition()
+
+    def _set_binning_mode_average(self) -> None:
+        """Prefer Average over Sum for the binning reduction so a 2x2/4x4 bin
+        keeps pixel intensity in range instead of summing (2x2 Sum quadruples
+        counts → saturated-white frames).
+
+        ``BinningHorizontalMode`` / ``BinningVerticalMode`` are the GenICam SFNC
+        enum nodes for the reduction operation; the entry we want is ``Average``.
+        Both the nodes and the enum entry may be absent or read-only on a given
+        model / SDK build, so each write goes through the same ``IsAvailable`` /
+        ``IsWritable`` guard as the value nodes and a missing enum constant is
+        skipped, not raised.  No-op without a live camera handle (simulation
+        tracks the mode via ``self._binning_mode`` in ``set_binning``).
+        """
+        ps = self._pyspin
+        if ps is None or self._cam is None:
+            return
+        # TODO(manual needed): confirm the BinningHorizontalMode/BinningVerticalMode
+        # node names AND the "Average" enum entry spelling against the Spinnaker
+        # SFNC for the BFLY-U3-23S6M.  Taken from the GenICam SFNC standard +
+        # docs/research/camera_optics_setup.md (a source-reading hypothesis, not an
+        # in-repo datasheet); the camera's raw Sum-vs-Average default is unverified.
+        # TODO(bench): confirm 2x2 Average binning no longer produces a white frame
+        # on the real BFLY-U3-23S6M (serial 19112408) and that these nodes are
+        # writable while acquisition is stopped.
+        for node_name, mode_attr in (
+            ("BinningVerticalMode", "BinningVerticalMode_Average"),
+            ("BinningHorizontalMode", "BinningHorizontalMode_Average"),
+        ):
+            node = getattr(self._cam, node_name, None)
+            if node is None:
+                logger.info("%s node absent on this model; skipping", node_name)
+                continue
+            mode_val = getattr(ps, mode_attr, None)
+            if mode_val is None:
+                logger.info("%s enum entry absent on this SDK build; skipping",
+                            mode_attr)
+                continue
+            self._set_node_if_writable(node, mode_val, node_name)
 
     def set_roi(
         self,
@@ -869,6 +923,31 @@ class BlackflyCamera(BaseDevice):
     # Simulation                                                           #
     # ──────────────────────────────────────────────────────────────────── #
 
+    def _apply_binning(self, frame: np.ndarray) -> np.ndarray:
+        """Reduce a full-resolution frame by the current binning factor,
+        honoring the Sum-vs-Average mode — the sim twin of the camera's
+        on-sensor binning.
+
+        Sum adds the ``n x n`` block (up to ``n**2`` x the intensity) and pins to
+        the format maximum when it overflows — the "white screen at binning 2/4"
+        Kaya saw with the camera's raw Sum default.  Average keeps intensity in
+        range, which is why ``set_binning`` now selects it.  Binning 1 is a no-op.
+        """
+        n = self._binning
+        if n <= 1:
+            return frame
+        h, w = frame.shape
+        h2, w2 = (h // n) * n, (w // n) * n
+        if h2 == 0 or w2 == 0:
+            return frame
+        blocks = frame[:h2, :w2].reshape(h2 // n, n, w2 // n, n)
+        scale = 65535 if frame.dtype == np.uint16 else 255
+        if self._binning_mode == "Sum":
+            binned = blocks.sum(axis=(1, 3), dtype=np.int64)
+        else:  # "Average"
+            binned = blocks.mean(axis=(1, 3))
+        return np.clip(binned, 0, scale).astype(frame.dtype)
+
     def _simulated_frame_with_meta(self) -> tuple[np.ndarray, FrameMeta]:
         """Return a slowly drifting Gaussian beam with Poisson-like noise."""
         h, w = 480, 640
@@ -889,15 +968,19 @@ class BlackflyCamera(BaseDevice):
         scale  = 65535 if dtype == np.uint16 else 255
         signal = (beam * scale * 0.85).clip(0, scale)
         noisy  = np.random.poisson(signal.clip(0, 1e7)).clip(0, scale).astype(dtype)
+        # Apply binning last so the Sum-vs-Average distinction lands on the
+        # returned frame (Sum can saturate → white; Average stays in range).
+        noisy  = self._apply_binning(noisy)
 
+        oh, ow = noisy.shape
         meta = FrameMeta(
             frame_id     = self._sim_frame_id,
             timestamp_ns = int(t * 1e9),
             exposure_us  = self._exposure_us,
             gain_db      = self._gain_db,
             black_level  = 0.0,
-            width        = w,
-            height       = h,
+            width        = ow,
+            height       = oh,
             pixel_format = self._pixel_format,
         )
         self._sim_frame_id += 1

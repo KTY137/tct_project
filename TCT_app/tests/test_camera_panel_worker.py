@@ -19,6 +19,7 @@ import os
 import threading
 import time
 
+import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -51,6 +52,53 @@ def _pump_until(app, pred, timeout: float = 5.0) -> bool:
 def _panel(cam):
     from gui.camera_panel import CameraPanel
     return CameraPanel(cam)
+
+
+# --------------------------------------------------------------------------- #
+# Mono16 display windowing (Kaya's "aliasing" bug) — the old path was          #
+# ``(frame >> 4).astype(uint8)``: a fixed 12-bit assumption that hard-          #
+# truncated the low 8 bits, wrapping a smooth gradient every 256 counts.        #
+# --------------------------------------------------------------------------- #
+
+def test_mono16_display_uses_full_window_no_truncation(qapp):
+    """A narrow-dynamic-range Mono16 frame (values in a small band) must be
+    autoscaled across the full 0..255 display range — the old ``>>4`` path
+    left it a near-black, contrast-free band."""
+    from gui.camera_panel import CameraPanel
+
+    frame = np.linspace(1000, 1100, 64 * 64, dtype=np.uint16).reshape(64, 64)
+    disp = CameraPanel._to_display_8bit(frame)
+
+    assert disp.dtype == np.uint8
+    # New window spans the range; old truncation would not.
+    assert disp.min() <= 5 and disp.max() >= 250
+    assert int(disp.max()) - int(disp.min()) > 200
+    old = (frame >> 4).astype(np.uint8)              # the removed path
+    assert int(old.max()) - int(old.min()) < 20      # ~no contrast — the bug
+
+
+def test_mono16_display_is_monotonic_no_wrap(qapp):
+    """A full-scale 16-bit ramp (Mono16 is 12-bit left-justified, values up to
+    ~65535): the old ``>>4`` recovered 0..4095 and the uint8 cast then wrapped
+    every 256 counts (the sawtooth 'aliasing'); the windowed map is monotonic."""
+    from gui.camera_panel import CameraPanel
+
+    frame = np.linspace(0, 65535, 4096, dtype=np.uint16).reshape(64, 64)
+    disp = CameraPanel._to_display_8bit(frame).ravel().astype(int)
+    assert np.all(np.diff(disp) >= 0)                # monotonic — no wrap
+    old = (frame >> 4).astype(np.uint8).ravel().astype(int)
+    assert not np.all(np.diff(old) >= 0)             # old path wraps (sawtooth)
+
+
+def test_mono8_display_passthrough_unchanged(qapp):
+    """Mono8 frames must pass straight through the display conversion — their
+    native range already is the display range (behaviour preserved)."""
+    from gui.camera_panel import CameraPanel
+
+    frame = np.arange(256, dtype=np.uint8).reshape(16, 16)
+    disp = CameraPanel._to_display_8bit(frame)
+    assert disp.dtype == np.uint8
+    assert np.array_equal(disp, frame)
 
 
 # --------------------------------------------------------------------------- #

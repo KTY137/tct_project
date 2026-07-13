@@ -666,12 +666,47 @@ class CameraPanel(QWidget):
     # Display helpers                                                      #
     # ──────────────────────────────────────────────────────────────────── #
 
-    def _display(self, frame: np.ndarray, meta: FrameMeta) -> None:
-        # Normalise to 8-bit for display
+    @staticmethod
+    def _window_to_8bit(frame: np.ndarray) -> np.ndarray:
+        """Map a >8-bit frame to 8-bit for display via a per-frame autoscale
+        window (1st–99th percentile), replacing the old fixed
+        ``(frame >> 4).astype(uint8)``.
+
+        The old path assumed exactly 12-bit data and hard-truncated the low 8
+        bits after the shift, so a smooth 12-bit gradient wrapped every 256
+        counts (Kaya's "aliasing" bands) and any summed/binned frame pinned to
+        white.  A percentile window is robust to the actual bit depth *and* to
+        summed intensities: it stretches the frame's own 1..99 % range across
+        0..255 so the background stays dark and only genuine highlights clip.
+        Cheap enough for the render slot — two ``np.percentile`` reductions plus
+        one vectorised rescale; the one extra allocation (the float rescale
+        buffer) is unavoidable for the arithmetic.
+        """
+        lo, hi = (float(v) for v in np.percentile(frame, (1.0, 99.0)))
+        if hi <= lo:
+            # Degenerate window (near-flat frame): fall back to full min/max,
+            # then to a black frame so a constant image is not a divide-by-zero.
+            lo, hi = float(frame.min()), float(frame.max())
+            if hi <= lo:
+                return np.zeros(frame.shape, dtype=np.uint8)
+        scaled = (frame.astype(np.float32) - lo) * (255.0 / (hi - lo))
+        return np.clip(scaled, 0, 255).astype(np.uint8)
+
+    @staticmethod
+    def _to_display_8bit(frame: np.ndarray) -> np.ndarray:
+        """Convert a raw camera frame to a contiguous 8-bit display buffer.
+
+        Mono8 (uint8) passes straight through — its native range already *is*
+        the display range (behaviour preserved).  Mono16 is autoscaled through
+        ``_window_to_8bit`` (the old fixed ``>>4`` truncation is gone)."""
         if frame.dtype == np.uint16:
-            disp = (frame >> 4).astype(np.uint8)   # 12-bit effective range
-        else:
-            disp = frame
+            return CameraPanel._window_to_8bit(frame)
+        return frame   # Mono8 (or already-8-bit) — passthrough, unchanged
+
+    def _display(self, frame: np.ndarray, meta: FrameMeta) -> None:
+        # Normalise to 8-bit for display (autoscale window for 16-bit,
+        # passthrough for 8-bit) — see _to_display_8bit / _window_to_8bit.
+        disp = self._to_display_8bit(frame)
 
         h, w = disp.shape
         qimg = QImage(disp.data, w, h, w, QImage.Format_Grayscale8)
