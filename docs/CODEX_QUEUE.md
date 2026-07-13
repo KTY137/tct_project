@@ -551,3 +551,30 @@ overall Apple-styleness.
 - Fresh capture attempt from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe scripts\capture_panels.py` executed 0 captures because the venv launcher failed before Python start: `.venv\pyvenv.cfg` still points at missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`.
 - Tests: no pytest run; S1 is documentation-only. `git diff --check` passed.
 - Risk: audit uses the freshest existing complete capture set, not a newly generated capture, until the local Python/venv interpreter is repaired.
+
+## C10 - Second-opinion review: P0' wavegen-apply + routine corpus (advisory, no code edits)
+
+**Status: QUEUED** - Effort: S/M - Source: Adam free-lane rule, 2026-07-13 evening
+
+Adversarial second opinion on two fresh commits (advisory only; the Claude
+crew already has a Mary review with verdict RISK-NOTES - your job is to find
+what BOTH the implementer and Mary missed, or confirm clean):
+
+1. `git show 5c75696` - P0' per-point wavegen apply in
+   `TCT_app/controller/scan_controller.py` (+validator, +hdf5_writer, +tests).
+   Focus: dict-mutation aliasing on step.params, JSON trace robustness
+   (unicode/inf/nan in commanded values), exception-window edge cases in
+   `_run_plan`'s finally ordering, validator range-boundary logic
+   (duty 0/100, Vpp 0), anything platform-specific.
+2. `git show 7272233` - the R1-R6 routine YAMLs in `TCT_app/routines/` +
+   frozen copies under `tests/fixtures/routine_corpus/`. Focus: are the six
+   plans PHYSICALLY sensible as lab routines (ranges, step counts, HV values,
+   speeds); YAML portability (encoding, line endings vs the byte-identity
+   promise); anything that would break `ScanPlan.load_yaml` round-trips on
+   Linux (PORT1 is coming).
+
+Do NOT modify any code or YAML. Do NOT run pytest (your venv launcher is
+still broken - known, fix pending). Deliverable: append findings to this
+file per Handback protocol, ranked by severity, each with file:symbol
+citation. "Confirm clean" per area is a valid verdict if you name what you
+checked.

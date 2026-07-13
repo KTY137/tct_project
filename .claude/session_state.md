@@ -70,6 +70,17 @@ trace-semantics rows → next Kiroku batch (TECH_DEBT.md locked now).
    per-test shutdown hygiene TECH_DEBT; trunk note in test_bucket_map
    at Phase 0.5.
 
+**Part-VI parity check CLOSED (2026-07-13 evening):** experimental
+branch's test_state_fuzz variant contains NOTHING extra — its only
+unique content was the historical xfail probe for start-while-PAUSED;
+HEAD has the bug FIXED (5730644 fail-closed guard, all 4 entry points)
+and covers it with three real tests (test_state_fuzz.py:
+start_while_paused / start_z_focus_while_paused /
+start_voltage_while_paused). Worktree removal (agent-aa19d2caf98c928dd,
+slice1-ui) was DENIED by the permission classifier — needs Kaya's
+explicit go (branches keep all commits regardless). C10 second-opinion
+review enqueued on Codex lane (watcher restarted, background).
+
 ## ✅ Standing verdicts (do not re-derive)
 
 - HV gate CLOSED (`df10f8e`+`0f1c012`, Mary APPROVE, bench green).
