@@ -7,6 +7,9 @@ Loads an existing HDF5 run file and provides:
     viridis / NaN-honesty / colorbar-unit rules apply here too)
   - CCE vs. bias voltage curve (from a bias scan HDF5 file), with the
     depletion-voltage estimate drawn as an annotated line (design system §4)
+    plus a fit-quality tile row (V_dep / Quality / Flags / Ref σ, from
+    ``analysis.efield_analysis.fit_depletion_voltage`` /
+    ``compute_cce_with_uncertainty`` — see ``_update_cce_fit_tiles``)
   - Export analysis results to CSV
 
 Cockpit v5 layout (design system §7 "Analysis"): the empty state is a
@@ -16,11 +19,13 @@ swaps to a compact run-header bar over segmented 2D-map / CCE modes.
 from __future__ import annotations
 
 import csv
+import logging
 import time
 from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QListWidget, QListWidgetItem, QPushButton,
@@ -41,17 +46,68 @@ except ImportError:
     _HAS_H5 = False
 
 from analysis.cce import cce_vs_reference
+from analysis.efield_analysis import compute_cce_with_uncertainty, fit_depletion_voltage
 from analysis.map_slice import (
     display_unit_scale, mm_to_index, slice_grid_at_mm, strip_unit_suffix,
 )
 from analysis.scan_grid import grid_extent
-from gui.panel_kit import Card, FigureCard, SegmentedControl, panel_header
+from gui.panel_kit import (
+    Card, FigureCard, MetricGrid, MetricTile, SegmentedControl, panel_header,
+)
 from gui.scan_map_view import QUANTITIES, QUANTITY_UNITS, ScanMapView
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
 from gui.style import DARK, PLOT_FG, PLOT_OVERLAY, SPACE_MD, SPACE_SM
 
+logger = logging.getLogger(__name__)
+
 # How many recent .h5 files the empty-state list offers.
 _RECENT_RUNS_MAX = 8
+
+# Fit-quality tile banding (D3 — see AnalysisPanel._update_cce_fit_tiles).
+# DepletionFitResult.quality is the 0-1 heuristic documented on that
+# dataclass (bracket density + plateau flatness + monotonicity, unweighted
+# mean — see analysis/efield_analysis.py). These two thresholds turn it
+# into the Quality tile's 3-band read:
+#   quality >= _QUALITY_OK_MIN    -> "ok"   trust v_dep at face value.
+#   quality >= _QUALITY_WARN_MIN  -> "warn" usable but shaky (sparse
+#                                    bracket and/or a noisy post-crossing
+#                                    plateau) — worth a second look.
+#   quality <  _QUALITY_WARN_MIN  -> "crit" do not trust v_dep without
+#                                    checking the raw sweep by eye.
+# "ok" renders as MetricTile's "normal" (quiet grey) state, deliberately
+# NOT "good" (green): design law 1 ("quiet nominal" — the accent/green is
+# spent sparingly and never means "good",
+# docs/design/cockpit_design_system.md §1) — the same precedent
+# gui/monitor_panel.py already sets, downgrading a nominal alarm reading
+# from "good" to "normal".
+_QUALITY_OK_MIN = 0.7
+_QUALITY_WARN_MIN = 0.4
+
+
+def _flags_tile_content(fit) -> tuple[str, str]:
+    """Flags tile (value text, MetricTile state) from one
+    ``DepletionFitResult`` — "clean" when unambiguous, otherwise a badge
+    list built from the exact two sub-conditions ``fit.ambiguous`` itself
+    is defined from (``n_crossings > 1``, ``not monotonic`` — see the
+    dataclass docstring). A real charge reversal (non-monotonic) is a more
+    serious data-quality signal than sweep noise alone re-crossing an
+    already-flat threshold, so that alone earns "crit"; multiple crossings
+    on an otherwise monotonic sweep is "warn"."""
+    if not fit.ambiguous:
+        return "clean", "normal"
+    parts: list[str] = []
+    if fit.n_crossings > 1:
+        parts.append(f"AMBIGUOUS ({fit.n_crossings}×)")
+    if not fit.monotonic:
+        parts.append("NON-MONOTONIC")
+    if not parts:
+        # Defensive only: fit.ambiguous is defined as one of the two checks
+        # above, so this is unreachable given today's DepletionFitResult —
+        # kept so a future change to that contract degrades honestly
+        # instead of showing a blank badge.
+        parts.append("AMBIGUOUS")
+    state = "crit" if not fit.monotonic else "warn"
+    return ", ".join(parts), state
 
 
 class AnalysisPanel(QWidget):
@@ -401,6 +457,26 @@ class AnalysisPanel(QWidget):
             )
             self._vdep_line.setVisible(False)
             self._cce_plot.addItem(self._vdep_line)
+            # cce ± sigma (compute_cce_with_uncertainty) — only ever shown
+            # with real (nonzero) sigma content, see _update_cce_fit_tiles.
+            self._cce_errorbar = pg.ErrorBarItem(pen=pg.mkPen(DARK["accent"], width=1))
+            self._cce_errorbar.setVisible(False)
+            self._cce_plot.addItem(self._cce_errorbar)
+            # Depletion-fit bracket — the two |V| points straddling the
+            # threshold crossing — as a light shaded band. Outline + light
+            # fill is fine here (unlike the map slicer's averaging band):
+            # this plot's canvas is flat PLOT_BG, not viridis hue-encoded
+            # image data, so the "no translucency over hue data" ruling
+            # (see _build_slice_overlay) doesn't apply — same reasoning as
+            # scope_panel._int_region's shaded integration window.
+            bracket_fill = QColor(PLOT_OVERLAY)
+            bracket_fill.setAlpha(40)
+            self._cce_bracket_region = pg.LinearRegionItem(
+                movable=False, brush=pg.mkBrush(bracket_fill),
+                pen=pg.mkPen(PLOT_OVERLAY, width=1),
+            )
+            self._cce_bracket_region.setVisible(False)
+            self._cce_plot.addItem(self._cce_bracket_region)
             lay.addWidget(self._cce_figure, 1)
 
             # V_dep estimate + convention/Q_ref provenance (§4: "CCE plots
@@ -408,6 +484,20 @@ class AnalysisPanel(QWidget):
             self._lbl_vdep = QLabel("V_dep estimate: —")
             self._lbl_vdep.setObjectName("cardSubtitle")
             lay.addWidget(self._lbl_vdep)
+
+            # Fit-quality tile row (D3): V_dep / Quality / Flags / Ref σ,
+            # from analysis.efield_analysis.fit_depletion_voltage /
+            # compute_cce_with_uncertainty — see _update_cce_fit_tiles and
+            # the _QUALITY_OK_MIN/_QUALITY_WARN_MIN module comment.
+            # compact=True: a secondary detail row under the plot's hero
+            # role (same idiom as gui/monitor_panel.py's dashboard tiles).
+            self._cce_fit_tiles = MetricGrid(columns=4, compact=True)
+            self._tile_vdep: MetricTile = self._cce_fit_tiles.add_tile(("V_dep", "—"))
+            self._tile_quality: MetricTile = self._cce_fit_tiles.add_tile(("Quality", "—"))
+            self._tile_flags: MetricTile = self._cce_fit_tiles.add_tile(("Flags", "—"))
+            self._tile_ref_sigma: MetricTile = self._cce_fit_tiles.add_tile(("Ref σ", "—"))
+            lay.addWidget(self._cce_fit_tiles)
+            self._reset_cce_fit_tiles("no run loaded")
         return page
 
     # ------------------------------------------------------------------ #
@@ -529,6 +619,11 @@ class AnalysisPanel(QWidget):
                 f"{n_arrays} arrays", "good" if n_arrays else "warn"
             )
             self._replot_map()
+            # A new run's CCE tiles/label/line may not still apply to the
+            # PREVIOUS run's fit — same "reset on load" reasoning as
+            # _replot_map's own _reset_slice_state() call; recomputed fresh
+            # the next time "Plot CCE vs bias" runs.
+            self._reset_cce_fit_tiles("not yet plotted")
             self._stack.setCurrentIndex(1)
             return True
         except Exception as exc:
@@ -885,6 +980,28 @@ class AnalysisPanel(QWidget):
             currents = self._data.get("leakage_A")
         return voltages, charges, currents
 
+    def _reset_cce_fit_tiles(self, reason: str) -> None:
+        """Put the 4 fit-quality tiles — and the pre-existing V_dep label/
+        line, which show the exact same computed quantity — into an honest
+        "nothing current to say" state. Called on every new run load (see
+        ``load_run``, mirroring ``_reset_slice_state``'s "a previous run's
+        state may not still apply" reasoning) and whenever ``_plot_cce``
+        cannot produce a usable fit, so a stale run's numbers are never left
+        on screen (law 4 / the stale-run provenance fix, 7892a26). A no-op
+        before the tiles exist (no pyqtgraph) or are built."""
+        if not (_HAS_PG and hasattr(self, "_tile_vdep")):
+            return
+        for tile in (self._tile_vdep, self._tile_quality, self._tile_flags,
+                     self._tile_ref_sigma):
+            tile.set_value("—")
+            tile.set_state("normal")
+            tile.set_stale(True, reason)
+            tile.setToolTip("")
+        self._vdep_line.setVisible(False)
+        self._lbl_vdep.setText("V_dep estimate: —")
+        self._cce_errorbar.setVisible(False)
+        self._cce_bracket_region.setVisible(False)
+
     def _plot_cce(self) -> None:
         if not _HAS_PG or (not self._data and not self._voltage_scan):
             return
@@ -894,6 +1011,7 @@ class AnalysisPanel(QWidget):
         if voltages is None or charges is None:
             from PySide6.QtWidgets import QMessageBox
             self._chip_dataset.set_status("No bias data", "warn")
+            self._reset_cce_fit_tiles("no bias data")
             QMessageBox.warning(
                 self, "No bias data",
                 "No 'voltage_scan/voltage_V' + 'voltage_scan/charge_pC' "
@@ -918,28 +1036,148 @@ class AnalysisPanel(QWidget):
             i_scaled = i_ua / max(np.max(np.abs(i_ua)), 1e-12)
             self._cce_curve_iv.setData(voltages, i_scaled)
 
-        # Estimate V_dep: voltage where CCE reaches 98% of plateau — drawn
-        # as an annotated line on the curve (§4), plus the text footnote.
+        # Depletion-voltage fit + CCE uncertainty -> the V_dep/Quality/
+        # Flags/Ref σ tiles (D3) and the pre-existing V_dep label/line
+        # (unchanged behaviour: a line only ever appears when v_dep is not
+        # None). Both analysis.efield_analysis functions are documented to
+        # never raise on bad/degenerate input (they feed a GUI tile) — the
+        # try/except below is a defensive backstop for a genuinely
+        # unexpected failure, not the normal path for "sweep too short to
+        # fit"; that normal, structured case is read honestly off
+        # DepletionFitResult.v_dep == None inside _update_cce_fit_tiles,
+        # with its own narrower warning log. This replaces a bare
+        # "except Exception: pass" that used to swallow real failures
+        # silently and leave whatever the tiles/line last showed on screen.
         try:
-            from analysis.efield_analysis import estimate_depletion_voltage
             v_arr = np.asarray(voltages, dtype=float)
             q_arr = np.asarray(charges, dtype=float)
-            v_dep_mag = estimate_depletion_voltage(v_arr, q_arr)
-            if v_dep_mag is not None:
-                # estimate_depletion_voltage() always returns a positive
-                # magnitude (|V|) — re-apply the bias sign convention read
-                # from the DATA itself (never guessed) so the marker lands
-                # on the same side / within the range of the plotted points.
-                finite_v = v_arr[np.isfinite(v_arr)]
-                negative_bias = finite_v.size > 0 and float(np.nanmedian(finite_v)) < 0
-                v_dep_signed = -v_dep_mag if negative_bias else v_dep_mag
-                self._lbl_vdep.setText(
-                    f"V_dep estimate: {v_dep_signed:+.1f} V (|V| convention)")
-                self._vdep_line.setValue(float(v_dep_signed))
-                self._vdep_line.setVisible(True)
-                self._chip_dataset.set_status(f"Vdep {v_dep_signed:+.1f} V", "info")
-        except Exception:
-            pass
+            fit = fit_depletion_voltage(v_arr, q_arr)
+            cce_result = compute_cce_with_uncertainty(q_arr, q_ref)
+            self._update_cce_fit_tiles(fit, cce_result, v_arr)
+        except Exception as exc:
+            logger.warning(
+                "CCE fit-quality tiles failed for run %r: %s",
+                self._run_path, exc)
+            self._reset_cce_fit_tiles("fit unavailable")
+
+    def _update_cce_fit_tiles(self, fit, cce_result, v_arr: np.ndarray) -> None:
+        """Populate the V_dep / Quality / Flags / Ref σ tiles (+ the
+        pre-existing V_dep label/line) from one ``DepletionFitResult`` and
+        one ``CCEResult`` — the only place either dataclass's fields become
+        pixels. V_dep/Quality/Flags are treated as one unit (all derived
+        from the SAME ``fit``): a degenerate fit (``fit.v_dep is None`` —
+        an under-sampled or all-NaN sweep) takes the whole tile row back to
+        the honest "nothing to say" state via ``_reset_cce_fit_tiles``
+        rather than showing a fake-precise quality=0.00/AMBIGUOUS badge
+        computed from zero real points."""
+        if fit.v_dep is None:
+            logger.warning(
+                "Depletion-voltage fit unavailable for run %r: %s",
+                self._run_path, fit.notes or "no usable data")
+            self._reset_cce_fit_tiles(fit.notes or "fit unavailable")
+            return
+
+        # fit_depletion_voltage() only ever returns a positive |V|
+        # magnitude — re-apply the bias sign convention read from the DATA
+        # itself (never guessed) so the marker/tile land on the same side /
+        # within the range of the plotted points.
+        finite_v = v_arr[np.isfinite(v_arr)]
+        negative_bias = finite_v.size > 0 and float(np.nanmedian(finite_v)) < 0
+        v_dep_signed = -fit.v_dep if negative_bias else fit.v_dep
+
+        self._lbl_vdep.setText(
+            f"V_dep estimate: {v_dep_signed:+.1f} V (|V| convention)")
+        self._vdep_line.setValue(float(v_dep_signed))
+        self._vdep_line.setVisible(True)
+        self._chip_dataset.set_status(f"Vdep {v_dep_signed:+.1f} V", "info")
+
+        self._tile_vdep.set_value(f"{v_dep_signed:+.1f} ± {fit.v_dep_sigma:.1f} V")
+        self._tile_vdep.set_state("normal")
+        self._tile_vdep.set_stale(False, "")
+        self._tile_vdep.setToolTip(
+            f"method={fit.method}, threshold_frac={fit.threshold_frac:.3g}, "
+            f"n_points={fit.n_points}, bracket="
+            + (f"[{fit.bracket[0]:.3g}, {fit.bracket[1]:.3g}] V" if fit.bracket
+               else "None (crossing at the lowest sampled |V|)"))
+
+        # Quality banding — see the _QUALITY_OK_MIN/_QUALITY_WARN_MIN
+        # module comment for the thresholds and their rationale.
+        if fit.quality >= _QUALITY_OK_MIN:
+            q_state = "normal"   # "ok" — quiet nominal (design law 1)
+        elif fit.quality >= _QUALITY_WARN_MIN:
+            q_state = "warn"
+        else:
+            q_state = "crit"
+        self._tile_quality.set_value(f"{fit.quality:.2f}")
+        self._tile_quality.set_state(q_state)
+        self._tile_quality.set_stale(False, "")
+        self._tile_quality.setToolTip(
+            fit.notes or "bracket density + plateau flatness + monotonicity "
+                         "(see DepletionFitResult docstring)")
+
+        flags_text, flags_state = _flags_tile_content(fit)
+        self._tile_flags.set_value(flags_text)
+        self._tile_flags.set_state(flags_state)
+        self._tile_flags.set_stale(False, "")
+        self._tile_flags.setToolTip(fit.notes or "no ambiguity flags")
+
+        self._update_ref_sigma_tile(cce_result)
+
+        # cce ± sigma overlay — only when there is real (nonzero, finite)
+        # sigma content: with today's single-Q_ref data model (the manual
+        # spin box, no repeated reference-channel readings) sigma is
+        # normally all-zero — see CCEResult's own honesty notes.
+        finite = (np.isfinite(cce_result.sigma) & np.isfinite(cce_result.cce)
+                  & np.isfinite(v_arr))
+        if finite.any() and np.any(cce_result.sigma[finite] != 0):
+            self._cce_errorbar.setData(
+                x=v_arr[finite], y=cce_result.cce[finite],
+                height=2.0 * cce_result.sigma[finite],
+            )
+            self._cce_errorbar.setVisible(True)
+        else:
+            self._cce_errorbar.setVisible(False)
+
+        # Depletion-fit bracket — the two |V| points straddling the
+        # threshold crossing — converted to the SAME signed convention as
+        # the plotted x-axis (fit.bracket itself is always a |V| pair).
+        if fit.bracket is not None:
+            lo, hi = fit.bracket
+            region = (-hi, -lo) if negative_bias else (lo, hi)
+            self._cce_bracket_region.setRegion(region)
+            self._cce_bracket_region.setVisible(True)
+        else:
+            self._cce_bracket_region.setVisible(False)
+
+    def _update_ref_sigma_tile(self, cce_result) -> None:
+        """Ref σ tile: the CCE-uncertainty reference term
+        (``ref_std``/``ref_mean``, as a relative percentage) plus the
+        ``q_term_included`` honesty caveat from ``CCEResult`` — kept
+        VISIBLE as the tile's own caption (never tooltip-only) per the D3
+        brief, since it explains what the ± sigma on the plot does and does
+        not include."""
+        ref_mean, ref_std = cce_result.ref_mean, cce_result.ref_std
+        if not (np.isfinite(ref_mean) and ref_mean != 0 and np.isfinite(ref_std)):
+            self._tile_ref_sigma.set_value("—")
+            self._tile_ref_sigma.set_state("normal")
+            self._tile_ref_sigma.set_stale(True, "reference undefined")
+            self._tile_ref_sigma.setToolTip(cce_result.notes)
+            return
+        rel_pct = 100.0 * ref_std / ref_mean
+        self._tile_ref_sigma.set_value(f"{rel_pct:.1f}%")
+        self._tile_ref_sigma.set_state("normal")
+        self._tile_ref_sigma.set_stale(False)
+        # q_term_included is False whenever charge_sigma_pC was left at its
+        # 0 default (today's only call site, _plot_cce) — the caveat this
+        # tile exists to surface, visible as the caption, not buried in a
+        # tooltip a reader has to think to hover for.
+        caption = ("ref-scatter only, no charge-noise term"
+                   if not cce_result.q_term_included else
+                   "includes charge-noise term")
+        self._tile_ref_sigma.set_caption(caption)
+        self._tile_ref_sigma.setToolTip(
+            f"ref_std={ref_std:.4g} pC, ref_mean={ref_mean:.4g} pC "
+            f"(n_ref={cce_result.n_ref}) — {cce_result.notes}")
 
     def _export_cce_csv(self) -> None:
         if not self._data and not self._voltage_scan:

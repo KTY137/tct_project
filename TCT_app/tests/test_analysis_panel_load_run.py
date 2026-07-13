@@ -9,6 +9,7 @@ pytest-qt) used by test_panel_kit_rollout_batch3.py.
 from __future__ import annotations
 
 import csv
+import logging
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -846,3 +847,269 @@ def test_quantity_switch_to_absent_quantity_clears_profile_honestly(tmp_path):
     # previous quantity's.
     assert panel._slice_figure.plot.getAxis("left").labelUnits == "s"
     assert "0/" in panel._slice_figure._subtitle_label.text()
+
+
+# --------------------------------------------------------------------------- #
+# CCE fit-quality tiles (D3): V_dep / Quality / Flags / Ref σ                 #
+# --------------------------------------------------------------------------- #
+
+def test_cce_fit_tiles_start_stale_before_any_load():
+    """Construction-time state — no run loaded yet: honest em-dash + stale,
+    never the bare MetricTile default ('-')."""
+    _app()
+    panel = AnalysisPanel()
+    for tile in (panel._tile_vdep, panel._tile_quality, panel._tile_flags,
+                 panel._tile_ref_sigma):
+        assert tile.value() == "—"
+        assert tile.is_stale()
+
+
+def test_cce_fit_tiles_populate_from_known_knee_dataset():
+    """A clean, unambiguous bias sweep with a well-defined knee — tiles
+    match what fit_depletion_voltage/compute_cce_with_uncertainty actually
+    compute (never a hand-hardcoded magic number, so this stays correct if
+    the fit formula is ever tuned)."""
+    from analysis.efield_analysis import compute_cce_with_uncertainty, fit_depletion_voltage
+
+    _app()
+    panel = AnalysisPanel()
+    bias = np.array([0.0, -20.0, -40.0, -60.0, -80.0, -100.0])
+    charge = np.array([-0.1, -0.6, -0.95, -0.99, -1.0, -1.0])
+    panel._data = {"bias_V": bias, "dut_charge_pC": charge}
+
+    panel._plot_cce()
+
+    fit = fit_depletion_voltage(bias, charge)
+    assert fit.v_dep is not None
+    assert fit.quality >= 0.7            # this fixture IS the "ok" case
+    assert fit.ambiguous is False
+
+    assert not panel._tile_vdep.is_stale()
+    v_dep_signed = -fit.v_dep            # median bias is negative
+    assert panel._tile_vdep.value() == f"{v_dep_signed:+.1f} ± {fit.v_dep_sigma:.1f} V"
+    assert panel._tile_vdep.state() == "normal"
+
+    assert panel._tile_quality.value() == f"{fit.quality:.2f}"
+    assert panel._tile_quality.state() == "normal"   # "ok" band -> quiet, not green
+    assert not panel._tile_quality.is_stale()
+
+    assert panel._tile_flags.value() == "clean"
+    assert panel._tile_flags.state() == "normal"
+    assert not panel._tile_flags.is_stale()
+
+    cce_result = compute_cce_with_uncertainty(charge, panel._spin_ref_charge.value())
+    assert not panel._tile_ref_sigma.is_stale()
+    expected_pct = 100.0 * cce_result.ref_std / cce_result.ref_mean
+    assert panel._tile_ref_sigma.value() == f"{expected_pct:.1f}%"
+
+    # Today's data model (a single manual Q_ref, no repeated reference
+    # readings) makes ref_std == 0 -> sigma is identically zero -> the
+    # error-bar overlay stays hidden (see _update_cce_fit_tiles).
+    assert cce_result.q_term_included is False
+    assert panel._cce_errorbar.isVisible() is False
+    assert panel._vdep_line.isVisible() is True
+
+
+def test_cce_ref_sigma_caveat_visible_when_q_term_not_included():
+    """The reference-scatter-only caveat (q_term_included is False) must be
+    a VISIBLE caption, not buried in a tooltip only."""
+    _app()
+    panel = AnalysisPanel()
+    bias = np.array([0.0, -20.0, -40.0, -60.0, -80.0, -100.0])
+    charge = np.array([-0.1, -0.6, -0.95, -0.99, -1.0, -1.0])
+    panel._data = {"bias_V": bias, "dut_charge_pC": charge}
+
+    panel._plot_cce()
+
+    caption_label = panel._tile_ref_sigma._caption
+    # isHidden() (not isVisible()) is the correct QWidget check in a
+    # headless test: the panel is never .show()n, so isVisible()'s
+    # ancestor-chain/top-level requirement would read False regardless of
+    # this label's own flag — same caveat test_slice_controls_hidden_
+    # until_toggled_on documents for _slice_figure.
+    assert not caption_label.isHidden()
+    assert "ref-scatter only" in caption_label.text()
+    # Full numeric provenance is additionally reachable via tooltip.
+    assert "ref_mean=" in panel._tile_ref_sigma.toolTip()
+
+
+def test_cce_fit_tiles_flags_warn_state_multiple_crossings():
+    """Multiple threshold crossings but still monotonic up to the crossing
+    -> ambiguous, 'warn' (not 'crit' — that is reserved for a real charge
+    dip, see the non-monotonic test below)."""
+    from analysis.efield_analysis import fit_depletion_voltage
+
+    _app()
+    panel = AnalysisPanel()
+    bias = np.array([0.0, -20.0, -40.0, -60.0, -80.0, -100.0])
+    charge = np.array([-0.1, -0.6, -0.99, -0.80, -1.0, -1.0])
+    panel._data = {"bias_V": bias, "dut_charge_pC": charge}
+
+    panel._plot_cce()
+
+    fit = fit_depletion_voltage(bias, charge)
+    assert fit.ambiguous is True
+    assert fit.n_crossings > 1
+    assert fit.monotonic is True
+
+    assert panel._tile_flags.state() == "warn"
+    assert "AMBIGUOUS" in panel._tile_flags.value()
+    assert f"{fit.n_crossings}" in panel._tile_flags.value()
+    assert "NON-MONOTONIC" not in panel._tile_flags.value()
+    assert not panel._tile_flags.is_stale()
+
+
+def test_cce_fit_tiles_flags_crit_state_non_monotonic():
+    """A real charge dip BEFORE the threshold crossing -> non-monotonic ->
+    'crit' (a more serious data-quality signal than noise-driven
+    re-crossings alone)."""
+    from analysis.efield_analysis import fit_depletion_voltage
+
+    _app()
+    panel = AnalysisPanel()
+    bias = np.array([0.0, -20.0, -40.0, -60.0, -80.0, -100.0])
+    charge = np.array([-0.1, -0.6, -0.3, -0.95, -0.99, -1.0])
+    panel._data = {"bias_V": bias, "dut_charge_pC": charge}
+
+    panel._plot_cce()
+
+    fit = fit_depletion_voltage(bias, charge)
+    assert fit.ambiguous is True
+    assert fit.monotonic is False
+
+    assert panel._tile_flags.state() == "crit"
+    assert "NON-MONOTONIC" in panel._tile_flags.value()
+
+
+def test_cce_fit_tiles_all_nan_data_degrades_honestly(caplog):
+    """Degenerate (all-NaN) bias/charge data: no crash, em-dash tiles, a
+    logged warning naming the run, and no InfiniteLine — the honest
+    degraded state that replaced the old silent 'except Exception: pass'."""
+    _app()
+    panel = AnalysisPanel()
+    panel._data = {
+        "bias_V": np.full(6, np.nan),
+        "dut_charge_pC": np.full(6, np.nan),
+    }
+    panel._run_path = "synthetic_all_nan_run.h5"
+
+    with caplog.at_level(logging.WARNING, logger="gui.analysis_panel"):
+        panel._plot_cce()   # must not raise
+
+    assert panel._tile_vdep.value() == "—"
+    assert panel._tile_vdep.is_stale()
+    assert panel._tile_quality.value() == "—"
+    assert panel._tile_quality.is_stale()
+    assert panel._tile_flags.value() == "—"
+    assert panel._tile_flags.is_stale()
+    assert panel._tile_ref_sigma.value() == "—"
+    assert panel._tile_ref_sigma.is_stale()
+
+    assert panel._vdep_line.isVisible() is False
+    assert panel._cce_errorbar.isVisible() is False
+    assert panel._cce_bracket_region.isVisible() is False
+
+    assert any(
+        "depletion" in rec.message.lower() and "synthetic_all_nan_run.h5" in rec.message
+        for rec in caplog.records
+    ), f"expected a logged depletion-fit warning, got: {[r.message for r in caplog.records]}"
+
+
+def test_cce_fit_tiles_unexpected_exception_is_caught_logged_and_degrades(monkeypatch, caplog):
+    """A genuinely unexpected failure (not the structured 'v_dep is None'
+    case) must still be caught, logged, and degrade the tiles honestly —
+    the panel must never crash on garbage data."""
+    _app()
+    panel = AnalysisPanel()
+    bias = np.array([0.0, -20.0, -40.0, -60.0, -80.0, -100.0])
+    charge = np.array([-0.1, -0.6, -0.95, -0.99, -1.0, -1.0])
+    panel._data = {"bias_V": bias, "dut_charge_pC": charge}
+    # First plot successfully so the tiles carry real values...
+    panel._plot_cce()
+    assert not panel._tile_vdep.is_stale()
+
+    def _boom(*a, **k):
+        raise RuntimeError("synthetic failure")
+    monkeypatch.setattr("gui.analysis_panel.fit_depletion_voltage", _boom)
+
+    with caplog.at_level(logging.WARNING, logger="gui.analysis_panel"):
+        panel._plot_cce()   # ...then a patched-in failure must not raise
+
+    assert panel._tile_vdep.value() == "—"
+    assert panel._tile_vdep.is_stale()
+    assert panel._vdep_line.isVisible() is False
+    assert any("synthetic failure" in rec.message for rec in caplog.records)
+
+
+def test_cce_errorbar_shown_only_when_sigma_nonzero(monkeypatch):
+    """The cce ± sigma overlay only ever appears with real sigma content —
+    today's single-Q_ref data model always yields all-zero sigma (see the
+    'known knee' test above); this exercises the POSITIVE branch directly
+    via a synthetic CCEResult, since production data can't produce it yet."""
+    from analysis.efield_analysis import CCEResult
+
+    _app()
+    panel = AnalysisPanel()
+    bias = np.array([0.0, -20.0, -40.0, -60.0, -80.0, -100.0])
+    charge = np.array([-0.1, -0.6, -0.95, -0.99, -1.0, -1.0])
+    panel._data = {"bias_V": bias, "dut_charge_pC": charge}
+
+    panel._plot_cce()
+    assert panel._cce_errorbar.isVisible() is False   # today's real data model
+
+    fake = CCEResult(
+        cce=np.abs(charge), sigma=np.full(6, 0.05), ref_mean=1.0, ref_std=0.05,
+        n_ref=3, charge_sigma_pC=0.0, q_term_included=False, notes="synthetic",
+    )
+    monkeypatch.setattr(
+        "gui.analysis_panel.compute_cce_with_uncertainty", lambda *a, **k: fake)
+
+    panel._plot_cce()
+
+    assert panel._cce_errorbar.isVisible() is True
+    assert len(panel._cce_errorbar.opts["x"]) == 6
+
+
+def test_switching_to_run_without_cce_data_clears_fit_tiles(tmp_path):
+    """Loading a run WITHOUT bias data right after one WITH bias data must
+    not leave the previous run's fit-quality tiles/line on screen."""
+    _app()
+    h5_cce = _write_voltage_scan_run(tmp_path / "run_tiles_a")
+    h5_map = _write_tiny_run(tmp_path / "run_tiles_b")   # xy map run, no bias data
+    panel = AnalysisPanel(runs_dir=tmp_path)
+
+    assert panel.load_run(h5_cce) is True
+    panel._plot_cce()
+    assert not panel._tile_vdep.is_stale()
+    assert panel._tile_vdep.value() != "—"
+    assert panel._vdep_line.isVisible() is True
+
+    assert panel.load_run(h5_map) is True
+
+    for tile in (panel._tile_vdep, panel._tile_quality, panel._tile_flags,
+                 panel._tile_ref_sigma):
+        assert tile.is_stale()
+        assert tile.value() == "—"
+    assert panel._vdep_line.isVisible() is False
+
+
+def test_no_bias_data_plot_click_resets_fit_tiles(monkeypatch):
+    """Clicking 'Plot CCE vs bias' on a run with no bias data at all must
+    also honestly reset the tiles (not just leave them at whatever a PRIOR
+    successful plot showed)."""
+    _app()
+    panel = AnalysisPanel()
+    bias = np.array([0.0, -20.0, -40.0, -60.0, -80.0, -100.0])
+    charge = np.array([-0.1, -0.6, -0.95, -0.99, -1.0, -1.0])
+    panel._data = {"bias_V": bias, "dut_charge_pC": charge}
+    panel._plot_cce()
+    assert not panel._tile_vdep.is_stale()
+
+    panel._data = {"dut_amplitude_V": np.array([1.0, 2.0])}   # no bias_V/charge at all
+    monkeypatch.setattr(
+        "PySide6.QtWidgets.QMessageBox.warning", staticmethod(lambda *a, **k: None))
+
+    panel._plot_cce()
+
+    assert panel._tile_vdep.is_stale()
+    assert panel._tile_vdep.value() == "—"
