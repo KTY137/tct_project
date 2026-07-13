@@ -312,6 +312,35 @@ def test_glass_pane_registry_is_opt_in_and_excludes_plot_containers():
         panel_kit.set_panel_glass(False)
 
 
+def test_register_glass_pane_after_switch_is_already_on_adopts_it_immediately():
+    """Late-joiner consistency: a pane built (and registered) AFTER the user
+    already flipped "Panel glass" on must not sit flat until the next toggle
+    — it should pick up glassPane=true the moment it registers."""
+    _app()
+    early = Card("Built before the switch")
+    panel_kit.register_glass_pane(early)
+    try:
+        panel_kit.set_panel_glass(True)
+        assert early.property("glassPane") == "true"
+
+        late = Card("Built after the switch was already on")
+        assert not late.property("glassPane")   # not registered yet
+        panel_kit.register_glass_pane(late)
+        # No second set_panel_glass() call in between -- registration alone
+        # must apply the already-active state.
+        assert late.property("glassPane") == "true"
+    finally:
+        panel_kit.set_panel_glass(False)
+    assert not early.property("glassPane")
+    assert not late.property("glassPane")
+
+    # And the mirror case: registering while the switch is off must never
+    # pre-emptively turn it on.
+    off_pane = Card("Built while switch is off")
+    panel_kit.register_glass_pane(off_pane)
+    assert not off_pane.property("glassPane")
+
+
 def test_set_panel_glass_survives_a_destroyed_registered_pane():
     """A registered pane can be torn down while the switch is still toggled —
     set_panel_glass must skip the dead C++ object, not raise."""

@@ -929,6 +929,11 @@ class EmptyState(QWidget):
 # alive by this module (mirrors gui/backdrop._backdrop_applied_windows).
 _GLASS_PANE_REGISTRY: "weakref.WeakSet[QWidget]" = weakref.WeakSet()
 
+# Mirrors the last value passed to set_panel_glass, so a pane registered
+# AFTER the switch is already on adopts the current state immediately
+# instead of waiting for the next toggle (late-joiner consistency).
+_GLASS_ENABLED = False
+
 
 def register_glass_pane(widget: QWidget) -> None:
     """Opt *widget* (a ``Card`` / ``QGroupBox`` / ``#cardPane`` frame) INTO the
@@ -944,12 +949,20 @@ def register_glass_pane(widget: QWidget) -> None:
     simply never being registered — the property is opt-in per instance, there
     is no blanket selector — and a guard test pins that those never carry the
     property (``tests/test_panel_kit_cockpit.py``).
+
+    Late-joiner consistency: if the switch is already ON when *widget*
+    registers (e.g. a lazily-built tab/panel constructed after the user
+    flipped "Panel glass"), the pane picks up ``glassPane=true`` right away
+    instead of staying flat until the next toggle.
     """
     if isinstance(widget, FigureCard):
         raise ValueError(
             "panel glass is banned on plot/figure containers "
             "(cockpit hard rule 3 — no translucency over a live plot/camera)")
     _GLASS_PANE_REGISTRY.add(widget)
+    if _GLASS_ENABLED:
+        widget.setProperty("glassPane", "true")
+        repolish(widget)
 
 
 def registered_glass_panes() -> list[QWidget]:
@@ -961,14 +974,17 @@ def set_panel_glass(enabled: bool) -> None:
     """Turn the experimental panel-glass tint ON/OFF for every REGISTERED safe
     pane (and only those), repolishing each so the ``glassPane`` QSS selector
     re-evaluates immediately. Defensive against a pane whose C++ object was
-    already destroyed (registered then torn down while the switch toggles)."""
-    from gui.style import repolish
+    already destroyed (registered then torn down while the switch toggles).
+    Also records the state module-wide so a pane registered later (see
+    :func:`register_glass_pane`) adopts it immediately."""
+    global _GLASS_ENABLED
+    _GLASS_ENABLED = bool(enabled)
     try:
         from shiboken6 import isValid
     except Exception:                       # pragma: no cover - shiboken always present
         def isValid(_w):  # type: ignore[misc]
             return True
-    flag = "true" if enabled else ""
+    flag = "true" if _GLASS_ENABLED else ""
     for w in list(_GLASS_PANE_REGISTRY):
         if not isValid(w):
             continue

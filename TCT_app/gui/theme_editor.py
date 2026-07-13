@@ -661,22 +661,43 @@ class ThemeEditorDialog(QDialog):
         current backdrop draft: a live DWM material needs a fully-opaque window
         (a layered <100% window suppresses it), so while one is active the
         slider is pinned to 100% and disabled with a visible note explaining
-        why — never a silent clamp (Task 1c)."""
+        why — never a silent clamp (Task 1c).
+
+        Neither branch touches the STORED preference (``_draft_window_opacity``
+        / the settings key) or the global ``style._window_opacity`` — those are
+        the user's actual choice, not what the material temporarily forces. The
+        real (compositor) opacity is kept coherent separately, by
+        ``style.apply_window_opacity``'s own backdrop-aware pin (``effective =
+        1.0 if backdrop != "none" else value``), which every caller of this
+        method already re-invokes after a backdrop change. While active, the
+        slider DISPLAY only is pinned to 100% (``_force_opacity_to_full``, a
+        display-only cousin of ``_sync_opacity_control``); once back to "none",
+        the slider display is restored from the stored draft the same way
+        (Mary's gate review of 7cb2bd3 — this used to clobber the stored
+        preference to 1.0 on every construction with an active backdrop)."""
         active = self._draft_backdrop != "none"
         self._opacity_slider.setEnabled(not active)
         self._opacity_backdrop_note.setVisible(active)
         if active:
             self._force_opacity_to_full()
+        else:
+            self._sync_opacity_control()
 
     def _force_opacity_to_full(self) -> None:
-        """Pin window opacity to 100% (slider display + draft + global state +
-        store) — used when a backdrop material becomes active."""
+        """Pin the opacity slider's DISPLAY to 100% while a backdrop material
+        is active — display-only. Must NOT mutate the stored preference
+        (``_draft_window_opacity``, the settings key) or the global
+        ``style._window_opacity``: the effective (compositor) opacity is
+        already pinned separately by ``style.apply_window_opacity``'s
+        backdrop-aware pin, which reads the real backdrop state directly
+        rather than this slider. Mutating storage here silently clobbered the
+        user's chosen translucency the instant a backdrop was active —
+        including at dialog construction, before the user touched anything
+        (Mary's gate review of 7cb2bd3)."""
         self._opacity_slider.blockSignals(True)
         self._opacity_slider.setValue(100)
         self._opacity_slider.blockSignals(False)
         self._opacity_value_label.setText("100%")
-        self._draft_window_opacity = style.set_window_opacity(1.0)
-        self._persist_window_opacity()
 
     def _on_panel_glass_toggled(self, checked: bool) -> None:
         """Experimental "Panel glass" switch — live AND auto-persisted (a

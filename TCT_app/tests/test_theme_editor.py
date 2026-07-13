@@ -1105,12 +1105,21 @@ def test_backdrop_pins_and_disables_opacity_with_a_visible_note(tmp_path, monkey
     assert dlg._opacity_slider.isEnabled() is False
     assert dlg._opacity_slider.value() == 100
     assert dlg._opacity_backdrop_note.isHidden() is False
-    assert style.get_window_opacity() == pytest.approx(1.0)
+    # The slider DISPLAY pins to 100%, but the STORED preference must survive
+    # untouched while the backdrop is active -- the effective (compositor)
+    # pin to full opacity is a separate, already-covered concern (see
+    # tests/test_backdrop.py::test_apply_window_opacity_pinned_to_full_while_backdrop_active).
+    # A dialog that merely has a backdrop active (including at construction)
+    # must never clobber the user's actual translucency preference.
+    assert style.get_window_opacity() == pytest.approx(0.88)
 
-    # Back to none: the slider re-enables and the note hides again.
+    # Back to none: the slider re-enables, the note hides, AND the slider
+    # display returns to the stored preference -- never left stuck at 100.
     dlg._backdrop_combo.setCurrentIndex(dlg._backdrop_combo.findData("none"))
     assert dlg._opacity_slider.isEnabled() is True
     assert dlg._opacity_backdrop_note.isHidden() is True
+    assert dlg._opacity_slider.value() == 88
+    assert style.get_window_opacity() == pytest.approx(0.88)
     style.reset_theme_customization()
 
 
