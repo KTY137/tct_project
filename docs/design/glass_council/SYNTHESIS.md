@@ -9,6 +9,16 @@
 | **Inputs (binding)** | All 10 council lanes (`docs/design/glass_council/`: BRIEF, brokkr, thor, ratatoskr, ymir, baldr, volundr, tyr, frigg + loki attack pass + fenrir kill floor), `docs/design/glass_gap_findings.md`, `docs/DECISIONS.md` (2026-07-13 QML-hybrid entry), `docs/ROADMAP_MASTERPLAN.md` U-track, `docs/CAPABILITY_MODEL.md` (layering-law precedent), commit `2cf720b` (attr-20 fix, landed after the lanes wrote) |
 | **Supersedes** | Nothing yet — §8 lists exactly what it re-ratifies once Kaya nods |
 
+---
+
+**⚠ MEASURED CORRECTIONS (2026-07-14)** — This document's §-rows below are superseded where marked:
+
+1. **Path-D law refuted (commit 353072f spike + 081da40 fix).** A window containing a live `QOpenGLWidget` child kept its DWM material (Mica 84/84/84, Acrylic 32/32/32), indistinguishable from a GL-free control on Qt 6.11.1 / Win11 26200. The barrier was never the GL child — it was **attribute order**. Setting `WA_TranslucentBackground` *after* the native HWND exists prevented the surface from getting an alpha channel, so DWM returned S_OK but nothing composited. Commit 081da40 (G-B1) pins this ordering and fixes the attribute assertion, and the main window *does* frost on real hardware.
+
+2. **G0 RHI criterion inverted (commit 353072f spike).** A QQuickWindow with `color: "transparent"` + the **OpenGL RHI** renders real glass on Win11; the same shell on **D3D11** shows flat white (Qt 6.11 does not create a DirectComposition swapchain there; flip-model present loses alpha). `gui/main.py`'s OpenGL pin is load-bearing, not dead weight. As written, G0's P1 pass criterion names the D3D RHI — the configuration known to fail.
+
+---
+
 The key words **MUST**, **MUST NOT**, **NEVER**, and **LAW** are used as in
 `docs/CAPABILITY_MODEL.md`: LAW is constitution-class, changed only with
 Kaya's explicit per-change approval. References are **symbol-anchored**
@@ -51,6 +61,8 @@ Kaya, tonight, verbatim:
    — our own material renderer, our own composition rules, built on Qt
    Quick primitives rather than forked from them, so it stays
    maintainable by one physicist + AI.
+
+⚠ SUPERSEDED 2026-07-14 (353072f, 081da40) — see correction banner.
 
 What money **cannot** buy (stated up front, because Vorschrift 4 does not
 repeal physics): per-pixel DWM alpha through a QWidget top-level that
@@ -98,7 +110,8 @@ the lanes wrote:
    CRITICAL-1): `docs/DECISIONS.md` 2026-07-13 "QML-hybrid boundary"
    promises "pre-blended tokens **+ window-level DWM backdrop**" *and* the
    `QQuickWidget`-chrome architecture — mutually exclusive on the same
-   HWND by path D. And the U-track as written ends at U6 = "QML chrome
+   HWND by path D (⚠ SUPERSEDED 2026-07-14 (353072f) — see correction banner).
+   And the U-track as written ends at U6 = "QML chrome
    default", which is still the `QQuickWidget` island inside a QWidget
    window — i.e. **the ratified roadmap never reaches real cockpit glass
    at any stage**. §8 names the re-ratification.
@@ -233,6 +246,8 @@ inherits (Völundr):
 
 Amended Candidate B, stated without the overstatement Loki flagged:
 
+⚠ SUPERSEDED 2026-07-14 (353072f, 081da40) — see correction banner.
+
 - **The cockpit window is the TOKEN look by construction** for the entire
   option-(a) era. Not a degradation rung — its *design*. The v6
   pre-blends, the specular/edge grammar, the ambient-canvas gradient
@@ -245,6 +260,8 @@ Amended Candidate B, stated without the overstatement Loki flagged:
   `gui/backdrop.py` chain + `gui/style.py::apply_window_backdrop_to`
   fan-out, which already passes `dark=`. "Glass satellites, opaque
   cockpit" (Ratatoskr §3.3) works today with zero new mechanism.
+⚠ SUPERSEDED 2026-07-14 (353072f) — see correction banner.
+
 - **The path-D census makes the satellite rule enforceable** (§2.3): any
   top-level that gains a visible RTT child forfeits material *for that
   window*, logged, re-resolved per window — never averaged (Thor
@@ -272,6 +289,8 @@ forward. Mechanism, precisely:
   Mica on Qt 6.10.1). DWM attach (38 + 20) on its HWND through a new
   HWND-level entry point extracted from `gui/backdrop.py` (the current
   `apply_backdrop` takes a `QWidget`; the extraction is mechanical).
+⚠ SUPERSEDED 2026-07-14 (353072f) — see correction banner (RHI criterion inverted).
+
 - **The OpenGL RHI pin does not apply to the GlassShell.**
   `gui/qml_shell.py::pin_opengl_rhi` exists so the chrome `QQuickWidget`
   and the `GLViewWidget` can share one window's context. In the
@@ -651,6 +670,8 @@ gate for any diff touching backdrop/glass_env/style-canvas/panel_kit/
 
 ### 7.2 The §11 flip-probe material rows (added by G-B3; cancels the pre-scheduled white-night)
 
+⚠ SUPERSEDED 2026-07-14 (353072f, 081da40) — see correction banner.
+
 To `docs/BENCH_CHECKLIST.md` §11: **R6** — with acrylic active and the
 chrome island live, theme-editor/dialog margins still frost (expected:
 YES); main-window margins frost (expected: **NO — by design**, path-D law,
@@ -660,6 +681,8 @@ census log line appears (expected: exactly that, with the log line as the
 proof the census works). GlassShell rows (R8+) land with G3.
 
 ### 7.3 G0 pass criteria (the go/no-go, pre-registered so the spike cannot be argued green)
+
+⚠ SUPERSEDED 2026-07-14 (353072f) — see correction banner (RHI criterion inverted).
 
 - **P1** Translucent `QQuickWindow` + D3D RHI + attr 38/20: INV-A/INV-D
   pass on the shell window (material demonstrably composites behind the
@@ -725,6 +748,8 @@ autonomously; this section is the *proposal*):
 ---
 
 ## 9. What we still cannot have (the honest list — unchanged by budget)
+
+⚠ SUPERSEDED 2026-07-14 (353072f, 081da40) — see correction banner.
 
 1. **Real DWM material on the classic QWidget cockpit window** while any
    GL/Quick child lives in it. Path-D physics; not "yet" — *ever*, on
