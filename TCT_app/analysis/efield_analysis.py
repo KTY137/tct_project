@@ -38,7 +38,9 @@ Status
 reconstruction itself (``reconstruct_efield`` / ``silicon_mobility`` /
 ``compute_cce``) is NOT yet wired into any scan — it is the offline analysis
 for edge-TCT z-scan drift-time data (planned feature, kept as the physics
-roadmap).
+roadmap).  ``compute_cce_with_uncertainty`` (CCE plus a propagated
+reference-scatter sigma, see its docstring) exists alongside ``compute_cce``
+but is likewise not yet wired into the GUI — that is a separate, later beat.
 """
 from __future__ import annotations
 
@@ -181,6 +183,185 @@ def compute_cce(
     if not np.isfinite(Q_ref) or Q_ref == 0:
         return np.full_like(Q, np.nan)
     return Q / Q_ref
+
+
+# ---------------------------------------------------------------------------
+# CCE with propagated reference-sample uncertainty
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class CCEResult:
+    """
+    Result of :func:`compute_cce_with_uncertainty` — CCE plus a per-point
+    1-sigma uncertainty propagated from the scatter of the supplied
+    reference sample(s). Purely additive: ``compute_cce`` is unchanged and
+    unaffected by this class/function existing.
+
+    Uncertainty model
+    ------------------
+    Standard first-order propagation of a ratio, ``CCE = |Q| / |Q_ref|``::
+
+        sigma_cce / |cce| = sqrt((sigma_q / |Q|)^2 + (sigma_ref / |Q_ref|)^2)
+
+    Computed here in the algebraically equivalent *absolute* form, which
+    stays well-defined at ``Q == 0`` (the relative form above divides by
+    zero there even though the physical uncertainty is perfectly finite)::
+
+        sigma_cce = sqrt((sigma_q / |Q_ref|)**2 + (cce * sigma_ref / |Q_ref|)**2)
+
+    ``sigma_ref`` (the reference/denominator term) is estimated honestly
+    from what was actually supplied: the population standard deviation
+    (``ddof=0``) of the finite samples in ``q_ref_pC`` — e.g. repeated
+    reference-channel readings, capturing shot-to-shot laser-intensity /
+    ref-channel scatter. Pass a single value (or single-element array) if
+    only one reference reading exists; ``ref_std`` then collapses to ``0``
+    and ``cce`` reduces exactly to ``compute_cce``'s scalar-reference case
+    (same abs-value convention, see ``cce`` below).
+
+    ``sigma_q`` (the numerator / signal-channel term) is **not honestly
+    estimable from today's data model**: one charge value is stored per
+    scan point (see ``SCAN_DATA_FORMAT.md``'s ``analysis/dut_charge_pC``),
+    not repeats, so there is no per-point charge scatter to compute here.
+    Rather than invent a number, ``charge_sigma_pC`` (an argument to
+    :func:`compute_cce_with_uncertainty`) defaults to ``0`` — the q-term
+    then contributes nothing and ``sigma`` reduces to
+    ``|cce| * (ref_std / ref_mean)``, i.e. reference-channel scatter only.
+    Pass an explicit ``charge_sigma_pC`` (a known noise floor, or a
+    per-point scatter once/if repeats are stored) to include that term.
+    ``q_term_included`` records which case applied for a given result.
+
+    Fields
+    ------
+    cce : ``|charges_pC| / |ref_mean|`` — identical abs-value ratio
+        convention to :func:`compute_cce` (``ref_mean`` plays the role of
+        ``compute_cce``'s ``Q_ref``).
+    sigma : 1-sigma absolute uncertainty on ``cce`` (same dimensionless
+        units as ``cce``), from the model above. NaN wherever ``cce`` is
+        NaN (a missing/non-finite charge reading, or a degenerate
+        reference — see below); never raises.
+    ref_mean : ``abs(mean(finite samples of q_ref_pC))`` — the ``Q_ref``
+        actually used for the ratio. ``NaN`` if no sample was finite (the
+        degenerate case: ``cce``/``sigma`` are then all-NaN, mirroring
+        ``compute_cce``'s degenerate-``Q_ref`` behaviour).
+    ref_std : population standard deviation (``ddof=0``) of the finite
+        samples in ``q_ref_pC``; ``0.0`` for a single finite sample,
+        ``NaN`` if none were finite.
+    n_ref : count of finite samples in ``q_ref_pC`` actually used for
+        ``ref_mean`` / ``ref_std``.
+    charge_sigma_pC : the ``charge_sigma_pC`` argument as supplied, echoed
+        back unchanged (``0.0`` unless the caller passed an explicit
+        estimate).
+    q_term_included : whether the charge-noise term contributed to
+        ``sigma`` (``False`` when ``charge_sigma_pC`` was left at its ``0``
+        default) — the honesty flag a caller/GUI should surface rather
+        than implying a fully-propagated uncertainty when only the
+        reference term is actually known.
+    notes : short human-readable caveat (a degenerate/zero reference, or
+        that the charge-noise term was not included); never empty.
+    """
+    cce: np.ndarray
+    sigma: np.ndarray
+    ref_mean: float
+    ref_std: float
+    n_ref: int
+    charge_sigma_pC: float | np.ndarray
+    q_term_included: bool
+    notes: str = ""
+
+
+def compute_cce_with_uncertainty(
+    charges_pC: np.ndarray,
+    q_ref_pC: np.ndarray,
+    charge_sigma_pC: float | np.ndarray = 0.0,
+) -> CCEResult:
+    """
+    Compute Charge Collection Efficiency with a propagated 1-sigma
+    uncertainty (see :class:`CCEResult` for the model and its honesty
+    caveats). Additive alongside ``compute_cce`` / ``cce_vs_reference``,
+    neither of which this function calls or alters.
+
+    ``CCE(i) = |charges_pC[i]| / |mean(q_ref_pC)|`` — the same abs-value
+    ratio convention as :func:`compute_cce`.
+
+    Parameters
+    ----------
+    charges_pC : array_like
+        Collected charge per scan point, in pC (signed; magnitude is used,
+        same convention as ``compute_cce``).
+    q_ref_pC : array_like or float
+        One or more reference-charge samples, in pC, that establish the
+        CCE normalization baseline (e.g. repeated reference-channel
+        readings, or several near-full-depletion points) — their mean is
+        ``Q_ref`` and their scatter (``ref_std``) is propagated into
+        ``sigma``. A bare scalar is accepted (treated as a single sample;
+        ``ref_std`` is then ``0.0``).
+    charge_sigma_pC : float or array_like, default 0.0
+        Optional per-point signal-channel charge noise, in pC — see
+        ``CCEResult``'s docstring for why this defaults to 0 rather than
+        being estimated automatically. Broadcast against ``charges_pC``.
+
+    Returns
+    -------
+    CCEResult
+        ``cce`` / ``sigma`` are NaN-filled arrays (never a crash) when the
+        reference is degenerate (no finite sample, or a zero mean) — the
+        same "give up honestly" behaviour as ``compute_cce``'s degenerate
+        branch.
+    """
+    Q = np.abs(np.asarray(charges_pC, dtype=float))
+
+    ref = np.atleast_1d(np.asarray(q_ref_pC, dtype=float))
+    ref_finite = ref[np.isfinite(ref)]
+    n_ref = int(ref_finite.size)
+    if n_ref > 0:
+        ref_mean = float(abs(np.mean(ref_finite)))
+        ref_std = float(np.std(ref_finite))   # ddof=0; 0.0 for a single sample
+    else:
+        ref_mean = float("nan")
+        ref_std = float("nan")
+
+    sigma_q = np.broadcast_to(
+        np.asarray(charge_sigma_pC, dtype=float), Q.shape
+    ).astype(float)
+    q_term_included = bool(np.any(sigma_q != 0))
+
+    if not np.isfinite(ref_mean) or ref_mean == 0:
+        nan_arr = np.full_like(Q, np.nan)
+        return CCEResult(
+            cce=nan_arr,
+            sigma=nan_arr.copy(),
+            ref_mean=ref_mean,
+            ref_std=ref_std,
+            n_ref=n_ref,
+            charge_sigma_pC=charge_sigma_pC,
+            q_term_included=q_term_included,
+            notes=("reference is non-finite or zero; cce and sigma are NaN "
+                   "(mirrors compute_cce's degenerate-Q_ref behaviour)"),
+        )
+
+    Q_ref = ref_mean
+    cce = Q / Q_ref
+    # ref_std is guaranteed finite here: ref_mean finite implies n_ref > 0,
+    # and np.std of a non-empty finite array is always finite.
+    sigma = np.sqrt((sigma_q / Q_ref) ** 2 + (cce * ref_std / Q_ref) ** 2)
+
+    notes = (
+        "charge-noise term included (charge_sigma_pC supplied)" if q_term_included
+        else "charge-noise term not estimable from today's data model "
+             "(charge_sigma_pC left at its 0 default); sigma reflects "
+             "reference-channel scatter only"
+    )
+
+    return CCEResult(
+        cce=cce,
+        sigma=sigma,
+        ref_mean=ref_mean,
+        ref_std=ref_std,
+        n_ref=n_ref,
+        charge_sigma_pC=charge_sigma_pC,
+        q_term_included=q_term_included,
+        notes=notes,
+    )
 
 
 # ---------------------------------------------------------------------------
