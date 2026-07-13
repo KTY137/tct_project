@@ -56,12 +56,40 @@ LANES NOW OPEN (first beats dispatched):
 
 | Beat | Agent | CLAIMED paths |
 |---|---|---|
-| B2 capture_photo block | Abel (opus) | `TCT_app/controller/scan_plan.py`, `plan_compiler.py`, `scan_plan_validator.py`, `plan_estimate.py`, `scan_controller.py` (dispatch), tests: plan_compiler/validator/executor |
-| D3 analysis fit-quality tiles | Jonathan | `TCT_app/gui/analysis_panel.py`, `TCT_app/tests/test_analysis_panel_load_run.py` |
-| A4 SequenceCoordinator (Mary fwd-reqs baked in) | Noah (opus) | `TCT_app/gui/sequence_coordinator.py` (new), `TCT_app/tests/test_sequence_coordinator.py` (new) |
-| C3-mini hygiene (hex→token + dialog construction-apply) | Noah (2nd) | `TCT_app/gui/settings_window.py`, `TCT_app/gui/theme_editor.py` (construction only), `TCT_app/tests/test_theme_editor.py`, `TCT_app/tests/test_no_inline_hex_gui.py` |
-| Bookkeeping batch 2 | Kiroku | `docs/ARCHITECTURE.md`, `docs/TECH_DEBT.md`, `docs/BENCH_CHECKLIST.md`, `docs/config_keys.md`, research index |
-| Codex style audit (Kaya request) | Codex lane | `docs/design/codex_style_audit_20260713.md` |
+| A5.1 surgical danger locks (NOT-AUS always live — Adam ruling, law 5) | Noah (opus) | `TCT_app/gui/multi_bias_panel.py`, `TCT_app/gui/bias_panel.py`, `TCT_app/gui/motor_panel.py`, `TCT_app/tct_gui.py`, panel tests + `test_sequencer_panel.py` |
+| Mary closure review (A3.1+A4+A5+W3, sets A5.1 always-live list) | Mary (read-only) | none |
+
+A5 LANDED `1ca5677` — SEQUENCER FEATURE A1-A5 COMPLETE, pending closure fixes.
+
+## ⚠️ MARY CLOSURE VERDICT: REQUEST-CHANGES (2026-07-13 ~08:00)
+
+Track-A closure CONFIRMED (7b32dc3 verified: all-channel park honest,
+hook-raise halt, non-finished halt). A4/A5 requirements all met (gate
+private+discarded, no dangling active, deep-copy pinned, REAL park_safe
+injected). W3 camera-offline-neutral UPHELD. Two MAJORs to close:
+1. **manual_pause wedge + HV-hold (A5.2):** mid-plan manual_pause in a
+   queued plan → ungated box.exec (tct_gui:1727) + worker parks HOLDING HV
+   all night; trailing manual_pause silently promotes PAUSED→FINISHED.
+   RULING: validator ERROR at sequencer add/load (mid+trailing, name the
+   routine) + defense-in-depth guard in _on_plan_manual_pause (notify +
+   auto-abort while _sequence_active). → A5.2a (Abel, IN FLIGHT:
+   sequencer.py + sequence_coordinator.py + tests); A5.2b micro-beat
+   (tct_gui guard) AFTER A5.1 frees tct_gui.
+2. **Emergency stops greyed during sequence:** being fixed by A5.1 (in
+   flight). Mary's authoritative ALWAYS-LIVE list: motor STOP, bias
+   emergency-OFF, per-channel output-off (incl. NON-primary parity),
+   sequencer Abort stays single-click, laser/wavegen emergency never
+   locked. Verify A5.1 report against this list on landing.
+| E3 staircase affine selfcal (Mary-class) | Paul (opus) | `TCT_app/controller/repeatability.py`, `TCT_app/tests/test_affine_selfcal.py` (new), `TCT_app/tests/test_repeatability_gate.py` |
+| E4 affine mosaic + refine wiring | Jonathan | `TCT_app/analysis/mosaic_stitch.py`, `TCT_app/tests/test_mosaic_stitch.py` |
+| Codex style audit (Kaya request) — RE-ENQUEUED 03:55Z as queue task S1 after inline-objective bounce (lane executes CODEX_QUEUE.md tasks only; lesson re-recorded in memory) | Codex lane | `docs/design/codex_style_audit_20260713.md`, `docs/CODEX_QUEUE.md` (S1 status line) |
+
+LANDED additionally: `c1fc0c2` A4 SequenceCoordinator · `d100650` C3-mini ·
+`b82999e` Kiroku batch 2 · `7b32dc3` A3.1 Mary-fixes (Track-A REQUEST-CHANGES
+CLOSED: all-channel park, hook-raise halt, non-finished-word halt) ·
+`a9ec103` D4 plumbing rider · `419a0a0` D3 tiles (Track D COMPLETE) ·
+`f3b0457` B2 capture_photo · `00d53bc` D4 · `95b27c7`/`a3449be` D1/D2.
+Mary closure verification of A3.1 folds into the pre-gate batch review.
 
 C2 LANDED `c66ee05` (backdrop settings/fan-out, 124+135 green; eyeball
 checklist → BENCH_CHECKLIST via Kiroku batch 2). NOTE for C3-mini vs A4:

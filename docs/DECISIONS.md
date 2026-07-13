@@ -152,7 +152,7 @@ HDF5+capture_photo, backdrop, e-field/metrology) → Wave 1/3/4 items via free
 lanes. Rationale: critical-path safety-system work lands first; structural
 changes unblock all downstream feature work; parallelizable features ship
 together to consolidate review gates. Affects: `docs/ARCHITECTURE.md`, task
-queue, review cadence. Status: ACTIVE — both structural blockers landed (26bcf95, 034c176); feature lanes queued.
+queue, review cadence. Status: APPROVED — sequencer A1-A5 complete incl. closure fixes, Mary verdict CLOSED; Tracks B/C/D complete; E-track through E2/E6a landed, E3/E4 in flight at report time.
 
 ## 2026-07-13 — Stitched-image feature in scope for big wave RATIFIED
 

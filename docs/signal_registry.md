@@ -36,6 +36,18 @@ Organization: **one section per module**, signals listed in definition order. Fo
 
 ---
 
+## gui/sequence_coordinator.py
+
+| Signal | Signature | Defined at | Connected to |
+|--------|-----------|-----------|--------------|
+| `SequenceCoordinator.entry_state_changed` | `(int, str, str)` — (step_index, state, routine_name) | `sequence_coordinator.py:TBD` | `SequencerPanel.on_entry_state_changed()`, planner status display |
+| `SequenceCoordinator.sequence_progress` | `(int, int)` — (done, total) | `sequence_coordinator.py:TBD` | `SequencerPanel.on_sequence_progress()`, progress bar updates |
+| `SequenceCoordinator.sequence_finished` | `(str)` — routine_name | `sequence_coordinator.py:TBD` | `SequencerPanel.on_sequence_finished()` |
+| `SequenceCoordinator.sequence_error` | `(str)` — error message | `sequence_coordinator.py:TBD` | Error display + safe-hold |
+| `SequenceCoordinator.sequence_active` | `(bool)` — True = queue running | `sequence_coordinator.py:TBD` | `PlannerPanel` (disables edit during sequence) |
+
+---
+
 ## gui/scan_coordinator.py
 
 | Signal | Signature | Defined at | Connected to |
@@ -261,4 +273,5 @@ These are objects exposed to QML via `QQmlContext.setContextProperty()` in `tct_
 - `_LogBridge` and `_QtDeviceDebugHandler` are defined inline in `tct_gui.py` under logging setup and are not separate classes.
 - Multiple `changed()` signals in `settings_window.py` tabs are used to track form state changes within the settings dialog.
 - `BiasPoller.reading` and `LivenessMonitor` live on separate `QThread` instances and their signals cross thread boundaries (enqueued mode, safe).
+- **Panel contract slot:** `SequencerPanel.set_manual_danger_locked(bool)` gates operator controls (motion, HV ramps) during sequence execution; emergency stop always live. Called by `SequenceCoordinator` on entry/exit/error. All control panels should implement this slot for UX coherence during multi-routine sequencing.
 

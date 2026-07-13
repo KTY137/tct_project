@@ -111,7 +111,8 @@ Core design rules (verified in code):
   WARN/ALARM thresholds into per-point analysis status (scan continues; warnings
   are advisory). `_move_action` and `_acquire_core` (shared by estimate + executor)
   ensure derived HV/motion bounds for the `ArmedEnvelope` are byte-for-byte identical
-  to live execution.
+  to live execution. Public seam `park_safe()` halts motion on all axes, discharges
+  HV (primary channel only), and resets state for recovery.
 - `danger_gate.py` — danger action protocol and authorization gates. `DangerAction`
   dataclass (action kind, `requires_confirm: bool`); `DangerGate` protocol (async
   request/confirm workflow). `AutoConfirmGate` (auto-approves in simulation);
@@ -135,6 +136,10 @@ Core design rules (verified in code):
   (step size + per-step delay during ramp; sourced from device config defaults,
   loop overrides, or per-action overrides; unifies the e4control + native driver 
   ramp-shaping parameters).
+- `survey_plan.py` (NEW) — Survey preset builder. `SurveyPlan` (snake-pattern raster
+  of move+capture_photo planner steps; geometry specified in `plan.safety['survey']`
+  dict with grid bounds and spacing). Used by planner presets to auto-generate
+  capture sequences for mosaic assembly.
 - `scan_plan_validator.py` — pure fail-closed plan pre-flight:
   `validate_plan(plan, PlanLimits) -> list[PlanIssue]`. Checks stage limits, HV
   range, `max_points` cap, and (fail-closed) requires any bias-driving plan to
@@ -154,10 +159,12 @@ Core design rules (verified in code):
   now models per-`BiasStep` ramp shaping via `ceil(|dV|/step)*delay` for accurate
   ramp-duration ETA (sourced from device config defaults, loop overrides, or
   per-action overrides in `BiasStep.ramp_step_V` / `ramp_delay_s` fields).
-- `sequencer.py` (NEW) — Pure queue engine for executing scan plan steps. `SequenceRunner`
+- `sequencer.py` — Pure queue engine for executing scan plan steps. `SequenceRunner`
   (executes compiled `Step` list, no hardware I/O, no Qt dependencies, fail-closed
   halt on error). `PreflightHook` seam for custom pre-execution logic. YAML-serializable
   plan persistence and recovery. Used by executor/planner for deterministic step replay.
+  `assert_sequencer_compatible(plan)` blacklist vets plans; `record_outcome(step, result)`
+  only advances the sequence on FINISHED outcomes.
 - `device_manager.py` — owns all device instances; single
   connect/disconnect/status interface for the GUI. Backend registries map
   `devices.yaml` keys to classes: `MOTOR_BACKENDS` (`pi`, `grbl`, `simulated`),
@@ -394,6 +401,14 @@ dual-dispatch; `start_plan` emits `scan_started` on success; signals: `point_don
 `z_focus_pt`, `z_focus_done`, `vscan_point`, `plan_progress`, `plan_error`,
 `plan_finished`, `plan_running`, `hv_armed`, `manual_pause`, `warn_dialog`, `error_dialog`,
 `status_message`; new `execute_plan(plan, gate)` slot wires ScanController.execute_plan),
+`sequence_coordinator.py` (NEW) — Qt queue driver for plan sequences. `SequenceCoordinator`
+coordinates multi-routine sequencing via `start_sequence()` seam; union gate is private to
+the coordinator; emits `sequence_active(bool)` contract signal to planner for UX feedback.
+Stateless dispatcher that routes sequencer signals (entry_state_changed, sequence_progress,
+sequence_finished, sequence_error) to GUI listeners.
+`sequencer_panel.py` (NEW) — Operator-facing sequencer UI. Panel that manages queue
+display and control; reuses `ArmLatch` component for sequence authorization. Fail-closed
+load semantics: validates before accepting new sequence item.
 `arm_latch.py` (design-system law 5: `ArmLatch` two-step gesture well — hold-to-arm
 or press-twice, ~10 s auto-disarm countdown, instant-stop abort separate; pure view
 with no hardware I/O or controller refs; renders envelope summary; signals arm_started/
@@ -514,6 +529,10 @@ byte-for-byte equality), `charge_calibration.py` (`ChargeCalibration`),
   than `efield_analysis.compute_cce` (epsilon-clamp vs. NaN) — see the
   module docstring for why. Wired into `AnalysisPanel._plot_cce` /
   `_export_cce_csv`.
+- `image_prep.py` (NEW) — Metrology preprocessing for stitched-image assembly.
+  Handles sensor orientation via ArUco fiducials and classical CV (template matching,
+  contours), NaN-fill-before-FFT invariant for frequency-domain alignment. Lazy import
+  with clean feature-disabled degradation if `opencv-python-headless` unavailable.
 
 ## configs/ and tests/
 
@@ -569,7 +588,37 @@ Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 ## Changelog
 
-- 2026-07-13 — **D4: Canonical baseline subtraction (00d53bc).** NEW `analysis/waveform_analysis.correct_baseline()` (DUT path baseline-corrected). Reference-channel baseline now also baseline-corrected via mirrored implementation in `devices/intensity_base.py` with pinned-equal guard test — fixes latent bias from DC offset on ref channel affecting all saved charge/CCE values. Closes RISK row 85 (Kings retro).
+- 2026-07-13 — **E6a: Survey plan builder (d2050e3).** NEW `controller/survey_plan.py`: snake-pattern raster of move+capture_photo steps; geometry in `plan.safety['survey']` dict. Enables planner presets for automated mosaic capture sequences.
+
+- 2026-07-13 — **E2: Image prep & sensor orientation (b5b8051).** NEW `analysis/image_prep.py`: metrology preprocessing for stitched-image assembly via ArUco fiducials + classical CV (template matching, contours). NaN-fill-before-FFT invariant for frequency-domain alignment. opencv-python-headless import with feature-disabled degradation.
+
+- 2026-07-13 — **A5.2b: Pause-dialog guard (6e691fd).** Manual pause dialog now guards against double-show via `_pause_dialog_shown` flag; stray signal emissions on shutdown no longer show modal on dying window.
+
+- 2026-07-13 — **A5.2a: Pause-sequencer compatibility gate (88f500f).** `ScanController._resume()` no-op unless state is PAUSED; halt semantics match engine; prevents phantom resume on non-paused scans.
+
+- 2026-07-13 — **A5.1: Surgical danger locks on sequence (7061e97).** Emergency stop always live (no arm latch required); sequence entry/exit/error guarded by `set_manual_danger_locked(bool)` contract on panels for coherent UX during sequencing.
+
+- 2026-07-13 — **A5: SequencerPanel + planner capture_photo palette (1ca5677).** NEW `gui/sequencer_panel.py`: operator-facing queue display; reuses `ArmLatch` component for sequence authorization. NEW `gui/sequence_coordinator.py`: routes sequencer state to planner; emits `sequence_active(bool)` contract. Planner capture_photo action + palette wiring.
+
+- 2026-07-13 — **A4: SequenceCoordinator extraction (c1fc0c2).** NEW `controller/SequenceCoordinator` (multi-routine orchestration, union gate private, sequence_active signal). Decoupled from ScanCoordinator for reusability.
+
+- 2026-07-13 — **C3-mini: Backdrop construction-apply (d100650).** Theme editor now self-applies backdrop/opacity on construction; user sees material effects immediately on launch without requiring manual Apply click.
+
+- 2026-07-13 — **C2: Backdrop fan-out (c66ee05).** `style.py` backdrop trio (material + opacity → glass-amount tokens); `theme_editor.py` backend combo for preset selection; QSettings key `theme/window_backdrop` (none|mica|acrylic, default none, garbage→none). Persisted with `theme/window_opacity` slider.
+
+- 2026-07-13 — **B2: Capture_photo end-to-end (f3b0457).** NEW additive `HDF5Writer.save_camera_frame(frame, point_index)` seam; `gui/camera_panel.py` button wires to `ScanCoordinator.capture_photo()` slot. Jonathan-approved in b5b8051 beat. Frame→point alignment auditable via `camera/frame_point_index` dataset.
+
+- 2026-07-13 — **B1: HDF5 camera honesty (06de0dc).** `data/hdf5_writer.py` NEW `camera/frame_point_index` dataset (frame→point map), `n_frames_omitted` attribute (count of silently-dropped shape-mismatched frames). `camera/frames` never zero-padded. Fixes silent data loss.
+
+- 2026-07-13 — **A3.1: Park_safe all-channels + engine halt semantics (7b32dc3).** `ScanController.park_safe()` halts motion on all axes, discharges HV (primary channel only), resets state. Mary CLOSED Track-A verdict includes 88f500f + 6e691fd + 7061e97.
+
+- 2026-07-13 — **D4: Fit-quality tiles (419a0a0).** `gui/analysis_panel.py` CCE/V_dep view now conditional on fit-quality flag; Track D complete.
+
+- 2026-07-13 — **D4: Ref baseline + binning resolution (00d53bc + 00abe9c).** Reference-channel baseline-corrected via canonical `analysis/waveform_analysis.correct_baseline()` (mirrored in `devices/intensity_base.py`, guard test ensures byte-for-byte parity). Binning Average attempt with permanent skip-at-INFO for classic BFLY SN 19112408.
+
+- 2026-07-13 — **A3: Device_manager baseline_samples wiring (a9ec103).** `device_manager` passes config `analysis.baseline_samples` to analysis modules; contracts wired.
+
+- 2026-07-13 — **D4: Ref baseline subtraction (00d53bc).** NEW `analysis/waveform_analysis.correct_baseline()` (DUT path baseline-corrected). Reference-channel baseline now also baseline-corrected via mirrored implementation in `devices/intensity_base.py` with pinned-equal guard test — fixes latent bias from DC offset on ref channel affecting all saved charge/CCE values. Closes RISK row 85 (Kings retro).
 
 - 2026-07-13 — **D2: CCE with uncertainty bounds (a3449be).** NEW `analysis/efield_analysis.compute_cce_with_uncertainty(charges, fit_result) -> CCEResult` (ratio + confidence); replaces bare CCE in GUI tiles. Closes RISK row 87 (Kings retro: V_dep fit-quality gap).
 
