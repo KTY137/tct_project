@@ -331,3 +331,27 @@ No app-code edits. No commit. Set D5 DONE with findings per Handback.
 - Cross-cutting trace concluded there is no direct override path to locked safety tokens (`danger`/`armed`/`sim`/`error`, including `crit`/`warn` aliases) through preset JSON, QSettings, typography/radius helpers, or glass blending; residual design risk is unrestricted editable accent/text colors, not safety-token mutation.
 - Verification: read the relevant `git show` diffs and current source with line numbers for `scan_controller.py`, `scan_coordinator.py`, `scan_viewer_panel.py`, `tct_gui.py`, `analysis/map_slice.py`, `analysis_panel.py`, `style.py`, `theme_editor.py`, `qml_theme.py`, and targeted tests. `git diff --check` passed. Per D5 instruction, pytest was not run.
 - Risk: review is static-only; no runtime reproduction or screenshot/contrast measurement pass was performed.
+
+## S1 — Visual style audit from rendered panels (advisory, no code edits)
+
+**Status: OPEN** · Effort: M · Source: Kaya request 2026-07-13 (night shift)
+
+Judge whether the PySide6 GUI styling is good enough and list concrete
+remaining tweaks for: materials/shading depth, line spacing, typography
+(sizes/weights/rhythm), shadows/elevation, padding/alignment consistency,
+overall Apple-styleness.
+
+- READ FIRST so you do not repeat already-planned work (OUT of scope):
+  `docs/design/feinschliff_gap_notes_adam.md`, `docs/design/state_color_census.md`
+  (the ladder sweep is running), and skim `TCT_app/gui/style.py` tokens. The
+  Windows DWM acrylic backdrop is already built (gui/backdrop.py) — do not
+  propose it.
+- RENDER: from `TCT_app\` with `$env:QT_QPA_PLATFORM='offscreen'` and the venv
+  python, run `scripts\capture_panels.py` for fresh panel PNGs. Open and LOOK
+  at them — your image-reading ability is why this task is on your lane.
+- DELIVERABLE: write ONE file `docs/design/codex_style_audit_20260713.md` —
+  a ranked tweak list (impact vs effort), each item citing the exact
+  `gui/style.py` token or QSS block file:line, with the proposed new value
+  where trivial. "Good enough, ship it" is a valid verdict per area if you
+  name what you checked.
+- Do NOT modify any gui code. Set S1 DONE with findings per Handback.
