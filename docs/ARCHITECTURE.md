@@ -608,6 +608,14 @@ Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 ## Changelog
 
+- 2026-07-13 — **gui/style.py + backdrop: theme-toggle repaint fix under active DWM material (9cdc970).** window.update() symmetric to the none-path repolish; canvas rule becomes rgba(bg,0.82) passthrough when a backdrop is active, byte-identical when none; docs/design/glass_gap_findings.md added.
+
+- 2026-07-13 — **gui/monitor_panel.py: banner worst-computation now uses local _BANNER_SEVERITY (1af0325).** OK<WARN<UNAVAILABLE<ALARM — a hard alarm can no longer be masked by a concurrent UNAVAILABLE channel; headline carries "Alarm · N unavailable".
+
+- 2026-07-13 — **gui/motion_kit.py + bias_panel + qml_theme: Mary-A riders (f7fcc65).** roll_number gates on the rendered string (HV readout no longer rolls on noise), destroy guard (target.destroyed → stop+detach, defensive hardening with wiring tests), public cancel_roll/cancel_pulse/cancel_all + shutdown quiesce, specular getter warns+falls back to 0.1 instead of raising in a QML binding.
+
+- 2026-07-13 — **Real DWM glass: WA_TranslucentBackground extended to centralWidget (7cb2bd3).** Default QSurfaceFormat alpha=8 before QApplication, effective opacity pinned 1.0 while a backdrop is active (stored pref kept; slider clamped+noted), backdrop/opacity/panel-glass auto-apply+auto-persist, glassPane opt-in registry (theme-editor cards only tonight; FigureCard refused), PANEL_GLASS_ALPHA=0.55 + BACKDROP_CANVAS_ALPHA=0.82 placeholders for live tuning, surface-tint tooltip.
+
 - 2026-07-13 — **docs/CODEX_QUEUE.md: C9 findings (3f1ba4e).** Sandbox venv failure root-caused to WindowsApps store-alias base interpreter; fix = recreate venv from non-Store CPython 3.10.
 
 - 2026-07-13 — **CLAUDE.md + DECISIONS.md: orchestration upgrade ratified (87b1ac5).** Per-beat Mary for safety class, Shiori brief-checks, judgment-beat Opus override, report caps 1200, free lanes as parallel value superseding free-lane-first.

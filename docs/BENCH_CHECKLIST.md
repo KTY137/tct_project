@@ -444,6 +444,7 @@ Source: `docs/research/camera_optics_setup.md` (verified live 2026-07-10).
 - Launch TCT app with QML shell enabled (`TCT_QML_SHELL=1`).
 - Open **Settings → Theme**.
 - Locate the **Window Backdrop** combo (values: none | mica | acrylic).
+- Opacity slider behavior: verify it auto-pins to 100% and is disabled while a backdrop is active (with visible note indicating this constraint).
 - Test all six scenarios below; observe for **visual correctness** (no crashes, no grey flash on real DWM compositor, smooth transitions):
 
 | Scenario | Check | Expected |
@@ -454,11 +455,14 @@ Source: `docs/research/camera_optics_setup.md` (verified live 2026-07-10).
 | A4 | Backdrop → None | Grey disappears, window becomes opaque; clean transition |
 | B1 | Theme toggle (dark ↔ light) under active material | Material/opacity persist; theme colors update independently |
 | B2 | Window resize + DPI change + detach tab | Material/opacity survive; no reset to defaults; detached window inherits material |
+| B3 | Blur pass (visual only) | **Desktop text behind frosted regions must be UNREADABLE; crisp readable desktop = fail** (baseline: text legibility loss confirms the frosted effect is active) |
 
 **Expected result:**
-- All six scenarios pass without visual artifacts or crashes.
+- All seven scenarios pass without visual artifacts or crashes.
 - Danger-chip (red) legibility under Mica+opacity is acceptable (4.5:1 contrast floor).
-- Settings auto-apply; no manual Apply click required (design-fix in progress 2026-07-13).
+- Settings auto-apply and auto-persist (no manual Apply click required).
+- Opacity slider auto-pinned to 100% and disabled while a backdrop is active (with visible note).
+- Panel glass (experimental) = theme-editor cards only for now.
 
 **Closes:**
 - C1/C2 feature acceptance (backdrop.py + style.py integration + theme_editor UI).
