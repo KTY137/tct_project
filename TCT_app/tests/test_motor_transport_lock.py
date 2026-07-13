@@ -18,7 +18,9 @@ device (capability spine, scan run-control) will build on them:
 
   (3) STOP IS NEVER QUEUED — holding the transport lock must not delay an
       emergency stop.  GRBL's stop is a real-time byte and takes no lock at all;
-      PI's stop takes it only with a short timeout and sends STP regardless.
+      PI's stop is the single-character #24 (pipython ``StopAll()``) and, per
+      docs/research/pi_gcs_stop_semantics.md, is now equally lock-free — it
+      takes no io_lock and completes in one in-flight exchange.
 """
 import threading
 import time
@@ -205,7 +207,10 @@ class FakeGCS:
         self.violations: list[str] = []        # two threads in one exchange
         self.unguarded: list[str] = []         # call made without transport_lock
         self.calls: list[str] = []
-        self._moving_polls = 0
+        self._moving_polls = 0        # IsMoving reports motion this many polls
+        self._ontarget_after = 0      # ontarget reports NOT-on-target this many polls
+        self._stopall_raises = False  # make StopAll() raise (non-raising-contract test)
+        self._qerr_raises = False     # make qERR() raise (non-raising-contract test)
         self._pos = {"1": 0.0, "2": 0.0, "3": 0.0}
 
     # -- exchange bookkeeping ------------------------------------------------
@@ -234,6 +239,7 @@ class FakeGCS:
         for axis, target in zip(ids, targets):
             self._pos[axis] = float(target)
         self._moving_polls = 2                 # two IsMoving polls report motion
+        self._ontarget_after = 2               # two ontarget polls report NOT arrived
 
     def IsMoving(self, ids):
         self._exchange("IsMoving")
@@ -242,9 +248,35 @@ class FakeGCS:
             self._moving_polls -= 1
         return {a: moving for a in ids}
 
+    def ontarget(self, ids):
+        """Target-relative arrival signal (what pitools.ontarget queries).
+
+        Reports NOT-on-target for ``_ontarget_after`` polls after a MOV, then
+        on-target — modelling qONT/qOSN, which are defined against the newly
+        commanded target and therefore never falsely read "done" in the
+        command-accept window (unlike raw IsMoving)."""
+        self._exchange("ontarget")
+        on = self._ontarget_after <= 0
+        if self._ontarget_after > 0:
+            self._ontarget_after -= 1
+        return {a: on for a in ids}
+
     def qONT(self, ids):
         self._exchange("qONT")
         return {a: True for a in ids}
+
+    def StopAll(self, noraise=False):
+        """pipython GCSDevice.StopAll — the #24 emergency stop."""
+        self._exchange("StopAll")
+        if self._stopall_raises:
+            raise RuntimeError("StopAll boom")
+
+    def qERR(self):
+        """ERR? — reports AND clears the latched error register."""
+        self._exchange("qERR")
+        if self._qerr_raises:
+            raise RuntimeError("qERR boom")
+        return 0
 
     def qLIM(self, axis):
         self._exchange("qLIM")
@@ -263,10 +295,22 @@ class FakeGCS:
         self._exchange("CloseConnection")
 
 
+class _FakePitools:
+    """Stand-in for ``pipython.pitools`` — ``ontarget(gcs, ids)`` delegates to
+    the FakeGCS, exactly as the real ``pitools.ontarget(pidevice, axes)`` queries
+    the device.  Set as ``stage._pitools`` so ``_wait_on_target`` never imports
+    real pipython."""
+
+    @staticmethod
+    def ontarget(gcs, ids):
+        return gcs.ontarget(ids)
+
+
 def _pi_stage(dwell: float = 0.002) -> PIMotorStage:
     """A PI stage wired to a fake GCS session — never touches pipython."""
     m = PIMotorStage(simulation=False)
     m._gcs = FakeGCS(m, dwell=dwell)
+    m._pitools = _FakePitools()                 # _wait_on_target polls pitools.ontarget
     m._connected = True
     m._homed = True                             # tests target the transport, not the gate
     m.limits = SoftwareLimits(-20, 20, -20, 20, -20, 20)
@@ -373,16 +417,71 @@ class TestPITransportLock:
         assert len(polls) > 1, "poller made no progress while moves were running"
 
 
+class TestPIWaitOnTargetIsRaceFree:
+    """(4) _wait_on_target must poll the TARGET-RELATIVE signal (pitools.ontarget
+    → qONT/qOSN), not raw IsMoving.  qONT/qOSN are defined against the newly
+    commanded target, so the wait cannot end on a "not moving" snapshot taken in
+    the command-accept window before motion physically starts."""
+
+    def test_wait_consults_ontarget_and_does_not_return_on_a_not_moving_snapshot(self):
+        m = _pi_stage()
+        gcs = m._gcs
+        # The race trap: IsMoving would report NOT-moving from the first poll
+        # (the command-accept window) — a raw IsMoving-first wait would return
+        # immediately.  The target-relative signal reports not-on-target for 3
+        # polls, then arrival.
+        gcs._moving_polls = 0
+        gcs._ontarget_after = 3
+
+        assert run_with_timeout(
+            lambda: m._wait_on_target(["1", "2", "3"]), timeout=5.0
+        ), "_wait_on_target never returned"
+
+        # It polled the target-relative ontarget signal, once per loop, and only
+        # returned after it flipped true (3 not-on-target polls + 1 arrival).
+        assert gcs.calls.count("ontarget") == 4, (
+            f"expected 4 ontarget polls (3 not-arrived + arrival), got "
+            f"{gcs.calls.count('ontarget')} — {gcs.calls}"
+        )
+        # It did NOT decide on the race-prone raw IsMoving snapshot.
+        assert "IsMoving" not in gcs.calls, (
+            "wait consulted IsMoving — the start-race signal it must not decide on"
+        )
+        # Every poll ran UNDER the transport lock, released between polls.
+        assert gcs.unguarded == [], f"ontarget polled without the lock: {gcs.unguarded}"
+
+    def test_wait_polls_ontarget_under_the_lock_via_move_to(self):
+        """End-to-end through move_to: MOV then the ontarget-based wait, all
+        guarded, arriving after the target-relative signal flips."""
+        m = _pi_stage()
+        m.move_to(1.0, 2.0, 3.0)
+        gcs = m._gcs
+        assert gcs.calls.count("MOV") == 1
+        assert gcs.calls.count("ontarget") >= 1, "the wait never polled ontarget"
+        assert "IsMoving" not in gcs.calls, "move_to's wait must not use IsMoving"
+        assert gcs.unguarded == [], f"move_to touched the session unguarded: {gcs.unguarded}"
+
+
 class TestPIStopIsNeverQueued:
-    def test_stop_takes_the_lock_when_the_transport_is_free(self):
+    def test_stop_sends_hash24_stopall_lock_free_when_transport_is_free(self):
+        """(1) stop is the #24 StopAll (NOT the STP mnemonic) and takes NO
+        io_lock even when the transport is idle — it is lock-free like GRBL's."""
         m = _pi_stage()
         m.stop()
-        assert m._gcs.calls == ["STP"]
-        assert m._gcs.unguarded == [], "an idle-transport stop should be guarded"
+        # #24/StopAll, then the belt-and-suspenders qERR read-and-clear.
+        assert m._gcs.calls == ["StopAll", "qERR"], (
+            f"stop must send #24/StopAll (then qERR), got {m._gcs.calls}"
+        )
+        assert "STP" not in m._gcs.calls, "stop must not use the STP mnemonic"
+        # Both went out WITHOUT the transport lock — that is the whole point.
+        assert m._gcs.unguarded == ["StopAll", "qERR"], (
+            f"stop took the transport lock — it must be lock-free: {m._gcs.unguarded}"
+        )
 
-    def test_stop_is_not_queued_behind_a_held_transport_lock(self):
-        """(3) E-stop: bounded acquire, then STP goes out UNGUARDED rather than
-        waiting for a 60 s move to release the transport."""
+    def test_stop_never_acquires_the_lock_even_while_another_thread_holds_it(self):
+        """(1) E-stop under contention: with a mover holding the transport, the
+        #24 stop still completes PROMPTLY (<0.1 s) — no bounded 0.25 s wait,
+        because it never touches the lock at all."""
         m = _pi_stage()
         holder_released = threading.Event()
 
@@ -395,19 +494,36 @@ class TestPIStopIsNeverQueued:
         time.sleep(0.05)                        # let the holder take the lock
         try:
             t0 = time.monotonic()
-            assert run_with_timeout(m.stop, timeout=3.0), \
+            assert run_with_timeout(m.stop, timeout=1.0), \
                 "PI stop() never completed while the transport was held"
             elapsed = time.monotonic() - t0
         finally:
             holder_released.set()
             holder.join(timeout=5.0)
 
-        # It fell through the bounded acquire quickly — never behind the move.
-        assert elapsed < 3.0
-        assert elapsed >= PIMotorStage._STOP_LOCK_TIMEOUT_S * 0.5
-        assert m._gcs.calls == ["STP"], "the stop never reached the controller"
-        assert m._gcs.unguarded == ["STP"], (
-            "STP should have been sent unguarded after the bounded acquire failed"
+        # It did NOT wait on the lock — no 0.25 s bounded acquire any more.
+        assert elapsed < 0.1, (
+            f"stop() waited on the transport lock ({elapsed:.3f}s) — not lock-free"
+        )
+        assert m._gcs.calls == ["StopAll", "qERR"], (
+            f"the stop never reached the controller as #24/StopAll: {m._gcs.calls}"
+        )
+        assert m._gcs.unguarded == ["StopAll", "qERR"], (
+            "the #24 stop must be sent WITHOUT the transport lock"
+        )
+
+    def test_stop_swallows_a_raising_stopall_and_a_raising_qerr(self):
+        """(2) non-raising contract: even if BOTH StopAll and the follow-up
+        qERR raise, stop() must not propagate — and it still attempts both."""
+        m = _pi_stage()
+        m._gcs._stopall_raises = True
+        m._gcs._qerr_raises = True
+
+        m.stop()                                 # must not raise
+
+        assert "StopAll" in m._gcs.calls, "StopAll was never attempted"
+        assert "qERR" in m._gcs.calls, (
+            "the belt-and-suspenders qERR must still run after a raising StopAll"
         )
 
     def test_stop_while_not_connected_is_a_noop(self):
@@ -426,22 +542,29 @@ class TestPIDisconnectStopsFirst:
     nulls self._gcs.
     """
 
-    def test_disconnect_sends_stp_before_closing_the_session(self):
+    def test_disconnect_stops_before_closing_the_session(self):
         m = _pi_stage()
         gcs = m._gcs                       # disconnect nulls m._gcs — keep the stub
         gcs._moving_polls = 2              # the stage is (fake-)moving at teardown
 
         m.disconnect()
 
-        assert "STP" in gcs.calls, "disconnect did not stop the stage"
+        assert "StopAll" in gcs.calls, "disconnect did not stop the stage (#24/StopAll)"
         assert "CloseConnection" in gcs.calls, "disconnect did not close the session"
-        assert gcs.calls.index("STP") < gcs.calls.index("CloseConnection"), (
+        assert gcs.calls.index("StopAll") < gcs.calls.index("CloseConnection"), (
             "disconnect closed the GCS session BEFORE stopping the stage — a "
             "mid-move disconnect leaves the PI stage moving with no session to "
             "stop it"
         )
-        # STP went out under the transport lock (it was free during teardown).
-        assert gcs.unguarded == [], f"teardown touched the session unguarded: {gcs.unguarded}"
+        # stop() is lock-free now, so its #24/StopAll and the belt-and-suspenders
+        # qERR are the deliberately-unguarded teardown calls; CloseConnection
+        # (under disconnect's own bounded acquire) stays guarded.
+        assert gcs.unguarded == ["StopAll", "qERR"], (
+            f"unexpected unguarded teardown calls: {gcs.unguarded}"
+        )
+        assert "CloseConnection" not in gcs.unguarded, (
+            "CloseConnection must run under disconnect's bounded acquire, not unguarded"
+        )
         assert m._gcs is None and not m.connected and not m.homed
 
     def test_second_disconnect_is_a_clean_noop(self):
@@ -472,7 +595,7 @@ class TestPIDisconnectStopsFirst:
         gcs = m._gcs
 
         def _boom() -> None:
-            raise RuntimeError("STP exploded")
+            raise RuntimeError("stop() exploded")
 
         m.stop = _boom                      # type: ignore[method-assign]
 

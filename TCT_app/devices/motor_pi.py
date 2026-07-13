@@ -62,37 +62,41 @@ class PIMotorStage(MotorStageBase):
     deliberate exception; read its comment before changing anything here.
     """
 
-    # Emergency-stop lock policy — READ BEFORE CHANGING.
+    # Emergency-stop lock policy — resolved by
+    # docs/research/pi_gcs_stop_semantics.md (supersedes the earlier
+    # TODO(manual needed) from commit 4a89647).
     #
     # An emergency stop must never be queued behind the move it is supposed to
     # interrupt.  GRBLMotorStage gets that for free: its stop is a GRBL
-    # real-time byte (0x85) which the controller acts on straight out of the
-    # serial buffer, so it is written WITHOUT the transport lock.
+    # real-time byte (0x85) the controller acts on straight out of the serial
+    # buffer, sent WITHOUT the transport lock.
     #
-    # For PI/GCS that property is NOT established by anything in this repo:
-    # pipython issues ``STP`` through the same GCS message layer as every other
-    # command, and whether a C-663/C-884 executes it immediately when it arrives
-    # while another command's reply is still outstanding is a manual question,
-    # not a code question.  Guessing a different command here would be inventing
-    # instrument behaviour (safety rule 4) — so we do not.
+    # PI/GCS gets the same property via the single-character #24 stop
+    # (pipython ``GCSDevice.StopAll()`` == ``chr(24)``): pipython's message
+    # layer serialises each exchange with its OWN internal lock, released
+    # between polls, so a ``StopAll()`` from the abort thread waits at most one
+    # in-flight exchange (~ms), never a whole move.  Therefore ``stop()`` takes
+    # NO io_lock (read its comment).  ``StopAll(noraise=True)`` also reads-and-
+    # masks GCS error 10 ("controller was stopped by command"), so the next
+    # command does not inherit it.  The #24-vs-STP/HLT choice, the error-10
+    # latch/clear, and the qONT/qOSN on-target signal are all sourced in the
+    # research note.
     #
-    # TODO(manual needed): PI GCS 2.0 command reference / pipython —
-    #   (a) is ``STP`` acted on immediately when it arrives mid-exchange (i.e. is
-    #       it real-time, like GRBL's 0x85), or is it queued behind the pending
-    #       command?
-    #   (b) does pipython expose the single-character stop (#24 / 0x18, "stop all
-    #       axes") — e.g. as ``GCSDevice.StopAll()`` — and is that the correct
-    #       emergency-stop primitive to use instead of ``STP``?
-    #   (c) after a stop, does the controller latch an error state that makes the
-    #       NEXT command raise until it is cleared, and what clears it?
+    # TODO(bench): confirm on the real C-663 Mercury Step + L-836 —
+    #   (a) ``StopAll()`` halts a running FRF/MOV with sub-command latency
+    #       (should be indistinguishable from instant).  Command-layer facts in
+    #       the note are from PI's pipython + the E-727 GCS 2.0 manual; a
+    #       C-663-firmware-specific quirk (StopAll / HasqONT / HasqOSN support)
+    #       is not individually verified.
+    #   (b) a ``MOV`` is accepted after ``StopAll`` + error-clear WITHOUT
+    #       re-homing.  #24 latches error 10 but should not disable the servo
+    #       (that is the harder #27) — not verbatim-confirmed for C-663
+    #       firmware.  Fail-safe either way: a refused MOV surfaces as
+    #       DeviceError via _require_homed / the MOV guard.
     #
-    # Until that is answered we take the least-bad option below: try to take the
-    # transport lock for a SHORT bounded time, and if a long move is holding it,
-    # send the stop ANYWAY without the lock.  Rationale: the worst case of an
-    # unguarded stop is that the mover's in-flight exchange is garbled, which
-    # surfaces as a DeviceError and fails safe; the worst case of a *late* stop
-    # is a crash.  Never invert that trade.
-    _STOP_LOCK_TIMEOUT_S = 0.25
+    # The bounded acquire below belongs to ``disconnect()``'s CloseConnection
+    # ONLY (a teardown arriving mid-move must still complete) — NOT to stop().
+    _DISCONNECT_LOCK_TIMEOUT_S = 0.25
 
     def __init__(
         self,
@@ -167,9 +171,10 @@ class PIMotorStage(MotorStageBase):
         # the GCS session is still reachable.  stop() reads self._gcs and gates
         # on it being non-None (it does NOT gate on self._connected), so it must
         # run BEFORE the swap below that nulls self._gcs — nulling first would
-        # make the stop a silent no-op.  stop() is already bounded-acquire and
-        # non-raising (it swallows STP failures internally), but we still guard
-        # the call so a stop failure can never abort the teardown.
+        # make the stop a silent no-op.  stop() is now lock-free (issues
+        # #24/StopAll without io_lock) and non-raising (it swallows StopAll/qERR
+        # failures internally), but we still guard the call so a stop failure can
+        # never abort the teardown.
         try:
             self.stop()
         except Exception:
@@ -184,7 +189,7 @@ class PIMotorStage(MotorStageBase):
             # Bounded acquire, not a blocking one: a disconnect that arrives
             # while a long move holds the transport must still complete (and a
             # blocking one would hang the shutdown path for the whole move).
-            got = self.io_lock.acquire(timeout=self._STOP_LOCK_TIMEOUT_S)
+            got = self.io_lock.acquire(timeout=self._DISCONNECT_LOCK_TIMEOUT_S)
             try:
                 gcs.CloseConnection()
             except Exception:
@@ -287,32 +292,34 @@ class PIMotorStage(MotorStageBase):
         self.move_to(cur.x_mm + dx_mm, cur.y_mm + dy_mm, cur.z_mm + dz_mm)
 
     def stop(self) -> None:
-        # Emergency stop.  See the _STOP_LOCK_TIMEOUT_S comment on the class:
-        # this path may NEVER block for the length of a move, so it takes the
-        # transport lock only with a short timeout and sends STP regardless.
+        # Emergency stop = single-character #24 (GCS "stop all axes", immediate),
+        # sent via pipython StopAll().  NOT the STP mnemonic (a normal
+        # LF-terminated command line) and — crucially — NOT under io_lock:
+        # pipython serialises each exchange with its own internal lock released
+        # between polls, so this #24 byte waits at most one in-flight exchange
+        # (~ms), never a whole move (the GRBL-0x85-shaped lock-free stop the
+        # class comment wants).  StopAll(noraise=True) also reads-and-masks GCS
+        # error 10 ("controller was stopped by command") so the next command
+        # does not inherit it.  Source: pipython gcscommands.StopAll (chr(24)) /
+        # pitools.stopall; see docs/research/pi_gcs_stop_semantics.md.
         gcs = self._gcs
         if gcs is None:
             logger.warning("PI stage STOP requested while not connected — no-op")
             return
-        # Re-entrant: a caller that already holds the transport lock (e.g. a
-        # fail-safe halt from inside a guarded exchange) re-acquires instantly.
-        got = self.io_lock.acquire(timeout=self._STOP_LOCK_TIMEOUT_S)
-        if not got:
-            logger.warning(
-                "PI STOP: transport busy for %.2f s (a move is holding it) — "
-                "sending STP UNGUARDED rather than queueing the emergency stop.",
-                self._STOP_LOCK_TIMEOUT_S,
-            )
         try:
-            gcs.STP()
+            gcs.StopAll(noraise=True)      # sends chr(24); masks E10_PI_CNTR_STOP
         except Exception as exc:
-            # A stop path must never raise.  (Some GCS controllers also latch an
-            # error after a stop — see TODO(manual needed) (c) on the class.)
-            logger.debug("PI STP raised (swallowed on the stop path): %s", exc)
-        finally:
-            if got:
-                self.io_lock.release()
-        logger.warning("PI stage STOP issued")
+            # A stop path must never raise.
+            logger.debug("PI StopAll raised (swallowed on the stop path): %s", exc)
+        # Belt-and-suspenders: if this pipython build has errcheck OFF, StopAll
+        # may leave error 10 latched; a best-effort qERR() reports AND clears it
+        # (error 10 is cleared by READING it), so the abort's next command does
+        # not look like a second fault.  Must never raise.
+        try:
+            gcs.qERR()
+        except Exception:
+            pass
+        logger.warning("PI stage STOP issued (#24 StopAll)")
 
     def zero_position(self) -> None:
         """Declare the current position as the origin.
@@ -355,37 +362,51 @@ class PIMotorStage(MotorStageBase):
     def _wait_on_target(self, ids: list[str]) -> None:
         """Block until every axis in *ids* reports on-target (or timeout).
 
-        Polls ONE GCS exchange at a time, taking the transport lock per poll and
-        releasing it between polls — the same shape as ``GRBLMotorStage.
-        _grbl_wait_idle``.  The lock is deliberately NOT held across the whole
-        wait: that would freeze the GUI position poller for the length of every
-        move (up to ``move_timeout_s``) and put every other transport user
-        behind it.
+        Polls PI's own ``pitools.ontarget()`` ONE exchange at a time, taking the
+        transport lock per poll and releasing it between polls — the same shape
+        as ``GRBLMotorStage._grbl_wait_idle``.  The lock is deliberately NOT
+        held across the whole wait: that would freeze the GUI position poller
+        for the length of every move (up to ``move_timeout_s``) and put every
+        other transport user behind it.
 
-        ``pitools.waitontarget`` is no longer used here for exactly that reason:
-        it runs its own poll loop inside pipython, so serialising it correctly
-        would mean holding the transport for the entire move.  The checks below
-        are the ones this driver already used as its fallback — ``IsMoving``
-        first (works for the open-loop L-836 steppers), ``qONT`` when the
-        controller rejects it.
-        TODO(bench): on the real C-663 + L-836, confirm this IsMoving/qONT poll
-        reports on-target for a normal MOV exactly as pitools.waitontarget did
-        (watch for a controller that only answers qONT with a servo/encoder).
+        ``pitools.ontarget`` reads the servo state once (``qSVO``) then selects a
+        TARGET-RELATIVE arrival signal — ``qONT`` for closed-loop axes,
+        ``qOSN`` (steps-left) for open-loop steppers (the L-836 default),
+        falling back to ``IsMoving`` only if the controller supports neither.
+        ``qONT``/``qOSN`` are defined against the NEWLY commanded target, so they
+        cannot falsely read "on-target" in the window right after ``MOV`` is
+        accepted but before motion physically starts — the start-race a raw
+        ``IsMoving``-first poll would have (that ordering was backwards for
+        race-safety).  Source: pipython pitools.ontarget; see
+        docs/research/pi_gcs_stop_semantics.md.
+        TODO(bench): on the real C-663 + L-836, confirm ontarget() reports
+        arrival for a normal MOV.  Open- vs closed-loop default depends on the
+        optional linear encoder / configured SVO; pitools.ontarget probes
+        HasqONT/HasqOSN so it should degrade safely, but confirm on the bench.
         """
+        pit = self._pitools
+        if pit is None:
+            # Lazy, safe import — no import-time hardware (rule 1).  connect()
+            # normally sets self._pitools; this only fires if the wait is
+            # reached without it (defensive, keeps the module top import-free).
+            from pipython import pitools as pit  # type: ignore[import]
         deadline = time.monotonic() + self._move_timeout
-        time.sleep(0.02)   # let the move actually start before polling
+        time.sleep(0.02)   # small "command taken up" guard (cf. pitools.waitonready)
         while time.monotonic() < deadline:
             try:
                 with self.io_lock:
-                    moving = self._gcs.IsMoving(ids)
-                if not any(moving.values()):
+                    on_target = pit.ontarget(self._gcs, ids)
+                # Empty dict → treat as not-yet-arrived (do not let all({}) == True
+                # short-circuit into a false "done").
+                if on_target and all(on_target.values()):
                     return
             except Exception:
-                # Some controllers reject IsMoving mid-move; try qONT? instead.
+                # Extremely defensive: if ontarget() itself errors, fall back to
+                # a raw IsMoving check rather than spin.
                 try:
                     with self.io_lock:
-                        on_target = self._gcs.qONT(ids)
-                    if all(on_target.values()):
+                        moving = self._gcs.IsMoving(ids)
+                    if not any(moving.values()):
                         return
                 except Exception:
                     return
