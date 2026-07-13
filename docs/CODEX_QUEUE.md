@@ -334,7 +334,7 @@ No app-code edits. No commit. Set D5 DONE with findings per Handback.
 
 ## S1 — Visual style audit from rendered panels (advisory, no code edits)
 
-**Status: OPEN** · Effort: M · Source: Kaya request 2026-07-13 (night shift)
+**Status: DONE - Wrote rendered-panel style audit; fresh capture blocked by broken venv.** · Effort: M · Source: Kaya request 2026-07-13 (night shift)
 
 Judge whether the PySide6 GUI styling is good enough and list concrete
 remaining tweaks for: materials/shading depth, line spacing, typography
@@ -355,3 +355,11 @@ overall Apple-styleness.
   where trivial. "Good enough, ship it" is a valid verdict per area if you
   name what you checked.
 - Do NOT modify any gui code. Set S1 DONE with findings per Handback.
+
+**Codex findings (2026-07-13):**
+- Files touched: `docs/design/codex_style_audit_20260713.md`, `docs/CODEX_QUEUE.md`.
+- Wrote the requested style audit from rendered panels, ranking shared-style tweaks for micro-label typography, surface ladder contrast, opt-in static-card depth, denser secondary controls, table/tree row grammar, and old-shell chrome stopgaps, with exact `gui/style.py`/`panel_kit.py` line citations and concrete token values where trivial.
+- Verification: read `docs/design/feinschliff_gap_notes_adam.md`, `docs/design/state_color_census.md`, skimmed `TCT_app/gui/style.py`, inspected `scripts/capture_panels.py`, and visually inspected the complete `artifacts_claude/ui_audit_20260712T231348Z` light/dark capture set via contact sheets plus representative shell, motor, camera, scope, planner, and settings screenshots.
+- Fresh capture attempt from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe scripts\capture_panels.py` executed 0 captures because the venv launcher failed before Python start: `.venv\pyvenv.cfg` still points at missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`.
+- Tests: no pytest run; S1 is documentation-only. `git diff --check` passed.
+- Risk: audit uses the freshest existing complete capture set, not a newly generated capture, until the local Python/venv interpreter is repaired.
