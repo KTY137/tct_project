@@ -47,6 +47,7 @@ _CONFIG_PATH = Path(__file__).parent.parent / "configs" / "devices.yaml"
 # Plain import — prime_pyvisa() itself does no bus enumeration, so this has
 # no hardware side effects at module load (see _VisaScanManager below).
 from controller.yaml_persist import merge_yaml_text
+from controller.config_validator import _MAX_SIM_BIAS_CHANNELS
 from devices.waveform_generator import prime_pyvisa
 from gui.app_settings import theme_mode
 from gui import style
@@ -1032,6 +1033,25 @@ class _BiasSection(QWidget):
         ef.addRow("Port / GPIB addr:", self._port)
         form.addRow(self._e4c_frame)
 
+        # ── simulated (channel count is a simulation-only knob — real
+        # backends report their channel count from hardware, never config) ─
+        self._simulated_frame = QWidget()
+        sf = QFormLayout(self._simulated_frame)
+        sf.setContentsMargins(0, 0, 0, 0)
+        sim_count = int(cfg.get("sim_channel_count", 1) or 1)
+        self._sim_count = _ispin(sim_count, 1, _MAX_SIM_BIAS_CHANNELS)
+        self._sim_channel = _ispin(int(cfg.get("channel", 0) or 0),
+                                    0, max(sim_count - 1, 0))
+        sf.addRow("Sim. channel count:", self._sim_count)
+        sf.addRow("Primary channel:", self._sim_channel)
+        sf.addRow(_hint_label(
+            "Simulation only — how many HV channels the SIMULATED supply "
+            "reports. Real backends (keithley/e4control/iseg) get their "
+            "channel count from the hardware, never from this file.",
+            self._theme_mode))
+        self._sim_count.valueChanged.connect(self._on_sim_count_changed)
+        form.addRow(self._simulated_frame)
+
         # ── iseg (VISA — USB or LAN socket) ───────────────────────────
         self._iseg_frame = QWidget()
         gf = QFormLayout(self._iseg_frame)
@@ -1076,14 +1096,22 @@ class _BiasSection(QWidget):
 
         for w in (self._k_visa, self._e4c_dev, self._conn_type,
                   self._host, self._port, self._compliance,
-                  self._iseg_visa, self._iseg_ch, self._iseg_ramp, self._sim):
+                  self._iseg_visa, self._iseg_ch, self._iseg_ramp, self._sim,
+                  self._sim_count, self._sim_channel):
             _connect_changed(w, self.changed)
 
     def _on_backend(self, text: str) -> None:
         self._keithley_frame.setVisible(text == "keithley")
         self._e4c_frame.setVisible(text == "e4control")
         self._iseg_frame.setVisible(text == "iseg")
+        self._simulated_frame.setVisible(text == "simulated")
         self.changed.emit()
+
+    def _on_sim_count_changed(self, count: int) -> None:
+        """Keep the primary-channel spinbox's max in lockstep with the count
+        spinbox — the validator hard-ERRORs on channel >= sim_channel_count,
+        so the editor must never let the pair drift out of range."""
+        self._sim_channel.setMaximum(max(count - 1, 0))
 
     def to_dict(self) -> dict:
         backend = self._backend.currentText()
@@ -1112,6 +1140,11 @@ class _BiasSection(QWidget):
                 "ramp_speed_V_s": self._iseg_ramp.value(),
                 "voltage_range_V": 2000,
                 "timeout_ms": 5000,
+            })
+        elif backend == "simulated":
+            d.update({
+                "sim_channel_count": self._sim_count.value(),
+                "channel": self._sim_channel.value(),
             })
         return d
 
