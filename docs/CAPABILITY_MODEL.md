@@ -2,12 +2,12 @@
 
 | | |
 |---|---|
-| **Version** | v0.2 |
+| **Version** | v0.3 |
 | **Date** | 2026-07-13 |
-| **Status** | Mary REQUEST-CHANGES closed (12 findings) → re-review → Kaya ratification (D1 gate) |
+| **Status** | Mary S1 (12) + Codex C11 (6) closed → Mary re-review → Kaya ratification (D1 gate) |
 | **Owner** | Paul (driver contract) — plumbing halves (validator/config wiring) are Abel's |
 | **Normative for** | roadmap stage D1a (`capabilities/model.py`) and D1b (`capabilities/adapters.py`, registry) |
-| **Inputs (binding)** | `docs/ROADMAP_MASTERPLAN.md` Part I incl. bounce corrections F1/F2/F3, Codex BLOCKER-1 / MAJOR-1, the Völundr contract addenda in Part III, and Mary's S1 taxonomy review (REQUEST-CHANGES, 2026-07-13 — see §17) |
+| **Inputs (binding)** | `docs/ROADMAP_MASTERPLAN.md` Part I incl. bounce corrections F1/F2/F3, Codex BLOCKER-1 / MAJOR-1, the Völundr contract addenda in Part III, Mary's S1 taxonomy review (REQUEST-CHANGES, 2026-07-13), and the Codex C11 adversarial review (2026-07-13) — dispositions in §17 |
 
 The key words **MUST**, **MUST NOT**, **SHOULD**, **SHOULD NOT**, **MAY**, and
 **NEVER** are to be interpreted as in RFC 2119. Statements labelled **LAW** are
@@ -169,10 +169,17 @@ class HVSource(SweepableParameter):
     polarity: str | None = None     # 'p'/'n' as normalised by
                                     # devices/bias_supply_base.py::normalize_polarity;
                                     # None = unknown/fixed.  Descriptive only (§5.4).
+    channel: int | None = None      # resolved PHYSICAL BiasChannel index
+                                    # (devices/bias_channel.py::BiasChannel.channel);
+                                    # None = the driver has no channel concept.
+                                    # Provenance disambiguation, §14.2 — never policy.
 
+# NOT a CapabilityDescriptor (§5.4, Codex MAJOR-D): a non-registered grouping
+# helper.  It has no capability_id BY CONSTRUCTION and can never be registered
+# or snapshot into provenance — the registered capabilities are its axes.
 @dataclass(frozen=True)
-class Motion3D(CapabilityDescriptor):
-    axes: tuple[SweepableParameter, ...]   # one per stage axis (x, y, z)
+class Motion3D:
+    axes: tuple[SweepableParameter, ...]   # the registered stage.x/y/z descriptors
 ```
 
 Field-by-field live consumers (rule of economy, §3):
@@ -192,7 +199,8 @@ Field-by-field live consumers (rule of economy, §3):
 | `readback` | binding `verify_or_skip` behaviour + `swept/` readback datasets (§9, §10) |
 | `channels` | DA1 `swept/`-adjacent provenance; scope adapter surface |
 | `polarity` | provenance snapshot; multi-bias UI display |
-| `axes` | motion-envelope construction; planner stage axes (P3) |
+| `channel` | `swept/` `channel` attr (§10) — disambiguates which physical HV channel a run drove (§14.2); multi-bias UI display |
+| `axes` | motion-envelope construction; planner stage axes (P3) — a field of the `Motion3D` *helper* (§5.4), not of any descriptor |
 
 ### 5.1 `capability_id` grammar
 
@@ -205,14 +213,18 @@ Field-by-field live consumers (rule of economy, §3):
   `duty_cycle_pct` (`controller/scan_plan_validator.py::_KNOWN_WAVEGEN_KEYS`).
   The adapter owns that mapping; the two vocabularies are linked by a static
   table, never by string munging.
-- Seed vocabulary (v1): `stage.x`, `stage.y`, `stage.z`, `bias.voltage`,
-  `wavegen.frequency`, `wavegen.pulse_width`, `wavegen.duty_cycle`,
-  `wavegen.amplitude`, `wavegen.offset`, `wavegen.output` (TriggerSource),
-  `scope.waveform` (WaveformSource), `camera.frame` (FrameSource),
-  `intensity.amplitude` + `intensity.charge` (ReadableChannels, §5.4),
-  `slow_control.<channel>` (ReadableChannel, one per configured channel,
-  named per §5.1.1).
-- ⚑ Multi-channel HV naming is an open Kaya question (§14.2).
+- Seed vocabulary (v1): `stage.x`, `stage.y`, `stage.z`, `bias.voltage`
+  (the primary-HV-channel *role*, §14.2), `bias.ch{n}.voltage` (one per
+  non-primary physical HV channel, §14.2 — grammar-conforming: `ch1` matches
+  `[a-z][a-z0-9_]*`), `wavegen.frequency`, `wavegen.pulse_width`,
+  `wavegen.duty_cycle`, `wavegen.amplitude`, `wavegen.offset`,
+  `wavegen.output` (TriggerSource), `scope.waveform` (WaveformSource),
+  `camera.frame` (FrameSource), `intensity.amplitude` + `intensity.charge`
+  (ReadableChannels, §5.4), `slow_control.<channel>` (ReadableChannel, one
+  per configured channel, named per §5.1.1).
+- ⚑ Multi-channel HV naming is now **specified** in §14.2 (Codex MAJOR-E:
+  the deferral was unsound); the ⚑ marks it for Kaya's explicit nod inside
+  the D1-gate ratification of this document.
 
 ### 5.1.1 Slow-control channel names — config→id mapping (decided)
 
@@ -293,8 +305,27 @@ device whose transport lock the reservation takes.
   DANGEROUS relay action) is likewise **not** a capability in v1 — it stays a
   panel-only, gate-confirmed action; the descriptor's `polarity` field is
   descriptive only.
-- **`Motion3D`** aggregates per-axis `SweepableParameter`s (`stage.x/y/z`,
-  unit `"mm"`). Axis `limits` MUST be derived from
+- **`Motion3D` is a helper, NOT a capability** (decided v0.3, Codex
+  MAJOR-D — v0.2 gave it descriptor *shape* with no registry *identity*).
+  It aggregates the per-axis `SweepableParameter`s (`stage.x/y/z`, unit
+  `"mm"`) so the registry builder and planner can treat the stage as one
+  envelope, but it does **not** inherit `CapabilityDescriptor`: it has no
+  `capability_id`, CANNOT be registered (registration is keyed by
+  `capability_id`, which it lacks by construction), and is never snapshot
+  into provenance — its *axes* are the registered, classed, serialised
+  capabilities. Why this way and not a registered `stage.position`:
+  (i) a binding drives exactly one capability and each axis already is one —
+  a registered 3-vector twin would publish the same MOTION hazard path a
+  second time, needing duplicate gate wiring for zero new ability;
+  (ii) rule of economy — no consumer for a vector setpoint exists (the plan
+  grammar's `Axis` and P3's `AxisSpec` are per-axis);
+  (iii) v0.2's shape was self-contradictory anyway: a descriptor field
+  holding `tuple[SweepableParameter, ...]` violates §4's JSON-scalar field
+  restriction, so `Motion3D` never was a valid descriptor. A coordinated
+  multi-axis-move capability, if ever needed, is a declared v2 extension
+  (§12) — `stage.position` is REJECTED for v1, recorded so it is not
+  re-proposed without a consumer.
+  Axis `limits` MUST be derived from
   `devices/motor_base.py::MotorStageBase.limits_user_frame()` — the user-frame
   envelope — **not** raw `self.limits`, and (per that method's docstring)
   MUST be re-derived whenever the frame can have changed (after home/zero).
@@ -363,8 +394,8 @@ reserve → prepare → apply → wait_settled → verify_or_skip → release | 
   the setting. For `HVSource` this MUST route through the shaped-ramp path
   (`devices/bias_supply_base.py::BiasSupplyBase.ramp_to` semantics — never a
   direct `set_voltage` jump; a ramp-to-zero never energises an idle channel,
-  per that method's SAFETY docstring). For a `Motion3D` axis it routes
-  through `MotorStageBase.move_to` (which re-checks limits and homing
+  per that method's SAFETY docstring). For a stage axis (`stage.x/y/z`) it
+  routes through `MotorStageBase.move_to` (which re-checks limits and homing
   internally). `apply` entry is the "command-issued" event DA1's timing
   columns will timestamp.
 
@@ -475,14 +506,46 @@ The v0.2 contract is an **accessor**, not a fixed lock:
 - **MUST** reserve via `transport_lock` — never a parallel second lock over
   the same transport (two locks = the interleave hazard returns).
 - **`device_id` is identity; `transport_id` is the lock key — they are
-  separate fields and MAY disagree** (Mary BUG-6).
+  separate fields and MAY disagree** (Mary BUG-6). **Worked pass-through
+  example (normative):**
   `devices/intensity_scope_ch.py::ScopeChannelMonitor` is a `BaseDevice`
   with its *own* (idle) `io_lock` but reads through
   `Oscilloscope.read_channel` — the real transport lock is the **scope's**.
   Its capabilities declare `device_id="intensity_monitor"` (honest
   provenance) and `transport_id="scope"` (honest lock owner); the binding
-  reserves the scope's `transport_lock`. Overloading `device_id` for both
+  reserves the scope's `transport_lock`, and the monitor's own idle
+  `io_lock` is never the reservation unit. The adapter for a pass-through
+  device MUST set `transport_id` to the short key of the device whose I/O
+  path the wrapped method actually exercises (the adapter layer may import
+  `devices/*` per §2.2, so an `isinstance(monitor, ScopeChannelMonitor)`
+  dispatch is legal and sufficient). Overloading `device_id` for both
   roles would force a lie into one of them.
+- **The lock RESOLVER (Codex BLOCKER-A) — exactly one API maps
+  `transport_id` to a lock object.** `CapabilityRegistry` (D1b, §11.2)
+  builds a **transport map** at construction, from the same `DeviceManager`
+  attributes §11.2 enumerates — no live query, per LAW §2.4:
+  - `"motor"` → `self.motor`, `"scope"` → `self.scope`,
+    `"camera"` → `self.camera`,
+    `"waveform_generator"` → `self.waveform_generator`,
+    `"intensity_monitor"` → `self.intensity_monitor`,
+    `"slow_control/<name>"` → that `SlowControlChannel` instance (a
+    `BaseDevice`, so it carries the default accessor);
+  - `"bias_supply"` → **the shared driver**, reached as
+    `self.bias_supply.driver`
+    (`devices/bias_channel.py::BiasChannel.driver`): `DeviceManager.bias_supply`
+    and every entry of `bias_channels` are `BiasChannel` **proxies with no
+    lock of their own** — their I/O delegates to the one shared
+    `BiasSupplyBase`, whose per-call `io_lock` is the real transport lock.
+    Resolving on the proxy would re-create Mary BLOCKER-1 (a lock nothing
+    acquires); all HV channels sharing one `transport_id` = one lock is
+    exactly right, because they share one physical transport.
+  The resolved lock is `transport_map[descriptor.transport_id].transport_lock`
+  — one attribute lookup on one named instance, no fallback, no search. A
+  `transport_id` outside the map raises `KeyError` at **registry build /
+  binding construction** (fail closed, before any reserve). The registry
+  exposes this as `CapabilityRegistry.transport_lock_for(transport_id)`;
+  bindings resolve their lock **through it at construction** — no second
+  resolution path may exist.
 - Multi-capability atomic sets (e.g. frequency+duty on one wavegen) reserve
   once per transport; cross-transport grouped reservations MUST acquire in
   sorted **`transport_id`** order (deadlock avoidance — sorting by
@@ -491,10 +554,14 @@ The v0.2 contract is an **accessor**, not a fixed lock:
 - **D1b test requirement (identity, not convention):** for every registered
   binding, the object the reservation acquires MUST be **identical** —
   `is`, not merely equivalent — to the lock the driver's own I/O path
-  acquires (e.g. `binding.transport_lock is grbl._lock`,
-  `intensity_binding.transport_lock is scope.io_lock`). A per-adapter
-  identity assertion plus one behavioural test (hold the reservation in
-  simulation, prove a concurrent driver I/O call blocks) gate D1b exit.
+  acquires, **resolved through `transport_lock_for`, not asserted ad hoc**
+  (e.g. `binding.transport_lock is grbl._lock`,
+  `intensity_binding.transport_lock is scope.io_lock`,
+  `bias_ch1_binding.transport_lock is dm.bias_supply.driver.transport_lock`
+  — the same object for every HV channel). A per-adapter identity assertion,
+  one resolver fail-closed test (unknown `transport_id` raises at build),
+  plus one behavioural test (hold the reservation in simulation, prove a
+  concurrent driver I/O call blocks) gate D1b exit.
 
 ### 6.2 Reservation vs. fail-safe — never in the way of STOP
 
@@ -611,8 +678,10 @@ Normative rules regardless of shape:
 
 ### 7.3 Class assignments (v1)
 
-- `stage.x/y/z`, `Motion3D` → `MOTION`.
-- `bias.voltage` (`HVSource`) → `HV`.
+- `stage.x/y/z` → `MOTION`. (The `Motion3D` envelope helper carries no
+  class of its own — it is not a descriptor, §5.4; its axes are the classed
+  capabilities.)
+- `bias.voltage` and every `bias.ch{n}.voltage` (`HVSource`, §14.2) → `HV`.
 - `wavegen.*` setters and `wavegen.output` → `EMITTING` (the wavegen drives
   the laser trigger — see the EMITTING note in
   `ScanController._apply_wavegen_settings`'s docstring). The laser itself has
@@ -623,19 +692,52 @@ Normative rules regardless of shape:
 
 ### 7.4 HARD LAW — generated UI and safety controls
 
-**Generated UI NEVER produces safety controls.** A generated form (D4b) may
-render values, units, limits, and danger *styling*, but any operation on a
-capability with `safety_class >= MOTION` routes through the **existing QWidget
-gates** (`QtDangerGate` modal and the established envelope/lock paths). No
-generated widget may fire a gated operation without the gate, and no generated
-widget may implement a STOP/kill/ALL-OFF control — those remain the
-hand-written QWidget instances on the single existing safety path.
+**Generated UI NEVER produces safety controls, and the gate law binds per
+(capability, OPERATION) — never per class alone** (rewritten in v0.3, Codex
+MAJOR-F: v0.2's per-class wording contradicted the §7.2 route table for
+EMITTING setters). A generated form (D4b) may render values, units, limits,
+and danger *styling* (class-based `>=` styling stays legal, §7.1), and:
 
-A generated control for a capability with `safety_class >= MOTION` whose
-descriptor has `limits=None` MUST be rendered **DISABLED** (with the reason
-shown), never as an unbounded setter. This case is real, not theoretical:
-`BiasSupplyBase.voltage_range_V` is optional (`float | None`), so an
-`HVSource` descriptor can legally carry `limits=None`.
+- For every (capability, operation) a generated widget can fire, the
+  **effective route set** comes from §7.2 (class floor plus any §14.1
+  add-only override). If that set is **non-empty**, the operation MUST
+  route through the existing QWidget gates (`QtDangerGate` modal and the
+  established envelope/lock paths); no generated widget may fire it without
+  them.
+- If the set is **empty**, the generated control fires ungated — that is
+  the route table's meaning, not a loophole. Concretely: `wavegen.*` `SET`
+  is ungated today (`_apply_wavegen_settings`) and MUST stay so in a
+  generated panel. What makes EMITTING `SET` safe is a **driver-path
+  property, stated here normatively: wavegen setters never touch output
+  state** — `_apply_wavegen_settings` "NEVER touches `output_on` /
+  `output_off`" (its docstring; the setters adjust parameters of an output
+  that is only ever armed inside `_acquire_core`). The emission **ARMING**
+  is the gated operation, not the parameter value — which is why the ladder
+  needs no modal per duty-cycle edit. A per-edit confirmation on
+  frequency/duty would push the operator toward an auto-confirm
+  workaround — the exact gate-defeat path this section exists to prevent.
+- An operation whose floor names a **RESERVED** route
+  (`emission_interlock` before P3) MUST be rendered **DISABLED** (reason
+  shown) in generated UI — never fired ungated, never given an invented
+  stand-in gate. Concretely: no generated ARM control for `wavegen.output`
+  until P3 lands.
+- No generated widget may implement a STOP/kill/ALL-OFF control — those
+  remain the hand-written QWidget instances on the single existing safety
+  path. (`STOP` being ungated in §7.2 is about those existing controls; it
+  licenses no generated one.)
+- A generated control for a capability with `safety_class >= MOTION` whose
+  descriptor has `limits=None` MUST be rendered **DISABLED** (with the
+  reason shown), never as an unbounded setter — the `>=` here is legal
+  because disabling can only fail closed (§7.1). This case is real, not
+  theoretical: `BiasSupplyBase.voltage_range_V` is optional
+  (`float | None`), so an `HVSource` descriptor can legally carry
+  `limits=None`.
+- **D4b test requirement — the contract is testable against the route
+  table:** for every published (capability, operation) pair, a D4b test
+  asserts the generated widget (a) fires the gate **iff** the effective
+  route set is non-empty, (b) renders DISABLED for RESERVED routes and for
+  the `limits=None` case, and (c) exposes no STOP/kill surface. The route
+  table is data; the UI law is checkable against it, not against prose.
 
 ### 7.5 LAW — `metadata` is never policy input
 
@@ -712,9 +814,11 @@ Layout — one HDF5 **group per swept capability**, named by its
 the dot as a path separator):
 
 ```
-/swept/bias.voltage/commanded          f8  (N,)
+/swept/bias.voltage/commanded          f8  (N,)   point-aligned (alignment table)
 /swept/bias.voltage/readback           f8  (N,)   [BEST_EFFORT only]
 /swept/bias.voltage/readback_skipped   u1  (N,)   [BEST_EFFORT only]
+/swept/bias.voltage/event_value        f8  (M,)   apply-indexed, NOT point-aligned
+/swept/bias.voltage/event_row          i8  (M,)   dangling-tag row reference
 ```
 
 Literal dataset names and dtypes:
@@ -725,27 +829,94 @@ Literal dataset names and dtypes:
 | `readback` | `f8` | `(N,)` | only when `readback == BEST_EFFORT` | **measured** value; `NaN` where skipped or failed. MUST contain only measured values (LAW §9) |
 | `readback_skipped` | `u1` | `(N,)` | only when `readback == BEST_EFFORT` | `0` = measured; `1` = skipped by policy/reservation hold; `2` = read attempted but failed/unparseable |
 
-Rows are index-aligned with `/points` (row *i* ↔ `points/x_mm[i]` etc.),
-extensible, gzip, chunk 64 — the established scalar-dataset shape. Runs that
-write no `/points` rows (e.g. photo-only surveys) write no `swept/` group;
-anything beyond that alignment rule is DA1's to design under its own [Kaya]
-gate.
+**Alignment — per scan type, not `/points`-only (Codex BLOCKER-B).** v0.2
+aligned `swept/` exclusively with `/points`, which lost two truths:
+`SCAN_DATA_FORMAT.md` has non-`/points` scan tables, and a command whose
+point row never lands had no home. Both are fixed structurally:
 
-**When a row is appended, and what must survive a fault (Mary RISK-9):**
+Every run type has at most one **alignment table** — the per-point record
+its point-aligned `swept/` datasets index into (real shapes from
+`TCT_app/SCAN_DATA_FORMAT.md` §"Datasets (other scan types)"; writer symbols
+verified):
 
-- A `swept/` row is appended **at SAVE_POINT** — the same event that appends
-  the `/points` row it aligns with (`_run_plan`'s `SaveStep` branch →
-  `save_point`). A set whose point never reaches SAVE_POINT (an acquire that
-  fails *after* a successful set) therefore writes **no** `swept/` row —
-  by construction, not by accident.
-- **LAW — commanded-but-unsaved sets MUST survive in provenance.** The P0'
-  trace exists precisely for this: `ScanController._flush_wavegen_trace`
-  keys its entries on the acquire-**ATTEMPT** index and flushes on **every**
-  exit path, so the last command before a fault survives even when its
-  point row does not. `swept/` alone does NOT provide this property — DA1
-  MUST either keep the attempt-indexed command trace alongside `swept/`, or
-  add an explicit attempts dataset with the same guarantee. DA1 owns the
-  columns; this honesty rule is owned here and gates DA1's design.
+| `run_info/scan_type` | Alignment table | Row appended by |
+|---|---|---|
+| `xy_scan` | `/points` | `HDF5Writer.save_point` |
+| `voltage_scan` | `/voltage_scan` | `HDF5Writer.save_voltage_point` |
+| `z_focus_amplitude` / `z_focus_edge` | `/z_focus` | `HDF5Writer.save_z_focus_point` |
+
+- The point-aligned datasets (`commanded`, `readback`, `readback_skipped`)
+  are index-aligned with the run's alignment table (row *i* ↔ that table's
+  row *i*), extensible, gzip, chunk 64 — the established scalar-dataset
+  shape. A point-aligned row is appended by **the same event that appends
+  its alignment-table row** (`save_point` / `save_voltage_point` /
+  `save_z_focus_point`), so the two can never desync; a set whose point
+  never reaches that save writes **no** point-aligned row — by
+  construction — and survives in the event datasets below instead. Each
+  `swept/` group records which table via the `aligned_with` attr (below),
+  so a reader never guesses.
+- Honesty note on the existing tables (verified in
+  `controller/scan_controller.py`): `/voltage_scan/voltage_V` is
+  **measured** (`_save_voltage(reading.voltage_V, …)` — the post-ramp
+  `BiasReading`), while `/z_focus/z_mm` is **commanded** (the loop saves the
+  setpoint `float(z)`). The `swept/` layer adds the commanded/readback
+  distinction *structurally* instead of per-table lore — e.g. a voltage
+  scan's `swept/bias.voltage/commanded` (the setpoint) is genuinely new
+  information beside the measured `voltage_V` column, and no existing
+  column is re-labelled.
+- A run whose alignment table gets no rows (e.g. a photo-only survey)
+  writes no point-aligned datasets — but MAY still write **event** datasets
+  (below), which need no table.
+
+**Command events — apply-indexed, NOT point-aligned (Codex BLOCKER-B /
+Mary RISK-9).** Two further datasets per `swept/` group:
+
+| Dataset | dtype | shape | Presence | Meaning |
+|---|---|---|---|---|
+| `event_value` | `f8` | `(M,)` | always (for a swept capability) | value of apply-attempt *k*, in command order |
+| `event_row` | `i8` | `(M,)` | always | the alignment-table row attempt *k* was commanded FOR — the row a later save at that point WILL occupy; **dangling** (`>=` table length) when that row never landed |
+
+Semantics — deliberately the proven `camera/frame_point_index` dangling-tag
+pattern (`SCAN_DATA_FORMAT.md` §CAPTURE_PHOTO), not a new invention:
+
+- An event row is appended at **`apply` entry** (§6's command-issued event:
+  after `prepare`'s fail-closed validation, immediately before the first
+  driver command of the exchange). A `prepare`-rejected value therefore
+  never gets an event (nothing was issued); an `apply` that raises
+  mid-exchange still leaves its event — the post-mortem question "what was
+  the last thing we asked the instrument to do?" MUST be answerable from
+  the file. (This is deliberately *stronger* than the P0' stopgap, whose
+  trace appends only after a setter returns; the delta is visible only on
+  runs that abort mid-apply, so the §11.3 equality gate is unaffected.)
+- Events are appended **incrementally** (extensible dataset, the
+  established writer behaviour) — never buffered to run end. A fault after
+  a successful set loses nothing; a hard kill loses at most the event in
+  flight, matching `outcome="unknown"` honesty.
+- `event_row` values are not unique (a retried point commands twice) and
+  readers MUST bounds-check them against the alignment table's length
+  before indexing — exactly the `frame_point_index` reader contract. Where
+  a row *did* land, the LAST event with `event_row == i` is the command in
+  effect at that row's save, and MUST equal `commanded[i]` — a DA1 writer
+  test.
+- Worked fault cases (both real, verified in `scan_controller.py`):
+  1. **Wavegen set + acquire fails:** `_apply_wavegen_settings` runs BEFORE
+     `_acquire_core`; a duty-cycle set that succeeds followed by a failing
+     acquire aborts the run with no `/points` row for that attempt — the
+     `swept/wavegen.duty_cycle` events keep the command, `event_row`
+     dangling. The P0' honesty property, now structural.
+  2. **IV compliance trip:** the voltage sweep ramps to step *k*'s
+     setpoint, `reading.compliant` trips, and the loop `break`s **before**
+     `_save_voltage` — `/voltage_scan` holds rows `0..k-1`, and the
+     `swept/bias.voltage` events end with the trip setpoint at dangling
+     `event_row == k`. The trip voltage is in the file.
+
+**LAW — commanded-but-unsaved sets MUST survive in provenance** (Mary
+RISK-9). The event datasets above are the specified mechanism; DA1
+implements them (under its own [Kaya] gate) and MUST keep the P0'
+`wavegen_command_trace` alongside until the §11.3 equality gate confirms
+the events reproduce it. DA1 owns the implementation; this honesty rule is
+owned here and gates DA1's design — it is settled BEFORE the format
+freezes, not during.
 
 Literal **group attributes** on each `swept/{capability_id}` group (HDF5
 string attrs unless noted):
@@ -760,6 +931,8 @@ string attrs unless noted):
 | `label` | str | descriptor `label` |
 | `readback_policy` | str | `"NONE"` / `"BEST_EFFORT"` |
 | `model_version` | str | capability-model version (§4) |
+| `aligned_with` | str | absolute path of the run's alignment table (`"/points"`, `"/voltage_scan"`, `"/z_focus"`) — present whenever point-aligned datasets are |
+| `channel` | int | **`HVSource` groups only** — the resolved physical `BiasChannel` index the run drove (descriptor `channel`, §14.2); disambiguates `bias.voltage` across configs |
 
 Additionally the full `descriptor.snapshot()` of every swept capability
 serialises into the run's `scan_config` metadata (the `/run_info` group per
@@ -790,8 +963,9 @@ are the proven, gated paths):
 
 | Capability | Driver path it wraps |
 |---|---|
-| `stage.x/y/z` (via `Motion3D`) | `MotorStageBase.move_to` / `get_position` / `wait_until_ready` / `stop`; limits from `limits_user_frame()` |
-| `bias.voltage` (`HVSource`) | `BiasSupplyBase.ramp_to` (shaped), `read()` → `BiasReading` for read-back; limits from `voltage_range_V` |
+| `stage.x/y/z` (grouped by the `Motion3D` helper, §5.4 — the axes are the registered capabilities) | `MotorStageBase.move_to` / `get_position` / `wait_until_ready` / `stop`; limits from `limits_user_frame()` |
+| `bias.voltage` (`HVSource`) | `BiasChannel.ramp_to` / `read()` on the primary proxy (`DeviceManager.bias_supply`) — delegates to the driver's `ramp_to_ch`/`read_ch`, preserving `BiasSupplyBase.ramp_to` shaped-ramp semantics; limits from `voltage_range_V` |
+| `bias.ch{n}.voltage` (`HVSource`, §14.2) | the same `BiasChannel` surface on `DeviceManager.bias_channels[n]` — same shared driver, same `transport_id="bias_supply"`, same lock (§6.1) |
 | `wavegen.frequency/pulse_width/duty_cycle/amplitude/offset` | `WaveformGenerator.set_frequency` / `set_pulse_width` / `set_duty_cycle` / `set_amplitude` / `set_offset` — the same setters `_apply_wavegen_settings` forwards today, in the same deterministic order (frequency first) |
 | `wavegen.output` (`TriggerSource`) | `WaveformGenerator.output_on` / `output_off` (ARM path hard-coded until P3, §7.2) |
 | `scope.waveform` (`WaveformSource`) | `Oscilloscope.acquire` / `read_channel` |
@@ -830,6 +1004,10 @@ not copies. API:
   (§5.2); raises `KeyError` on unknown ids (fail closed).
 - `binding(capability_id) -> CapabilityBinding` — constructs the runtime
   handle; performs no I/O.
+- `transport_lock_for(transport_id)` — the ONE lock resolver (§6.1);
+  bindings resolve their lock through it at construction; unknown
+  `transport_id` raises `KeyError` (fail closed). No I/O — the transport
+  map is built from the same device attributes above.
 
 **Direct access remains**: nothing existing migrates to the registry; panels,
 scan controller, and tests keep using `DeviceManager` attributes; tests opt
@@ -842,7 +1020,9 @@ The first capability-executed feature is the wavegen (P1), re-landing the
 now-shipped P0' behaviour (`ScanController._apply_wavegen_settings` +
 `wavegen_command_trace`) behind the capability path, gated on behavior
 equality against P0' — command order + point index + final `swept/` rows,
-never just a run-level setting (Codex MAJOR-2). Note for reviewers: the
+never just a run-level setting (Codex MAJOR-2). The §10 event datasets are
+the structural home of that attempt-indexed comparison: on any run that does
+not abort mid-apply, trace entries map 1:1 onto event rows. Note for reviewers: the
 roadmap's Part I line "params['wavegen'] … dropped at scan_controller.py:1413"
 described the pre-P0' state and is **stale at HEAD** — the executor forwards
 per-point wavegen params today; P1's job is re-hosting, not fixing.
@@ -860,11 +1040,24 @@ needing tests (and the driver items a Mary review, safety class):
 | 3 | `PIMotorStage` gains transport serialisation: a re-entrant lock acquired in every GCS-touching method (`get_position`, `move_to`, `is_moving`, homing), exposed as `transport_lock`. Fixes a pre-existing unserialised-transport gap, capability layer or not | `devices/motor_pi.py` | Paul |
 | 4 | Slow-control channel-name charset check: ERROR on a `name` outside `[a-z][a-z0-9_]*` that is not one of the four §5.1.1 grandfathered names; ERROR on collision with an alias target | `controller/config_validator.py::_check_slow_control` | Abel (validator half — dispatch in the same beat wave as D1a) |
 | 5 | Registry fail-closed on unmappable slow-control names + the §5.1.1 static alias table | `capabilities/` registry (D1b) | Paul |
+| 6 | `CapabilityRegistry.transport_lock_for` — the §6.1 transport map/resolver (`bias_supply` → `BiasChannel.driver`); `KeyError` at build on unknown `transport_id` | `capabilities/` registry (D1b) | Paul |
+| 7 | `HVSource.channel` populated from `BiasChannel.channel`; `bias.ch{n}.voltage` descriptors published per §14.2 | `capabilities/` adapters + registry (D1b) | Paul |
 
 Items 1–3 are the **driver-side follow-up of the §6.1 accessor contract**
 (Mary BLOCKER-1) — real work, recorded here so it is scheduled, not
-discovered. Item 3 in particular is a live hazard today: the PI stage's GCS
-session has no serialisation between the GUI poller and the scan thread.
+discovered. Status at v0.3 authoring (verified in the working tree): items
+**1–2 have landed** (`BaseDevice.transport_lock` and the GRBL
+`RLock`+override exist); item **3 is outstanding** — a live hazard today:
+the PI stage's GCS session has no serialisation between the GUI poller and
+the scan thread. Items 6–7 are new in v0.3 (Codex BLOCKER-A / MAJOR-E).
+
+Beyond D1, this contract also gates (scheduled at their own stages, listed
+here so the schedulable list is complete):
+
+| Stage | Change | File / symbol | Owner |
+|---|---|---|---|
+| DA1 | `swept/` event datasets (`event_value`/`event_row`), `aligned_with`/`channel` attrs, per-scan-type alignment (§10) | `data/hdf5_writer.py` + `SCAN_DATA_FORMAT.md` version bump | Jonathan (under DA1's [Kaya] gate) |
+| D4b | Route-table conformance test for generated UI (§7.4): gate fired iff route set non-empty; RESERVED/`limits=None` → DISABLED; no STOP surface | D4b test suite | Noah |
 
 ## 12. v2 extensions — declared, NOT designed
 
@@ -881,6 +1074,11 @@ violate the no-field-without-consumer rule today):
   amplitude + charge + waveform arrays + `saturated`). v1 publishes the two
   scalar `ReadableChannel`s instead (§5.4); the composite stays on the
   driver surface until a v2 consumer exists.
+- **Coordinated multi-axis motion** — a registered vector-setpoint
+  capability (`stage.position`-style). v1 deliberately registers only the
+  per-axis `stage.x/y/z` (`Motion3D` is a non-registered helper, §5.4);
+  a vector capability needs vector `limits`/`unit` semantics and has no
+  consumer today.
 
 Declaring them here reserves the concepts so nobody wedges them into
 `metadata` (which LAW §7.5 would forbid consuming anyway).
@@ -934,13 +1132,48 @@ Declaring them here reserves the concepts so nobody wedges them into
    Whatever the shape, the §7.1/§7.2 LAWs (STOP never gated; tighten-only;
    `>=` never derives gate sets; max-hazard class; union routing; generated
    UI never a safety control) hold.
-2. **⚑ Multi-channel HV `capability_id` naming.** The grammar (§5.1) admits
-   more segments. Proposal: the primary channel is `bias.voltage`
-   (permanent), additional channels `bias.ch{n}.voltage` mirroring the
-   `BiasChannel` index that `DeviceManager.refresh_bias_channels` enumerates.
-   Since published ids are permanent (§5.2), the naming needs Kaya's nod
-   before the first multi-channel descriptor is published. (D1 can ship with
-   only the primary-channel id and defer this.)
+2. **⚑ Multi-channel HV `capability_id` naming — SPECIFIED in v0.3, pending
+   Kaya's ratification (Codex MAJOR-E).** v0.2 deferred this behind a Kaya
+   flag, but the deferral was unsound: `ScanController._resolve_bias` +
+   `DeviceManager.refresh_bias_channels` already execute non-primary
+   `BiasChannel`s today (`safety["bias_channel"]=1` is a runnable saved
+   plan), so a D1 without the naming either serialises such a run as plain
+   `bias.voltage`/`device_id="bias_supply"` — indistinguishable from the
+   primary channel — or has no descriptor for a plan that runs. The naming
+   (option **a**, ratify now):
+   - **`bias.voltage` is the primary-channel ROLE id** — permanent, and the
+     honest continuation of every historic single-channel file. It is
+     deliberately **NOT an alias for channel 0**: the primary's physical
+     index is config-chosen (`DeviceManager._bias_primary_ch`, from the
+     driver's configured channel), so pinning `bias.voltage := ch0` would
+     lie on any bench with a different primary. The resolved physical index
+     rides first-class in `HVSource.channel` (§5) and the `swept/`
+     `channel` attr (§10), so provenance is always disambiguable per run.
+   - **`bias.ch{n}.voltage` names PHYSICAL channel *n*** — the 0-based
+     `BiasChannel.channel` index `DeviceManager.refresh_bias_channels`
+     enumerates. Its meaning never moves with config; it is *published* for
+     each non-primary channel of the current config (config-dependent
+     publication is not id removal — a bench without a camera publishes no
+     `camera.frame` either).
+   - **Physical identity wins the mapping**: `_resolve_bias` with an
+     explicit index equal to the primary returns the SAME primary proxy
+     object, so the registry maps it to `bias.voltage` — one physical
+     channel is never two simultaneously-published ids, and `swept/` group
+     names stay unambiguous.
+   - All `bias.*` capabilities share `transport_id="bias_supply"` — one
+     physical transport, one lock (§6.1) — so two channels can never
+     interleave on the shared link.
+   - **Rejected alternative (b) — fail-closed block on non-primary
+     provenance/execution until ratification**: rejected because it either
+     refuses a plan that runs today (breaking a working user workflow over
+     bookkeeping, not hazard) or lets DA1 write channel-1 provenance
+     labelled as the primary — the exact dishonesty MAJOR-E names.
+     Fail-closed is for hazards; this one we know how to record honestly.
+   The ⚑ stays because published ids are permanent (§5.2): Kaya's nod on
+   this naming is part of the D1-gate ratification of this document, and no
+   multi-channel descriptor is published before that ratification. D1 is no
+   longer left with an unrunnable case — the spec is complete either way he
+   rules.
 
 ## 15. TCT will NEVER guarantee
 
@@ -980,8 +1213,24 @@ platform seed cannot inherit implied commitments:
   survival rules; lifecycle terminal renamed `release | abort`. All v0.1
   symbols re-verified against the working tree; Mary's code claims confirmed
   before each fix. Awaiting Mary re-review → Kaya ratification (D1 gate).
+- **v0.3, 2026-07-13 (Paul)** — closes the Codex C11 adversarial review
+  (2 BLOCKER, 4 MAJOR, 1 confirm-clean; disposition table in §17). Headline
+  changes: §6.1 gains the lock RESOLVER
+  (`CapabilityRegistry.transport_lock_for`, transport map with
+  `bias_supply → BiasChannel.driver`); §10 rebuilt around per-scan-type
+  alignment tables (`/points`, `/voltage_scan`, `/z_focus`) plus
+  apply-indexed `event_value`/`event_row` command-event datasets (the RISK-9
+  honesty LAW's specified mechanism); `Motion3D` demoted to a non-registered
+  helper; multi-channel HV naming specified (`bias.voltage` = primary role,
+  `bias.ch{n}.voltage` = physical channel, `HVSource.channel` field) pending
+  Kaya's ⚑ ratification; §7.4 rewritten operation-aware with a D4b
+  route-table conformance test. Two Codex sub-findings verified already
+  clean at f84f1e0 (mid-write review snapshot — see §17). All new claims
+  verified against the working tree (`_save_voltage(reading.voltage_V, …)`
+  measured vs `/z_focus` commanded; the IV compliance-trip `break` before
+  `_save_voltage`; §11.4 items 1–2 landed, item 3 outstanding).
 
-## 17. Review history (v0.1 → Mary S1 → v0.2)
+## 17. Review history (v0.1 → Mary S1 → v0.2 → Codex C11 → v0.3)
 
 Mary's S1 taxonomy review of v0.1 (a6d58e0): REQUEST-CHANGES, 12 findings.
 Disposition — every finding closed in v0.2, none deferred:
@@ -1000,3 +1249,18 @@ Disposition — every finding closed in v0.2, none deferred:
 | RISK-10 lifecycle vs executor finally | §6: LAW — lifecycle never replaces `_run_plan`'s finally fail-safe; clean finish still runs it; terminal renamed `release \| abort` |
 | NIT-11 unbounded generated setter | §7.4: `safety_class >= MOTION` + `limits=None` → control rendered DISABLED |
 | NIT-12 v0.1 commit-message honesty debt | §11.1: in-class wavegen sim divergence now recorded + delayed-apply test device named (`SimulatedMotorStage`); §5.3 rewritten to the real symbols (five-key `connect_all` dict vs six-entry `_DISPLAY_TO_SHORT`) |
+
+Codex C11 adversarial review of v0.2 (findings in `docs/CODEX_QUEUE.md` §C11;
+Codex noted the working tree changed under him mid-review, and two
+sub-findings match an earlier snapshot, not the landed f84f1e0 — each is
+dispositioned on disk truth, verified, never assumed):
+
+| Codex finding | Disposition in v0.3 |
+|---|---|
+| BLOCKER-A `transport_id` split half-done | The genuinely open half closed in §6.1: the lock RESOLVER is now specified (`CapabilityRegistry.transport_lock_for`; transport map over the §11.2 `DeviceManager` attributes; `bias_supply` resolves to `BiasChannel.driver` — the proxies own no lock; build-time `KeyError` fail-closed) + the pass-through example labelled normative + resolver folded into the D1b identity test (§11.4 item 6). The other sub-items — sorted-by-`transport_id` grouping, the §10 `transport_id` attr, the `ScopeChannelMonitor` example — were **already present in landed v0.2** (mid-write snapshot); re-verified: zero residual `device_id`-as-lock statements |
+| BLOCKER-B `swept/` loses command events | §10 rebuilt: per-scan-type ALIGNMENT TABLE (`/points`, `/voltage_scan`, `/z_focus` — real shapes from `SCAN_DATA_FORMAT.md`) + `aligned_with` attr; apply-indexed `event_value`/`event_row` datasets on the proven `camera/frame_point_index` dangling-tag pattern, appended at `apply` entry, incrementally — the set-succeeds/acquire-fails case AND the IV compliance-trip case (both verified in `scan_controller.py`) survive in the file; photo-only runs may hold events without point-aligned datasets; settled before DA1 freezes the format |
+| MAJOR-C stale `intensity.reading` | **VERIFIED CLEAN at f84f1e0** (mid-write snapshot): zero `intensity.reading` occurrences outside §5.4's negative rationale; §7.3 and §11.1 already carry `intensity.amplitude`/`intensity.charge`. No change needed; recorded so the claim is auditable |
+| MAJOR-D `Motion3D` shape without identity | §5/§5.4: `Motion3D` no longer inherits `CapabilityDescriptor` — a non-registered frozen helper with no `capability_id` by construction (its `axes` field violated §4's descriptor field restriction anyway); the registered capabilities are `stage.x/y/z`; `stage.position` REJECTED for v1 (duplicate MOTION hazard path, no consumer), declared v2 (§12); §7.3/§11.1 wording fixed |
+| MAJOR-E multi-channel HV cannot be deferred | §14.2 rewritten — naming SPECIFIED (option a): `bias.voltage` = primary-channel ROLE (never a ch0 alias — the primary index is config-chosen), `bias.ch{n}.voltage` = physical channel *n*, physical identity wins the mapping, one shared `transport_id="bias_supply"`; `HVSource.channel` field + `swept/` `channel` attr disambiguate provenance; alternative (b) fail-closed block REJECTED (breaks a runnable plan or writes dishonest provenance); ⚑ retained for Kaya's D1-gate nod |
+| MAJOR-F §7.2 vs §7.4 contradict for EMITTING SET | §7.4 rewritten OPERATION-aware: the gate law binds per (capability, operation) via the §7.2 route table; empty route set ⇒ ungated generated control (wavegen `SET` — safe because setters never touch output state; ARMING is the gated operation, stated normatively); RESERVED route ⇒ DISABLED until P3; D4b route-table conformance test required (§11.4 beyond-D1 table) |
+| Confirm-clean §5.1.1 alias table | No action — Codex verified the slow-control permanence trap closed; recorded |
