@@ -127,6 +127,23 @@ def test_set_reading_motion_off_jumps_directly(monkeypatch):
         _dispose(panel)
 
 
+def test_shutdown_cancels_inflight_voltage_roll():
+    """shutdown() must quiesce an in-flight readout roll on the voltage tile
+    (via the public motion_kit cancel helper) so the animation never outlives
+    the tile or the poll thread that feeds it."""
+    _app()
+    panel = BiasPanel(_FakeSupply(connected=True))
+    try:
+        panel.set_reading(_Reading(-150.0, 5e-6, False))
+        # A roll is in flight on the voltage tile's value label ...
+        assert getattr(panel._tile_v._value, mk._ROLL_ATTR, None) is not None
+        panel.shutdown()
+        # ... and shutdown() cancelled it (no stale animation left behind).
+        assert getattr(panel._tile_v._value, mk._ROLL_ATTR, None) is None
+    finally:
+        panel.deleteLater()
+
+
 def test_danger_well_and_kill_switch_get_no_animation():
     """Ratified law: only the Voltage · measured readout animates. The
     kill switch (Output OFF) and the HV/current tiles are untouched by

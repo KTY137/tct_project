@@ -30,6 +30,7 @@ QML usage::
 """
 from __future__ import annotations
 
+import logging
 import re
 import weakref
 
@@ -54,12 +55,49 @@ _RGBA_ALPHA_RE = re.compile(
     r"rgba\(\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*([\d.]+)\s*\)")
 
 
+_LOG = logging.getLogger(__name__)
+
+# Only ever reached if gui/style.py's specular token becomes UNPARSEABLE (a
+# malformed dev-tool override, say) — normally the alpha is parsed live. A
+# single conservative constant (not a per-theme table) so this fallback can
+# NEVER silently drift out of step the way the old hardcoded 0.85/0.045 table
+# did; on the fallback path the "correct" value is undefined anyway.
+_SPECULAR_FALLBACK_ALPHA = 0.1
+_specular_parse_warned = False
+
+
 def _alpha_from_rgba(rgba: str) -> float:
-    """Extract the alpha channel from a CSS ``rgba(r, g, b, a)`` string."""
+    """Extract the alpha channel from a CSS ``rgba(r, g, b, a)`` string.
+
+    Raises ``ValueError`` on a non-rgba() token — the strict low-level parser
+    (pinned by the drift-guard test). Callers that must not raise from inside a
+    QML ``@Property`` getter go through :func:`_specular_alpha`."""
     match = _RGBA_ALPHA_RE.match(str(rgba).strip())
     if not match:
         raise ValueError(f"gui.qml_theme: not a parseable rgba() string: {rgba!r}")
     return float(match.group(1))
+
+
+def _specular_alpha(mode: str) -> float:
+    """Specular highlight alpha for *mode*, parsed live from ``gui.style``.
+
+    The safe wrapper the ``Theme.specular`` @Property getter uses: raising from
+    inside a QML property getter is a diagnosis nightmare (it surfaces as an
+    opaque binding error with no site), so a parse miss logs a WARNING once and
+    falls back to :data:`_SPECULAR_FALLBACK_ALPHA` instead. The drift-guard
+    tests still exercise :func:`_alpha_from_rgba` directly, so correctness of
+    the normal path stays pinned."""
+    global _specular_parse_warned
+    try:
+        return _alpha_from_rgba(palette(mode)["specular"])
+    except (ValueError, KeyError, TypeError):
+        if not _specular_parse_warned:
+            _specular_parse_warned = True
+            _LOG.warning(
+                "gui.qml_theme: specular token for mode %r is not a parseable "
+                "rgba() string (%r); falling back to alpha %.3f.",
+                mode, palette(mode).get("specular"), _SPECULAR_FALLBACK_ALPHA)
+        return _SPECULAR_FALLBACK_ALPHA
 
 # PySide6 declarative registration: the QML side does ``import Tct``.
 QML_IMPORT_NAME = "Tct"
@@ -248,8 +286,10 @@ class Theme(QObject):
         # gui/style.py's LIGHT/DARK dicts are mutated in place at runtime by
         # ``set_glass_amount()``/dev-tool overrides (see its
         # ``_recompute_palettes``), so a cached alpha would go stale exactly
-        # the way the old hardcoded 0.85/0.045 table did.
-        alpha = _alpha_from_rgba(palette(_MODE)["specular"])
+        # the way the old hardcoded 0.85/0.045 table did. ``_specular_alpha``
+        # (not ``_alpha_from_rgba`` directly) so a malformed token degrades to
+        # a warned fallback instead of raising from inside this @Property.
+        alpha = _specular_alpha(_MODE)
         c = QColor(255, 255, 255)
         c.setAlphaF(alpha)
         return c

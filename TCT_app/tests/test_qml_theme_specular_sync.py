@@ -71,3 +71,32 @@ def test_alpha_from_rgba_rejects_non_rgba_string():
 
     with pytest.raises(ValueError):
         _alpha_from_rgba("#ffffff")
+
+
+def test_specular_property_falls_back_when_token_unparseable(caplog):
+    """A malformed specular token must NOT raise from inside the ``specular``
+    QML @Property getter (an exception there surfaces as an opaque binding
+    error with no site — a diagnosis nightmare). It degrades to a warned,
+    conservative fallback alpha instead; the strict parser
+    (``_alpha_from_rgba``) still raises, so the drift-guard above is unchanged.
+    """
+    import logging
+
+    import gui.qml_theme as qml_theme
+
+    _app()
+    theme = Theme()
+    set_theme_mode("light")
+    original = LIGHT["specular"]
+    qml_theme._specular_parse_warned = False   # so the once-only WARNING fires here
+    try:
+        LIGHT["specular"] = "not-a-parseable-token"
+        with caplog.at_level(logging.WARNING, logger="gui.qml_theme"):
+            colour = theme.specular            # must NOT raise
+        assert abs(colour.alphaF() - qml_theme._SPECULAR_FALLBACK_ALPHA) < 1e-3
+        assert any("specular" in r.getMessage() for r in caplog.records), \
+            "no warning breadcrumb logged for the unparseable specular token"
+    finally:
+        LIGHT["specular"] = original
+        qml_theme._specular_parse_warned = False
+        set_theme_mode("light")

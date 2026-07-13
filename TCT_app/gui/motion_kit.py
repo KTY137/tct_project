@@ -95,6 +95,7 @@ from gui.worker import owned_single_shot
 __all__ = [
     "STANDARD_EASING", "FAST_MS", "BASE_MS", "SLOW_MS",
     "motion_enabled", "fade_swap", "roll_number", "pulse",
+    "cancel_roll", "cancel_pulse", "cancel_all",
 ]
 
 # -- easing / duration scale (see module docstring) ------------------------ #
@@ -111,13 +112,17 @@ NumberFormat = Union[str, Callable[[float], str]]
 _ROLL_ATTR = "_tct_motion_roll_anim"
 _PULSE_ATTR = "_tct_motion_pulse_anim"
 _FADE_ATTR = "_tct_motion_fade_anim"
+# Stashes the (target, handler) for an animation's mid-flight destroy-guard
+# (see _arm_destroy_guard) so _detach can disarm it on every retire path.
+_DESTROY_GUARD_ATTR = "_tct_motion_destroy_guard"
 
 
 def _detach(obj) -> None:
-    """Break *obj*'s Qt parent-child link. Called on every animation this
+    """Retire *obj*: disarm its :func:`_arm_destroy_guard` ``destroyed`` guard
+    (if any) and break its Qt parent-child link. Called on every animation this
     module creates, on every path that is done with it (natural finish AND
-    cancel). Why: a ``QVariantAnimation``/``QPropertyAnimation`` parented to
-    the same widget
+    cancel). Why the parent break: a ``QVariantAnimation``/``QPropertyAnimation``
+    parented to the same widget
     its own connected closure also references forms a Python reference cycle
     that is harmless while that widget has other live references (the normal
     case), but crashed reproducibly when the widget's last external
@@ -126,11 +131,53 @@ def _detach(obj) -> None:
     collector had to referee a cycle Qt's C++ parent-owns-child contract
     doesn't know about. Detaching is synchronous, ordinary, and confirmed (by
     the same repro that found this) to still let ``DeleteWhenStopped`` reap
-    the animation correctly on the next event-loop pass."""
+    the animation correctly on the next event-loop pass. Disarming the guard
+    in the SAME step keeps the two halves of "this animation is done" together,
+    and stops a long-lived readout (which rolls every poll tick) from
+    accumulating stale ``destroyed`` connections on its label."""
+    guard = getattr(obj, _DESTROY_GUARD_ATTR, None)
+    if guard is not None:
+        setattr(obj, _DESTROY_GUARD_ATTR, None)
+        target, handler = guard
+        try:
+            target.destroyed.disconnect(handler)
+        except (RuntimeError, TypeError):
+            pass  # target already gone, or the connection already dropped
     try:
         obj.setParent(None)
     except RuntimeError:
         pass  # underlying C++ QObject already gone
+
+
+def _arm_destroy_guard(anim, target) -> None:
+    """Defend against *target* being destroyed WHILE *anim* is still running —
+    the one path :func:`_detach` does not otherwise cover. Finish, cancel and
+    motion-off all detach *anim* explicitly; a bare last-reference drop or a
+    ``WA_DeleteOnClose`` detached panel closing mid-animation never runs any of
+    those, so the animation stays parented (and cyclically referenced) into the
+    exact access-violation :func:`_detach` exists to prevent.
+
+    Fix: connect *target*'s ``destroyed`` to a handler that STOPS and unparents
+    *anim*. ``destroyed`` fires at the very top of ``~QObject`` — before Qt
+    deletes children — so *anim*'s C++ object is still valid in the slot, but
+    *target*'s is mid-teardown: the handler therefore touches ONLY the
+    animation, never the widget. Stopping halts ``valueChanged`` before the
+    widget is gone; unparenting breaks the Qt-parent<->Python-cycle cyclic GC
+    would otherwise have to referee. The connection is disarmed by
+    :func:`_detach` on every normal finish/cancel, so it never lingers or
+    accumulates."""
+    def _on_target_destroyed(*_a, _anim=anim) -> None:
+        try:
+            _anim.stop()
+        except RuntimeError:
+            pass
+        try:
+            _anim.setParent(None)
+        except RuntimeError:
+            pass
+        setattr(_anim, _DESTROY_GUARD_ATTR, None)  # guard consumed
+    setattr(anim, _DESTROY_GUARD_ATTR, (target, _on_target_destroyed))
+    target.destroyed.connect(_on_target_destroyed)
 
 
 def _cancel_attr(owner: QWidget, attr: str) -> None:
@@ -264,6 +311,11 @@ def fade_swap(
 
     anim.finished.connect(_finish)
     setattr(stacked, _FADE_ATTR, anim)
+    # Mid-flight safety net: if `stacked` is externally destroyed before the
+    # fade lands (finish/cancel never run), stop + unparent the anim (parented
+    # to the disposable overlay, itself a child of `stacked`) — see
+    # _arm_destroy_guard.
+    _arm_destroy_guard(anim, stacked)
     anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
@@ -279,6 +331,7 @@ def roll_number(
     *,
     duration: int | None = None,
     easing: QEasingCurve.Type | None = None,
+    force: bool = False,
 ) -> None:
     """Animate *label*'s text from *old* to *new*, re-rendering via *fmt* at
     every intermediate frame.
@@ -290,17 +343,27 @@ def roll_number(
     calls ``.setText()``, never touches fonts or stylesheet properties.
 
     Always lands EXACTLY on ``fmt`` applied to *new* when finished (or
-    immediately, if *old* == *new* or motion is off) — never a
-    float-interpolation rounding near-miss. Cancels/replaces any roll
+    immediately, if the DISPLAYED text does not change or motion is off) —
+    never a float-interpolation rounding near-miss. Cancels/replaces any roll
     already in flight on *label*.
+
+    Change-gate on the *rendered string*, not the raw float: a live readback
+    (HV voltage, current, ...) almost never repeats a bit-identical float
+    between poll ticks, so a raw ``old == new`` gate let the tile re-roll on
+    ~every ~500 ms tick even when the shown number never moved — a static
+    reading that visibly animates reads as RAMPING to an operator. When the
+    formatted text is unchanged we land it directly and skip the animation
+    entirely. ``force=True`` overrides the gate (animate even if the string is
+    unchanged) for callers/tests that want the motion regardless.
     """
     _cancel_attr(label, _ROLL_ATTR)
     final_text = _render(fmt, new)
-    if not motion_enabled() or old == new:
+    start_text = _render(fmt, old)
+    if not motion_enabled() or (not force and start_text == final_text):
         label.setText(final_text)
         return
 
-    label.setText(_render(fmt, old))
+    label.setText(start_text)
 
     anim = QVariantAnimation(label)
     anim.setDuration(BASE_MS if duration is None else int(duration))
@@ -317,6 +380,7 @@ def roll_number(
 
     anim.finished.connect(_finish)
     setattr(label, _ROLL_ATTR, anim)
+    _arm_destroy_guard(anim, label)   # survive a mid-flight destruction of label
     anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
 
 
@@ -400,4 +464,35 @@ def pulse(
 
     anim.finished.connect(_finish)
     setattr(widget, _PULSE_ATTR, anim)
+    _arm_destroy_guard(anim, widget)   # survive a mid-flight destruction of widget
     anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+
+# --------------------------------------------------------------------------- #
+# Public cancel helpers — quiesce in-flight motion during teardown            #
+# --------------------------------------------------------------------------- #
+
+def cancel_roll(label: QLabel) -> None:
+    """Stop + detach any in-flight :func:`roll_number` animation on *label*.
+
+    For teardown paths (panel ``shutdown``) that must quiesce a rolling readout
+    before the widget — or a thread that feeds it — goes away. Leaves whatever
+    text is currently shown; does not force the final value (a shutting-down
+    panel has nothing to display). No-op if nothing is rolling."""
+    _cancel_attr(label, _ROLL_ATTR)
+
+
+def cancel_pulse(widget: QWidget) -> None:
+    """Stop + detach any in-flight :func:`pulse` on *widget* and restore full
+    opacity (never leaves it dimmed). No-op if nothing is pulsing."""
+    _cancel_pulse(widget)
+
+
+def cancel_all(widget: QWidget) -> None:
+    """Stop + detach every in-flight motion_kit animation owned by *widget* —
+    a roll, a pulse, and (if *widget* is a ``QStackedWidget``) a page fade.
+    The blanket quiesce for a widget being torn down."""
+    _cancel_attr(widget, _ROLL_ATTR)
+    _cancel_pulse(widget)
+    if isinstance(widget, QStackedWidget):
+        _cancel_fade(widget)

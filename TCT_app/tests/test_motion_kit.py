@@ -173,6 +173,32 @@ def test_roll_number_same_value_is_noop():
     assert getattr(label, mk._ROLL_ATTR, None) is None
 
 
+def test_roll_number_same_displayed_value_skips_animation():
+    """Change-gate on the RENDERED STRING, not the raw float: two readback
+    samples that round to the same displayed text must not start an animation
+    (raw-float readback noise would otherwise re-roll a static reading on every
+    ~500 ms poll tick — an operator reads that motion as RAMPING)."""
+    _app()
+    label = QLabel()
+    # -150.236 and -150.238 differ as raw floats but both render "-150.24 V".
+    mk.roll_number(label, -150.236, -150.238, "{:+.2f} V")
+    assert label.text() == "-150.24 V"                     # landed directly
+    assert getattr(label, mk._ROLL_ATTR, None) is None     # no anim machinery
+
+
+def test_roll_number_force_animates_even_when_display_unchanged():
+    """The explicit escape hatch: force=True animates regardless of the gate,
+    and still lands EXACTLY on fmt(new)."""
+    _app()
+    label = QLabel()
+    mk.roll_number(label, -150.236, -150.238, "{:+.2f} V", force=True)
+    anim = getattr(label, mk._ROLL_ATTR, None)
+    assert anim is not None
+    anim.setCurrentTime(anim.duration())
+    assert label.text() == "-150.24 V"
+    assert getattr(label, mk._ROLL_ATTR, None) is None
+
+
 def test_roll_number_lands_exactly_on_final_value():
     _app()
     label = QLabel()
@@ -359,3 +385,89 @@ def test_fade_swap_survives_bare_widget_plus_gc_after_cancel():
     del stack
     import gc
     gc.collect()  # must not access-violate
+
+
+# --------------------------------------------------------------------------- #
+# MID-FLIGHT external target destruction (Mary batch, b156cdf/87c54fd review): #
+# the destroy-guard — the one path _detach's finish/cancel/motion-off miss.    #
+# --------------------------------------------------------------------------- #
+#
+# _detach runs on finish/cancel/motion-off, never when the target is destroyed
+# WHILE the animation still runs — the real-app case the brief names: a
+# WA_DeleteOnClose detached panel closing mid-animation. gui/motion_kit's
+# _arm_destroy_guard wires target.destroyed -> stop + unparent the anim before
+# Qt deletes it, keeping the module's documented "dies cleanly with its target"
+# invariant EXPLICIT and deterministic instead of relying on Qt's C++ cascade
+# order. The first two tests pin the guard WIRING (armed while running,
+# disarmed on every retire) — these fail if the guard is dropped. The three
+# below are crash-freedom regression guards for the mid-flight teardown itself:
+# note the current code does NOT access-violate here even without the guard in
+# this headless/deterministic harness (a bare ref-drop can't even collect the
+# target — a running QVariantAnimation is pinned by Qt's QUnifiedTimer and its
+# closures strong-ref the target), so they guard the invariant against future
+# regressions rather than reproducing a demonstrated crash.
+
+def test_roll_number_arms_and_disarms_destroy_guard():
+    """The guard is armed on the anim while it runs and disarmed the moment it
+    finishes (_detach). Fails if _arm_destroy_guard is not wired."""
+    _app()
+    label = QLabel()
+    mk.roll_number(label, 0.0, 150.0, "{:.0f}")
+    anim = getattr(label, mk._ROLL_ATTR)
+    assert getattr(anim, mk._DESTROY_GUARD_ATTR, None) is not None  # armed
+    anim.setCurrentTime(anim.duration())                            # finish -> _detach
+    assert getattr(anim, mk._DESTROY_GUARD_ATTR, None) is None      # disarmed
+
+
+def test_roll_number_cancel_disarms_destroy_guard():
+    """Cancelling/replacing a roll disarms the superseded anim's guard, so a
+    label that rolls every poll tick never accumulates stale connections."""
+    _app()
+    label = QLabel()
+    mk.roll_number(label, 0.0, 10.0, "{:.0f}")
+    anim1 = getattr(label, mk._ROLL_ATTR)
+    assert getattr(anim1, mk._DESTROY_GUARD_ATTR, None) is not None
+    mk.roll_number(label, 5.0, 20.0, "{:.0f}")   # cancels anim1 -> _detach disarms
+    assert getattr(anim1, mk._DESTROY_GUARD_ATTR, None) is None
+
+
+def test_roll_number_survives_mid_flight_target_destruction():
+    import gc
+    app = _app()
+    label = QLabel()
+    mk.roll_number(label, 0.0, 150.0, "{:.0f}")
+    assert getattr(label, mk._ROLL_ATTR, None) is not None   # running, not done
+    label.deleteLater()          # external mid-flight destruction (WA_DeleteOnClose)
+    _flush(app)                  # DeferredDelete -> target gone, destroy-guard fires
+    assert not shiboken6.isValid(label)
+    del label
+    gc.collect()                 # aftermath cyclic collection must not crash
+    _flush(app)
+
+
+def test_pulse_survives_mid_flight_target_destruction():
+    import gc
+    app = _app()
+    widget = QWidget()
+    mk.pulse(widget)
+    assert getattr(widget, mk._PULSE_ATTR, None) is not None
+    widget.deleteLater()
+    _flush(app)
+    assert not shiboken6.isValid(widget)
+    del widget
+    gc.collect()
+    _flush(app)
+
+
+def test_fade_swap_survives_mid_flight_target_destruction():
+    import gc
+    app = _app()
+    stack = _stack()
+    mk.fade_swap(stack, 1)
+    assert getattr(stack, mk._FADE_ATTR, None) is not None
+    stack.deleteLater()
+    _flush(app)
+    assert not shiboken6.isValid(stack)
+    del stack
+    gc.collect()
+    _flush(app)

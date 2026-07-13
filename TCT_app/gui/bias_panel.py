@@ -44,7 +44,7 @@ from devices.bias_supply_base import BiasSupplyBase
 from controller.danger_gate import DangerAction, DangerGate
 from controller.scan_controller import VoltageScanConfig
 from gui.app_settings import theme_mode
-from gui.motion_kit import roll_number
+from gui.motion_kit import cancel_roll, roll_number
 from gui.panel_kit import Card, CheckableCard, MetricGrid, MetricTile, section_header
 from gui.status_bus import notify
 from gui.style import PLOT_BG, WARN_RED, axis_color, palette, repolish
@@ -1185,6 +1185,14 @@ class BiasPanel(QWidget):
             flash_button(self._btn_off, "good", "Off")
 
     def shutdown(self) -> None:
+        # Quiesce the voltage tile's in-flight readout roll first (public
+        # motion_kit helper — no reaching into its private attrs): a shutting-
+        # down panel has nothing left to animate, and the roll must not outlive
+        # the tile/poll thread it belongs to.
+        try:
+            cancel_roll(self._tile_v._value)
+        except Exception:
+            pass
         # IV sweep (ABANDON): the handle's shutdown() requests abort() then joins,
         # dropping it best-effort if it will not stop.  Supply call (MUST_COMPLETE):
         # the handle joins and, on timeout, emits `orphaned` + logs at ERROR so an
