@@ -927,6 +927,26 @@ def test_wavegen_setter_error_fails_safe_and_preserves_data(sim):
     assert not ch.output_off.called
 
 
+@pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+def test_apply_wavegen_non_finite_raises_before_commanding(sim, bad):
+    """Defensive guard (MAJOR): a non-finite wavegen value raises BEFORE the
+    setter is called and BEFORE it enters the command trace.
+
+    The validator rejects such a plan on paper; this is the last-line guard if a
+    plan is ever executed un-validated.  Fail closed (rule 5): nothing is
+    commanded, and no NaN/Infinity token can reach the wavegen_command_trace."""
+    dm, ctrl, sm = sim
+    freq = mock.Mock(wraps=dm.waveform_generator.set_frequency)
+    dm.waveform_generator.set_frequency = freq
+    ctrl._wavegen_trace = []
+
+    with pytest.raises(ValueError):
+        ctrl._apply_wavegen_settings({"frequency_hz": bad}, 0)
+
+    assert not freq.called                 # never commanded to hardware
+    assert ctrl._wavegen_trace == []       # nothing recorded into the trace
+
+
 # --------------------------------------------------------------------------- #
 # danger-gate value types                                                      #
 # --------------------------------------------------------------------------- #

@@ -10,6 +10,7 @@ so the scan logic is completely decoupled from the hardware backend.
 from __future__ import annotations
 
 import logging
+import math
 import threading
 import time
 from dataclasses import dataclass, asdict, is_dataclass
@@ -1568,6 +1569,17 @@ class ScanController:
         ``except`` / ``finally``, which leaves HV, motion and the wavegen output
         safe (rule 5 — never continue after a hardware fault).
 
+        Defensive finiteness guard (fail closed, defence in depth): every value
+        is checked with :func:`math.isfinite` BEFORE it is commanded.  A
+        ``NaN``/``+/-inf`` raises :class:`ValueError` *before* the setter runs and
+        before the value enters :attr:`_wavegen_trace`, so a non-finite setpoint
+        can neither reach the hardware nor surface as a non-standard
+        ``NaN``/``Infinity`` JSON token in the command-trace metadata.  The
+        validator already rejects such plans on paper (:func:`_check_wavegen_params`);
+        this guard is the last line if a plan is executed un-validated.  It stays
+        setter-only in spirit — it reads and checks, it does not add any new
+        hardware command.
+
         Records the COMMANDED values (never a measured read-back) into
         :attr:`_wavegen_trace` for the run-metadata honesty stopgap.
 
@@ -1590,28 +1602,46 @@ class ScanController:
         wfg = self._dev.waveform_generator
         commanded: dict = {}
         if "frequency_hz" in settings:
-            v = float(settings["frequency_hz"])
+            v = self._finite_wavegen_arg("frequency_hz", settings["frequency_hz"])
             wfg.set_frequency(v)
             commanded["frequency_hz"] = v
         if "pulse_width_s" in settings:
-            v = float(settings["pulse_width_s"])
+            v = self._finite_wavegen_arg("pulse_width_s", settings["pulse_width_s"])
             wfg.set_pulse_width(v)
             commanded["pulse_width_s"] = v
         if "duty_cycle_pct" in settings:
-            v = float(settings["duty_cycle_pct"])
+            v = self._finite_wavegen_arg("duty_cycle_pct", settings["duty_cycle_pct"])
             wfg.set_duty_cycle(v)
             commanded["duty_cycle_pct"] = v
         if "amplitude_V" in settings:
-            v = float(settings["amplitude_V"])
+            v = self._finite_wavegen_arg("amplitude_V", settings["amplitude_V"])
             wfg.set_amplitude(v)
             commanded["amplitude_V"] = v
         if "offset_V" in settings:
-            v = float(settings["offset_V"])
+            v = self._finite_wavegen_arg("offset_V", settings["offset_V"])
             wfg.set_offset(v)
             commanded["offset_V"] = v
         if commanded:
             self._wavegen_trace.append(
                 {"point_index": acq_index, "commanded": commanded})
+
+    @staticmethod
+    def _finite_wavegen_arg(name: str, raw) -> float:
+        """Cast a wavegen setting to ``float`` and fail closed on non-finite.
+
+        Raises :class:`ValueError` on ``NaN``/``+/-inf`` BEFORE the caller
+        commands the generator, so a non-finite setpoint can neither reach the
+        hardware nor be appended to :attr:`_wavegen_trace` (keeping the
+        command-trace JSON free of ``NaN``/``Infinity`` tokens).  The raise
+        propagates to :meth:`_run_plan`'s shared ``except`` / ``finally``, which
+        leaves HV, motion and the wavegen output safe (rule 5).
+        """
+        v = float(raw)
+        if not math.isfinite(v):
+            raise ValueError(
+                f"non-finite wavegen setting '{name}' ({raw!r}) — refusing to "
+                "command the generator (fail-closed before setter)")
+        return v
 
     def _flush_wavegen_trace(self) -> None:
         """Write the per-point wavegen command trace into ``/run_info`` metadata.

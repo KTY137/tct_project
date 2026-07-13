@@ -12,6 +12,11 @@ root:
   reduce: charge
   children:
   - type: action
+    action: wait
+    params:
+      seconds: 0.5
+      reason: bias settle
+  - type: action
     action: acquire_waveform
     params:
       n_averages: 8

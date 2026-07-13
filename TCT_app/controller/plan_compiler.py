@@ -36,6 +36,7 @@ never getattr / eval / string dispatch (fail closed on anything unknown).
 """
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 
 from controller.scan_plan import ActionType, LeafMeta, ScanPlan
@@ -196,7 +197,13 @@ def compile_plan(plan: ScanPlan) -> list[Step]:
         if at == ActionType.ACQUIRE_WAVEFORM:
             steps.append(AcquireStep(
                 n_averages=_effective_n_averages(params, meta),
-                params=dict(params),
+                # DEEP copy: a shallow dict(params) would leave the nested
+                # 'wavegen' mapping shared with the live plan object, so a
+                # post-validation mutation of plan.root[...].params['wavegen']
+                # would silently change the commanded hardware values without
+                # re-validation.  The compiled step is a frozen, self-contained
+                # snapshot — params are small plain data, so deepcopy is cheap.
+                params=copy.deepcopy(params),
             ))
         elif at == ActionType.SAVE_POINT:
             steps.append(SaveStep())

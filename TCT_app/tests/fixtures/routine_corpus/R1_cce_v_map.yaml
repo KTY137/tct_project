@@ -11,6 +11,11 @@ root:
   snake: false
   reduce: null
   children:
+  - type: action
+    action: wait
+    params:
+      seconds: 0.5
+      reason: bias settle
   - type: loop
     axis: stage_x
     start: -1.0

@@ -19,6 +19,7 @@ ERROR, not a shrug.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -379,7 +380,15 @@ def _check_wavegen_params(
       loud, not inert — unlike the outer WARNING for unknown action params,
       because a mistyped wavegen key silently DROPS a setting the operator
       believes is applied);
-    * a non-numeric value → ERROR (the executor casts each to ``float``).
+    * a non-numeric value → ERROR (the executor casts each to ``float``);
+    * a non-finite value (``NaN`` / ``+/-inf``) → ERROR.  This is the EARLY
+      fail-closed point for the trace path: a non-finite commanded value would
+      both drive the generator with a garbage setpoint AND, if it reached the
+      ``wavegen_command_trace`` metadata, serialise as a non-standard
+      ``NaN``/``Infinity`` JSON token that strict readers reject.  Rejected on
+      paper here (the executor's :meth:`_apply_wavegen_settings` carries a
+      matching defensive guard), so a non-finite value can never be commanded or
+      recorded.
 
     Range split (per the P0' brief).  These are STRUCTURAL-DOMAIN ERRORs —
     values that are physically impossible independent of any hardware, exactly
@@ -417,6 +426,14 @@ def _check_wavegen_params(
                 f"wavegen '{key}' must be a number (got {val!r})"))
             continue
         v = float(val)
+        # Fail closed on NaN / +/-inf BEFORE the range checks: a non-finite value
+        # slips past every ``v <= 0`` / ``v < 0`` comparison (they are all False
+        # for NaN), so it must be rejected explicitly here.
+        if not math.isfinite(v):
+            issues.append(PlanIssue(
+                ERROR, path,
+                f"wavegen '{key}' must be finite (got {val!r})"))
+            continue
         if key in ("frequency_hz", "pulse_width_s") and v <= 0:
             issues.append(PlanIssue(
                 ERROR, path, f"wavegen '{key}' must be > 0 (got {v:g})"))

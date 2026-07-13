@@ -206,6 +206,27 @@ def test_wavegen_settings_ride_in_acquire_params():
     assert acq.params["wavegen"] == wg
 
 
+def test_compiled_params_are_deep_copied_from_live_plan():
+    """Regression (MAJOR): the compiler snapshots step params by DEEP copy.
+
+    A shallow ``dict(params)`` would leave the NESTED ``wavegen`` mapping shared
+    with the live plan object, so mutating ``plan.root[...].params['wavegen']``
+    after validation/compile would silently change the values the executor
+    commands to hardware — with no re-validation.  The compiled step must be an
+    isolated snapshot."""
+    acq = _acq(wavegen={"duty_cycle_pct": 0.2, "frequency_hz": 1000.0})
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0], children=[acq, _save()])
+    plan = ScanPlan(root=[loop])
+    step = next(s for s in compile_plan(plan) if isinstance(s, AcquireStep))
+    assert step.params["wavegen"]["duty_cycle_pct"] == 0.2
+
+    # Mutate the LIVE plan's nested wavegen mapping post-compile.
+    plan.root[0].children[0].params["wavegen"]["duty_cycle_pct"] = 99.9
+    # The compiled snapshot is untouched — it does not alias the live nested dict.
+    assert step.params["wavegen"]["duty_cycle_pct"] == 0.2
+    assert step.params["wavegen"] is not acq.params["wavegen"]
+
+
 def test_all_action_types_map_to_steps():
     loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0], children=[
         ActionBlock(action=ActionType.WAIT, params={"seconds": 2.5}),

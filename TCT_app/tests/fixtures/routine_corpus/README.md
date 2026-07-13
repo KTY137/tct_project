@@ -36,18 +36,25 @@ is recorded and Kaya-ratified).
 
 | File | Routine | Plan tree |
 |---|---|---|
-| `R1_cce_v_map.yaml` | CCE(V) map | `bias_V -> stage_x -> stage_y(snake) -> ACQUIRE+SAVE` — byte-faithful export of `planner_panel._default_template_plan` (the one built-in) |
+| `R1_cce_v_map.yaml` | CCE(V) map | `bias_V -> WAIT(bias settle) -> stage_x -> stage_y(snake) -> ACQUIRE+SAVE` — derived from `planner_panel._default_template_plan` plus an explicit post-bias-change settle WAIT (see R1 note) |
 | `R2_iv_vs_position.yaml` | IV-vs-position | `stage_x -> stage_y -> bias_V -> WAIT+ACQUIRE+SAVE` |
 | `R3_focus_stack.yaml` | Focus stack | `stage_z -> CAPTURE_PHOTO` |
 | `R4_survey_measure.yaml` | Survey+measure combo | `stage_x -> stage_y(snake) -> CAPTURE_PHOTO+ACQUIRE+SAVE` |
-| `R5_depletion_fast_scan.yaml` | Depletion-voltage fast scan | `bias_V(coarse, reduce="charge") -> ACQUIRE+SAVE` |
+| `R5_depletion_fast_scan.yaml` | Depletion-voltage fast scan | `bias_V(coarse, reduce="charge") -> WAIT(bias settle) -> ACQUIRE+SAVE` |
 | `R6_backlash_raster.yaml` | Backlash/repeatability raster | `stage_x(explicit values, direction reversals) -> ACQUIRE+SAVE` |
 
 R1 note: the on-disk file stores the description em dash as UTF-8 for
-readability; `ScanPlan.load_yaml(R1).to_yaml()` reproduces
-`_default_template_plan().to_yaml()` byte-for-byte (verified), so R1 is faithful
-under the canonical serializer. R7 (duty-cycle characterization) joins the
-corpus only after P0' makes `params["wavegen"]` non-inert — see the C1 proposal.
+readability; under the canonical serializer `ScanPlan.load_yaml(R1).to_yaml()`
+differs from the file only by re-escaping that em dash to `—` (verified) —
+the WAIT and every loop round-trip byte-identically. R1 is DERIVED from
+`_default_template_plan()` but adds an explicit `WAIT seconds: 0.5`
+(`reason: bias settle`) as the first child of the bias_V loop, so acquisition
+does not begin before the detector settles after each HV step. It therefore no
+longer round-trips byte-for-byte to `_default_template_plan().to_yaml()` (the
+built-in template lacks that dwell); giving the code template the same
+post-bias-change settle is a follow-up in the `gui/planner_panel.py`-owning
+beat. R7 (duty-cycle characterization) joins the corpus only after P0' makes
+`params["wavegen"]` non-inert — see the C1 proposal.
 
 ## How they were authored / validated
 

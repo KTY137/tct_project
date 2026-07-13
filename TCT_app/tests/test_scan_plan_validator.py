@@ -273,6 +273,20 @@ def test_wavegen_non_numeric_value_is_error():
                    {"frequency_hz": "fast"}), limits())))
 
 
+def test_wavegen_non_finite_value_is_error():
+    """Regression (MAJOR): NaN / +/-inf must be rejected for EVERY key.
+
+    A non-finite value slips past every range comparison (``v <= 0`` / ``v < 0``
+    / the ``0 < v < 100`` band are all False for NaN) and would otherwise reach
+    the ``wavegen_command_trace`` metadata as a non-standard ``NaN``/``Infinity``
+    JSON token that strict readers reject.  Fail closed here."""
+    for key in ("frequency_hz", "pulse_width_s", "duty_cycle_pct",
+                "amplitude_V", "offset_V"):
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            errs = errors(validate_plan(_wavegen_plan({key: bad}), limits()))
+            assert any(key in e and "finite" in e for e in errs), (key, bad, errs)
+
+
 def test_wavegen_non_mapping_is_error():
     assert any("must be a mapping" in e
                for e in errors(validate_plan(_wavegen_plan([1, 2, 3]), limits())))
