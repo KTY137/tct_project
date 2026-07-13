@@ -40,11 +40,12 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable
 
 import numpy as np
 
+from analysis.camera_calibration import AffineFit, fit_affine, residual_summary
 from analysis.image_prep import PreparedROI, prepare_metrology_roi
 from controller.danger_gate import DangerAction, DangerGate
 
@@ -197,6 +198,237 @@ class RepeatabilityResult:
 
 
 # --------------------------------------------------------------------------- #
+# Stage -> camera affine self-calibration (Wave-5 step 2)                      #
+# --------------------------------------------------------------------------- #
+
+def plan_affine_staircase(
+    nx: int = 3,
+    ny: int = 3,
+    step_mm: float = 0.5,
+    *,
+    origin_mm: tuple[float, float] = (0.0, 0.0),
+) -> list[tuple[float, float]]:
+    """Commanded XY positions for a stage->camera affine-calibration staircase.
+
+    The path covers an ``nx x ny`` grid (spacing ``step_mm``, lower-left corner
+    ``origin_mm``) and is built so that **every interior grid point is
+    approached from opposite directions on each axis** -- the raw observation
+    backlash needs (approach a point moving +X vs -X, and +Y vs -Y; the
+    forward-minus-return image discrepancy *is* the backlash, see
+    :func:`fit_stage_camera_affine` and
+    ``docs/design/camera_survey_metrology.md`` sections B/C, "step the stage ...
+    both directions ... forward-return offset ... = backlash").
+
+    Deterministic visit order (documented so the pairing in
+    :func:`fit_stage_camera_affine`, the ``_forward_mask_from_path`` labelling,
+    and the sim tests can rely on it)::
+
+        Phase X -- one row at a time, j = 0 .. ny-1 (bottom to top):
+            forward sweep : (x0,yj) (x1,yj) ... (x_{nx-1},yj)   [+X arrivals]
+            return  sweep : (x_{nx-2},yj) ...   (x0,yj)         [-X arrivals]
+        Phase Y -- one column at a time, i = 0 .. nx-1 (left to right):
+            forward sweep : (xi,y0) (xi,y1) ... (xi,y_{ny-1})   [+Y arrivals]
+            return  sweep : (xi,y_{ny-2}) ...   (xi,y0)         [-Y arrivals]
+
+    Phase X exercises X backlash (X reverses between each row's forward and
+    return sweep) and already visits every grid point; Phase Y exercises Y
+    backlash. Consecutive commanded points differ by a single ``step_mm``
+    (except the one Phase X -> Phase Y hand-off), so neighbour-to-neighbour
+    image overlap stays high for the chained correlation in
+    :meth:`RepeatabilityTester.calibrate_affine`.
+
+    Pure planning only: NO device access, NO motion -- returns the commanded
+    list for a caller (the tester) to drive under a danger gate.
+    """
+    if nx < 2 or ny < 2:
+        raise ValueError(f"need at least a 2x2 grid; got nx={nx}, ny={ny}")
+    if step_mm <= 0.0:
+        raise ValueError(f"step_mm must be positive; got {step_mm}")
+    ox, oy = float(origin_mm[0]), float(origin_mm[1])
+    xs = [ox + i * float(step_mm) for i in range(nx)]
+    ys = [oy + j * float(step_mm) for j in range(ny)]
+
+    path: list[tuple[float, float]] = []
+    # Phase X: each row forward (+X) then return (-X); the return skips the
+    # turn point (x_{nx-1}) it just left, so interior x's are the ones seen
+    # from both directions.
+    for j in range(ny):
+        for i in range(nx):
+            path.append((xs[i], ys[j]))
+        for i in range(nx - 2, -1, -1):
+            path.append((xs[i], ys[j]))
+    # Phase Y: each column forward (+Y) then return (-Y).
+    for i in range(nx):
+        for j in range(ny):
+            path.append((xs[i], ys[j]))
+        for j in range(ny - 2, -1, -1):
+            path.append((xs[i], ys[j]))
+    return path
+
+
+def _forward_mask_from_path(path: list[tuple[float, float]]) -> list[bool]:
+    """Label each visit forward(+)/return(-) by the sign of its arrival move
+    along the dominant axis -- the staircase's forward sweeps arrive +X/+Y and
+    its return sweeps -X/-Y (see :func:`plan_affine_staircase`). The very first
+    visit has no arrival move and is labelled forward by convention (it seeds
+    the chain and forms no pair)."""
+    mask: list[bool] = [True]
+    for k in range(1, len(path)):
+        dx = path[k][0] - path[k - 1][0]
+        dy = path[k][1] - path[k - 1][1]
+        if abs(dx) >= abs(dy):
+            mask.append(dx > 0.0)
+        else:
+            mask.append(dy > 0.0)
+    return mask
+
+
+@dataclass(frozen=True)
+class StageCameraCal:
+    """Stage->camera affine self-calibration result (Wave-5 step 2).
+
+    ``affine`` is a real :class:`~analysis.camera_calibration.AffineFit` for
+    every genuine fit; it is ``None`` ONLY for an aborted capture (gate denied,
+    or fewer than three usable points) -- :func:`fit_stage_camera_affine`
+    itself always returns a real fit. ``backlash_mm`` is the per-axis mean
+    forward-minus-return discrepancy in stage mm (see
+    :func:`fit_stage_camera_affine`); ``(0.0, 0.0)`` when no forward/return
+    pairs were available. ``rms_um`` is the affine residual rms (linearity).
+    ``passes`` is ``None`` unless a ``tolerance_um`` was supplied, else the
+    :func:`~analysis.camera_calibration.residual_summary` pass/fail. ``notes``
+    is a human one-liner (point count, rms, backlash, any exclusions)."""
+
+    affine: AffineFit | None
+    backlash_mm: tuple[float, float]
+    rms_um: float
+    passes: bool | None
+    n_points: int
+    notes: str
+
+
+def _reduce_backlash(
+    commanded: np.ndarray,
+    measured: np.ndarray,
+    affine: AffineFit,
+    forward_mask: np.ndarray,
+) -> tuple[tuple[float, float], int]:
+    """Per-axis mean |forward-return| discrepancy in stage mm, plus the pair
+    count. See :func:`fit_stage_camera_affine` for the derivation contract.
+
+    The *approach axis* of each visit is read from the visit-ordered path (the
+    dominant component of ``commanded[i] - commanded[i-1]``), and forward/return
+    visits are paired **within the same axis**. This keeps X and Y backlash
+    separate even when a commanded point is visited on both a row sweep and a
+    column sweep (as the full staircase does) -- pairing all-forward against
+    all-return there would blend the two axes and halve each number."""
+    forward = np.asarray(forward_mask, dtype=bool).reshape(-1)
+    obj = affine.image_to_object(measured)  # measured px -> apparent stage mm
+
+    arrivals = np.zeros_like(commanded)
+    if len(commanded) > 1:
+        arrivals[1:] = commanded[1:] - commanded[:-1]
+    approach_axis = np.argmax(np.abs(arrivals), axis=1)  # 0 (X) or 1 (Y) per visit
+
+    groups: dict[tuple[float, float], list[int]] = {}
+    for i, key in enumerate(map(tuple, np.round(commanded, 6))):
+        groups.setdefault(key, []).append(i)
+
+    sums = [0.0, 0.0]
+    counts = [0, 0]
+    for idxs in groups.values():
+        for axis in (0, 1):
+            on_axis = [i for i in idxs
+                       if approach_axis[i] == axis and abs(arrivals[i][axis]) > 1e-9]
+            fwd = [i for i in on_axis if forward[i]]
+            ret = [i for i in on_axis if not forward[i]]
+            if not fwd or not ret:
+                continue
+            # forward-minus-return in stage mm; the affine inverse already turned
+            # the pixel offset into an mm offset via the fitted scale/rotation.
+            dd = obj[fwd].mean(axis=0) - obj[ret].mean(axis=0)
+            sums[axis] += abs(float(dd[axis]))
+            counts[axis] += 1
+
+    bx = sums[0] / counts[0] if counts[0] else 0.0
+    by = sums[1] / counts[1] if counts[1] else 0.0
+    return (bx, by), counts[0] + counts[1]
+
+
+def fit_stage_camera_affine(
+    commanded_mm,
+    measured_px,
+    *,
+    tolerance_um: float | None = None,
+    forward_mask=None,
+) -> StageCameraCal:
+    """Fit the stage->camera affine and derive per-axis backlash (pure).
+
+    *commanded_mm* ``(N, 2)`` are the commanded stage XY (mm) in **visit
+    order**; *measured_px* ``(N, 2)`` the registered image positions ``(u, v)``
+    (px) of those visits (built by chaining sub-pixel correlations, see
+    :meth:`RepeatabilityTester.calibrate_affine`). The affine (scale, rotation,
+    shear), its residual metrics, and the pass/fail flag are delegated verbatim
+    to :func:`analysis.camera_calibration.fit_affine` /
+    :func:`~analysis.camera_calibration.residual_summary` -- this function only
+    adds the backlash reduction. No device access; safe to unit-test.
+
+    Backlash derivation
+    -------------------
+    A point commanded twice -- once on a forward (+) approach and once on a
+    return (-) approach along the SAME axis -- images at two slightly different
+    pixel positions; that offset is the mechanical backlash on that axis. Each
+    visit's approach axis is read from the visit-ordered path (the dominant
+    component of ``commanded[i] - commanded[i-1]``, hence *commanded_mm* must be
+    in visit order); for every commanded position, forward and return visits are
+    paired **within each axis**, mapped back to stage mm through the fitted
+    affine inverse (:meth:`AffineFit.image_to_object`), and differenced. The
+    per-axis magnitude is averaged into ``backlash_mm``. Pairing per axis (not
+    all-forward against all-return) keeps X and Y separate even when a point is
+    visited on both a row and a column sweep. With no *forward_mask* -- or a mask
+    that yields no forward/return pair -- backlash is ``(0.0, 0.0)``: it is
+    genuinely unmeasurable without the approach labelling, which is why the mask
+    is a required observation rather than a convenience.
+    """
+    commanded = np.asarray(commanded_mm, dtype=np.float64).reshape(-1, 2)
+    measured = np.asarray(measured_px, dtype=np.float64).reshape(-1, 2)
+    n = len(commanded)
+    affine = fit_affine(commanded, measured)
+
+    passes: bool | None = None
+    if tolerance_um is not None:
+        summary = residual_summary(
+            affine.residuals_px, affine.mean_px_per_mm, tolerance_um=tolerance_um,
+        )
+        passes = bool(summary["passes"])
+
+    backlash: tuple[float, float] = (0.0, 0.0)
+    if forward_mask is None:
+        backlash_note = "backlash unmeasured (no forward/return mask)"
+    else:
+        backlash, n_pairs = _reduce_backlash(commanded, measured, affine, forward_mask)
+        if n_pairs:
+            backlash_note = (
+                f"backlash {n_pairs} pair(s): X={backlash[0] * 1000.0:.2f} um, "
+                f"Y={backlash[1] * 1000.0:.2f} um"
+            )
+        else:
+            backlash_note = "backlash unmeasured (no matched forward/return pair)"
+
+    notes = (
+        f"{n} pts; rms {affine.rms_px:.3f} px ({affine.rms_um:.2f} um); "
+        f"{backlash_note}"
+    )
+    return StageCameraCal(
+        affine=affine,
+        backlash_mm=backlash,
+        rms_um=affine.rms_um,
+        passes=passes,
+        n_points=n,
+        notes=notes,
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Orchestrator                                                                #
 # --------------------------------------------------------------------------- #
 
@@ -272,7 +504,11 @@ class RepeatabilityTester:
     def calibrate(self, axis: str = "x", dist_mm: float = 5.0,
                   settle_s: float = 0.4) -> float:
         """Command one known move on *axis* and return px/mm from the measured
-        pixel shift.  Returns to the start position afterwards."""
+        pixel shift.  Returns to the start position afterwards.
+
+        This is the quick *scalar* sanity check (one axis, one move); for
+        placement-grade geometry -- rotation/shear/anisotropic scale, linearity
+        residuals and per-axis backlash -- use :meth:`calibrate_affine`."""
         axis = axis.lower()
         d = {"x": (dist_mm, 0, 0), "y": (0, dist_mm, 0), "z": (0, 0, dist_mm)}[axis]
         # Fail-closed: this commands a real stage move, so confirm BEFORE any
@@ -394,3 +630,121 @@ class RepeatabilityTester:
 
         self.logger.info("Repeatability done:\n%s", result.summary())
         return result
+
+    def calibrate_affine(self, *, nx: int = 3, ny: int = 3, step_mm: float = 0.5,
+                         settle_s: float = 0.5, tolerance_um: float | None = None,
+                         quality_min: float = 0.2) -> StageCameraCal:
+        """Drive a danger-gated staircase and fit the stage->camera affine.
+
+        Placement-grade companion to :meth:`calibrate` (which measures a single
+        scalar px/mm). Plans an ``nx x ny`` staircase *around the current stage
+        point* (:func:`plan_affine_staircase`); then -- after ONE operator
+        confirmation covering the whole staircase -- visits each commanded
+        position, settles, grabs a frame through the Wave-5 preprocessing
+        pipeline (:meth:`_grab`), and chains neighbour-to-neighbour sub-pixel
+        correlations into a cumulative pixel position versus the FIRST frame.
+        The ``(commanded_mm, measured_px)`` pairs are fitted by
+        :func:`fit_stage_camera_affine` (affine + linearity residuals + per-axis
+        backlash).
+
+        Safety -- identical fail-closed stance to :meth:`run`:
+
+        * No gate injected -> refuse (``RuntimeError``); the stage never moves.
+        * Gate DENIES -> clean abort: the stage is left exactly where it is, no
+          motion is commanded, and a no-data :class:`StageCameraCal`
+          (``affine is None``, ``n_points == 0``) is returned -- never raised.
+        * Every move is a planned staircase position; nothing moves outside the
+          confirmed extent. On success the stage is left at the last staircase
+          point (this method does not auto-home or auto-return).
+
+        A position whose grabbed frame scores below *quality_min* is EXCLUDED
+        from the fit (never fabricated into a pair), counted in the returned
+        ``notes``, and the chained correlation bridges the gap to the next good
+        frame. If fewer than three usable points remain, a no-data result is
+        returned rather than a meaningless fit.
+        """
+        if not getattr(self._camera, "connected", False):
+            raise RuntimeError(
+                "Camera is not connected — cannot calibrate the stage->camera affine.")
+
+        start = self._motor.get_position()  # read-only, commands no motion
+        origin = (start.x_mm, start.y_mm)
+        z0 = start.z_mm
+        path = plan_affine_staircase(nx=nx, ny=ny, step_mm=step_mm, origin_mm=origin)
+        forward_mask_full = _forward_mask_from_path(path)
+        # TODO(bench): confirm on the real stage+camera that step_mm keeps each
+        # neighbour image shift well under half a frame at the actual
+        # magnification (phase correlation aliases past that), and that the DUT
+        # target has enough texture to correlate; both are optics-dependent and
+        # only verifiable on hardware (docs/design/camera_survey_metrology.md D).
+        x_extent = (nx - 1) * step_mm
+        y_extent = (ny - 1) * step_mm
+
+        # ONE confirmation for the whole staircase (mirrors run() / the plan
+        # executor), carrying the real extent, step and move count. This is
+        # BEFORE any move; the origin read above commands no motion.
+        action = DangerAction(
+            kind="move",
+            summary=(f"Stage->camera affine calibration: {nx}x{ny} staircase, "
+                     f"{step_mm:g} mm steps ({x_extent:g}x{y_extent:g} mm extent), "
+                     f"{len(path)} moves from the current point."),
+            detail={"nx": nx, "ny": ny, "step_mm": step_mm,
+                    "x_extent_mm": x_extent, "y_extent_mm": y_extent,
+                    "n_positions": len(path), "origin_mm": origin},
+        )
+        if not self._confirm_motion(action):
+            self.logger.info(
+                "Affine calibration not confirmed — no motion performed.")
+            return StageCameraCal(
+                affine=None, backlash_mm=(0.0, 0.0), rms_um=0.0, passes=None,
+                n_points=0,
+                notes="affine calibration denied at the danger gate — no motion performed",
+            )
+
+        commanded: list[tuple[float, float]] = []
+        measured: list[tuple[float, float]] = []
+        fwd_flags: list[bool] = []
+        last_image: np.ndarray | None = None
+        last_px = (0.0, 0.0)
+        n_excluded = 0
+
+        for k, (px_mm, py_mm) in enumerate(path):
+            self._motor.move_to(px_mm, py_mm, z0)
+            prepared = self._grab(settle_s)
+            if prepared.quality < quality_min:
+                n_excluded += 1
+                self.logger.debug(
+                    "affine cal: position %d (%.3f, %.3f) quality %.3f < %.3f "
+                    "— EXCLUDED (motion still happened)",
+                    k, px_mm, py_mm, prepared.quality, quality_min)
+                continue
+            if last_image is None:
+                cur_px = (0.0, 0.0)                       # first good frame = origin
+            else:
+                dy, dx = cross_correlation_shift(last_image, prepared.image)
+                cur_px = (last_px[0] + dx, last_px[1] + dy)
+            commanded.append((px_mm, py_mm))
+            measured.append(cur_px)
+            fwd_flags.append(forward_mask_full[k])
+            last_image = prepared.image
+            last_px = cur_px
+
+        if len(commanded) < 3:
+            return StageCameraCal(
+                affine=None, backlash_mm=(0.0, 0.0), rms_um=0.0, passes=None,
+                n_points=len(commanded),
+                notes=(f"affine calibration aborted: only {len(commanded)} usable "
+                       f"point(s) after {n_excluded} low-quality exclusion(s) — "
+                       f"need at least 3"),
+            )
+
+        cal = fit_stage_camera_affine(
+            commanded, measured, tolerance_um=tolerance_um, forward_mask=fwd_flags,
+        )
+        if n_excluded:
+            cal = replace(
+                cal,
+                notes=f"{n_excluded} low-quality position(s) excluded; {cal.notes}",
+            )
+        self.logger.info("Affine calibration done: %s", cal.notes)
+        return cal
