@@ -18,7 +18,7 @@ from typing import Optional
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QObject, Qt, QSettings, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 )
 
 from devices.camera_blackfly import BlackflyCamera, FrameMeta
+from gui.app_settings import theme_mode
 from gui.panel_kit import (
     ActionBar, Card, EmptyState, MetricGrid, MetricTile, panel_header,
     readout_cell,
@@ -195,7 +196,7 @@ class CameraPanel(QWidget):
         # Theme mode for the histogram bar's accent colour (gui.style tokens).
         # Read once from the same QSettings key main.py/tct_gui.py use,
         # mirroring MotorPanel/MonitorPanel; see refresh_theme() below.
-        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
+        self._theme_mode = theme_mode()
 
         self._build_ui()
 

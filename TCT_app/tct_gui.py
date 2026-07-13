@@ -11,7 +11,7 @@ import logging
 import os
 import sys
 
-from PySide6.QtCore import Qt, Slot, Signal, QObject, QThread, QTimer, QSettings, QUrl
+from PySide6.QtCore import Qt, Slot, Signal, QObject, QThread, QTimer, QUrl
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QTabWidget, QApplication, QStyle,
@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QFrame, QDockWidget, QPlainTextEdit, QScrollArea,
 )
 
+from gui import app_settings
 from gui.style import (
     apply_theme, apply_window_backdrop, apply_window_backdrop_to,
     apply_window_opacity, get_window_opacity, load_theme_customization,
@@ -224,8 +225,8 @@ class TCTMainWindow(QMainWindow):
         # Aux windows (created lazily) + one-time wiring
         self._device_manager_window: DeviceManagerWindow | None = None
         self._settings_window: SettingsWindow | None = None
-        self._settings = QSettings("TCT", "TCTSetup")
-        self._theme_mode = str(self._settings.value("theme", "light"))
+        self._settings = app_settings.settings()
+        self._theme_mode = app_settings.theme_mode(self._settings)
         # Theme-editor customization (gui/theme_editor.py): palette overrides,
         # glass amount, typography, radius — loaded from theme/* right where
         # the saved dark/light choice is, so the apply_theme() re-assert in
@@ -916,7 +917,7 @@ class TCTMainWindow(QMainWindow):
                     panel.refresh_theme(self._theme_mode)
                 except Exception:
                     logger.debug("panel refresh_theme failed", exc_info=True)
-        self._settings.setValue("theme", self._theme_mode)
+        app_settings.set_theme_mode(self._theme_mode, self._settings)
 
     def _open_theme_editor(self) -> None:
         """View ▸ Theme… — the theme-editor dialog (gui/theme_editor.py),
@@ -953,28 +954,23 @@ class TCTMainWindow(QMainWindow):
 
     def _restore_window_state(self) -> None:
         s = self._settings
-        geo = s.value("geometry")
+        geo = app_settings.window_geometry(s)
         if geo is not None:
             self.restoreGeometry(geo)
-        idx = s.value("active_tab")
+        idx = app_settings.active_tab_index(s)
         if idx is not None:
-            try:
-                self._tabs.setCurrentIndex(int(idx))
-            except (TypeError, ValueError):
-                pass
-        detached = s.value("detached_titles") or []
-        if isinstance(detached, str):
-            detached = [detached]
+            self._tabs.setCurrentIndex(idx)
+        detached = app_settings.detached_titles(s)
         for title in detached:
             self._tabs.detach_by_title(title)
 
     def _save_window_state(self) -> None:
         s = self._settings
-        s.setValue("geometry", self.saveGeometry())
-        s.setValue("theme", self._theme_mode)
+        app_settings.set_window_geometry(self.saveGeometry(), s)
+        app_settings.set_theme_mode(self._theme_mode, s)
         if hasattr(self, "_tabs"):
-            s.setValue("active_tab", self._tabs.currentIndex())
-            s.setValue("detached_titles", self._tabs.detached_titles())
+            app_settings.set_active_tab_index(self._tabs.currentIndex(), s)
+            app_settings.set_detached_titles(self._tabs.detached_titles(), s)
 
     def _refresh_lights(self) -> None:
         """Update the device lights from the *live* device state.

@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from PySide6.QtCore import Qt, QObject, QRegularExpression, QSettings, QThread, Signal
+from PySide6.QtCore import Qt, QObject, QRegularExpression, QThread, Signal
 from PySide6.QtGui import (
     QColor, QFont, QSyntaxHighlighter, QTextCharFormat,
 )
@@ -48,6 +48,7 @@ _CONFIG_PATH = Path(__file__).parent.parent / "configs" / "devices.yaml"
 # no hardware side effects at module load (see _VisaScanManager below).
 from controller.yaml_persist import merge_yaml_text
 from devices.waveform_generator import prime_pyvisa
+from gui.app_settings import theme_mode
 from gui import style
 from gui.panel_kit import Card, form_row, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
@@ -1353,7 +1354,7 @@ class SettingsWindow(QDialog):
         # tct_gui._toggle_theme's live-refresh loop (tct_gui.py is out of
         # this module's scope) — see refresh_theme() for a caller-driven
         # re-tint path.
-        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
+        self._theme_mode = theme_mode()
         self._build_ui()
         self._load_file()
 

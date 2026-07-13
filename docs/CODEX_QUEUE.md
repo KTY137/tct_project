@@ -332,6 +332,44 @@ No app-code edits. No commit. Set D5 DONE with findings per Handback.
 - Verification: read the relevant `git show` diffs and current source with line numbers for `scan_controller.py`, `scan_coordinator.py`, `scan_viewer_panel.py`, `tct_gui.py`, `analysis/map_slice.py`, `analysis_panel.py`, `style.py`, `theme_editor.py`, `qml_theme.py`, and targeted tests. `git diff --check` passed. Per D5 instruction, pytest was not run.
 - Risk: review is static-only; no runtime reproduction or screenshot/contrast measurement pass was performed.
 
+## C7 — Central QSettings accessor: gui/app_settings.py
+
+**Status: DONE — Added central accessor; style.py allowlisted under active lock.** · Effort: S-M · Source: Adam, day-shift wave 1 (2026-07-13); Wave-1/4 leftover
+
+Scattered `QSettings("TCT", "TCTSetup")` constructions + raw string keys are
+duplicated across `gui/` and `tct_gui.py`. Centralize them.
+
+- Task: create `TCT_app/gui/app_settings.py` — a thin, typed accessor module:
+  one place that owns the `QSettings("TCT", "TCTSetup")` identity and typed
+  get/set helpers for the keys that exist TODAY (discover them first:
+  `rg -n "QSettings\(" TCT_app/` and `rg -n "\.value\(|\.setValue\(" TCT_app/gui TCT_app/tct_gui.py`).
+  Typical keys: theme mode, backdrop/canvas mode, window geometry, save
+  options. Defaults must match current call-site defaults EXACTLY.
+- Migrate the mechanical call sites in `gui/` + `tct_gui.py` to the accessor.
+  Behavior-identical refactor: same keys, same defaults, same types. Do NOT
+  touch scan/HV/motion logic files beyond the settings lines themselves.
+- **Coordination:** another beat holds locks on `gui/style.py` and
+  `gui/panel_kit.py` today — if those files have uncommitted changes, leave
+  their call sites unmigrated and note them in findings instead (per ground
+  rule: never edit a file another agent is mid-flight on).
+- Add `TCT_app/tests/test_app_settings.py`: accessor round-trip with a
+  scratch QSettings scope + a grep-style guard that no `gui/` module except
+  `app_settings.py` constructs `QSettings("TCT", "TCTSetup")` directly
+  (allowlist any file you intentionally left unmigrated).
+- Verify headless: the new test + `tests/test_apply_theme_lifetime.py`. Known
+  sandbox venv-launch issue (see C1-C6 findings): if pytest cannot start,
+  verify statically, say so explicitly, and Adam runs the suite after.
+- Do NOT commit; set C7 DONE with findings per Handback.
+
+**Codex findings (2026-07-13):**
+- Files touched: `TCT_app/gui/app_settings.py`, `TCT_app/main.py`, `TCT_app/tct_gui.py`, `TCT_app/gui/bias_panel.py`, `TCT_app/gui/calibration_panel.py`, `TCT_app/gui/camera_panel.py`, `TCT_app/gui/laser_panel.py`, `TCT_app/gui/monitor_panel.py`, `TCT_app/gui/motor_panel.py`, `TCT_app/gui/planner_panel.py`, `TCT_app/gui/scope_panel.py`, `TCT_app/gui/settings_window.py`, `TCT_app/gui/stage_view.py`, `TCT_app/gui/theme_editor.py`, `TCT_app/tests/test_app_settings.py`, `docs/CODEX_QUEUE.md`.
+- Added `gui/app_settings.py` as the single owner of the `QSettings("TCT", "TCTSetup")` identity plus typed helpers/constants for theme mode, window state, planner arm latch, theme customization keys, and theme presets. Mechanical panel/main-window call sites now read/write through the accessor.
+- `gui/style.py` was intentionally left unmigrated and allowlisted in `test_app_settings.py` because the day-shift style-token beat owns that dirty file; `gui/panel_kit.py` has no QSettings call site to migrate.
+- Added `tests/test_app_settings.py` with a scratch INI-backed round-trip test and a grep-style guard that blocks direct app-store construction in `gui/`, `tct_gui.py`, and `main.py` except the intentional `gui/style.py` allowlist.
+- Verification: `git diff --check` passed. Static guard checks passed: `Select-String` found no direct `QSettings("TCT", "TCTSetup")` construction outside `gui/app_settings.py` and allowlisted `gui/style.py`; `tct_gui.py` and `main.py` had no direct constructor hits.
+- Requested pytest from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_app_settings.py tests/test_apply_theme_lifetime.py` executed 0 tests because the venv launcher failed before Python start: `.venv\pyvenv.cfg` still points to missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`. `--collect-only`, bare `python --version`, and `py -0p` were also unavailable locally.
+- Risk: runtime pytest verification remains blocked until the local Python/venv interpreter is repaired; `gui/style.py` still owns its old theme/* persistence lines until the style-token beat releases that file.
+
 ## S1 — Visual style audit from rendered panels (advisory, no code edits)
 
 **Status: DONE - Wrote rendered-panel style audit; fresh capture blocked by broken venv.** · Effort: M · Source: Kaya request 2026-07-13 (night shift)

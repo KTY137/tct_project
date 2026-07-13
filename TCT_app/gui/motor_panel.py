@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 import math
 
-from PySide6.QtCore import Qt, QThread, QTimer, Signal, QSettings
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication, QWidget, QGridLayout, QHBoxLayout, QVBoxLayout,
     QLabel, QDoubleSpinBox, QMessageBox, QPushButton, QSizePolicy, QSplitter,
@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 
 from controller.danger_gate import DangerAction, DangerGate
 from devices.motor_base import MotorStageBase
+from gui.app_settings import theme_mode
 from gui.panel_kit import Card, panel_header
 from gui.stage_view import StageView
 from gui.status_bus import notify
@@ -179,7 +180,7 @@ class MotorPanel(QWidget):
         # once from the same QSettings key main.py/tct_gui.py use, so a
         # freshly built panel matches the already-applied app theme; see
         # refresh_theme() for why there is no live change notification yet.
-        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
+        self._theme_mode = theme_mode()
         self._readout_caps: dict[str, QLabel] = {}
         self._jog_axis_btns: dict[str, list[QPushButton]] = {"x": [], "y": [], "z": []}
         self._abs_captions: dict[str, QLabel] = {}

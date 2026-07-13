@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import (
-    QByteArray, QObject, Qt, QMimeData, QSettings, QThread, QTimer, Signal, Slot,
+    QByteArray, QObject, Qt, QMimeData, QThread, QTimer, Signal, Slot,
 )
 from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -47,6 +47,7 @@ from controller.scan_plan import (
 )
 from controller.scan_plan_validator import PlanIssue, PlanLimits, validate_plan
 from gui.arm_latch import ArmLatch
+from gui.app_settings import planner_arm_latch_enabled, theme_mode
 from gui.panel_kit import EmptyState, MetricGrid, MetricTile
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
@@ -77,19 +78,14 @@ _ROLE_BLOCK = Qt.ItemDataRole.UserRole
 _ROLE_PATH = Qt.ItemDataRole.UserRole + 1
 _UNDO_CAP = 20
 
-# QSettings key for the two-step arm latch (design law 5). Default ON; setting
+# App-settings key for the two-step arm latch (design law 5). Default ON; setting
 # it False restores the legacy per-action "Arm HV" dialog + Start flow as a
 # bench fallback (a per-action DangerGate still confirms each live danger).
-_ARM_LATCH_SETTING = "planner/arm_latch"
 
 
 def _arm_latch_enabled() -> bool:
-    """Read the two-step-latch flag (default ON). QSettings can round-trip a
-    bool as the string ``"false"``, so coerce explicitly."""
-    raw = QSettings("TCT", "TCTSetup").value(_ARM_LATCH_SETTING, True)
-    if isinstance(raw, bool):
-        return raw
-    return str(raw).strip().lower() not in ("false", "0", "no", "off")
+    """Read the two-step-latch flag (default ON)."""
+    return planner_arm_latch_enabled()
 
 
 def _default_envelope_provider(plan: ScanPlan) -> ArmedEnvelope:
@@ -512,7 +508,7 @@ class PlannerPanel(QWidget):
     def __init__(self, parent: QWidget | None = None,
                  limits: PlanLimits | None = None) -> None:
         super().__init__(parent)
-        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
+        self._theme_mode = theme_mode()
         self._limits: PlanLimits = limits or self._DEFAULT_LIMITS
         self._plan: ScanPlan = _default_template_plan()
         self._hv_armed = False
@@ -520,7 +516,7 @@ class PlannerPanel(QWidget):
         self._running = False
         # Two-step arm latch (design law 5). When enabled the danger well hosts
         # the ArmLatch; when disabled the legacy Arm-HV dialog + Start buttons
-        # remain (bench fallback, _ARM_LATCH_SETTING).
+        # remain (bench fallback, app_settings.PLANNER_ARM_LATCH_KEY).
         self._latch_enabled = _arm_latch_enabled()
         self._envelope_provider = _default_envelope_provider
         self._env_cache: ArmedEnvelope | None = None

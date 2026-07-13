@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QObject, QSettings, QThread, QTimer, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QLineEdit, QDoubleSpinBox,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from devices.laser_manual import LaserManualMetadata
 from devices.waveform_generator import WaveformGenerator, list_visa_resources
+from gui.app_settings import theme_mode
 from gui.motion import set_pulse
 from gui.panel_kit import Card, CheckableCard, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
@@ -68,7 +69,7 @@ class LaserPanel(QWidget):
         # the classic edge-TCT delay axis.  Read once from the same
         # QSettings key main.py/tct_gui.py use, mirroring MotorPanel/
         # BiasPanel; see refresh_theme() below.
-        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
+        self._theme_mode = theme_mode()
         self._build_ui()
         # The output/armed chip must reflect the REAL driver output state, not
         # last-button bookkeeping — otherwise a scan arming the trigger, or a

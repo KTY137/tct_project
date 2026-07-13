@@ -12,7 +12,7 @@ import math
 import time
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt, QTimer, QSettings
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
     QLabel, QSpinBox, QPushButton,
@@ -27,6 +27,7 @@ except ImportError:
     _HAS_PG = False
 
 from devices.slow_control_base import AlarmStatus, SlowControlReading
+from gui.app_settings import theme_mode
 from gui.panel_kit import Card, FigureCard, MetricGrid, MetricTile, panel_header
 from gui.status_widgets import StatusChip, set_button_icon
 from gui.style import DARK, LIGHT, SPACE_SM
@@ -96,7 +97,7 @@ class MonitorPanel(QWidget):
         # Theme mode for the History-plot curve accent (gui.style tokens).
         # Read once from the same QSettings key main.py/tct_gui.py use,
         # mirroring MotorPanel/BiasPanel; see refresh_theme() below.
-        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
+        self._theme_mode = theme_mode()
         self._build_ui()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._poll)

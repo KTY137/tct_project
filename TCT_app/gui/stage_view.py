@@ -24,7 +24,7 @@ plot origin ``(0, 0)`` marker is by definition the user-frame origin.
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QStackedWidget,
@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui.status_widgets import StatusPill
+from gui.app_settings import theme_mode
 from gui.style import palette
 
 try:
@@ -48,7 +49,7 @@ except Exception:
 
 
 def _theme_from_settings() -> str:
-    return str(QSettings("TCT", "TCTSetup").value("theme", "light"))
+    return theme_mode()
 
 
 def _stage_colors(mode: str) -> dict[str, str]:

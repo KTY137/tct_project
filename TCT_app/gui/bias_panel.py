@@ -26,7 +26,7 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-from PySide6.QtCore import QTimer, Signal, QThread, QObject, QSettings
+from PySide6.QtCore import QTimer, Signal, QThread, QObject
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
     QLabel, QDoubleSpinBox, QSpinBox,
@@ -43,6 +43,7 @@ except ImportError:
 from devices.bias_supply_base import BiasSupplyBase
 from controller.danger_gate import DangerAction, DangerGate
 from controller.scan_controller import VoltageScanConfig
+from gui.app_settings import theme_mode
 from gui.panel_kit import Card, CheckableCard, MetricGrid, MetricTile, section_header
 from gui.status_bus import notify
 from gui.style import PLOT_BG, WARN_RED, axis_color
@@ -246,7 +247,7 @@ class BiasPanel(QWidget):
         # bias reads amber everywhere.  Read once from the same QSettings key
         # main.py/tct_gui.py use; see refresh_theme() for why this isn't
         # live-notified yet.
-        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
+        self._theme_mode = theme_mode()
         self._build_ui()
 
         # ── Live readout + polarity poll (own thread — instrument I/O must

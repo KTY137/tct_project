@@ -27,7 +27,7 @@ THREE MATERIAL KNOBS, AND THEY ARE NOT THE SAME THING (round 3)
 All state lives in ``gui/style.py``'s override layer (apply_theme_overrides /
 set_glass_amount / set_window_opacity / set_window_backdrop / apply_typography /
 apply_radius_scale) — this dialog is pure view/wiring on top of it, persisted
-via QSettings("TCT", "TCTSetup") under ``theme/*``. Applying routes through the
+via ``gui.app_settings`` under ``theme/*``. Applying routes through the
 SAME machinery as the View menu's dark-mode toggle (tct_gui._toggle_theme, via
 the ``applyRequested`` signal), so QSS regeneration, the QML Theme singleton,
 and every panel's ``refresh_theme`` all fire exactly as they do today.
@@ -61,11 +61,11 @@ from PySide6.QtWidgets import (
     QSpinBox, QVBoxLayout, QWidget,
 )
 
-from gui import backdrop, style
+from gui import app_settings, backdrop, style
 from gui.panel_kit import Card, SegmentedControl
 from gui.style import RADIUS_XS, SPACE_MD, SPACE_SM, SPACE_XS
 
-PRESETS_KEY = "theme/presets"
+PRESETS_KEY = app_settings.THEME_PRESETS_KEY
 
 # Editable swatch rows: (token group, human label) — token groups are
 # style.EDITABLE_TOKENS; one swatch fans out per style._OVERRIDE_FANOUT.
@@ -161,7 +161,7 @@ def _sanitize_preset(item) -> dict | None:
 def load_user_presets(settings: QSettings) -> list[dict]:
     """User presets from QSettings JSON (``theme/presets``), each sanitized."""
     try:
-        raw = json.loads(str(settings.value(PRESETS_KEY, "") or "[]"))
+        raw = json.loads(app_settings.user_presets_json(settings))
     except (TypeError, ValueError):
         return []
     presets: list[dict] = []
@@ -174,9 +174,11 @@ def load_user_presets(settings: QSettings) -> list[dict]:
 
 
 def save_user_presets(settings: QSettings, presets: list[dict]) -> None:
-    settings.setValue(PRESETS_KEY, json.dumps(
-        [{k: v for k, v in p.items() if k != "builtin"} for p in presets]))
-    settings.sync()
+    app_settings.set_user_presets_json(
+        json.dumps([{k: v for k, v in p.items() if k != "builtin"}
+                    for p in presets]),
+        settings,
+    )
 
 
 def _settings_row(label_text: str, control: QWidget,
@@ -220,7 +222,7 @@ class ThemeEditorDialog(QDialog):
         # same cockpit, not an opaque slab floating over a translucent shell.
         style.apply_window_backdrop_to(self)
         self.setWindowOpacity(style.get_window_opacity())
-        self._settings = settings if settings is not None else QSettings("TCT", "TCTSetup")
+        self._settings = settings if settings is not None else app_settings.settings()
         self._mode = "dark" if str(mode).lower() == "dark" else "light"
 
         # Drafts — uncommitted control state; committed only by _apply().

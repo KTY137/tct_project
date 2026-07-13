@@ -15,7 +15,7 @@ import re
 from dataclasses import dataclass, field
 
 import numpy as np
-from PySide6.QtCore import QObject, QSettings, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QLabel, QPushButton, QCheckBox, QSlider, QLineEdit,
@@ -45,6 +45,7 @@ except ImportError:
 from controller.yaml_persist import update_yaml_file
 from devices.oscilloscope import Oscilloscope
 from analysis.waveform_analysis import analyse_waveform
+from gui.app_settings import theme_mode
 from gui.panel_kit import Card, CheckableCard, panel_header
 from gui.scope_measurements import MeasurementPanel
 from gui.status_bus import notify
@@ -479,7 +480,7 @@ class ScopePanel(QWidget):
         # colours, the "delay"-axis time readouts, the probe-attenuation
         # warning).  Read once from the same QSettings key main.py/tct_gui.py
         # use, mirroring MotorPanel/BiasPanel — see refresh_theme() below.
-        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
+        self._theme_mode = theme_mode()
         # Waveform-analysis parameters from devices.yaml (analysis: block) so
         # the live readout uses the same window/termination as the scans.
         self._analysis_kwargs = dict(analysis_kwargs or {})

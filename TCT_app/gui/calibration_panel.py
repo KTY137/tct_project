@@ -20,7 +20,7 @@ import time
 
 import numpy as np
 import yaml
-from PySide6.QtCore import Qt, QObject, QSettings, QThread, Signal
+from PySide6.QtCore import Qt, QObject, QThread, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout, QGroupBox, QHBoxLayout,
@@ -31,6 +31,7 @@ from analysis.charge_calibration import ChargeCalibration, q_one_mip_pC
 from analysis.waveform_analysis import analyse_waveform
 from controller.danger_gate import DangerGate
 from controller.repeatability import RepeatabilityTester
+from gui.app_settings import theme_mode
 from gui.panel_kit import panel_header
 from gui.status_widgets import ReadoutCell, StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import FONT_SM, MONO_FAMILIES, palette
@@ -118,7 +119,7 @@ class CalibrationPanel(QWidget):
         self._ref_worker: _ReferenceWorker | None = None
         self._rep_thread: QThread | None = None
         self._rep_worker: _RepeatWorker | None = None
-        self._theme_mode = str(QSettings("TCT", "TCTSetup").value("theme", "light"))
+        self._theme_mode = theme_mode()
         self._build_ui()
         self._load_from(devices.charge_calibration)
         self._loading = False
