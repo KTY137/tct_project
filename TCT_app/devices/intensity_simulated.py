@@ -13,7 +13,7 @@ import time
 
 import numpy as np
 
-from .intensity_base import IntensityMonitorBase, IntensityReading
+from .intensity_base import IntensityMonitorBase, IntensityReading, correct_baseline
 
 
 class SimulatedIntensityMonitor(IntensityMonitorBase):
@@ -30,6 +30,15 @@ class SimulatedIntensityMonitor(IntensityMonitorBase):
         Slow linear drift of the amplitude per second (fraction).
     saturates_above_V:
         Amplitude above which the reading is flagged as saturated.
+    baseline_offset_V:
+        DC offset added to the whole simulated reference waveform.  Defaults
+        *nonzero* on purpose: it keeps the reference-channel baseline-bias bug
+        class permanently exercised by the test suite.  With baseline
+        correction the reported charge is invariant to this offset; without it
+        (the old code) the offset would leak straight into ``dut_charge_norm``.
+    baseline_samples:
+        Leading pre-trigger samples used for baseline subtraction (mirrors the
+        DUT ``analysis:`` convention).
     """
 
     def __init__(
@@ -38,6 +47,8 @@ class SimulatedIntensityMonitor(IntensityMonitorBase):
         noise_frac: float = 0.02,
         drift_rate_per_s: float = 0.001,
         saturates_above_V: float = 0.9,
+        baseline_offset_V: float = 0.01,
+        baseline_samples: int = 20,
         simulation: bool = True,
     ) -> None:
         super().__init__(simulation=simulation)
@@ -45,6 +56,8 @@ class SimulatedIntensityMonitor(IntensityMonitorBase):
         self._noise_frac = noise_frac
         self._drift_rate = drift_rate_per_s
         self._sat_limit = saturates_above_V
+        self._baseline_offset_V = baseline_offset_V
+        self._baseline_samples = baseline_samples
         self._start_time = time.monotonic()
         self._scale_V: float | None = None
 
@@ -101,14 +114,23 @@ class SimulatedIntensityMonitor(IntensityMonitorBase):
         return max(0.0, self._nominal_amplitude * drift * (1.0 + noise))
 
     def _make_waveform(self, amplitude: float) -> np.ndarray:
-        """Return a Gaussian pulse waveform at the given amplitude."""
+        """Return a Gaussian pulse waveform at the given amplitude.
+
+        Includes the configured DC baseline offset so the reference channel
+        carries a realistic (and, by default, nonzero) baseline that the
+        analysis must remove.
+        """
         t0 = 40e-9       # pulse centre
         sigma = 8e-9     # pulse width
         pulse = amplitude * np.exp(-0.5 * ((self._time_s - t0) / sigma) ** 2)
         noise = np.random.normal(0.0, amplitude * 0.01, size=pulse.shape)
-        return pulse + noise
+        return pulse + noise + self._baseline_offset_V
 
     def _integrate(self, waveform: np.ndarray) -> float:
         R = 50.0  # assumed 50-Ω termination
-        charge_C = np.trapz(waveform, self._time_s) / R
+        # Baseline-correct first (shared named formula) so the injected DC
+        # offset cannot bias the charge — the reference-channel bug this
+        # simulation keeps permanently test-visible.
+        corrected, _, _ = correct_baseline(waveform, self._baseline_samples)
+        charge_C = np.trapz(corrected, self._time_s) / R
         return float(charge_C * 1e12)

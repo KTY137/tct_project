@@ -41,6 +41,54 @@ class WaveformResult:
     polarity:       int = 0        # +1 positive pulse, -1 negative, 0 no signal
 
 
+def correct_baseline(
+    voltage_V: np.ndarray,
+    baseline_samples: int = 20,
+) -> tuple[np.ndarray, float, float]:
+    """Subtract the pre-trigger DC baseline from a waveform.
+
+    This is the single *named* baseline formula for the whole app.  Both the
+    DUT path (``analyse_waveform`` below) and the reference-channel path
+    (``devices/intensity_scope_ch.py``) correct the baseline through it, so a
+    DC offset on either channel is removed identically and cannot silently bias
+    amplitude/charge — nor, downstream, ``dut_charge_norm``.
+
+    The baseline is the mean of the first ``baseline_samples`` samples (the
+    pre-trigger region — the trigger delay is assumed to place the pulse after
+    them).
+
+    Parameters
+    ----------
+    voltage_V:
+        1-D waveform samples.
+    baseline_samples:
+        Number of leading samples used to estimate the baseline (clamped to
+        ``[1, len(voltage_V)]``).
+
+    Returns
+    -------
+    (corrected_V, baseline_V, baseline_rms_V)
+        The baseline-subtracted waveform, the estimated DC baseline level, and
+        the RMS of the baseline region (a noise proxy).
+
+    Note
+    ----
+    ``devices/`` may not import ``analysis/`` (the three-layer law, enforced by
+    ``tests/test_layer_contracts.py::test_devices_import_nothing_above``).  The
+    reference-channel driver therefore carries a byte-for-byte *mirror* of this
+    function in ``devices/intensity_base.py``; the two are pinned equal by
+    ``tests/test_intensity_panel.py::test_device_baseline_mirror_matches_analysis``
+    so they cannot drift.
+    """
+    v = np.asarray(voltage_V, dtype=float)
+    if v.size == 0:
+        return v, 0.0, 0.0
+    n = min(max(int(baseline_samples), 1), v.size)
+    baseline = float(np.mean(v[:n]))
+    baseline_rms = float(np.std(v[:n]))
+    return v - baseline, baseline, baseline_rms
+
+
 def analyse_waveform(
     time_s: np.ndarray,
     voltage_V: np.ndarray,
@@ -87,10 +135,12 @@ def analyse_waveform(
         raise ValueError(f"termination_ohm must be > 0 (got {termination_ohm})")
 
     # Baseline (assumes the trigger delay puts the pulse after the first
-    # baseline_samples — the pre-trigger region)
-    baseline = float(np.mean(voltage_V[:baseline_samples]))
-    baseline_rms = float(np.std(voltage_V[:baseline_samples]))
-    corrected = voltage_V - baseline
+    # baseline_samples — the pre-trigger region).  Routed through the shared
+    # named formula so the DUT and reference paths correct identically; the
+    # length check above guarantees baseline_samples <= len, so clamping inside
+    # correct_baseline is a no-op here and the result is bit-identical to the
+    # previous inline computation.
+    corrected, _baseline, baseline_rms = correct_baseline(voltage_V, baseline_samples)
     mag = np.abs(corrected)
 
     # Amplitude & polarity

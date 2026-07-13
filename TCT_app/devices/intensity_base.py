@@ -24,6 +24,33 @@ class IntensityMonitorError(DeviceError):
     """Raised when an intensity-monitor measurement fails."""
 
 
+def correct_baseline(
+    voltage_V: np.ndarray,
+    baseline_samples: int = 20,
+) -> tuple[np.ndarray, float, float]:
+    """Subtract the pre-trigger DC baseline from a waveform (devices layer).
+
+    Byte-for-byte *mirror* of ``analysis.waveform_analysis.correct_baseline``.
+    It is duplicated here — not imported — because ``devices/`` may not import
+    ``analysis/`` under the three-layer law
+    (``tests/test_layer_contracts.py::test_devices_import_nothing_above``).
+    ``tests/test_intensity_panel.py::test_device_baseline_mirror_matches_analysis``
+    pins the two implementations equal so they cannot silently drift.
+
+    Returns ``(corrected_V, baseline_V, baseline_rms_V)``; the baseline is the
+    mean of the first ``baseline_samples`` (pre-trigger) samples, clamped to
+    ``[1, len(voltage_V)]``.  Used by every IntensityMonitor backend so a DC
+    offset on the reference channel cannot bias the reported amplitude/charge.
+    """
+    v = np.asarray(voltage_V, dtype=float)
+    if v.size == 0:
+        return v, 0.0, 0.0
+    n = min(max(int(baseline_samples), 1), v.size)
+    baseline = float(np.mean(v[:n]))
+    baseline_rms = float(np.std(v[:n]))
+    return v - baseline, baseline, baseline_rms
+
+
 @dataclass
 class IntensityReading:
     """Single intensity-monitor readout snapshot."""
