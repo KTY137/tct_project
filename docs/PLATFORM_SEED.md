@@ -129,27 +129,38 @@ the existing `BiasSupplyBase` interface (`devices/bias_supply_base.py`) — the
 rest of the app never knows the backend changed. Zero ABC changes were
 needed to add it.
 
-**License condition (verbatim from the roadmap — do not soften this):**
-Kaya's authorization for e4control covers **TCT-internal use only**
-(2026-07-13: "informal confirmation from the E4 authors — open-source
-intent, no formal license text. Vendoring/recoding into tct_app is
-Kaya-authorized... For the PUBLIC SEED this is NOT resolved... exactly two
-sound options by tag time: an upstream license/written grant exists, or the
-adapter pattern moves to a TCT-private appendix.") Concretely, for
-LabControl:
+**License condition — resolved 2026-07-13 (Kaya-directed).** The seed
+repository itself is now **MIT-licensed** (`LICENSE`, repo root; Copyright
+(c) 2026 Kaya Yesilyurt, Kaya-directed 2026-07-13). This license covers
+TCT's *own* source — including the adapter file below — and does **not**,
+and cannot, relicense e4control's own code, which TCT never vendors into
+Git or the seed (intentionally `.gitignore`d local reference material; see
+`docs/REFERENCE_MATERIAL.md`). Upstream e4control carries **no formal
+license file**; its authors gave Kaya an **informal confirmation of
+open-source intent** (2026-07-13) — informal confirmation, not a written
+grant. Concretely, for LabControl:
 
-- The **pattern** (optional-checkout discovery, dynamic import, ABC-wrapping
-  shape) may ship in the public seed **only if** an upstream e4control
-  license/written grant exists by tag time.
-- If no such grant exists, the pattern moves to a **TCT-private appendix**,
-  not the public seed.
-- **Neither option ever means copying e4control code itself** into
-  LabControl or the seed — TCT does not vendor it into Git (it is
-  intentionally `.gitignore`d local reference material; see
-  `docs/REFERENCE_MATERIAL.md`), and the app never pushes to or edits the
-  upstream repo.
-- Which of the two options applies is **Kaya's decision to make at tag
-  time**, not Samantha's or Adam's to preempt here.
+- The **adapter pattern** (optional-checkout discovery, dynamic import,
+  ABC-wrapping shape) ships in the public seed under the seed's own MIT
+  license: `devices/bias_supply_e4control.py` is 100% TCT-authored and
+  never contains copied e4control source text — the same manual/datasheet-
+  sourced discipline Hardware safety rule 4 already requires for every
+  instrument command applies here too.
+- **This does not make e4control's own code MIT-licensed or
+  redistributable.** At connect time, when a local e4control checkout is
+  present, the adapter *dynamically imports and calls e4control's actual
+  classes/methods* (`_import_e4control_device`, `self._dev.setVoltage()`,
+  `rampVoltage()`, `setOutput()`, …) — a real runtime dependency on
+  third-party code, not a reimplementation of it. That third-party code is
+  never vendored, embedded, or shipped with the seed.
+- **Recommendation to third parties (including LabControl): treat e4control
+  upstream itself as unlicensed** — an informal author confirmation is not
+  a redistribution right — and use **our MIT-licensed adapter pattern**,
+  sourcing e4control independently (if real e4control-backed hardware is
+  needed) under whatever terms its authors actually offer.
+- If a formal upstream license or written grant appears later, re-evaluate
+  whether closer integration makes sense — that is Kaya's call, not a
+  default outcome of this entry.
 
 ### 4b. The QML seam
 
@@ -394,3 +405,12 @@ version/git history: **0.1.0-draft** as of this write. Suggested rule
   §5.1.3 "Trusted-operator" mode against the drafted safety-is-local
   invariant. Not yet reviewed by Mamoru (file/symbol claims) or Kaya
   (ratification).
+- 2026-07-13 — Samantha: §4a license paragraph resolved (Kaya-directed).
+  Repo root `LICENSE` added (MIT, Copyright (c) 2026 Kaya Yesilyurt). Seed's
+  own MIT license covers TCT-authored code only; e4control's own code is
+  never relicensed, vendored, or copied — the adapter dynamically imports
+  and calls e4control's actual classes at connect time (verified against
+  `devices/bias_supply_e4control.py`), which is a runtime dependency, not a
+  reimplementation. Upstream e4control still has no formal license; authors'
+  informal open-source-intent confirmation to Kaya stands. §6 (remote/
+  trusted-operator) untouched — separate pending ruling.
