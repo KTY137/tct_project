@@ -52,9 +52,14 @@ untracked `artifacts_claude/`. All three killed-beat recoveries are committed
 
 | Beat | Agent | CLAIMED paths |
 |---|---|---|
-| 0.3 bench -Xdist | background shell | none (bundle of committed HEAD) |
-| 1.1 SM transition lock | Abel (opus) | `TCT_app/controller/state_machine.py`, `TCT_app/tests/test_state_fuzz.py`, `TCT_app/tests/test_state_machine.py` |
-| 1.2 output_on defuse | Paul (opus) | `TCT_app/devices/bias_supply_base.py`, `TCT_app/devices/bias_supply_*.py` (+simulated), call sites in `TCT_app/controller/scan_controller.py` + `TCT_app/gui/bias_panel.py` + `TCT_app/gui/multi_bias_panel.py`, `TCT_app/tests/test_bias_api_guard.py` (new) + swept test files |
+| Phase-1 batch review (26bcf95+034c176) | Mary (read-only) | none |
+| Post-Phase-1 docs sweep | Kiroku | `docs/ARCHITECTURE.md`, `docs/TECH_DEBT.md`, `docs/RESTART_HANDOFF_20260713.md`, `docs/DECISIONS.md` (status line of today's order entry only) |
+| Codex style audit (Kaya request) | Codex lane (watcher bff72hs4q running) | `docs/design/codex_style_audit_20260713.md` |
+
+LESSON (2026-07-13): while a beat holds `devices/` locks, do NOT run
+cross-cutting targeted suites — Adam raced Paul's half-written rename
+(abstract `enable_output` broke DeviceManager fixtures transiently). Verify
+lock-holder-independent tests only, or wait for the landing.
 
 NOTE deviation from plan (Adam, justified): 1.2 call-site sweep NOT sent to
 Codex — an HV-enable rename is safety-class; lane rule "safety stays with the
@@ -63,7 +68,8 @@ Claude crew" wins. Paul does the whole beat.
 LANDED this session: `0f1c012` Wave-0 GUI half (Noah) · `f57c00e` E7a research
 note (pin `opencv-python-headless==4.9.0.80`, DICT_4X4_50, pose ladder) ·
 `88907a4` six ratified decisions in docs/DECISIONS.md (Kiroku, append-only
-verified).
+verified) · `26bcf95` SM transition race fix (Abel, beat 1.1 — pure-SM tests
+16 passed; device-dependent fuzz/executor re-run pending after 1.2 lands).
 
 ## QUEUE
 

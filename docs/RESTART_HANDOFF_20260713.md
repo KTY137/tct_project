@@ -1,5 +1,9 @@
 # TCT cockpit-v5 — crew orchestration plan & session-restart handoff
 
+## STATUS
+
+STATUS 2026-07-13 (big-wave session): Wave 0 CLOSED — 0f1c012+df10f8e, Mary APPROVE, bench 1349 passed @ 88907a4, pushed. Wave-1 items landed: SM race 26bcf95, output_on footgun 034c176. Superseded by the approved big-wave plan; live state in .claude/session_state.md.
+
 ## Context
 
 This is the handoff for restarting the Adam-orchestrated session on the TCT
