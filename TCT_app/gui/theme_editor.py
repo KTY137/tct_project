@@ -213,6 +213,13 @@ class ThemeEditorDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Theme")
         self.setModal(False)
+        # Inherit the cockpit's window backdrop material and real window
+        # opacity at construction — same apply-order contract (backdrop
+        # THEN opacity, see gui.style.apply_window_backdrop's docstring) as
+        # gui.detachable_tabs._DetachedWindow: this dialog is part of the
+        # same cockpit, not an opaque slab floating over a translucent shell.
+        style.apply_window_backdrop_to(self)
+        self.setWindowOpacity(style.get_window_opacity())
         self._settings = settings if settings is not None else QSettings("TCT", "TCTSetup")
         self._mode = "dark" if str(mode).lower() == "dark" else "light"
 

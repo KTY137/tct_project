@@ -815,3 +815,41 @@ def test_backdrop_applied_before_opacity_from_the_dialogs_apply_button(tmp_path,
     finally:
         win.deleteLater()
         style.reset_theme_customization()
+
+
+# =========================================================================== #
+# Beat C3-mini: the dialog's OWN construction closes the "C2 risk note" gap — #
+# it must inherit the cockpit's live backdrop/opacity too, not just           #
+# gui.detachable_tabs._DetachedWindow (see test_backdrop.py::                 #
+# test_detached_window_construction_applies_current_backdrop for that one).   #
+# =========================================================================== #
+
+def test_dialog_construction_applies_current_backdrop_and_opacity(tmp_path, monkeypatch):
+    """ThemeEditorDialog.__init__ must call style.apply_window_backdrop_to()
+    and style.get_window_opacity() (feeding setWindowOpacity) on itself, in
+    that order — mirrors _DetachedWindow's construction-time contract.
+    Monkeypatches the two style entry points directly (not the DWM ctypes
+    layer test_backdrop.py owns): this only needs to prove __init__ reaches
+    them, in order, not re-verify the DWM plumbing underneath."""
+    calls: list[str] = []
+    orig_backdrop = style.apply_window_backdrop_to
+    orig_opacity = style.get_window_opacity
+
+    def recording_backdrop(window, kind=None):
+        calls.append("backdrop")
+        return orig_backdrop(window, kind)
+
+    def recording_opacity():
+        calls.append("opacity")
+        return orig_opacity()
+
+    monkeypatch.setattr(style, "apply_window_backdrop_to", recording_backdrop)
+    monkeypatch.setattr(style, "get_window_opacity", recording_opacity)
+
+    _dialog(tmp_path)
+
+    # get_window_opacity() is ALSO read again later (unrelated) to seed the
+    # opacity-slider draft, so assert order + presence rather than an exact
+    # count — the construction-time application call is the first one.
+    assert "backdrop" in calls and "opacity" in calls
+    assert calls.index("backdrop") < calls.index("opacity")

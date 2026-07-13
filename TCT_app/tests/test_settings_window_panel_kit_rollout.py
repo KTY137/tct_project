@@ -26,6 +26,7 @@ import yaml
 from PySide6.QtWidgets import QApplication, QFrame, QLabel
 
 from devices.camera_blackfly import BlackflyCamera
+from gui import style
 from gui.camera_panel import CameraPanel
 from gui.settings_window import SettingsWindow
 from gui.style import apply_theme
@@ -98,6 +99,38 @@ def test_settings_window_every_tab_grabs_both_themes():
     finally:
         win.close()
         apply_theme(_app(), "light")
+
+
+def test_settings_window_construction_applies_current_backdrop_and_opacity(monkeypatch):
+    """Beat C3-mini: SettingsWindow must inherit the cockpit's window
+    backdrop material and real window opacity at ITS OWN construction —
+    same apply-order contract (backdrop before opacity) as
+    gui.detachable_tabs._DetachedWindow / gui.theme_editor.ThemeEditorDialog
+    (see tests/test_theme_editor.py::
+    test_dialog_construction_applies_current_backdrop_and_opacity)."""
+    _app()
+    calls: list[str] = []
+    orig_backdrop = style.apply_window_backdrop_to
+    orig_opacity = style.get_window_opacity
+
+    def recording_backdrop(window, kind=None):
+        calls.append("backdrop")
+        return orig_backdrop(window, kind)
+
+    def recording_opacity():
+        calls.append("opacity")
+        return orig_opacity()
+
+    monkeypatch.setattr(style, "apply_window_backdrop_to", recording_backdrop)
+    monkeypatch.setattr(style, "get_window_opacity", recording_opacity)
+
+    win = SettingsWindow()
+    try:
+        # Unlike ThemeEditorDialog, SettingsWindow has no separate opacity
+        # "draft" to seed — this construction call is the only one.
+        assert calls == ["backdrop", "opacity"]
+    finally:
+        win.close()
 
 
 # --------------------------------------------------------------------------- #

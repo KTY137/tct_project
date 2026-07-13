@@ -13,14 +13,18 @@ docstring that *mentions* a hex value as prose (e.g. "replaces the hardcoded
 '#888'") does not trip the guard — only a real literal in executable code
 does.
 
-``_PENDING_SWEEP`` is a small, explicit, shrinking allowlist for files with
-real (non-comment) inline hex that are OUT OF SCOPE for the task that added
-this guard (T3 Phase-4 mechanical sweep: gui/scope_measurements.py,
-calibration_panel.py, laser_panel.py, scope_panel.py, device_panel.py only —
-see that task's report for what Mamoru's original sweep missed). A follow-up
-Phase-4 task should clear it out file by file; ``test_pending_sweep_entries_
-still_needed`` fails loudly if an entry is stale (already cleaned up
-elsewhere), so the allowlist can only shrink honestly, never silently rot.
+``_PENDING_SWEEP`` is a small, explicit, shrinking allowlist of the EXACT hex
+literals still outstanding per file (not a blanket per-file skip — beat
+C3-mini tightened this: a file with some pending literals is still scanned
+for everything else, so a *new* or *regressed* hex in an otherwise-pending
+file fails the guard same as anywhere else) for files that are OUT OF SCOPE
+for the task that added this guard (T3 Phase-4 mechanical sweep:
+gui/scope_measurements.py, calibration_panel.py, laser_panel.py,
+scope_panel.py, device_panel.py only — see that task's report for what
+Mamoru's original sweep missed). A follow-up Phase-4 task should clear it
+out value by value; ``test_pending_sweep_entries_still_needed`` fails loudly
+if an entry is stale (already cleaned up elsewhere), so the allowlist can
+only shrink honestly, never silently rot.
 """
 from __future__ import annotations
 
@@ -40,9 +44,15 @@ _HEX_RE = re.compile(r"#[0-9a-fA-F]{3,8}\b")
 # touch list, tracked here instead of silently failing the guard.
 # (motor_panel.py cleared in the batch-B migration: the jog-cluster centre
 # glyph now resolves palette(mode)["faint"] instead of "#8a97a8".)
-_PENDING_SWEEP = {
-    "settings_window.py",  # YAML syntax-highlighter palette (6 literals) +
-                            # invalid-YAML editor border "#c0392b"
+_PENDING_SWEEP: dict[str, frozenset[str]] = {
+    "settings_window.py": frozenset({
+        "#6a737d", "#005cc5", "#032f62", "#e36209",
+    }),  # _YamlHighlighter's syntax palette only. Beat C3-mini cleared the
+         # invalid-YAML editor border ("#c0392b" — now resolves through
+         # style.py's "crit" token via _palette()), and narrowed this entry
+         # from a whole-file skip to exactly these remaining literals, so a
+         # regression of that same "#c0392b" (or any other new hex in this
+         # file) is caught below same as any unlisted file.
 }
 
 
@@ -113,9 +123,10 @@ def test_gui_modules_glob_is_non_empty():
 def test_no_inline_hex_outside_style_py():
     failures: dict[str, list[str]] = {}
     for path in _gui_modules():
-        if path.name in _PENDING_SWEEP:
-            continue
         hits = _real_hex_hits(path)
+        allowed = _PENDING_SWEEP.get(path.name)
+        if allowed:
+            hits = [h for h in hits if h not in allowed]
         if hits:
             failures[path.name] = hits
     assert failures == {}, (
@@ -125,13 +136,15 @@ def test_no_inline_hex_outside_style_py():
 
 
 def test_pending_sweep_entries_still_needed():
-    """A stale allowlist entry (a file that's actually clean now) must fail
-    loudly rather than silently keep masking a future regression there."""
-    for name in _PENDING_SWEEP:
-        hits = _real_hex_hits(_GUI_DIR / name)
-        assert hits, (
-            f"gui/{name} is listed in _PENDING_SWEEP but has zero real inline "
-            "hex now — remove it from the allowlist"
+    """A stale allowlist entry (a hex value that's actually gone now) must
+    fail loudly rather than silently keep masking a future regression of
+    that same literal."""
+    for name, allowed in _PENDING_SWEEP.items():
+        hits = set(_real_hex_hits(_GUI_DIR / name))
+        missing = allowed - hits
+        assert not missing, (
+            f"gui/{name}'s _PENDING_SWEEP lists {sorted(missing)} but they "
+            "are no longer present — remove them from the allowlist"
         )
 
 

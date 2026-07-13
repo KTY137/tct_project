@@ -48,6 +48,7 @@ _CONFIG_PATH = Path(__file__).parent.parent / "configs" / "devices.yaml"
 # no hardware side effects at module load (see _VisaScanManager below).
 from controller.yaml_persist import merge_yaml_text
 from devices.waveform_generator import prime_pyvisa
+from gui import style
 from gui.panel_kit import Card, form_row, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import DARK, FONT_MD, FONT_XS, LIGHT, MONO_FAMILIES, SPACE_SM
@@ -1316,6 +1317,13 @@ class SettingsWindow(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Settings — devices.yaml")
         self.resize(820, 680)
+        # Inherit the cockpit's window backdrop material and real window
+        # opacity at construction — same apply-order contract (backdrop
+        # THEN opacity, see gui.style.apply_window_backdrop's docstring) as
+        # gui.detachable_tabs._DetachedWindow: this dialog is part of the
+        # same cockpit, not an opaque slab floating over a translucent shell.
+        style.apply_window_backdrop_to(self)
+        self.setWindowOpacity(style.get_window_opacity())
         self._config_path = config_path
         self._suppress_yaml_update = False
         self._dirty = False
@@ -1696,7 +1704,10 @@ class SettingsWindow(QDialog):
     def _show_parse_error(self, msg: str) -> None:
         self._parse_error_label.setText(f"YAML parse error: {msg}")
         self._parse_error_label.setVisible(True)
-        self._editor.setStyleSheet("border: 2px solid #c0392b;")
+        # Same loud "crit" token the parse-error label itself already reads
+        # (see _restyle_chrome_tokens) — was a hardcoded "#c0392b".
+        p = _palette(self._theme_mode)
+        self._editor.setStyleSheet(f"border: 2px solid {p['crit']};")
         self._set_yaml_valid(False)
         self._set_dirty(True)
 
