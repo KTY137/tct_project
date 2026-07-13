@@ -9,7 +9,7 @@ from controller.scan_plan import (
 )
 from controller.plan_compiler import (
     compile_plan, MoveStep, BiasStep, AcquireStep, SaveStep,
-    WaitStep, ManualPauseStep, ReadSlowControlStep,
+    WaitStep, ManualPauseStep, ReadSlowControlStep, CapturePhotoStep,
 )
 
 
@@ -37,7 +37,13 @@ def _sig(step):
         return ("Pause", step.prompt)
     if isinstance(step, ReadSlowControlStep):
         return ("Slow",)
+    if isinstance(step, CapturePhotoStep):
+        return ("Photo", step.settle_s, step.label)
     raise AssertionError(f"unknown step {step!r}")
+
+
+def _photo(**p):
+    return ActionBlock(action=ActionType.CAPTURE_PHOTO, params=p)
 
 
 def nested_snake_plan():
@@ -275,3 +281,71 @@ def test_stage_loop_ramp_shaping_never_reaches_bias_step():
     bias_steps = [s for s in compile_plan(plan) if isinstance(s, BiasStep)]
     assert bias_steps
     assert all(s.ramp_step_V is None and s.ramp_delay_s is None for s in bias_steps)
+
+
+# --------------------------------------------------------------------------- #
+# CAPTURE_PHOTO (B2): passive camera-grab step, carries settle_s/label,        #
+# emitted after the move-on-change, and NOT danger-marked.                     #
+# --------------------------------------------------------------------------- #
+
+def test_capture_photo_compiles_to_step_with_params():
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0],
+                     children=[_photo(settle_s=0.25, label="tile-1")])
+    steps = compile_plan(ScanPlan(root=[loop]))
+    photo = next(s for s in steps if isinstance(s, CapturePhotoStep))
+    assert photo.settle_s == 0.25
+    assert photo.label == "tile-1"
+
+
+def test_capture_photo_defaults_when_params_absent():
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0], children=[_photo()])
+    photo = next(s for s in compile_plan(ScanPlan(root=[loop]))
+                 if isinstance(s, CapturePhotoStep))
+    assert photo.settle_s == 0.0 and photo.label == ""
+
+
+def test_capture_photo_is_not_danger_marked():
+    """A camera grab is passive — CapturePhotoStep must carry NO confirmation /
+    danger flags (unlike MoveStep / BiasStep), so the executor never gates it."""
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0], children=[_photo()])
+    photo = next(s for s in compile_plan(ScanPlan(root=[loop]))
+                 if isinstance(s, CapturePhotoStep))
+    assert not hasattr(photo, "requires_confirm")
+    assert not hasattr(photo, "danger_kind")
+
+
+def test_capture_photo_emitted_after_move_at_coordinate():
+    """MOVE-on-change fires first, then the photo grabs at that position."""
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0, 5.0],
+                     children=[_photo(label="t"), _acq(), _save()])
+    sigs = [_sig(s) for s in compile_plan(ScanPlan(root=[loop]))]
+    assert sigs == [
+        ("Move", 0.0, None, None), ("Photo", 0.0, "t"), ("Acq", 1), ("Save",),
+        ("Move", 5.0, None, None), ("Photo", 0.0, "t"), ("Acq", 1), ("Save",),
+    ]
+
+
+def test_estimate_counts_capture_photo():
+    """The estimator charges settle_s + a fixed grab cost and one frame's bytes
+    (kept here because test_plan_estimate.py is outside this beat's file scope)."""
+    import pytest
+    from controller.plan_estimate import estimate_plan, CAMERA_GRAB_S, Sizing
+
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0],
+                     children=[_photo(settle_s=0.3)])
+    est = estimate_plan(ScanPlan(root=[loop]))
+    # First move is a free approach (0 travel); runtime = settle + grab cost.
+    assert est.est_runtime_s == pytest.approx(0.3 + CAMERA_GRAB_S)
+    # Data = exactly one conservative full-frame default, no SaveStep bytes.
+    assert est.est_data_bytes == Sizing().camera_frame_bytes
+
+
+def test_estimate_photo_data_scales_with_count():
+    from controller.plan_estimate import estimate_plan, Sizing
+    one = LoopBlock(axis=Axis.STAGE_X, values=[0.0], children=[_photo()])
+    three = LoopBlock(axis=Axis.STAGE_X, values=[0.0, 1.0, 2.0],
+                      children=[_photo()])
+    e1 = estimate_plan(ScanPlan(root=[one]))
+    e3 = estimate_plan(ScanPlan(root=[three]))
+    assert e1.est_data_bytes == Sizing().camera_frame_bytes
+    assert e3.est_data_bytes == 3 * Sizing().camera_frame_bytes

@@ -25,6 +25,12 @@ from dataclasses import dataclass, field
 from controller.plan_compiler import BiasStep
 from controller.scan_plan import ActionType, LeafMeta, ScanPlan
 
+# Fixed wall-clock cost of one CAPTURE_PHOTO grab+readout, on top of the step's
+# own settle_s.  A small, backend-agnostic constant (exposure + USB transfer +
+# per-chunk gzip are all ~tens of ms for an ROI frame); the estimate is a
+# conservative upper bound, not a per-camera model.
+CAMERA_GRAB_S: float = 0.05
+
 
 @dataclass(frozen=True)
 class Timing:
@@ -51,6 +57,12 @@ class Sizing:
     record_length: int = 1024              # samples per waveform
     channels: int = 2                      # ref_ch1 + dut_ch2
     scalars: int = 16                      # f8 scalars per point (pos/bias/...)
+    # Bytes for one CAPTURE_PHOTO frame.  Resolution is unknown at estimate time
+    # (ROI crop is chosen at run time), so this is a deliberately conservative
+    # UPPER bound: a full-frame Mono8 Blackfly grab = 1920 x 1200 x 1 byte
+    # (~2.3 MB).  A real ROI-cropped survey writes strictly less; gzip savings on
+    # a textured surface are poor (~1.2-1.5x) so raw bytes stay the honest cap.
+    camera_frame_bytes: int = 1920 * 1200
 
     def bytes_per_save(self) -> int:
         wave = self.channels * self.record_length * self.bytes_per_waveform_point
@@ -92,6 +104,7 @@ def estimate_plan(
     runtime = 0.0
     travel = {"x": 0.0, "y": 0.0, "z": 0.0}
     n_saves = 0
+    n_photos = 0
     warnings: list[str] = []
 
     # Per-axis last commanded position; None until that axis is first driven.
@@ -161,6 +174,12 @@ def estimate_plan(
             n_steps += 1
         elif at == ActionType.READ_SLOW_CONTROL:
             n_steps += 1  # slow-control read cost is negligible in this model
+        elif at == ActionType.CAPTURE_PHOTO:
+            # settle (dwell before grab) + a fixed grab/readout cost; the frame
+            # adds camera_frame_bytes to the data estimate below.
+            runtime += float(params.get("settle_s", 0.0)) + CAMERA_GRAB_S
+            n_photos += 1
+            n_steps += 1
 
     if n_manual:
         warnings.append(
@@ -170,7 +189,7 @@ def estimate_plan(
         warnings.append("plan compiled to zero steps (nothing to run)")
 
     hv_range = (min(bias_targets), max(bias_targets)) if bias_targets else (0.0, 0.0)
-    est_data = sizing.bytes_per_save() * n_saves
+    est_data = sizing.bytes_per_save() * n_saves + sizing.camera_frame_bytes * n_photos
 
     return PlanEstimate(
         total_points=plan.total_points(),

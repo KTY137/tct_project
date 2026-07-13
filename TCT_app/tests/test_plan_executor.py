@@ -103,6 +103,10 @@ def _pause(msg):
     return ActionBlock(action=ActionType.MANUAL_PAUSE, params={"prompt": msg})
 
 
+def _photo(**p):
+    return ActionBlock(action=ActionType.CAPTURE_PHOTO, params=p)
+
+
 def _stage_plan(values):
     """An x-only stage raster: acquire + save at each x.  No bias."""
     loop = LoopBlock(axis=Axis.STAGE_X, values=[float(v) for v in values],
@@ -636,6 +640,103 @@ def test_park_safe_never_commands_a_motor_move(sim):
 
     assert stop_spy.called                            # motion halted
     assert not move_spy.called                        # never a park MOVE
+
+
+# --------------------------------------------------------------------------- #
+# (m) CAPTURE_PHOTO (B2): frame↔point mapping, abort-in-settle, fail-safe       #
+# --------------------------------------------------------------------------- #
+def test_capture_photo_writes_frames_with_truthful_point_index(sim):
+    """A survey-shaped plan (move → capture_photo → acquire → save, ×2) writes
+    exactly the two explicit photo frames, each tagged with the point index the
+    following SAVE occupies — even though the per-point camera_frame save option
+    is OFF (an explicit CAPTURE_PHOTO always records)."""
+    import h5py
+
+    dm, ctrl, sm = sim
+    assert dm.save_options.camera_frame is False        # default: implicit grab off
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0, 1.0],
+                     children=[_photo(label="tile"), _acq(), _save()])
+    plan = ScanPlan(name="survey", root=[loop])
+
+    ctrl.start_plan(plan, _limits(camera_available=True), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.FINISHED
+    assert ctrl._writer._n_points == 2                  # two acquire+save points
+    with h5py.File(ctrl.last_run_path, "r") as f:
+        assert list(f["points/x_mm"][:]) == [0.0, 1.0]
+        # Two explicit photo frames written; frames[k] ↔ points row k.
+        assert f["camera/frames"].shape[0] == 2
+        assert list(f["camera/frame_point_index"][:]) == [0, 1]
+        assert f["camera"].attrs["n_frames_omitted"] == 0
+
+
+def test_capture_photo_abort_during_settle_stops_clean(sim):
+    """Abort arriving DURING the pre-grab settle stops the run before the grab:
+    no frame taken, clean ABORTED (not ERROR)."""
+    dm, ctrl, sm = sim
+    grab = mock.Mock(wraps=dm.camera.get_frame)
+    dm.camera.get_frame = grab
+
+    plan = ScanPlan(name="p", root=[_photo(settle_s=30.0)])   # root action: no move
+
+    real_sleep = ctrl._abortable_sleep
+    def sleeper(seconds):
+        ctrl.abort()          # operator abort lands mid-settle …
+        real_sleep(seconds)   # … so the abortable sleep returns at once
+    ctrl._abortable_sleep = sleeper
+
+    ctrl.start_plan(plan, _limits(camera_available=True), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.ABORTED
+    assert not grab.called                 # aborted before the grab — no frame
+    assert ctrl._writer._n_points == 0
+
+
+def test_capture_photo_missing_camera_fails_through_error_path(sim):
+    """A missing camera makes the grab raise — the step FAILS through the normal
+    plan error path (ERROR + surfaced), and the fail-safe still runs."""
+    dm, ctrl, sm = sim
+    dm.camera = None                                    # no camera device
+    wf_off = mock.Mock(wraps=dm.waveform_generator.output_off)
+    dm.waveform_generator.output_off = wf_off
+    errs: list = []
+    ctrl.on_error = lambda m: errs.append(m)
+
+    ctrl.start_plan(ScanPlan(name="p", root=[_photo()]),
+                    _limits(camera_available=True), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.ERROR
+    assert errs                                         # fault surfaced to operator
+    assert wf_off.called                                # fail-safe (wavegen) still ran
+    assert ctrl._writer._n_points == 0
+
+
+def test_capture_photo_grab_raises_mid_plan_leaves_hv_safe(sim):
+    """A grab that raises mid-plan on a bias-driving run → ERROR outcome AND the
+    HV fail-safe (ramp to 0 + output off) is unchanged."""
+    dm, ctrl, sm = sim
+    ch = dm.bias_supply
+    ch.output_off = mock.Mock(wraps=ch.output_off)
+    dm.camera.get_frame = mock.Mock(side_effect=RuntimeError("camera link lost"))
+    errs: list = []
+    ctrl.on_error = lambda m: errs.append(m)
+
+    loop = LoopBlock(axis=Axis.BIAS_V, values=[-20.0], children=[_photo()])
+    plan = ScanPlan(name="p", root=[loop],
+                    safety={"require_hv_confirmation": True})
+
+    ctrl.arm_hv(True)
+    ctrl.start_plan(plan, _limits(camera_available=True), AutoConfirmGate())
+    ctrl._thread.join(timeout=20)
+
+    assert sm.state is AppState.ERROR
+    assert any("camera link lost" in m for m in errs)
+    assert ch.setpoint_V == 0.0                         # HV ramped down
+    assert not ch.driver.output_is_on_ch(ch.channel)    # output opened
+    assert ch.output_off.called
 
 
 # --------------------------------------------------------------------------- #

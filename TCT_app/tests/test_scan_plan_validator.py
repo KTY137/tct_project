@@ -271,3 +271,47 @@ def test_ramp_shaping_on_stage_loop_warns():
     issues = validate_plan(plan, limits())
     assert errors(issues) == []
     assert any("ramp_step_V" in w and "non-bias" in w for w in warnings(issues))
+
+
+# --------------------------------------------------------------------------- #
+# CAPTURE_PHOTO (B2): fail-closed device-availability gate + settle_s sanity    #
+# --------------------------------------------------------------------------- #
+
+def _photo_plan(**params):
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0],
+                     children=[ActionBlock(action=ActionType.CAPTURE_PHOTO,
+                                           params=params)])
+    return ScanPlan(name="t", root=[loop])
+
+
+def test_capture_photo_without_camera_is_error():
+    """Fail-closed: a photo step with no camera available is rejected on paper."""
+    errs = errors(validate_plan(_photo_plan(), limits(camera_available=False)))
+    assert any("CAPTURE_PHOTO" in e and "camera" in e for e in errs)
+
+
+def test_capture_photo_default_limits_reject_it():
+    """PlanLimits defaults camera_available False, so an un-wired caller can
+    never accidentally admit a camera-less photo plan."""
+    errs = errors(validate_plan(_photo_plan(), limits()))
+    assert any("camera" in e for e in errs)
+
+
+def test_capture_photo_with_camera_is_accepted():
+    issues = validate_plan(_photo_plan(settle_s=0.2, label="tile"),
+                           limits(camera_available=True))
+    assert errors(issues) == []
+    # settle_s / label are known params → no unknown-param warning either.
+    assert not any("unknown param" in w for w in warnings(issues))
+
+
+def test_capture_photo_negative_settle_is_error():
+    errs = errors(validate_plan(_photo_plan(settle_s=-0.5),
+                                limits(camera_available=True)))
+    assert any("settle_s" in e for e in errs)
+
+
+def test_capture_photo_unknown_param_warns():
+    issues = validate_plan(_photo_plan(exposure_ms=5),
+                           limits(camera_available=True))
+    assert any("exposure_ms" in w for w in warnings(issues))

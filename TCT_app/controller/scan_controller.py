@@ -24,7 +24,7 @@ from controller.device_manager import DeviceManager
 from controller.scan_plan import ScanPlan
 from controller.plan_compiler import (
     compile_plan, MoveStep, BiasStep, AcquireStep, SaveStep,
-    WaitStep, ManualPauseStep, ReadSlowControlStep,
+    WaitStep, ManualPauseStep, ReadSlowControlStep, CapturePhotoStep,
 )
 from controller.scan_plan_validator import validate_plan, errors, PlanLimits
 from controller.danger_gate import DangerGate, DangerAction
@@ -1425,6 +1425,25 @@ class ScanController:
                     readings = self._slow_control_read_all()
                     self._apply_slow_control_policy(readings, bias)
 
+                elif isinstance(step, CapturePhotoStep):
+                    # Passive camera grab at the current point (survey/mosaic).
+                    # Settle before the grab; the sleep returns early on abort,
+                    # and a pause takes effect at the next top-of-loop park (same
+                    # cadence as WaitStep).
+                    self._abortable_sleep(step.settle_s)
+                    if self._abort_event.is_set():
+                        break
+                    # Resolve the camera exactly like the acquire path
+                    # (self._dev.camera).  Deliberately NOT wrapped in a
+                    # try/except: unlike _acquire_core's best-effort frame, an
+                    # explicit CAPTURE_PHOTO that cannot grab (no camera, or a
+                    # raising get_frame) must FAIL the run through the normal plan
+                    # error path — the shared except + finally then leave HV,
+                    # motion and the wavegen safe.  No special-casing, and no
+                    # widening of any try/except around the other steps.
+                    frame = self._dev.camera.get_frame()
+                    self._write_camera_frame(frame)
+
                 else:  # pragma: no cover - Step is a closed union
                     raise ValueError(f"unhandled plan step: {type(step).__name__}")
 
@@ -1485,6 +1504,31 @@ class ScanController:
         z = cur.z_mm if step.z_mm is None else step.z_mm
         self._dev.motor.move_to(x, y, z)
         self._dev.motor.wait_until_ready()
+
+    def _write_camera_frame(self, frame) -> None:
+        """Persist one CAPTURE_PHOTO frame straight to the run's ``/camera`` group.
+
+        Routes through :meth:`HDF5Writer.save_camera_frame`, which appends the
+        frame to ``camera/frames`` and tags it with the writer's CURRENT point
+        index in ``camera/frame_point_index`` (B1's honesty contract:
+        ``frames[k]`` belongs to ``points`` row ``frame_point_index[k]``, and the
+        dataset is never zero-backfilled — a dropped frame is counted, not
+        faked).  A subsequent ``SAVE_POINT`` at this coordinate then occupies that
+        point row, so the frame maps to a real point.
+
+        Deliberately NOT routed through :meth:`HDF5Writer.save_point`: that writes
+        a full point row including the mandatory ``waveforms`` group, which for a
+        photo-only capture is empty — it either crashes (zero-size waveform
+        chunk) or desyncs the waveforms/points parallel arrays.  A camera grab is
+        passive and self-contained, so it writes only the camera group.
+
+        An explicit CAPTURE_PHOTO always records its frame — it does NOT gate on
+        the per-point ``save_options.camera_frame`` toggle (that governs the
+        implicit per-acquire grab in :meth:`_acquire_core`); silently discarding
+        an operator's explicit photo step would be dishonest.
+        """
+        if self._writer is not None:
+            self._writer.save_camera_frame(frame)
 
     def _move_action(self, steps: list) -> DangerAction:
         """Build the ONE run-level stage-motion confirmation.

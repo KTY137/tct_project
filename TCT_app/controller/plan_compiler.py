@@ -111,6 +111,25 @@ class ReadSlowControlStep:
     """Sample slow-control sensors (temperature, humidity, …)."""
 
 
+@dataclass(frozen=True)
+class CapturePhotoStep:
+    """Grab one camera frame at the current point (survey/mosaic feature).
+
+    ``settle_s`` is a pre-grab dwell (>= 0) so the stage stops ringing before
+    the frame is taken; ``label`` is a human tag carried through for provenance.
+
+    Deliberately NOT danger-marked — a camera grab is passive (it drives no HV
+    and commands no motion), so unlike :class:`MoveStep` / :class:`BiasStep` it
+    carries no ``requires_confirm`` / ``danger_kind`` and is never gated through
+    the danger confirmation.  The executor persists the frame straight to the
+    writer's ``/camera`` group tagged with the current point index (it does NOT
+    route through ``save_point``, which would write a full — and, for a
+    photo-only capture, empty — waveforms/points row).
+    """
+    settle_s: float = 0.0
+    label: str = ""
+
+
 # --------------------------------------------------------------------------- #
 # Compiler                                                                     #
 # --------------------------------------------------------------------------- #
@@ -187,6 +206,11 @@ def compile_plan(plan: ScanPlan) -> list[Step]:
             steps.append(ManualPauseStep(prompt=_prompt(params)))
         elif at == ActionType.READ_SLOW_CONTROL:
             steps.append(ReadSlowControlStep())
+        elif at == ActionType.CAPTURE_PHOTO:
+            steps.append(CapturePhotoStep(
+                settle_s=float(params.get("settle_s", 0.0)),
+                label=str(params.get("label", "")),
+            ))
         else:  # pragma: no cover - ActionType is a closed enum
             raise ValueError(f"unhandled action type: {at!r}")
 
@@ -219,5 +243,5 @@ def _prompt(params: dict) -> str:
 # Public union alias so callers can spell the step type in hints.
 Step = (
     MoveStep | BiasStep | AcquireStep | SaveStep
-    | WaitStep | ManualPauseStep | ReadSlowControlStep
+    | WaitStep | ManualPauseStep | ReadSlowControlStep | CapturePhotoStep
 )

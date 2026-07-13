@@ -65,6 +65,13 @@ class PlanLimits:
     voltage_range_V: float
     max_points: int
     homed_required: bool = True
+    # Whether a camera device is configured/available for this run.  A
+    # CAPTURE_PHOTO action is an ERROR unless this is True (fail-closed: a photo
+    # step with no camera is rejected on paper, not left to fail mid-run).  Built
+    # from config by the caller alongside the other guardrails — the validator
+    # itself never imports a DeviceManager.  Defaults False so a caller that
+    # never wires it can never accidentally admit a camera-less photo plan.
+    camera_available: bool = False
 
 
 # --------------------------------------------------------------------------- #
@@ -93,6 +100,7 @@ _KNOWN_ACTION_PARAMS: dict[ActionType, frozenset[str]] = {
     ActionType.WAIT: frozenset({"seconds", "reason"}),
     ActionType.MANUAL_PAUSE: frozenset({"prompt", "message", "reason"}),
     ActionType.READ_SLOW_CONTROL: frozenset({"channels", "sensors", "label"}),
+    ActionType.CAPTURE_PHOTO: frozenset({"settle_s", "label"}),
 }
 
 
@@ -206,6 +214,14 @@ def _walk(
                     WARNING, npath,
                     "SAVE_POINT with no ACQUIRE_WAVEFORM earlier in its branch "
                     "— nothing acquired to save"))
+            # Device-availability gate (fail-closed): a photo step needs a
+            # camera.  Mirrors the config-derived guardrails PlanLimits carries
+            # for HV / stage limits — refuse on paper rather than mid-run.
+            if b.action == ActionType.CAPTURE_PHOTO and not limits.camera_available:
+                issues.append(PlanIssue(
+                    ERROR, npath,
+                    "CAPTURE_PHOTO needs a camera but none is configured/available "
+                    "(PlanLimits.camera_available is False) — refusing (fail-closed)"))
             _check_action_params(b, npath, issues)
 
 
@@ -300,6 +316,11 @@ def _check_action_params(
         if navg is not None and _is_num(navg) and int(navg) < 1:
             issues.append(PlanIssue(
                 ERROR, path, f"n_averages must be >= 1 (got {navg!r})"))
+    if action.action == ActionType.CAPTURE_PHOTO:
+        secs = params.get("settle_s")
+        if secs is not None and _is_num(secs) and float(secs) < 0:
+            issues.append(PlanIssue(
+                ERROR, path, f"CAPTURE_PHOTO settle_s must be >= 0 (got {secs!r})"))
 
     known = _KNOWN_ACTION_PARAMS.get(action.action, frozenset())
     for key in params:

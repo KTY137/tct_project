@@ -43,12 +43,21 @@ class Axis(str, Enum):
 
 
 class ActionType(str, Enum):
-    """The only leaf actions a plan may request."""
+    """The only leaf actions a plan may request.
+
+    ``CAPTURE_PHOTO`` grabs one camera frame at the current point (feeds the
+    survey/mosaic feature).  Its ``ActionBlock.params`` are ``settle_s`` (float,
+    seconds to dwell before the grab so the stage stops ringing; default 0.0)
+    and ``label`` (str, a human tag carried through to the executor; default
+    "").  A camera grab is passive — it drives no HV and no motion — so it is
+    deliberately NOT a danger step (see ``plan_compiler.CapturePhotoStep``).
+    """
     ACQUIRE_WAVEFORM = "acquire_waveform"
     SAVE_POINT = "save_point"
     WAIT = "wait"
     MANUAL_PAUSE = "manual_pause"
     READ_SLOW_CONTROL = "read_slow_control"
+    CAPTURE_PHOTO = "capture_photo"
 
 
 STAGE_AXES: frozenset[Axis] = frozenset(

@@ -217,6 +217,31 @@ class HDF5Writer:
         if affine is not None:
             grp.attrs["affine"] = np.asarray(affine, dtype="f8")
 
+    def save_camera_frame(self, frame: Any) -> None:
+        """Persist one standalone camera frame (e.g. a CAPTURE_PHOTO plan step).
+
+        Appends to ``camera/frames`` and tags it with the CURRENT point index
+        (:attr:`_n_points`) in ``camera/frame_point_index`` — the SAME honesty
+        contract as the per-point frame in :meth:`save_point`, via the same
+        :meth:`_save_camera_frame` primitive: ``frames[k]`` belongs to
+        ``points`` row ``frame_point_index[k]`` (``M <= N``), and a
+        ``None`` / ``ndim < 2`` / shape-mismatch frame is counted in
+        ``n_frames_omitted`` and logged rather than zero-backfilled.  The
+        ``camera`` group is created on first use.
+
+        Unlike :meth:`save_point`, this writes ONLY the camera group: a
+        standalone photo has no waveform / analysis / bias row, and routing it
+        through ``save_point`` would write the mandatory (and, for a photo-only
+        capture, empty) ``waveforms`` group — which crashes on the zero-size
+        waveform chunk or desyncs the waveforms/points parallel arrays.  It does
+        NOT advance ``_n_points`` (only a real point does); a following
+        ``SAVE_POINT`` at the same coordinate occupies that point row.
+        """
+        f = self._require_open()
+        cam = f.require_group("camera")
+        self._save_camera_frame(cam, self._n_points, frame)
+        f.flush()
+
     def _save_waveforms(self, f: h5py.File, idx: int, result: Any) -> None:
         grp = f.require_group("waveforms")
         time_axis = _array_or_empty(result.time_axis)
