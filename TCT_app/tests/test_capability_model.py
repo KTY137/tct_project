@@ -4,7 +4,8 @@ Normative spec: ``docs/CAPABILITY_MODEL.md`` v1.0-rc — section references
 below (§n) point into it.  This file is deliberately Qt-free bucket-A
 material: stdlib + pytest + ``capabilities`` only (the model itself is
 stdlib-only by LAW §2.1, pinned by ``test_model_module_is_stdlib_only``
-below until the layer-contract suite takes over that duty).
+below; since D1b the layer-contract suite carries the package-wide duty and
+this pin guards model.py itself, relative imports included).
 """
 from __future__ import annotations
 
@@ -679,18 +680,36 @@ def test_alias_helper_rejects_non_str():
 
 def test_model_module_is_stdlib_only():
     """LAW §2.1: capabilities/model.py imports only the stdlib — no Qt, no
-    numpy, no devices/, no controller/, no gui/.  AST scan in the style of
-    tests/test_layer_contracts.py (which will pin the package once
-    `capabilities` joins its layer table in D1b+)."""
+    numpy, no devices/, no controller/, no gui/.
+
+    D1b handover (this pin's D1a docstring promised it): the PACKAGE-wide
+    duty now lives in tests/test_layer_contracts.py — `capabilities` is in
+    its layer table, allowed to import `devices` only (adapters.py/registry.py
+    legitimately wrap drivers) — so this pin narrowed to model.py itself.
+
+    Mary's D1a flag, closed here: an AST scan that skips relative imports
+    (``node.level > 0``) would let ``from .adapters import X`` reach devices/
+    through the back door while the pin stayed green.  model.py has no
+    legitimate relative import (everything above it in-package is above it in
+    the layering), so ANY relative import is itself a violation.
+    """
     stdlib = set(sys.stdlib_module_names) | {"__future__"}
-    package_dir = Path(__file__).resolve().parent.parent / "capabilities"
-    for path in sorted(package_dir.glob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        roots = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                roots.update(alias.name.split(".")[0] for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and not node.level and node.module:
+    path = Path(__file__).resolve().parent.parent / "capabilities" / "model.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    roots: set[str] = set()
+    relative: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            roots.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level and node.level > 0:
+                relative.append(node.module or ".")
+            elif node.module:
                 roots.add(node.module.split(".")[0])
-        bad = sorted(roots - stdlib - {"capabilities"})
-        assert bad == [], f"{path.name} imports non-stdlib module(s): {bad}"
+    assert relative == [], (
+        f"model.py uses relative import(s) {relative} — forbidden outright: "
+        "a relative import could reach devices/ via adapters.py while an "
+        "absolute-only AST pin stayed green (stdlib-only LAW §2.1)"
+    )
+    bad = sorted(roots - stdlib)
+    assert bad == [], f"model.py imports non-stdlib module(s): {bad}"
