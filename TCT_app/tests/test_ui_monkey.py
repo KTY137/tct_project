@@ -42,9 +42,13 @@ unreachable *by construction*, not merely unlikely)
    Layer 3 is what makes "the monkey cannot start a scan" a *proof* rather than a
    promise.  It is deliberately at the controller boundary (the real danger
    seam), not at the widget, because widget-level markings are exactly the thing
-   under test: e.g. the Z-focus "Find focus" button carries ``state="primary"``
-   (NOT ``"motion"``/``"danger"``) yet starts a real motion+acquisition run — it
-   is caught here by its *text*, and layer 3 is the backstop if that ever slips.
+   under test: e.g. the Z-focus "Find focus" button used to carry
+   ``state="primary"`` (NOT ``"motion"``/``"danger"``) while starting a real
+   motion+acquisition run, caught only by its *text* — the W1 taxonomy sweep
+   has since given it the motion class too (rule 4 now ALSO denies it), but
+   rule 5's text-level denial stays the one true backstop for the next button
+   that slips through role-marking, and layer 3 is the final backstop if that
+   ever slips.
 
 Invariants checked after EVERY action
 -------------------------------------
@@ -141,9 +145,13 @@ def _seeds() -> tuple[int, ...]:
 # THE safe-action predicate (single source of truth)                           #
 # --------------------------------------------------------------------------- #
 # Marked-danger roles, as the panels actually set them (grep-verified against
-# gui/*.py): objectName "dangerBtn" (bias/multi_bias/motor/calibration/planner/
-# panel_kit/arm_latch), "armedBtn" (laser), "connectBtn"/"disconnectBtn"
-# (toolbar), and the dynamic QSS property state in {danger, motion, armed}.
+# gui/*.py): objectName "dangerBtn" (motor/calibration/planner/panel_kit/
+# arm_latch/bias polarity switch), "killSwitchBtn" (bias Output OFF /
+# multi_bias ALL OUTPUTS OFF -- the kill-switch escalation ruling gave these
+# their own identity, distinct from the ALWAYS-red dangerBtn language, but
+# still caught by the same "danger"/"arm"/"kill" object-substring net below),
+# "armedBtn" (laser), "connectBtn"/"disconnectBtn" (toolbar), and the dynamic
+# QSS property state in {danger, motion, armed}.
 _DENY_OBJECT_SUBSTRINGS = (
     "danger", "arm", "exec", "connect", "motion", "jog", "kill", "home", "menu",
 )
@@ -152,8 +160,9 @@ _DENY_STATES = frozenset({"danger", "motion", "armed"})
 # Text-level denial. REQUIRED, not belt-and-braces: role markings alone are NOT
 # sufficient, and this is the layer that proves it. Counter-examples found in
 # the live tree while writing this harness:
-#   * scan_viewer "Find focus"      state="primary"  -> starts a REAL z-focus
-#                                                       run (motion+acquisition)
+#   * scan_viewer "Find focus"      state="primary" when found (now "motion",
+#                                    W1 taxonomy sweep) -> starts a REAL
+#                                    z-focus run (motion+acquisition)
 #   * settings/scope "Apply & Save" no state         -> WRITES devices.yaml
 #   * scope "List VISA..."          no state         -> enumerates VISA resources
 #   * scope "Drive scope (->SCPI)"  QCheckBox        -> drives the instrument
@@ -809,10 +818,12 @@ def test_monkey_safe_filter_denies_every_danger_control(monkeypatch, tmp_path):
 
     Guards the safety layer that the random walk depends on: every control that
     can move the stage, drive HV, start a run, connect a device, or write the
-    config must be denied by :func:`is_monkey_safe` — including the ones whose
-    *role markings* look benign (the Z-focus "Find focus" button is
-    ``state="primary"``).  A future panel that adds a danger button without a
-    danger role will fail here rather than in a 1-in-200 random click.
+    config must be denied by :func:`is_monkey_safe` — including ones whose
+    *role markings* alone would look benign (the Z-focus "Find focus" button
+    used to ship as ``state="primary"`` and is caught below by its text
+    regardless of what state it carries).  A future panel that adds a danger
+    button without a danger role will fail here rather than in a 1-in-200
+    random click.
     """
     _neutralize_modals(monkeypatch, MonkeyContext())
     _install_tripwires(monkeypatch, MonkeyContext())
@@ -840,9 +851,15 @@ def test_monkey_safe_filter_denies_every_danger_control(monkeypatch, tmp_path):
         assert not offenders, "safe-filter let a danger control through: " + \
             "; ".join(offenders)
 
-        # And the specific, load-bearing case that motivated the text rule.
+        # The specific, load-bearing case that motivated the text rule. W1
+        # taxonomy sweep (state_color_census.md) gave "Find focus" the motion
+        # command class (rule 4 now ALSO denies it), but the word-level rule
+        # 5 stays the one true backstop per this test's own docstring -- it
+        # must deny even a button whose role marking looks benign, so this
+        # still asserts via the *text* path, not the state it happens to
+        # carry today.
         zf = win._scan_viewer._btn_zf_start
-        assert zf.property("state") == "primary"      # NOT marked motion/danger
+        assert zf.property("state") == "motion"        # now ALSO caught by rule 4
         assert not is_monkey_safe(zf), (
             "the Z-focus 'Find focus' button starts a real motion+acquisition "
             "run and must never be monkey-clickable")

@@ -815,36 +815,38 @@ QToolButton#detachTabButton:pressed {{ background: {_rgba(p['accent'], 0.20)}; }
 
 /* Connect/Disconnect toolbar buttons (objectName set by tct_gui.py after
    building the QToolBar action widgets — "objectNames for the green/red QSS
-   accents"). v5 palette-reach fix: this used to be a persistent SOLID
-   good/crit fill — the "loud flat-green CONNECT ALL" finding in
-   apple_style_ui_audit.md, a leftover pre-v5 button language the rest of
-   the app had already moved off of (see the tonal
-   QPushButton[state="good"/"crit"] rules above). Rest/hover now share that
-   same tonal language; press is the only moment that still goes fully
-   solid, matching tct_polish_preview.html's button spec note ("tinted
-   material that goes solid only at the moment of commitment"). Connect/
-   Disconnect are ordinary reversible actions, not hardware-dangerous ones
-   (see CLAUDE.md's confirmation-required list) — unlike dangerBtn below,
-   calming their rest state does not touch the danger-hierarchy rule. */
+   accents", now stale naming: neither carries a state colour any more).
+   State-color census D4 rank-1 fix (docs/design/state_color_census.md):
+   this used to be tonal good/crit (green/red) chrome — colour encoding a
+   COMMAND, the exact thing council_v5_paul.md §3 rules out for the Device
+   Manager's own Connect All ("neutral/accent — NOT green: colour encodes
+   state, never a command") and the QML rail's Shell.qml ShellButton already
+   gets right (Connect All = "accent" tone, Disconnect All = "quiet"/neutral
+   — "a bulk disconnect is a neutral, safe action — never red"). Connect
+   reuses the QPushButton[state="secondary"] accent-outline recipe above (a
+   primary-quiet affordance, not a status light); Disconnect drops to plain
+   neutral chrome — it is an ordinary reversible action, not a
+   hardware-dangerous one (see CLAUDE.md's confirmation-required list), so it
+   never borrows dangerBtn's red. */
 QPushButton#connectBtn, QToolButton#connectBtn {{
-    background: {_rgba(p['good'], 0.16)}; color: {p['good']};
-    border: 1px solid {_rgba(p['good'], 0.55)}; font-weight: 600;
+    background: {p['field']}; color: {p['accent']};
+    border: 1px solid {_rgba(p['accent'], 0.55)}; font-weight: 600;
 }}
 QPushButton#connectBtn:hover, QToolButton#connectBtn:hover {{
-    background: {_rgba(p['good'], 0.26)}; border-color: {p['good']};
+    background: {p['tint']}; border-color: {p['accent']};
 }}
 QPushButton#connectBtn:pressed, QToolButton#connectBtn:pressed {{
-    background: {p['good']}; color: white; border-color: {p['good']};
+    background: {_rgba(p['accent'], 0.24)};
 }}
 QPushButton#disconnectBtn, QToolButton#disconnectBtn {{
-    background: {_rgba(p['crit'], 0.16)}; color: {p['crit']};
-    border: 1px solid {_rgba(p['crit'], 0.55)}; font-weight: 600;
+    background: {p['field']}; color: {p['text']};
+    border: 1px solid {p['hairline_strong']}; font-weight: 600;
 }}
 QPushButton#disconnectBtn:hover, QToolButton#disconnectBtn:hover {{
-    background: {_rgba(p['crit'], 0.26)}; border-color: {p['crit']};
+    background: {p['hover']}; border-color: {p['border_strong']};
 }}
 QPushButton#disconnectBtn:pressed, QToolButton#disconnectBtn:pressed {{
-    background: {p['crit']}; color: white; border-color: {p['crit']};
+    background: {p['active']};
 }}
 QPushButton#connectBtn:disabled, QToolButton#connectBtn:disabled,
 QPushButton#disconnectBtn:disabled, QToolButton#disconnectBtn:disabled {{

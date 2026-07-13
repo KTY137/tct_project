@@ -109,7 +109,13 @@ class MonitorPanel(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
-        self._chip_alarm = StatusChip("All nominal", "neutral")
+        # Trust boundary (council_v5_paul.md §4 — state-color census D4 item
+        # 3): "All nominal" must be GATED on >=1 real reading. Construction
+        # happens before the first poll has run, i.e. exactly zero data — so
+        # the honest initial claim is "no data yet" (unknown), never a
+        # confident nominal; see _update_alarm_banner() for the live-poll
+        # counterpart of this same rule.
+        self._chip_alarm = StatusChip("No data", "unknown")
         root.addWidget(panel_header(
             "TCT Control · Instrument", "Monitor",
             trailing=[self._chip_alarm],
@@ -411,7 +417,13 @@ class MonitorPanel(QWidget):
                 alarm_count += 1
         # Quiet nominal (law 1): only abnormal states get colour; routine
         # "everything in range" is grey prose, never a standing green light.
-        if worst in (AlarmStatus.ALARM_LOW, AlarmStatus.ALARM_HIGH):
+        # Trust boundary (council_v5_paul.md §4): "All nominal" must be
+        # GATED on >=1 real reading -- an empty readings dict (zero
+        # configured channels, or read_all() hasn't produced anything yet)
+        # is UNKNOWN, never a confident "fine" claim (law 7).
+        if not readings:
+            self._chip_alarm.set_status("No data", "unknown")
+        elif worst in (AlarmStatus.ALARM_LOW, AlarmStatus.ALARM_HIGH):
             self._chip_alarm.set_status("Alarm", "crit")
         elif worst in (AlarmStatus.WARN_LOW, AlarmStatus.WARN_HIGH):
             self._chip_alarm.set_status("Warning", "warn")

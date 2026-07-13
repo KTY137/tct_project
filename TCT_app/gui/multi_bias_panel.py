@@ -35,10 +35,12 @@ from PySide6.QtWidgets import (
 from devices.bias_channel import BiasChannel
 from controller.danger_gate import DangerGate
 from controller.scan_controller import VoltageScanConfig
+from gui.app_settings import theme_mode
 from gui.bias_panel import BiasPanel, _SupplyCallWorker
 from gui.panel_kit import panel_header
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, set_button_icon
+from gui.style import palette, repolish
 
 
 class MultiBiasPanel(QWidget):
@@ -63,6 +65,10 @@ class MultiBiasPanel(QWidget):
         # "survives a rebuild" contract the injected gate has.  The global
         # ALL OUTPUTS OFF is never gated by it (cockpit law 5).
         self._danger_locked = False
+        # Theme mode for the ALL OUTPUTS OFF kill-switch icon ink (same
+        # pattern as every panel that bakes a token colour into a qtawesome
+        # icon at construction — see BiasPanel._update_kill_switch_style()).
+        self._theme_mode = theme_mode()
         self._build_ui()
         self._build_tabs(self._channels)
 
@@ -75,9 +81,18 @@ class MultiBiasPanel(QWidget):
 
         # The danger control sits in the header's trailing slot — top-right,
         # ahead of the tabs, so it stays reachable and visible from any tab.
+        # Kill-switch escalation ruling (council_v5_paul.md §2 — state-color
+        # census D4 rank-2 fix): this aggregates every channel's own escalated
+        # state (BiasPanel._kill_switch_state()) via kill_switch_state_changed
+        # -- ghost while nothing is connected, neutral while connected/inert,
+        # filled red the instant ANY channel might be HV-live. See
+        # _update_all_off_style()/_on_child_kill_switch_changed(). objectName
+        # carries "kill" (not "dangerBtn", whose ID selector paints solid red
+        # unconditionally) so it stays denied by the monkey harness's
+        # object-substring layer same as before, on top of the
+        # already-sufficient text-word denial on "output"/"off".
         self._btn_all_off = QPushButton("⏹ ALL OUTPUTS OFF")
-        self._btn_all_off.setObjectName("dangerBtn")
-        set_button_icon(self._btn_all_off, "mdi.power", color="white")
+        self._btn_all_off.setObjectName("killSwitchBtn")
         self._btn_all_off.setToolTip(
             "Ramp EVERY connected HV channel to 0 V and disable its output."
         )
@@ -109,13 +124,42 @@ class MultiBiasPanel(QWidget):
             # must come up locked, exactly as it comes up gated.
             if self._danger_locked:
                 panel.set_manual_danger_locked(True)
+            panel.kill_switch_state_changed.connect(self._on_child_kill_switch_changed)
             self._panels.append(panel)
             self._tabs.addTab(panel, f"CH{getattr(ch, 'channel', '?')}")
         self._refresh_summary()
+        self._update_all_off_style()   # initial aggregate (before any signal fires)
         # The primary channel (proxy index 0 in the normal single-primary
         # config) owns the bias+waveform scan controls; surface only its signal.
         if self._panels:
             self._panels[0].vscan_requested.connect(self.vscan_requested)
+
+    # ------------------------------------------------------------------ #
+    # Kill-switch escalation (aggregated from every channel's own state)  #
+    # ------------------------------------------------------------------ #
+
+    def _on_child_kill_switch_changed(self, _state: str) -> None:
+        self._update_all_off_style()
+
+    def _update_all_off_style(self) -> None:
+        """Council v5 §2 kill-switch escalation ruling, aggregated over every
+        channel: ANY channel possibly HV-live escalates the ONE global
+        control to filled red; otherwise neutral outline while ANY channel is
+        connected; ghost only when nothing is connected (nothing to kill)."""
+        states = [p._kill_switch_state() for p in self._panels]
+        if "danger" in states:
+            state = "danger"
+        elif "" in states:
+            state = ""
+        else:
+            state = "ghost"
+        if self._btn_all_off.property("state") != state:
+            self._btn_all_off.setProperty("state", state)
+            repolish(self._btn_all_off)
+        pal = palette(self._theme_mode)
+        icon_color = "white" if state == "danger" else (
+            pal["muted"] if state == "ghost" else pal["text"])
+        set_button_icon(self._btn_all_off, "mdi.power", color=icon_color)
 
     def _refresh_summary(self) -> None:
         total = len(self._channels)
@@ -182,8 +226,11 @@ class MultiBiasPanel(QWidget):
         existed before the switch.  Called live by ``tct_gui._toggle_theme``
         after ``apply_theme``; see BiasPanel.refresh_theme() for the pattern.
         """
+        if mode:
+            self._theme_mode = str(mode)
         for panel in self._panels:
             panel.refresh_theme(mode)
+        self._update_all_off_style()   # re-resolve the icon ink token
 
     # ------------------------------------------------------------------ #
     # Channel-count refresh                                               #

@@ -352,3 +352,41 @@ def test_device_manager_window_construct_and_theme_switch(tmp_path):
     finally:
         win.shutdown()   # stops the 1 s refresh QTimer
         _pump(app, 0.1)
+
+
+def test_device_manager_connected_state_never_renders_green(tmp_path):
+    """State-color census D4 rank-1 hit: ``_STATUS_STYLE["connected"]`` still
+    names ``OK_GREEN`` (gui/device_panel.py), but that colour half is dead --
+    ``StatusChip`` paints purely from the ``state`` string, and
+    ``status_widgets._STATE_ALIASES`` already normalizes "connected" to
+    "neutral" (law 1: quiet nominal, connected is routine, not a green
+    light). Pins the LIVE behaviour end to end: a device that is connected
+    but NOT simulated renders its row chip and the header summary chip both
+    "neutral", never "good"/green. Flips ``_connected``/``simulation``
+    directly on the (never actually connected) sim device object -- a plain
+    attribute set, no hardware I/O, matching this module's construction-only
+    pattern."""
+    app = _app()
+    from gui.device_panel import DeviceManagerWindow
+
+    dm = _sim_device_manager(tmp_path)
+    win = DeviceManagerWindow(dm)
+    try:
+        for _name, dev in dm.named_devices().items():
+            # "Bias Supply" is a BiasChannel PROXY (connected/simulation are
+            # read-only properties delegating to the shared driver) -- flip
+            # the underlying driver for that one, the device itself for
+            # every plain BaseDevice.
+            target = getattr(dev, "_driver", dev)
+            target._connected = True
+            target.simulation = False   # "connected" (real), not "simulated"
+        win._refresh()
+        for row in win._row_map:
+            chip = win._table.cellWidget(row, 1)
+            assert chip.property("state") == "neutral"
+            assert chip.property("state") != "good"
+        assert win._chip_summary.property("state") == "neutral"
+        assert win._chip_summary.property("state") != "good"
+    finally:
+        win.shutdown()
+        _pump(app, 0.1)

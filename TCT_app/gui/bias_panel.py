@@ -46,7 +46,7 @@ from controller.scan_controller import VoltageScanConfig
 from gui.app_settings import theme_mode
 from gui.panel_kit import Card, CheckableCard, MetricGrid, MetricTile, section_header
 from gui.status_bus import notify
-from gui.style import PLOT_BG, WARN_RED, axis_color
+from gui.style import PLOT_BG, WARN_RED, axis_color, palette, repolish
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.worker import ShutdownKind, WorkerThread
 
@@ -198,9 +198,13 @@ class BiasPanel(QWidget):
     Signals
     -------
     output_toggled(bool)  — emitted when output state changes
+    kill_switch_state_changed(str) — the Output OFF kill switch's escalated
+        chrome state changed ("ghost" / "" / "danger"); MultiBiasPanel
+        listens so its aggregate ALL OUTPUTS OFF control escalates too.
     """
 
     output_toggled  = Signal(bool)
+    kill_switch_state_changed = Signal(str)
     vscan_requested = Signal(VoltageScanConfig)
     _read_stop_requested = Signal()
 
@@ -376,14 +380,25 @@ class BiasPanel(QWidget):
         set_button_icon(self._btn_apply, "mdi.trending-up")
         self._btn_apply.clicked.connect(self._apply_voltage)
         self._btn_off = QPushButton("⏹ Output OFF (0 V)")
-        # Reuse the shared dangerBtn hook instead of a hardcoded hex (same
-        # red language as STOP/ALL-OFF, plus working hover/pressed states
-        # the old inline style didn't have).
-        self._btn_off.setObjectName("dangerBtn")
-        set_button_icon(self._btn_off, "mdi.power", color="white")
+        # Kill-switch escalation ruling (council_v5_paul.md §2 "Bias Supply"
+        # — state-color census D4 rank-2 fix): ALWAYS visible, but its CHROME
+        # escalates with real HV energy instead of standing red chrome --
+        # OFFLINE -> ghost outline (muted, nothing to kill); connected +
+        # output-off/unread -> neutral outline (ready, inert); HV-live
+        # (ramping/settled/uncertain) -> filled red, full salience, one-tap
+        # instant. Red arrives only with volts, never as standing chrome —
+        # see _update_kill_switch_style(), driven by _set_hv_tile()/
+        # set_reading() so it always tracks the derived HV state. objectName
+        # carries "kill" (NOT "dangerBtn" — that ID selector paints solid red
+        # unconditionally, which is exactly the always-red chrome this fixes)
+        # so it stays denied by the monkey harness's object-substring layer
+        # (tests/test_ui_monkey.py) same as before, on top of the
+        # already-sufficient text-word denial on "output"/"off".
+        self._btn_off.setObjectName("killSwitchBtn")
         self._btn_off.clicked.connect(self._emergency_off)
         btn_row.addWidget(self._btn_apply)
         btn_row.addWidget(self._btn_off)
+        self._update_kill_switch_style()   # initial ghost/neutral, pre-first-reading
         volt_form.addRow(btn_row)
         volt_box.add_layout(volt_form)
         root.addWidget(volt_box)
@@ -575,6 +590,7 @@ class BiasPanel(QWidget):
         if mode:
             self._theme_mode = str(mode)
         self._restyle_bias_axis()
+        self._update_kill_switch_style()   # re-resolve the icon ink token
 
     # ------------------------------------------------------------------ #
     # Slots                                                               #
@@ -683,6 +699,33 @@ class BiasPanel(QWidget):
         self._tile_hv.set_value(value)
         self._tile_hv.set_state(state)
         self._tile_hv.set_caption(caption)
+        self._update_kill_switch_style()
+
+    def _kill_switch_state(self) -> str:
+        """Council v5 §2 kill-switch escalation ruling: OFFLINE -> ``"ghost"``
+        (nothing to kill); connected with the HV tile stale/unread or
+        confirmed OFF -> ``""`` (plain neutral outline, ready/inert); any
+        other derived HV rung (RAMPING/SETTLED-live/LIVE?/MOVING?/TRIPPED,
+        i.e. armed/warn/crit) -> ``"danger"`` (filled red). Never claims a
+        confident "nothing to kill" from a stale/unread tile (law 7) — stale
+        falls to the quiet neutral outline, not the ghost-offline look,
+        because the supply IS connected and might be live."""
+        if not bool(getattr(self._supply, "connected", False)):
+            return "ghost"
+        if self._tile_hv.is_stale() or self._tile_hv.state() == "normal":
+            return ""
+        return "danger"
+
+    def _update_kill_switch_style(self) -> None:
+        state = self._kill_switch_state()
+        if self._btn_off.property("state") != state:
+            self._btn_off.setProperty("state", state)
+            repolish(self._btn_off)
+            self.kill_switch_state_changed.emit(state)
+        pal = palette(self._theme_mode)
+        icon_color = "white" if state == "danger" else (
+            pal["muted"] if state == "ghost" else pal["text"])
+        set_button_icon(self._btn_off, "mdi.power", color=icon_color)
 
     def _derive_hv_state(self, r, setpoint_V: float) -> tuple[str, str, str]:
         """OFF / RAMPING / SETTLED / TRIPPED, derived from what the driver
@@ -730,6 +773,7 @@ class BiasPanel(QWidget):
                 tile.set_value("—")
                 tile.set_stale(True, "not connected")
             self._chip_conn.set_status("Disconnected", "disconnected")
+            self._update_kill_switch_style()
             return
         try:
             sp = float(getattr(self._supply, "setpoint_V", 0.0) or 0.0)
@@ -1116,6 +1160,10 @@ class BiasPanel(QWidget):
         self._hv_ramping = False
         if err:
             notify(f"Output OFF failed: {err}", "error")
+            # _set_hv_tile already re-derives the kill-switch chrome (via
+            # _update_kill_switch_style), so a failed OFF escalates straight
+            # to filled red instead of fading to the busy-cleared neutral —
+            # a stop that did NOT confirm off must never look reassuring.
             self._set_hv_tile("ERROR", "crit", err)
         else:
             self._set_hv_tile("OFF", "normal",

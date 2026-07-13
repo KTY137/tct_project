@@ -181,6 +181,43 @@ def test_unavailable_reads_unknown_not_neutral():
     assert row_chip.property("state") == "unknown"
 
 
+def test_construction_never_claims_all_nominal_before_first_poll():
+    """Trust boundary (council_v5_paul.md §4 -- state-color census D4 item
+    3): construction happens before any reading exists at all -- the header
+    banner must not open on a confident "All nominal" it has zero data to
+    back up."""
+    _app()
+    panel, _mgr = _panel()
+    assert panel._chip_alarm.text() != "All nominal"
+    assert panel._chip_alarm.property("state") == "unknown"
+
+
+def test_zero_readings_poll_never_claims_all_nominal():
+    """A poll whose read_all() comes back empty (zero configured channels,
+    or nothing produced yet) is UNKNOWN, not a confident "All nominal" --
+    the exact 'ALL NOMINAL with zero readings' lie council_v5_paul.md §4
+    calls out. No mgr.set() calls here: read_all() returns {} even though
+    4 channels ARE configured, exercising the "gated on >=1 real reading"
+    rule directly."""
+    _app()
+    panel, mgr = _panel()
+    assert mgr.read_all() == {}
+    panel._poll()
+    assert panel._chip_alarm.text() != "All nominal"
+    assert panel._chip_alarm.property("state") == "unknown"
+
+
+def test_at_least_one_real_reading_still_reads_all_nominal():
+    """The gate gets out of the way the moment there IS real data -- this is
+    a >=1-reading gate, not a require-every-channel gate."""
+    _app()
+    panel, mgr = _panel()
+    mgr.set("temperature_C", 22.0, AlarmStatus.OK)
+    panel._poll()
+    assert panel._chip_alarm.text() == "All nominal"
+    assert panel._chip_alarm.property("state") == "neutral"
+
+
 # --------------------------------------------------------------------------- #
 # History plot: legend chip + NaN gaps                                        #
 # --------------------------------------------------------------------------- #

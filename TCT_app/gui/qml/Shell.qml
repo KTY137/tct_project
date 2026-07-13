@@ -152,8 +152,11 @@ Item {
 
                 // device status — a compact dot row (cached device state); the
                 // device name + state lives in a hover tooltip, not a label.
-                // 4-state per cockpit_design_system.md §6: real-connected
-                // (solid good) / simulated (a hatched-cyan RING — never a
+                // 4-state per council_v5_paul.md §1 state taxonomy (state-
+                // color census D4 rank-1 fix — real-connected used to be a
+                // solid GOOD/green dot, a green-on-nominal violation of law
+                // 1/6): real-connected (solid MUTED — IDLE-nominal, quiet,
+                // no colour) / simulated (a hatched-cyan RING — never a
                 // solid cyan fill, so it can never be mistaken for "good" at
                 // a glance — law 6) / disconnected (faint hollow ring) /
                 // fault (solid red — attempted-and-failed, from the last
@@ -169,7 +172,7 @@ Item {
                             readonly property string st: modelData[1]
                             width: 8; height: 8; radius: 4
                             anchors.verticalCenter: parent.verticalCenter
-                            color: st === "on" ? Theme.good
+                            color: st === "on" ? Theme.muted
                                  : st === "fault" ? Theme.crit : "transparent"
                             border.width: st === "sim" ? 1.6 : (st === "off" ? 1 : 0)
                             border.color: st === "sim" ? Theme.sim : Theme.faint
@@ -195,7 +198,13 @@ Item {
                     StatChip { lab: "Laser"; val: shell.laserText; state: shell.laserState }
                     StatChip {
                         lab: "Scope"; val: scopeVm.statusText
-                        state: scopeVm.acquiring ? "busy" : (scopeVm.connected ? "good" : "neutral")
+                        // State-color census D4 rank-1 fix: a connected-but-
+                        // idle scope is IDLE-nominal (law 1: quiet, never a
+                        // green "good"), not ACTIVE·benign -- that accent
+                        // fill is reserved for a genuinely live acquisition
+                        // (the "busy" branch above).
+                        state: scopeVm.acquiring ? "busy"
+                             : (scopeVm.connected ? "neutral" : "disconnected")
                     }
                     // The toolbar's app-state readout, re-exposed here since the
                     // classic toolbar is hidden in QML mode (tct_gui._build_central).

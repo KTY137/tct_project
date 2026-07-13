@@ -207,7 +207,11 @@ class DeviceManagerWindow(QMainWindow):
         elif connected == total and simulated:
             self._chip_summary.set_status(f"{connected}/{total} connected, {simulated} sim", "simulated")
         elif connected == total:
-            self._chip_summary.set_status(f"{connected}/{total} connected", "good")
+            # Quiet nominal (law 1): all-connected is routine, not a green
+            # light -- state-color census D4 rank-1 hit (this was still
+            # "good"/green; matches the fix multi_bias_panel.py's own
+            # channel-summary chip already carries).
+            self._chip_summary.set_status(f"{connected}/{total} connected", "neutral")
         else:
             self._chip_summary.set_status(f"{connected}/{total} connected", "warn")
 

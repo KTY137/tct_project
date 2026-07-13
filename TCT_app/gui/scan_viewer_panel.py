@@ -298,10 +298,16 @@ class ScanViewerPanel(QWidget):
         card.add_widget(self._zf_figure)
 
         # "Find focus" lives in the HEADER (not the collapsible body) so the
-        # card's primary verb stays one click away while collapsed.
+        # card's primary verb stays one click away while collapsed. It starts
+        # REAL stage motion + acquisition (a live Z sweep), so it carries the
+        # command-CLASS "motion" state (amber outline, law 2), never the
+        # generic "primary" accent -- state-color census D4 rank hit / W1
+        # taxonomy sweep (docs/design/state_color_census.md, TECH_DEBT.md
+        # "Z-focus Find focus" entry). Styling only: the gate/confirm path
+        # this button's signal eventually reaches is unchanged.
         self._btn_zf_start = QPushButton("Find focus")
         set_button_icon(self._btn_zf_start, "mdi.crosshairs-gps")
-        self._btn_zf_start.setProperty("state", "primary")
+        self._btn_zf_start.setProperty("state", "motion")
         repolish(self._btn_zf_start)
         self._btn_zf_start.clicked.connect(self._emit_z_focus)
         card.add_header_widget(self._btn_zf_start)

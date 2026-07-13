@@ -149,7 +149,14 @@ def test_bias_panel_danger_and_rail_hooks_present():
     _app()
     panel = BiasPanel(SimulatedBiasSupply())
     try:
-        assert panel._btn_off.objectName() == "dangerBtn"
+        # Kill-switch escalation ruling (council_v5_paul.md §2): Output OFF
+        # is no longer the ALWAYS-red "dangerBtn" -- its own "killSwitchBtn"
+        # identity stays denied by the monkey harness's object-substring
+        # layer, but its CHROME escalates with real HV energy (see
+        # test_bias_kill_switch_escalation.py). A never-connected supply
+        # starts "ghost" (nothing to kill).
+        assert panel._btn_off.objectName() == "killSwitchBtn"
+        assert panel._btn_off.property("state") == "ghost"
         assert panel._btn_polarity.objectName() == "dangerBtn"
         # The amber rail now lives on the Card via set_rail()'s railAxis
         # property instead of the old "#biasRail" objectName.
@@ -165,7 +172,12 @@ def test_multi_bias_panel_all_off_button_still_dangerous():
     drv.connect()
     panel = MultiBiasPanel([BiasChannel(drv, 0)])
     try:
-        assert panel._btn_all_off.objectName() == "dangerBtn"
+        # Kill-switch escalation ruling (council_v5_paul.md §2): still its
+        # OWN distinct identity (denied by the monkey's object-substring
+        # layer), but no longer standing red chrome -- see
+        # test_bias_kill_switch_escalation.py for the full ghost/neutral/
+        # danger lifecycle.
+        assert panel._btn_all_off.objectName() == "killSwitchBtn"
         assert panel._btn_all_off.text() == "⏹ ALL OUTPUTS OFF"
     finally:
         panel.shutdown()

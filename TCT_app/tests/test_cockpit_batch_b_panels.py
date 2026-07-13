@@ -208,8 +208,12 @@ def test_multi_bias_quiet_nominal_and_honest_tab_labels():
         assert panel._chip_channels.property("state") == "neutral"
         # "connected", never "LIVE": link-up is not an energized output.
         assert panel._tabs.tabText(0) == "CH0 · connected"
-        # The loudest red stays exactly as it was.
-        assert panel._btn_all_off.objectName() == "dangerBtn"
+        # Kill-switch escalation ruling (council_v5_paul.md §2 -- state-color
+        # census D4 rank-2 fix): the control is always reachable under its own
+        # identity, but no longer standing red chrome -- see
+        # test_bias_kill_switch_escalation.py for the ghost/neutral/danger
+        # lifecycle this replaced "the loudest red stays exactly as it was".
+        assert panel._btn_all_off.objectName() == "killSwitchBtn"
         assert panel._btn_all_off.text() == "⏹ ALL OUTPUTS OFF"
     finally:
         _dispose(panel)
