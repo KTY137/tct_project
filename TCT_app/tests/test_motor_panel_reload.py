@@ -41,6 +41,17 @@ Two independent defects, pinned here against the simulated backend:
     GUI-thread-only, I/O-free timer that reads only the plain
     ``connected``/``homed`` attributes (same pattern tct_gui.py's top-bar
     status strip already uses).
+
+Third defect, same family, pinned below (Mary review of commit 4a89647,
+RISK-3 "unpressable kill switch"): ``_use_current_pos`` and
+``_emit_set_as_start`` used to call ``self._motor.get_position()`` directly
+on the GUI thread, and neither button was in ``_motion_widgets`` so
+``_set_busy(True)`` never disabled them during homing.  Since 4a89647 the PI
+backend's ``home()`` holds the transport lock for the *entire* referencing
+move, so a click on either helper during a home would block the GUI event
+loop for that whole move — including STOP, which is also on the GUI thread.
+Fixed by reading the poller's already-cached ``_last_pos`` (never a live
+call) and adding both buttons to ``_motion_widgets``.
 """
 from __future__ import annotations
 
@@ -51,6 +62,8 @@ import time
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QPushButton
 
 
 @pytest.fixture(scope="module")
@@ -257,5 +270,181 @@ def test_connection_chip_updates_when_motor_connects_after_panel_built(qapp):
         assert "offline" not in panel._chip_homed.text().lower()
         assert "not homed" in panel._chip_homed.text().lower()
     finally:
+        panel.shutdown()
+        _pump(qapp, 0.2)
+
+
+# --------------------------------------------------------------------------- #
+# RISK-3 (Mary review, commit 4a89647): "Use current position" / "Set as scan  #
+# start" must read the cached _last_pos, never call get_position() on the     #
+# GUI thread — see the module docstring's third defect.                       #
+# --------------------------------------------------------------------------- #
+
+class _BlockingGetPositionMotor:
+    """MotorStageBase-shaped fake whose get_position() blocks on an Event.
+
+    Proves the scan-integration helpers never call it: if a regression put a
+    live get_position() back on the GUI-thread click path, this fake would
+    hang that click for the wait's duration instead of returning instantly,
+    and ``get_position_calls`` would go non-zero."""
+
+    def __init__(self) -> None:
+        self.connected = True
+        self.homed = True
+        self.limits = None
+        self._release = threading.Event()
+        self.get_position_calls = 0
+
+    def get_position(self):
+        from devices.motor_base import Position
+        self.get_position_calls += 1
+        self._release.wait(timeout=5.0)
+        return Position(9.0, 9.0, 9.0)   # would surface a live call if one slipped through
+
+    def home(self, axes=None) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+
+def _find_button(panel, text: str) -> QPushButton:
+    for btn in panel.findChildren(QPushButton):
+        if btn.text().strip().casefold() == text.casefold():
+            return btn
+    raise AssertionError(f"no button labelled {text!r} in the motor panel")
+
+
+def test_use_current_pos_reads_cached_position_never_calls_get_position(qapp):
+    """Clicking 'Use current position' must copy the poller's cached
+    _last_pos into the spinboxes without ever touching get_position() on the
+    GUI thread (the RISK-3 gap)."""
+    from gui.motor_panel import MotorPanel
+
+    motor = _BlockingGetPositionMotor()
+    panel = MotorPanel(motor)
+    try:
+        # No background poll racing the assertion — same idiom
+        # test_motor_danger_gate.py uses via ``connected = False``, but this
+        # fake needs ``connected = True`` so the button's own guard doesn't
+        # short-circuit before exercising the cached-position path.
+        panel._poller.set_paused(True)
+        panel._last_pos = (12.5, -3.5, 0.25)
+        panel._has_position = True
+
+        _find_button(panel, "Use current position").click()
+
+        assert motor.get_position_calls == 0, \
+            "the button called get_position() on the GUI thread (RISK-3, 4a89647)"
+        assert panel._spin_x.value() == pytest.approx(12.5)
+        assert panel._spin_y.value() == pytest.approx(-3.5)
+        assert panel._spin_z.value() == pytest.approx(0.25)
+    finally:
+        motor._release.set()
+        panel.shutdown()
+        _pump(qapp, 0.2)
+
+
+def test_set_as_start_reads_cached_position_never_calls_get_position(qapp):
+    """Same guarantee for 'Set as scan start' — including that the emitted
+    signal (which feeds the Scan panel's start coordinates) carries the
+    cached value, not a live read."""
+    from gui.motor_panel import MotorPanel
+
+    motor = _BlockingGetPositionMotor()
+    panel = MotorPanel(motor)
+    emitted: list[tuple[float, float, float]] = []
+    panel.set_as_scan_start.connect(lambda x, y, z: emitted.append((x, y, z)))
+    try:
+        panel._poller.set_paused(True)
+        panel._last_pos = (40.0, -8.0, 2.0)
+        panel._has_position = True
+
+        _find_button(panel, "Set as scan start").click()
+
+        assert motor.get_position_calls == 0, \
+            "the button called get_position() on the GUI thread (RISK-3, 4a89647)"
+        assert emitted == [(40.0, -8.0, 2.0)]
+    finally:
+        motor._release.set()
+        panel.shutdown()
+        _pump(qapp, 0.2)
+
+
+def test_use_current_pos_no_ops_when_position_never_polled(qapp):
+    """Honest handling of the never-polled case: no silent (0, 0, 0) default
+    is copied in (this feeds scan start coordinates) — the spinboxes stay
+    exactly as the operator left them."""
+    from gui.motor_panel import MotorPanel
+
+    motor = _BlockingGetPositionMotor()
+    panel = MotorPanel(motor)
+    try:
+        panel._poller.set_paused(True)
+        assert panel._has_position is False   # construction-time default
+        panel._spin_x.setValue(1.0)
+        panel._spin_y.setValue(2.0)
+        panel._spin_z.setValue(3.0)
+
+        _find_button(panel, "Use current position").click()
+
+        assert motor.get_position_calls == 0
+        assert panel._spin_x.value() == pytest.approx(1.0)
+        assert panel._spin_y.value() == pytest.approx(2.0)
+        assert panel._spin_z.value() == pytest.approx(3.0)
+    finally:
+        motor._release.set()
+        panel.shutdown()
+        _pump(qapp, 0.2)
+
+
+def test_set_as_start_no_ops_when_position_never_polled(qapp):
+    """Same honesty guarantee for 'Set as scan start': nothing is emitted
+    for a position nobody has actually confirmed."""
+    from gui.motor_panel import MotorPanel
+
+    motor = _BlockingGetPositionMotor()
+    panel = MotorPanel(motor)
+    emitted: list[tuple[float, float, float]] = []
+    panel.set_as_scan_start.connect(lambda x, y, z: emitted.append((x, y, z)))
+    try:
+        panel._poller.set_paused(True)
+        assert panel._has_position is False
+
+        _find_button(panel, "Set as scan start").click()
+
+        assert motor.get_position_calls == 0
+        assert emitted == [], "emitted a scan-start position nobody confirmed"
+    finally:
+        motor._release.set()
+        panel.shutdown()
+        _pump(qapp, 0.2)
+
+
+def test_scan_integration_buttons_disabled_while_busy(qapp):
+    """Defense in depth (alongside the cached-position read above): both
+    helpers sit in ``_motion_widgets`` now, so a move/home in flight disables
+    them exactly like Home/Move/Center/Zero."""
+    from gui.motor_panel import MotorPanel
+
+    motor = _BlockingGetPositionMotor()
+    panel = MotorPanel(motor)
+    try:
+        panel._poller.set_paused(True)
+        use_pos = _find_button(panel, "Use current position")
+        set_start = _find_button(panel, "Set as scan start")
+        assert use_pos in panel._motion_widgets
+        assert set_start in panel._motion_widgets
+        assert use_pos.isEnabled() and set_start.isEnabled()
+
+        panel._set_busy(True)
+        assert not use_pos.isEnabled()
+        assert not set_start.isEnabled()
+
+        panel._set_busy(False)
+        assert use_pos.isEnabled()
+        assert set_start.isEnabled()
+    finally:
+        motor._release.set()
         panel.shutdown()
         _pump(qapp, 0.2)

@@ -189,8 +189,18 @@ class MotorPanel(QWidget):
         # _refresh_connection_state().  It is also the "current position" the
         # danger-gate payloads quote: a fresh get_position() there would be
         # serial I/O on the GUI thread (and would race the poller for the
-        # port), which the confirm path must never do.
+        # port), which the confirm path must never do.  Also the source for
+        # "Use current position" / "Set as scan start" (below) for the same
+        # reason (Mary review, commit 4a89647, RISK-3): PI's home() holds the
+        # transport lock for the whole referencing move since that commit, so
+        # a live get_position() from a button click on the GUI thread could
+        # block the event loop for the duration of a home — including STOP.
         self._last_pos: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        # True once the poller has delivered a real reading — distinguishes
+        # "stage is actually at the origin" from "never polled yet", so the
+        # scan-integration helpers below never hand a scan a silently-stale
+        # (0, 0, 0) default as if it were a real position.
+        self._has_position = False
         self._build_ui()
 
         # Frame contract (docs/ARCHITECTURE.md "Motor frame contract"): the
@@ -568,6 +578,12 @@ class MotorPanel(QWidget):
         self._btn_set_start.clicked.connect(self._emit_set_as_start)
         helper_layout.addWidget(btn_use_pos)
         helper_layout.addWidget(self._btn_set_start)
+        # Defense in depth alongside the _last_pos read below: also disable
+        # both helpers while a move/home runs (_set_busy) and while the
+        # manual-danger lock holds the stage, even though neither button
+        # calls the driver anymore — cheap and it protects a different
+        # window (a click queued a hair before a move starts).
+        self._motion_widgets.extend([btn_use_pos, self._btn_set_start])
         helper_box.add_layout(helper_layout)
         root.addWidget(helper_box)
         root.addStretch(1)
@@ -1027,6 +1043,7 @@ class MotorPanel(QWidget):
 
     def _on_position_updated(self, x: float, y: float, z: float) -> None:
         self._last_pos = (x, y, z)
+        self._has_position = True
         # The axis letter already sits in the caption row above each value —
         # the value itself is a pure signed quantity (law 3).
         self._lbl_x.setText(f"{x:+.4f} mm")
@@ -1135,27 +1152,40 @@ class MotorPanel(QWidget):
         super().closeEvent(event)
 
     def _use_current_pos(self) -> None:
-        """Copy current stage position into the absolute-move spinboxes."""
-        if not self._motor.connected:
+        """Copy current stage position into the absolute-move spinboxes.
+
+        Reads the poller's cached ``_last_pos`` — NEVER a live
+        ``get_position()`` here.  This runs on the GUI thread, and since
+        commit 4a89647 the PI backend's ``home()`` holds the transport lock
+        for the entire referencing move; a live call here would block the
+        event loop for that whole move, including STOP (Mary review,
+        RISK-3: "unpressable kill switch").  See the ``_last_pos`` comment
+        in __init__.
+        """
+        if not self._motor.connected or not self._has_position:
+            notify("Current position not yet known — waiting for the "
+                   "first position reading.", "warn")
             return
-        try:
-            pos = self._motor.get_position()
-            self._spin_x.setValue(pos.x_mm)
-            self._spin_y.setValue(pos.y_mm)
-            self._spin_z.setValue(pos.z_mm)
-        except Exception:
-            pass
+        x, y, z = self._last_pos
+        self._spin_x.setValue(x)
+        self._spin_y.setValue(y)
+        self._spin_z.setValue(z)
 
     def _emit_set_as_start(self) -> None:
-        """Emit set_as_scan_start with the current stage position."""
-        if not self._motor.connected:
+        """Emit set_as_scan_start with the current stage position.
+
+        Same cached-``_last_pos`` fix as :meth:`_use_current_pos` — see its
+        docstring.  This value feeds the Scan panel's start coordinates, so
+        a never-polled position is refused rather than silently emitted as
+        (0, 0, 0).
+        """
+        if not self._motor.connected or not self._has_position:
+            notify("Current position not yet known — waiting for the "
+                   "first position reading.", "warn")
             return
-        try:
-            pos = self._motor.get_position()
-            self.set_as_scan_start.emit(pos.x_mm, pos.y_mm, pos.z_mm)
-            flash_button(self._btn_set_start, "good", "Copied")
-        except Exception:
-            pass
+        x, y, z = self._last_pos
+        self.set_as_scan_start.emit(x, y, z)
+        flash_button(self._btn_set_start, "good", "Copied")
 
     # ------------------------------------------------------------------ #
     # Helpers                                                             #
