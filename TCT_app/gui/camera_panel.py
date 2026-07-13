@@ -264,8 +264,12 @@ class CameraPanel(QWidget):
         # uses everywhere else — see gui/style.py).  Hot-path widget: no
         # QGraphicsEffect/shadow/glow, ever — static border + surface only.
         # Designed empty states (design system §7 "Camera"): a stack swaps
-        # between not-connected (error variant, §6 "failed connects are
-        # designed error states"), not-streaming, and the live image.
+        # between not-connected, not-streaming, and the live image.  A
+        # disconnected camera is an ABSENCE, not an alarm — council v5 state
+        # ladder (docs/design/council_v5_paul.md §1): OFFLINE is neutral/muted;
+        # red is reserved for HV-live / trip / abort.  So the offline surface
+        # uses the neutral EmptyState variant, never the crit "error" one
+        # (which would paint "Camera not connected" red — an off-as-danger lie).
         view_card = Card()
         view_card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
         self._img_label = QLabel("")
@@ -276,7 +280,7 @@ class CameraPanel(QWidget):
         self._empty_offline = EmptyState(
             "mdi.camera-off", "Camera not connected",
             "Connect the camera from the top bar; streaming resumes on its own.",
-            variant="error", theme_mode=self._theme_mode,
+            theme_mode=self._theme_mode,
         )
         self._empty_stopped = EmptyState(
             "mdi.camera", "Not streaming",

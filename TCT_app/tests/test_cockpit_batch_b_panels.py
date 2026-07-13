@@ -149,6 +149,32 @@ def test_bias_hero_tiles_stale_until_reading_then_derive_states():
         _dispose(panel)
 
 
+def test_bias_unknown_output_state_is_not_red_but_trip_stays_crit():
+    """Council v5 ladder (docs/design/council_v5_paul.md §1): the supply has NO
+    output-on/ramp-state readback, so OFF/SETTLED are INFERRED (their caption
+    says "not readable") — i.e. the true output-on fact is UNKNOWN.  Unknown is
+    not a fault: those states must never borrow the crit/red class.  Red stays
+    reserved for a genuine TRIPPED/compliance fault — this guardrail must not
+    be softened while fixing the off/absent/unknown red-misuses."""
+    _app()
+    panel = BiasPanel(_FakeSupply())
+    try:
+        # Inferred OFF while the real output-on state is unknown → neutral,
+        # never red.
+        panel._supply.setpoint_V = 0.0
+        panel.set_reading(_Reading(0.0, 0.0, False))
+        assert panel._tile_hv.value() == "OFF"
+        assert "not readable" in panel._tile_hv._caption.text()
+        assert panel._tile_hv.state() != "crit"
+        # A real compliance trip DOES stay crit — the loud fault is preserved.
+        panel._supply.setpoint_V = -250.0
+        panel.set_reading(_Reading(-250.0, 100e-6, True))
+        assert panel._tile_hv.value() == "TRIPPED"
+        assert panel._tile_hv.state() == "crit"
+    finally:
+        _dispose(panel)
+
+
 def test_bias_sweeps_fold_into_one_collapsed_advanced_card():
     _app()
     panel = BiasPanel(SimulatedBiasSupply())
@@ -198,9 +224,14 @@ def test_camera_action_bar_drives_existing_stream():
     panel = CameraPanel(BlackflyCamera(simulation=True))
     try:
         # Streaming still auto-starts (worker-test contract unchanged) and
-        # the not-connected surface is the designed error empty state.
+        # the not-connected surface shows on the view stack.
         assert panel._btn_live.isChecked()
         assert panel._view_stack.currentWidget() is panel._empty_offline
+        # Council v5 state ladder (docs/design/council_v5_paul.md §1): a
+        # disconnected camera is an ABSENCE, not an alarm — the offline surface
+        # must NOT use the crit "error" variant (which paints the title/icon
+        # red). Red is reserved for HV-live / trip / abort; "off" is not danger.
+        assert panel._empty_offline._variant == "default"
         # Stop and Single both disarm the live toggle (single = one grab).
         panel._btn_stop.click()
         assert not panel._btn_live.isChecked()
@@ -270,6 +301,9 @@ def test_motor_move_absolute_motion_class_and_switch_honesty():
         moves = [b for b in panel.findChildren(QPushButton) if b.text() == "Move to"]
         assert len(moves) == 1
         assert moves[0].property("state") == "motion"   # law 2: amber, not red
+        # Council v5 ladder: red is reserved for faults/HV/abort — a MOVE STAGE
+        # (motion) command must never borrow the danger/crit class.
+        assert moves[0].property("state") not in ("danger", "crit")
         assert panel._chip_switches.text() == "Switches unknown"
         assert panel._chip_switches.property("state") == "unknown"
         # STOP: still the single danger control, still never busy-disabled.
