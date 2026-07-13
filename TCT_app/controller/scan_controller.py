@@ -615,10 +615,22 @@ class ScanController:
         line of defense on any teardown path.  It is a **thin composition of the
         existing run-loop fail-safe primitives** — it introduces no new behaviour:
 
-        * :meth:`_bias_failsafe` — ramp the resolved bias channel to 0 V (its own
-          ``try``) then open the output (its own ``try``), the exact two-step
-          discipline every fault/deny/abort path already applies;
+        * :meth:`_bias_failsafe` — ramp a bias channel to 0 V (its own ``try``)
+          then open its output (its own ``try``), the exact two-step discipline
+          every fault/deny/abort path already applies;
         * :meth:`_motor_stop_safe` — best-effort halt of all stage axes.
+
+        **EVERY** exposed HV channel is parked, not just the primary.  A queued
+        sequence can arm a NON-primary channel (``plan.safety['bias_channel']=N``
+        / ``envelope_from_plans(channel=N)``), and between entries the engine
+        cannot know which channel the LAST entry drove — so park_safe() iterates
+        ALL of ``self._dev.bias_channels`` and makes each one safe.  Deliberately
+        NOT ``_resolve_bias`` (which resolves the ONE channel a run drives): the
+        per-channel two-try fail-safe is an idempotent no-op on an idle/0 V
+        channel, so parking every channel is harmless, whereas parking only the
+        primary would leave an armed non-primary channel live.  Falls back to the
+        primary proxy (``self._dev.bias_supply``) when the channel list is absent
+        or empty.
 
         **No parking MOTION is ever commanded.**  "Park" here means HV to 0 V +
         output off + motors *stopped* — never an XY/Z move to some "park
@@ -628,39 +640,47 @@ class ScanController:
         Safe and **idempotent in every state** — it never raises into the caller,
         because it IS the caller's safety net:
 
-        * no run active / already parked / supply already at 0 V + off → no-op;
+        * no run active / already parked / every channel already at 0 V + off → no-op;
         * after FINISHED → a harmless belt-and-braces re-assert;
         * after ERROR / ABORTED → the executor's fail-safe already ran, so
           re-asserting is harmless;
         * bias supply (or the whole stack) disconnected → a clean no-op, logged
           at debug, never a raise.
 
-        Internal failures are swallowed and logged: the two-``try`` fail-safe
-        already guarantees the output-off attempt is made even if the ramp-down
-        raises, and the motor halt is independently guarded.
+        Internal failures are swallowed and logged per channel: the two-``try``
+        fail-safe already guarantees the output-off attempt is made even if the
+        ramp-down raises, a surprise on one channel can neither skip the others
+        nor the motor halt, and the motor halt is independently guarded.
         """
-        # Resolve the primary bias channel exactly as the fault/abort paths do
-        # (default cfg -> self._dev.bias_supply).  Resolution itself must never
-        # propagate: park_safe is the last line of defense.
-        bias: BiasChannel | None = None
+        # Park EVERY exposed HV channel — a sequence may have armed a non-primary
+        # one, and between entries we cannot know which the last entry drove.
+        # Fall back to the primary proxy when the channel list is absent/empty.
+        # Enumeration itself must never propagate: park_safe is the last line of
+        # defense.
         try:
-            bias = self._resolve_bias(SimpleNamespace(bias_channel=None))
+            channels = list(getattr(self._dev, "bias_channels", None) or ())
         except Exception:
-            logger.debug("park_safe: no bias channel to park", exc_info=True)
+            channels = []
+        if not channels:
+            primary = getattr(self._dev, "bias_supply", None)
+            if primary is not None:
+                channels = [primary]
 
-        # Gate on connectivity like _check_compliance does: a disconnected supply
-        # is a clean, quiet no-op (calling ramp_to on it would only raise into the
-        # fail-safe's WARN branch).  The whole block is belt-and-braces guarded so
-        # a driver-side surprise can never skip the motor halt below.
-        try:
-            if bias is None:
-                pass
-            elif bias.connected:
-                self._bias_failsafe(bias)   # ramp->0 (own try) then output off (own try)
-            else:
-                logger.debug("park_safe: bias supply not connected — HV park is a no-op")
-        except Exception:
-            logger.debug("park_safe: bias park skipped", exc_info=True)
+        for bias in channels:
+            # Gate on connectivity like the compliance path does: a disconnected
+            # supply is a clean, quiet no-op (calling ramp_to on it would only
+            # raise into the fail-safe's WARN branch).  Each channel is
+            # belt-and-braces guarded so a driver-side surprise on one channel
+            # can neither skip the remaining channels nor the motor halt below.
+            try:
+                if bias is None:
+                    continue
+                if bias.connected:
+                    self._bias_failsafe(bias)   # ramp->0 (own try) then output off (own try)
+                else:
+                    logger.debug("park_safe: bias channel not connected — HV park is a no-op")
+            except Exception:
+                logger.debug("park_safe: bias park skipped for a channel", exc_info=True)
 
         self._motor_stop_safe()             # best-effort halt; never a MOVE
 

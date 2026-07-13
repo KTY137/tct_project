@@ -21,8 +21,10 @@ Fail-closed by construction
 ---------------------------
 There is deliberately **NO continue-on-failure option in v1**.  An unattended
 overnight queue must never keep energizing HV after an anomaly, so the FIRST
-non-clean outcome (``"error"`` / ``"aborted"``) or the FIRST preflight veto HALTS
-the queue: the culprit entry is marked FAILED and every remaining PENDING entry
+non-clean outcome (anything the executor reports other than ``"finished"`` —
+``"error"`` / ``"aborted"`` / the ``"unknown"`` crash sentinel / any unexpected
+word), the FIRST preflight veto, **or a preflight hook that raises** HALTS the
+queue: the culprit entry is marked FAILED and every remaining PENDING entry
 becomes SKIPPED.  A human decides what to do next morning — the machine does not
 plough on into the next routine.  Likewise a malformed persisted entry raises
 rather than yielding a silently shortened queue.
@@ -47,9 +49,12 @@ from controller.scan_plan import ScanPlan
 # Persisted-file schema version (see save/load below).
 SEQUENCE_FILE_VERSION = 1
 
-# The run outcome vocabulary — MUST match data/hdf5_writer.py VALID_OUTCOMES so
-# the coordinator can hand the same word it wrote into the HDF5 file straight to
-# record_outcome().  "finished" is the only clean outcome.
+# The RECORDED run-outcome vocabulary — MUST match data/hdf5_writer.py
+# VALID_OUTCOMES so the coordinator can hand the same word it wrote into the HDF5
+# file straight to record_outcome().  "finished" is the only outcome that
+# ADVANCES the queue; every other word HALTS it (see record_outcome).  This set
+# is no longer a gate — record_outcome accepts ANY string and fails closed — it
+# only distinguishes a standard bad-run word from an unexpected one in the log.
 _VALID_OUTCOMES: frozenset[str] = frozenset({"finished", "aborted", "error"})
 
 
@@ -163,7 +168,11 @@ class SequenceRunner:
         Returns the entry (now RUNNING) when its preflight passes.  Returns
         ``None`` when the queue is exhausted OR when a preflight veto halted it.
         A preflight veto marks the entry FAILED with the hook's message and
-        SKIPS every remaining PENDING entry (fail-closed halt).
+        SKIPS every remaining PENDING entry (fail-closed halt).  A preflight hook
+        that *raises* is treated identically to a veto: the engine owns the
+        outcome, marking the entry FAILED with the exception text and halting the
+        queue — it never relies on the coordinator to catch the exception (which
+        would otherwise strand the entry in PREFLIGHT and wedge the queue).
 
         Raises :class:`RuntimeError` if an entry is still PREFLIGHT/RUNNING — the
         caller must :meth:`record_outcome` before advancing, so two entries can
@@ -181,7 +190,17 @@ class SequenceRunner:
             return None
 
         self._set_state(entry, EntryState.PREFLIGHT)
-        result = self._preflight.run(entry)
+        try:
+            result = self._preflight.run(entry)
+        except Exception as exc:
+            # A hook that raises must not leave the entry stranded in PREFLIGHT
+            # (the next next_entry() would then forever refuse to advance past
+            # it).  Fail the culprit closed with the exception text and halt,
+            # exactly as a veto verdict does — the engine, not the coordinator,
+            # owns the outcome.
+            self._set_state(entry, EntryState.FAILED, f"preflight error: {exc}")
+            self._halt(EntryState.SKIPPED, "skipped: preflight halt")
+            return None
         if not result.ok:
             self._set_state(entry, EntryState.FAILED,
                             result.message or "preflight rejected")
@@ -194,19 +213,24 @@ class SequenceRunner:
     def record_outcome(self, outcome: str) -> None:
         """Record how the RUNNING entry's run ended.
 
-        *outcome* is the HDF5 outcome word (``"finished"`` / ``"aborted"`` /
-        ``"error"``).  ``"finished"`` marks the entry DONE and clears the way for
-        the next :meth:`next_entry`.  ANYTHING else marks it FAILED and HALTS the
-        queue (remaining PENDING → SKIPPED) — no continue-on-failure.
+        *outcome* is the HDF5 outcome word.  ONLY the literal ``"finished"``
+        marks the entry DONE and clears the way for the next :meth:`next_entry`.
+        EVERY other string — ``"aborted"`` / ``"error"``, the ``"unknown"``
+        crash sentinel, or any unexpected word — marks the entry FAILED and HALTS
+        the queue (remaining PENDING → SKIPPED); there is no continue-on-failure.
+        The exact word is recorded in the entry message.
 
-        Raises :class:`ValueError` on an unknown outcome word and
-        :class:`RuntimeError` if no entry is RUNNING.
+        This is deliberately fail-closed on ANY non-``"finished"`` word rather
+        than raising on an unrecognized one: ``data/hdf5_writer.py`` legitimately
+        persists ``"unknown"`` (its ``UNKNOWN_OUTCOME`` sentinel) when a run
+        process dies without recording a clean outcome — and that crashed-run
+        word is EXACTLY the outcome that most needs to halt an unattended
+        overnight queue.  A raise here would escape the engine and could strand
+        the sequence, so the most-dangerous outcome must never throw.
+
+        Raises :class:`RuntimeError` if no entry is RUNNING — that is a caller
+        sequencing bug (record_outcome before any next_entry), not a run outcome.
         """
-        if outcome not in _VALID_OUTCOMES:
-            raise ValueError(
-                f"unknown run outcome {outcome!r}; must be one of "
-                f"{sorted(_VALID_OUTCOMES)}"
-            )
         entry = self._running_entry()
         if entry is None:
             raise RuntimeError(
@@ -215,9 +239,15 @@ class SequenceRunner:
 
         if outcome == "finished":
             self._set_state(entry, EntryState.DONE)
-        else:
-            self._set_state(entry, EntryState.FAILED, f"run outcome: {outcome}")
-            self._halt(EntryState.SKIPPED, "skipped after halt")
+            return
+        # Any non-"finished" word halts the queue.  Record the exact word;
+        # flag words outside the standard recorded vocabulary (VALID_OUTCOMES)
+        # so a morning post-mortem can tell a real bad-run outcome from a caller
+        # slip — both still halt.  ("unknown" is genuinely non-standard: see
+        # hdf5_writer's UNKNOWN_OUTCOME, "Deliberately NOT one of VALID_OUTCOMES".)
+        suffix = "" if outcome in _VALID_OUTCOMES else " (non-standard)"
+        self._set_state(entry, EntryState.FAILED, f"run outcome: {outcome}{suffix}")
+        self._halt(EntryState.SKIPPED, "skipped after halt")
 
     def cancel(self) -> None:
         """Operator aborted the sequence: cancel the running entry + all PENDING.

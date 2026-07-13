@@ -33,6 +33,8 @@ from controller.scan_plan import ActionBlock, ActionType, Axis, LoopBlock, ScanP
 from controller.scan_plan_validator import PlanLimits
 from controller.danger_gate import AutoConfirmGate, DenyAllGate, DangerAction
 from devices.bias_supply_base import BiasReading
+from devices.bias_supply_simulated import SimulatedBiasSupply
+from devices.bias_channel import BiasChannel
 
 
 # --------------------------------------------------------------------------- #
@@ -640,6 +642,40 @@ def test_park_safe_never_commands_a_motor_move(sim):
 
     assert stop_spy.called                            # motion halted
     assert not move_spy.called                        # never a park MOVE
+
+
+def test_park_safe_parks_all_channels_including_non_primary(sim):
+    """MAJOR (Mary): park_safe() must de-energize EVERY exposed HV channel, not
+    just the primary — a sequence can be armed on a NON-primary channel, so
+    parking only self._dev.bias_supply would leave the actually-energized
+    channel live between entries.  Energize channel 1 on a 2-channel supply;
+    park_safe() brings it to 0 V + output OFF, and idle channel 0 stays off."""
+    dm, ctrl, sm = sim
+    # Swap in a 2-channel simulated driver (no hardware I/O) and enumerate it,
+    # mirroring test_bias_multichannel's DeviceManager injection.
+    drv = SimulatedBiasSupply(channel_count=2, voltage_range_V=1000.0)
+    dm._bias_driver = drv
+    dm._bias_primary_ch = 0
+    dm.bias_supply = BiasChannel(drv, 0)
+    drv.connect()
+    dm.refresh_bias_channels()
+    assert [c.channel for c in dm.bias_channels] == [0, 1]
+
+    # Energize the NON-primary channel 1 (models a sequence armed on channel 1);
+    # channel 0 stays idle/off throughout.
+    drv.set_voltage_ch(1, -50.0)
+    drv.output_on_ch(1)
+    assert drv.output_is_on_ch(1) and dm.bias_channels[1].setpoint_V == -50.0
+    assert not drv.output_is_on_ch(0)
+
+    ctrl.park_safe()
+
+    # The non-primary channel is de-energized: 0 V + output OFF...
+    assert dm.bias_channels[1].setpoint_V == 0.0
+    assert not drv.output_is_on_ch(1)
+    # ...and channel 0 was off and stays off (untouched-but-off).
+    assert dm.bias_channels[0].setpoint_V == 0.0
+    assert not drv.output_is_on_ch(0)
 
 
 # --------------------------------------------------------------------------- #

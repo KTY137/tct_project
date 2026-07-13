@@ -57,6 +57,16 @@ class _VetoPreflight:
         return PreflightResult(ok=True)
 
 
+class _RaisingPreflight:
+    """Preflight whose hook RAISES (models a buggy / hardware-faulting check)."""
+
+    def __init__(self, message: str = "focus probe exploded") -> None:
+        self._message = message
+
+    def run(self, entry: SequenceEntry) -> PreflightResult:
+        raise RuntimeError(self._message)
+
+
 # --------------------------------------------------------------------------- #
 # advance: a clean finish lets the next entry run                              #
 # --------------------------------------------------------------------------- #
@@ -129,6 +139,26 @@ def test_preflight_veto_only_halts_after_the_vetoed_entry():
     assert r.progress == (3, 3)
 
 
+def test_preflight_hook_that_raises_fails_entry_and_halts():
+    """MINOR (Mary): a preflight hook that RAISES must not strand the entry in
+    PREFLIGHT (which would wedge the queue — next_entry() would then forever
+    refuse to advance past it).  The engine owns the outcome: fail the culprit
+    closed with the exception text and halt, exactly like a veto, without relying
+    on the coordinator to catch the exception."""
+    r = _runner(3, preflight=_RaisingPreflight("focus probe exploded"))
+    result = r.next_entry()
+
+    assert result is None                       # nothing runs
+    assert r.entries[0].state is EntryState.FAILED
+    assert "focus probe exploded" in r.entries[0].message
+    assert [e.state for e in r.entries[1:]] == [EntryState.SKIPPED,
+                                                EntryState.SKIPPED]
+    assert r.is_complete is True
+    # The failure is on the record (a log line), not silently swallowed.
+    assert any("-> failed" in line and "focus probe exploded" in line
+               for line in r.log)
+
+
 # --------------------------------------------------------------------------- #
 # cancel mid-queue                                                             #
 # --------------------------------------------------------------------------- #
@@ -157,13 +187,25 @@ def test_cancel_between_entries_cancels_all_pending():
 # --------------------------------------------------------------------------- #
 # record_outcome guards                                                        #
 # --------------------------------------------------------------------------- #
-def test_record_outcome_unknown_word_raises_valueerror():
-    r = _runner(1)
-    r.next_entry()                              # an entry IS running
-    with pytest.raises(ValueError):
-        r.record_outcome("done")                # not an HDF5 outcome word
-    with pytest.raises(ValueError):
-        r.record_outcome("success")
+def test_record_outcome_nonstandard_word_halts_instead_of_raising():
+    """NEW semantics (Mary MINOR): record_outcome accepts ANY string; only the
+    literal "finished" advances.  Every other word — the "unknown" the HDF5
+    layer writes for a crashed run, or an unexpected caller word — FAILS the
+    entry and HALTS the queue (remaining SKIPPED), with the word in the message.
+
+    It deliberately does NOT raise: the crashed-run "unknown" is the outcome that
+    most needs to halt an unattended overnight queue, so the outcome path must
+    never throw (a raise would escape the engine and could strand the sequence).
+    """
+    for word in ("unknown", "gibberish", "done", "success"):
+        r = _runner(3)
+        r.next_entry()                          # an entry IS running
+        r.record_outcome(word)                  # must NOT raise
+        assert r.entries[0].state is EntryState.FAILED, word
+        assert word in r.entries[0].message, word
+        assert [e.state for e in r.entries[1:]] == [EntryState.SKIPPED,
+                                                    EntryState.SKIPPED], word
+        assert r.is_complete is True, word
 
 
 def test_record_outcome_without_running_entry_raises_runtimeerror():
