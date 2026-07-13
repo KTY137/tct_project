@@ -12,6 +12,7 @@ import json
 import os
 import threading
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -24,8 +25,12 @@ from controller.danger_gate import DangerAction
 from controller.plan_estimate import PlanEstimate, estimate_plan
 from controller.scan_plan import ActionBlock, ActionType, Axis, LoopBlock, ScanPlan, ScanBlock
 from controller.scan_plan_validator import PlanLimits, validate_plan
-from gui.planner_panel import _MIME_TYPE, PlannerPanel
+from gui.planner_panel import _MIME_TYPE, PlannerPanel, _default_template_plan
 from gui.qt_danger_gate import QtDangerGate
+
+# TCT_app/routines/: resolved from this file's own path (tests/ -> TCT_app/),
+# never from the CWD, so it stays correct regardless of where pytest runs from.
+_ROUTINES_DIR = Path(__file__).resolve().parent.parent / "routines"
 
 
 def _app() -> QApplication:
@@ -168,6 +173,37 @@ def test_default_template_validates_clean_under_default_limits():
         assert errors == []
     finally:
         panel.shutdown()
+
+
+def test_default_template_matches_frozen_r1_routine():
+    """``_default_template_plan()`` must stay byte-for-byte (as parsed dicts)
+    identical to ``routines/R1_cce_v_map.yaml``.
+
+    R1 is the frozen corpus routine originally GENERATED from this template
+    (see ``tests/fixtures/routine_corpus/README.md``), plus an explicit
+    post-bias-change settle WAIT that the template gained in the same beat
+    that added this test. A failure here means one of two real regressions:
+    either the template lost its bias-settle WAIT again (so a bias sweep
+    would acquire during the bias/detector transient), or R1 and the template
+    have independently drifted apart and one of them is now wrong -- in
+    either case this is a real divergence to investigate, not a fixture to
+    silently update. Read-only against ``routines/``; that file is a frozen,
+    separately-owned fixture and is never written by this test."""
+    r1_path = _ROUTINES_DIR / "R1_cce_v_map.yaml"
+    assert r1_path.is_file(), f"expected frozen routine at {r1_path}"
+
+    template_dict = _default_template_plan().to_dict()
+    r1_dict = ScanPlan.load_yaml(str(r1_path)).to_dict()
+
+    assert template_dict == r1_dict, (
+        "_default_template_plan() has diverged from routines/R1_cce_v_map.yaml. "
+        "R1 was generated from this template plus an explicit post-bias-change "
+        "settle WAIT (first child of the bias_V loop, before the stage "
+        "sub-loop) -- either the template lost that WAIT (a bias sweep would "
+        "then acquire during the bias/detector transient) or the template and "
+        "R1 have drifted apart independently and one of the two is wrong. "
+        f"template={template_dict!r}\nr1={r1_dict!r}"
+    )
 
 
 def test_large_estimate_runs_off_gui_thread(monkeypatch):

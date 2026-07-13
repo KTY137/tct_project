@@ -253,8 +253,14 @@ def _default_template_plan() -> ScanPlan:
     )
     x_loop = LoopBlock(axis=Axis.STAGE_X, start=-1.0, stop=1.0, step=0.1,
                         children=[y_loop])
+    # The plan compiler only emits a settle wait after MoveStep, never after
+    # BiasStep -- so without an explicit wait here, a bias sweep would start
+    # acquiring during the bias/detector transient. Mirrors the WAIT node
+    # added to routines/R1_cce_v_map.yaml (and R5) as the first child of the
+    # bias loop, before the stage sub-loop.
+    bias_settle = ActionBlock(action=ActionType.WAIT, params={"seconds": 0.5, "reason": "bias settle"})
     bias_loop = LoopBlock(axis=Axis.BIAS_V, start=0.0, stop=-300.0, step=-50.0,
-                           children=[x_loop])
+                           children=[bias_settle, x_loop])
     return ScanPlan(
         name="edge_tct_template",
         description="Edge-TCT CCE(V) map — bias -> x -> y snake (default template)",
