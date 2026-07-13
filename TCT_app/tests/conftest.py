@@ -134,3 +134,122 @@ def _flush_qt_deferred_deletes():
         app.processEvents()
         app.sendPostedEvents(None, QEvent.DeferredDelete)
     app.processEvents()
+
+
+# --------------------------------------------------------------------------- #
+# Thread-leak reaper + guard (D4, 2026-07-13).                                 #
+#                                                                              #
+# Some panels deliberately parent a worker thread to the long-lived            #
+# QApplication rather than to the panel — a planner cost-estimate worker       #
+# (started in __init__), a settings-window VISA scan — precisely so a soft     #
+# config-reload can delete the panel tree without destroying a still-running   #
+# QThread as a child (itself a hard Qt6 abort). In the real app the main       #
+# window's teardown quits those via each panel's shutdown(); a test that       #
+# builds a panel and drops it never runs that path, so the app-parented thread #
+# survives to interpreter exit, where ``~QApplication`` destroys it while it   #
+# is still running → Qt6 fail-fast ("QThread: Destroyed while thread '' is     #
+# still running", 0xC0000409) AFTER a green pytest summary. This was masked    #
+# under xdist (a worker subprocess crashing at exit after reporting results is #
+# invisible to the controller) and surfaced only in the SERIAL gate run.       #
+#                                                                              #
+# The crash is strictly a teardown-order fact: it needs a RUNNING QThread at   #
+# the moment ``~QApplication`` runs. So we play the main window's teardown     #
+# role ONCE, at session end (before the app is torn down), instead of          #
+# retrofitting every panel-constructing test: a COOPERATIVE quit()+join        #
+# (never terminate()) of every running non-main QThread — the same primitive   #
+# shutdown() uses. Doing it here (not per test) also keeps the O(heap) thread  #
+# scan off the ~1900-test hot path.                                            #
+# --------------------------------------------------------------------------- #
+def _running_nonmain_qthreads():
+    """Every live QThread except the main (GUI) thread that reports isRunning().
+
+    Enumerated via the Python heap (Qt exposes no thread registry). Wrappers
+    whose C++ object is already gone raise and are skipped."""
+    from PySide6.QtCore import QThread
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    main = app.thread() if app is not None else None
+    out = []
+    for obj in gc.get_objects():
+        if not isinstance(obj, QThread) or obj is main:
+            continue
+        try:
+            if obj.isRunning():
+                out.append(obj)
+        except (RuntimeError, ReferenceError):
+            continue  # C++ side already deleted — a harmless dangling wrapper
+    return out
+
+
+def _reap_running_qthreads(app):
+    """Cooperatively quit()+join every running non-main QThread, then drain the
+    deferred deletions their ``finished`` handlers schedule. Bounded wait — a
+    thread whose ``run()`` is a non-event-loop compute cannot be interrupted by
+    quit(), so never block the suite unbounded; a thread that ignores the join is
+    surfaced by :func:`pytest_sessionfinish`. NEVER ``terminate()``."""
+    from PySide6.QtCore import QEvent
+
+    reaped = False
+    for thread in _running_nonmain_qthreads():
+        try:
+            thread.quit()
+            thread.wait(3000)
+            reaped = True
+        except (RuntimeError, ReferenceError):
+            continue
+    if reaped:
+        gc.collect()
+        for _ in range(3):
+            app.processEvents()
+            app.sendPostedEvents(None, QEvent.DeferredDelete)
+        app.processEvents()
+
+
+def _describe_qthread(obj):
+    try:
+        name = obj.objectName()
+    except Exception:
+        name = "?"
+    chain = []
+    try:
+        p = obj.parent()
+        depth = 0
+        while p is not None and depth < 6:
+            chain.append(type(p).__name__)
+            p = p.parent()
+            depth += 1
+    except Exception:
+        pass
+    return f"class={type(obj).__name__} objectName={name!r} parent={'->'.join(chain) or '<none>'}"
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Bucket-A invariant guard: no non-main QThread may survive a graceful reap
+    at session end. A survivor is a thread a test started and neither joined nor
+    left reapable — it is destroyed only when ``~QApplication`` runs at interpreter
+    exit, a hard Qt6 abort (0xC0000409) that a green pytest summary hides. Fail the
+    session loudly instead. Opt out with TCT_ALLOW_LEAKED_THREADS=1 if it flakes."""
+    if os.environ.get("TCT_ALLOW_LEAKED_THREADS") == "1":
+        return
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    _reap_running_qthreads(app)          # last graceful attempt
+    survivors = _running_nonmain_qthreads()
+    if not survivors:
+        return
+    lines = "\n".join(f"    - {_describe_qthread(t)}" for t in survivors)
+    print(
+        "\n[THREAD-GUARD] FAIL: non-main QThread(s) survived a graceful reap at "
+        "session end. Left running, these hard-abort Qt6 when ~QApplication runs "
+        "at interpreter exit ('QThread: Destroyed while thread is still running')."
+        f" Owner must join/shutdown its thread on teardown.\n{lines}",
+        flush=True,
+    )
+    try:
+        session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    except Exception:
+        session.exitstatus = 1

@@ -291,7 +291,18 @@ def test_settings_window_gc_without_close_does_not_crash(tmp_path, monkeypatch):
     """Some callers never explicitly close() a parent-less SettingsWindow
     (see test_panel_kit_rollout_batch1.py::test_settings_window_still_
     constructs_untouched) — Python garbage-collecting it while the initial
-    scan is still in flight must not crash either."""
+    scan is still in flight must not crash either.
+
+    The scan thread is parented to the QApplication (not the GC'd window), so
+    it OUTLIVES the window and must be driven to completion via its own
+    done -> quit -> finished -> reap chain, which needs the GUI event loop
+    pumped. Left running it is destroyed only when ``~QApplication`` runs at
+    interpreter exit — a hard Qt6 abort ("QThread: Destroyed while thread is
+    still running"). So pump until the process-lifetime reaper has retired it;
+    a bare ``lambda: True`` predicate returns from ``_pump_until`` without
+    processing a single event and leaks the thread to interpreter exit."""
+    from gui.settings_window import _scan_reaper
+
     def slow_list():
         time.sleep(0.15)
         return []
@@ -299,8 +310,15 @@ def test_settings_window_gc_without_close_does_not_crash(tmp_path, monkeypatch):
     monkeypatch.setattr("devices.waveform_generator.list_visa_resources", slow_list)
 
     app = _app()
+    # The reaper is a process-lifetime singleton shared across every dialog in
+    # the suite; measure its baseline so this assertion tracks OUR orphaned
+    # thread being retired, not the global count reaching exactly zero.
+    before = _scan_reaper().active_count()
     win = SettingsWindow(config_path=_write_cfg(tmp_path, _REAL_CONFIG.read_text(encoding="utf-8")))
     del win   # drop the only reference while the 0.15s scan is still running
     import gc
     gc.collect()
-    _pump_until(app, lambda: True, timeout_s=0.3)
+    assert _pump_until(app, lambda: _scan_reaper().active_count() <= before,
+                       timeout_s=5.0), \
+        "orphaned VISA scan thread was never reaped — it would survive to " \
+        "interpreter exit and hard-abort Qt6 at ~QApplication"
