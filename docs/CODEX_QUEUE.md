@@ -407,6 +407,51 @@ giga-scan rates that floods the GUI thread. Coalesce redraws with a timer.
 - Requested pytest from `TCT_app` with `QT_QPA_PLATFORM=offscreen` and `.\.venv\Scripts\python.exe -m pytest tests/test_scan_map_view.py` executed 0 tests because the venv launcher failed before Python start: `.venv\pyvenv.cfg` still points to missing `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe`.
 - Risk: runtime pytest verification remains blocked until the local Python/venv interpreter is repaired; scan-end flushing depends on the existing `ScanViewerPanel.on_scan_finished()` / `on_scan_error()` lifecycle slots being delivered.
 
+## C9 — Sandbox self-diagnosis: why can't this lane launch TCT_app/.venv?
+
+**Status: DONE — Diagnosed sandbox venv launch failure as Store-alias base interpreter.** · Effort: S · Source: Adam, day-shift wave 3 (2026-07-13); recurring C1–C8 blocker
+
+Every C-task since C1 reports the same failure: `.venv\Scripts\python.exe`
+fails BEFORE Python starts because `.venv\pyvenv.cfg` points to a base at
+`C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_...\python.exe`
+that your sandbox cannot see. The crew's own runs work fine, so this is
+sandbox-environment-specific — and only you can observe it from inside.
+
+- **STRICTLY READ-ONLY on the environment: do NOT modify, repair, or
+  recreate `.venv`, do NOT install anything, do NOT edit pyvenv.cfg.**
+  The venv works for every other lane; breaking it stalls the whole crew.
+- Investigate and report: (1) full contents of `TCT_app\.venv\pyvenv.cfg`;
+  (2) does the `home` path exist/resolve in your sandbox (dir listing of
+  the parent; are WindowsApps execution aliases visible at all)?;
+  (3) which Python interpreters ARE reachable for you (`where.exe python`,
+  `where.exe py`, common install paths `C:\Python*`, `%LOCALAPPDATA%\Programs\Python`);
+  (4) exact error text/exit code from invoking `.venv\Scripts\python.exe --version`
+  directly and via cmd; (5) whether `python.exe` in Scripts is the standard
+  venv launcher (file size/hash) — i.e. is redirection-to-base the failing
+  step.
+- Deliverable: findings block under this task per Handback, ending with a
+  RECOMMENDATION section: what change (made by the crew, not you) would
+  unblock runtime pytest for this lane — e.g. recreate the venv from a
+  non-Store CPython 3.10, or an alternate interpreter path you verified
+  reachable. Note the constraint: the venv must stay 64-bit CPython 3.10
+  (vendored PySpin wheel) and numpy stays <2.
+- No app-code edits. No commit beyond this file's status/findings.
+
+**Codex findings (2026-07-13):**
+- Files touched: `docs/CODEX_QUEUE.md` only. No venv files, configs, packages, or app code were modified.
+- `TCT_app\.venv\pyvenv.cfg` contents:
+  ```text
+  home = C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0
+  include-system-site-packages = false
+  version = 3.10.11
+  ```
+- The configured `home` path and its parent both exist in this sandbox, but they resolve to Microsoft Store app-execution aliases, not a normal CPython install. The parent `WindowsApps` directory lists `python.exe`, `python3.10.exe`, `pip.exe`, etc. as 0-byte `-a---l` entries, and the configured `home` directory contains only the same 0-byte alias executables.
+- Reachable interpreter check: `where.exe python` exited 1, `where.exe py` exited 1, `py -0p` was not recognized, and `Get-Command python` resolved only to `C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\python.exe` (version `0.0.0.0`). Scanning PATH entries found only that WindowsApps alias. Common locations checked with no usable interpreter found: `C:\Python*`, `%LOCALAPPDATA%\Programs\Python`, `%ProgramFiles%\Python*`, `%ProgramFiles(x86)%\Python*`, `C:\ProgramData\chocolatey\bin`, and `C:\Users\nukei\.local\bin`.
+- Direct venv launch reproduces the blocker exactly. PowerShell `.\TCT_app\.venv\Scripts\python.exe --version` exited 101 with `Unable to create process using '"C:\Users\nukei\AppData\Local\Microsoft\WindowsApps\PythonSoftwareFoundation.Python.3.10_qbz5n2kfra8p0\python.exe" --version'`. `cmd /c "TCT_app\.venv\Scripts\python.exe --version"` also exited 101 with the same message.
+- Direct launch of the Store alias itself fails before Python starts: PowerShell reports `Eine angegebene Anmeldesitzung ist nicht vorhanden. Sie wurde gegebenenfalls bereits beendet`; `cmd` exits 1 with `Das angegebene Programm kann nicht ausgeführt werden.`
+- `TCT_app\.venv\Scripts\python.exe` appears to be the standard PSF venv launcher and not the broken component: size `268568`, SHA256 `B2C836C52CDF063180B9EE76F67AC42946101B79AC457F3494035A67C090D961`, file/product version `3.10.11`, company `Python Software Foundation`, internal name `Python Launcher`, original filename `py.exe`. The launcher starts, reads `pyvenv.cfg`, then fails when redirecting to the Store-alias base interpreter.
+- RECOMMENDATION: crew-side fix should recreate this venv from a non-Store 64-bit CPython 3.10 installed at a normal executable path visible to this lane, such as `%LOCALAPPDATA%\Programs\Python\Python310\python.exe` or `C:\Python310\python.exe`, then reinstall the existing requirements with numpy still `<2` and the vendored PySpin constraint intact. Before recreating, verify from this lane that the chosen base responds to `path\to\python.exe --version` and preferably appears in `where.exe python` or is passed explicitly. Do not patch `pyvenv.cfg` to another WindowsApps alias.
+
 ## S1 — Visual style audit from rendered panels (advisory, no code edits)
 
 **Status: DONE - Wrote rendered-panel style audit; fresh capture blocked by broken venv.** · Effort: M · Source: Kaya request 2026-07-13 (night shift)
