@@ -81,12 +81,12 @@ def sim(tmp_path):
 
 
 def _spy_channels(dm):
-    """Wrap ramp_to/read/output_on/output_off on both channels with call spies."""
+    """Wrap ramp_to/read/enable_output/output_off on both channels with call spies."""
     for ch in dm.bias_channels:
-        ch.ramp_to    = mock.Mock(wraps=ch.ramp_to)
-        ch.read       = mock.Mock(wraps=ch.read)
-        ch.output_on  = mock.Mock(wraps=ch.output_on)
-        ch.output_off = mock.Mock(wraps=ch.output_off)
+        ch.ramp_to       = mock.Mock(wraps=ch.ramp_to)
+        ch.read          = mock.Mock(wraps=ch.read)
+        ch.enable_output = mock.Mock(wraps=ch.enable_output)
+        ch.output_off    = mock.Mock(wraps=ch.output_off)
     return dm.bias_channels[0], dm.bias_channels[1]
 
 
@@ -184,7 +184,7 @@ class TestRefuseToStart:
         for ch in (ch0, ch1):
             assert not ch.ramp_to.called
             assert not ch.read.called
-            assert not ch.output_on.called
+            assert not ch.enable_output.called
             assert not ch.output_off.called
 
     def test_xy_scan_out_of_range_raises_and_does_not_start(self, sim):

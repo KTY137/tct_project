@@ -298,7 +298,7 @@ class KeithleyBiasSupply(BiasSupplyBase):
             self.logger.debug("Compliance set to %.3e A", current_A)
         self._compliance_A = current_A
 
-    def output_on(self) -> None:
+    def enable_output(self) -> None:
         self._require_connected()
         if not self.simulation:
             self._write(self._cmds["output_on"])

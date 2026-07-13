@@ -145,7 +145,7 @@ class SimulatedBiasSupply(BiasSupplyBase):
     def set_compliance(self, current_A: float) -> None:
         self.set_compliance_ch(self._primary_ch, current_A)
 
-    def output_on(self) -> None:
+    def enable_output(self) -> None:
         self.output_on_ch(self._primary_ch)
 
     def output_off(self) -> None:

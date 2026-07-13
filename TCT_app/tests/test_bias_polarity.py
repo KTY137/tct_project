@@ -28,7 +28,7 @@ class _MinimalSupply(BiasSupplyBase):
     def set_compliance(self, current_A: float) -> None:
         self._compliance_A = current_A
 
-    def output_on(self) -> None:
+    def enable_output(self) -> None:
         self._output_on = True
 
     def output_off(self) -> None:
@@ -93,7 +93,7 @@ class TestSimulatedPolarity:
 
     def test_switch_refused_when_output_on(self):
         s = self._supply(polarity="n")
-        s.output_on()
+        s.enable_output()
         s.set_voltage(-100.0)
         with pytest.raises(DeviceError, match="output is ON"):
             s.set_polarity("p")
@@ -103,7 +103,7 @@ class TestSimulatedPolarity:
         # Charge it up, then open the output relay: measured voltage persists,
         # so the discharge precondition must still block the switch.
         s = self._supply(polarity="n", voltage_range_V=1000.0)
-        s.output_on()
+        s.enable_output()
         s.set_voltage(-500.0)
         s.output_off()                     # output OFF but still charged
         assert not s._output_on
@@ -113,7 +113,7 @@ class TestSimulatedPolarity:
 
     def test_switch_allowed_after_ramp_down(self):
         s = self._supply(polarity="n", voltage_range_V=1000.0)
-        s.output_on()
+        s.enable_output()
         s.set_voltage(-500.0)
         s.set_voltage(0.0)                 # ramp/bleed down while ON -> discharged
         s.output_off()

@@ -112,8 +112,16 @@ class BiasSupplyBase(BaseDevice):
         """Set the current compliance limit (A)."""
 
     @abstractmethod
-    def output_on(self) -> None:
-        """Enable the output."""
+    def enable_output(self) -> None:
+        """Enable the output — **DANGEROUS**: this energizes the HV.
+
+        This is the switch-ON *action* (the caller gates it behind an explicit
+        DangerGate confirmation, exactly like an HV ramp).  It is deliberately
+        NOT named ``output_on`` any more: a bound method is always truthy, so
+        ``if supply.output_on:`` silently read as "always on" and was one missing
+        ``()`` away from energizing a supply.  To *read* the believed output
+        state use the read-only :attr:`is_output_on` property instead.
+        """
 
     @abstractmethod
     def output_off(self) -> None:
@@ -138,6 +146,27 @@ class BiasSupplyBase(BaseDevice):
     @property
     def voltage_range_V(self) -> float | None:
         return self._voltage_range_V
+
+    @property
+    def is_output_on(self) -> bool:
+        """The driver's *believed* output state for the primary channel.
+
+        Read-only state query — the honest counterpart to the switch-ON action
+        :meth:`enable_output`.  It reflects the driver's local belief
+        (``_output_on``), which the disable path keeps truthful: a failed
+        output-off never clears it to a false ``OFF`` (see each backend's
+        ``output_off`` docstring and commit df10f8e).  The LOCAL belief is
+        therefore always a definite ``bool`` — it is never unknown, so this
+        property does not return ``None``.
+
+        The genuine tri-state UNKNOWN (``None``) belongs to the *hardware*
+        readback :attr:`BiasReading.output_on_hw` (decoded from the module status
+        word), NOT here.  Comparing that hardware truth against this local belief
+        is how a stale flag — e.g. after a latched trip switched the channel off
+        behind the driver's back — is caught; this property alone must not be
+        read as ground truth about what the HV is physically doing.
+        """
+        return self._output_on
 
     def check_voltage_in_range(self, voltage_V: float) -> None:
         """Raise DeviceError if |voltage_V| exceeds the configured range.
@@ -183,7 +212,7 @@ class BiasSupplyBase(BaseDevice):
         switch the HV ON.  On an already-OFF channel a ramp to 0 V only parks the
         voltage *register* at zero (a write to a disabled output moves no HV, and
         is exactly what output_off() already does) so a later, deliberate
-        output_on() cannot energize into a stale non-zero setpoint.
+        enable_output() cannot energize into a stale non-zero setpoint.
         """
         self._require_connected()
         self.check_voltage_in_range(target_V)
@@ -197,7 +226,7 @@ class BiasSupplyBase(BaseDevice):
                 self.set_voltage(0.0)
                 self._setpoint_V = 0.0
                 return
-            self.output_on()      # genuine energize request only
+            self.enable_output()      # genuine energize request only
 
         sign = 1.0 if target_V >= current else -1.0
         while abs(target_V - current) > step_V / 2:
@@ -283,7 +312,7 @@ class BiasSupplyBase(BaseDevice):
         self.set_compliance(current_A)
 
     def output_on_ch(self, channel: int) -> None:
-        self.output_on()
+        self.enable_output()
 
     def output_off_ch(self, channel: int) -> None:
         self.output_off()

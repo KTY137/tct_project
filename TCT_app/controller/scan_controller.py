@@ -1551,10 +1551,13 @@ class ScanController:
     def _driver_believes_output_on(bias: BiasChannel) -> bool:
         """What the DRIVER thinks the output state is — local flag, no hardware I/O.
 
-        Beware: ``BiasChannel.output_on`` is a *method* (an action that switches
-        HV on!), so it is always truthy — testing it would be both wrong and
-        dangerous.  The driver's per-channel belief is ``output_is_on_ch``, a
-        pure local-state read on every backend.
+        Read the *believed* state, never the switch-ON action.  The energize
+        action is ``BiasChannel.enable_output`` (formerly the footgun
+        ``output_on`` — a method that is always truthy and one missing ``()``
+        from turning HV on; that name no longer exists, so a stale read now
+        raises AttributeError instead of silently reading "always on").  The
+        driver's per-channel belief is ``output_is_on_ch``, a pure local-state
+        read on every backend.
 
         A backend that cannot answer gives us no belief to contradict, so this
         reports ``False``: no belief, no fault claim, never a spurious abort.

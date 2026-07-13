@@ -29,9 +29,9 @@ class TestMultiChannelProxy:
         drv = self._driver()
         ch0, ch1 = BiasChannel(drv, 0), BiasChannel(drv, 1)
 
-        ch0.output_on()
+        ch0.enable_output()
         ch0.set_voltage(-100.0)
-        ch1.output_on()
+        ch1.enable_output()
         ch1.set_voltage(200.0)
 
         assert ch0.setpoint_V == -100.0
@@ -67,7 +67,7 @@ class TestMultiChannelProxy:
         # The safety gate lives in the driver; the proxy must not bypass it.
         drv = self._driver(polarity="n")
         ch0 = BiasChannel(drv, 0)
-        ch0.output_on()
+        ch0.enable_output()
         ch0.set_voltage(-500.0)
         with pytest.raises(DeviceError, match="output is ON"):
             ch0.set_polarity("p")
@@ -215,7 +215,7 @@ class TestZeroArgWrappers:
         assert s.compliance_A == 50e-6
         assert s.compliance_A_ch(primary) == 50e-6
 
-        s.output_on()
+        s.enable_output()
         assert s._output_on is True
         s.set_voltage(-300.0)
         assert s.setpoint_V == -300.0
@@ -240,7 +240,7 @@ class TestZeroArgWrappers:
     def test_simulated_zero_arg_matches_primary_channel(self):
         s = SimulatedBiasSupply(channel_count=2, voltage_range_V=1000.0, polarity="n")
         s.connect()
-        s.output_on()
+        s.enable_output()
         s.set_voltage(-250.0)
         assert s.setpoint_V == -250.0
         assert s.setpoint_V_ch(0) == -250.0

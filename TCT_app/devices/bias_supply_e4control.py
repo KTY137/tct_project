@@ -289,7 +289,7 @@ class E4ControlBiasSupply(BiasSupplyBase):
             logger.debug("Compliance set to %.3e A", current_A)
         self._compliance_A = current_A
 
-    def output_on(self) -> None:
+    def enable_output(self) -> None:
         self._require_connected()
         if not self.simulation and self._dev is not None:
             self._dev.setOutput(True)
@@ -384,7 +384,7 @@ class E4ControlBiasSupply(BiasSupplyBase):
                 # failed write cannot leave a 0 V claim we never achieved.
                 self.set_voltage(0.0)
                 return
-            self.output_on()      # genuine energize request only
+            self.enable_output()      # genuine energize request only
 
         # Update ramp params on the device object for this call
         ramp_step = max(abs(step_V), 1.0)

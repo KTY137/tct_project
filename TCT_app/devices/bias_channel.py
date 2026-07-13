@@ -58,6 +58,17 @@ class BiasChannel:
     def compliance_A(self) -> float:
         return self._driver.compliance_A_ch(self.channel)
 
+    @property
+    def is_output_on(self) -> bool:
+        """This channel's *believed* output state (read-only).
+
+        The honest state-query counterpart to the switch-ON action
+        :meth:`enable_output`; delegates to the driver's per-channel local
+        belief ``output_is_on_ch``.  It is never the dangerous method that
+        switches HV on, so reading it cannot energize anything.
+        """
+        return self._driver.output_is_on_ch(self.channel)
+
     def channel_count(self) -> int:
         """A single channel view always reports 1."""
         return 1
@@ -92,7 +103,7 @@ class BiasChannel:
     def set_compliance(self, current_A: float) -> None:
         self._driver.set_compliance_ch(self.channel, current_A)
 
-    def output_on(self) -> None:
+    def enable_output(self) -> None:
         self._driver.output_on_ch(self.channel)
 
     def output_off(self) -> None:
