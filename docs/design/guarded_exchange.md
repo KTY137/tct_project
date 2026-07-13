@@ -147,15 +147,21 @@ Two sub-forms, because hardware differs:
   GRBL 0x85 (jog-cancel) / Marlin `M410` raw port writes — existing, proven.
 - **T2-B — bounded escape, in-band.** The protocol has no established
   real-time primitive; the stop is an ordinary command on the shared session.
-  The base does `transport_lock.acquire(timeout=T2_BOUND)` (0.25 s today, per
-  `PIMotorStage._STOP_LOCK_TIMEOUT_S`), then sends the primitive **regardless
-  of whether the acquire succeeded**, releasing only if it acquired.
-  Rationale (unchanged from `4a89647`): the worst case of an unguarded send
-  is a garbled in-flight exchange, which surfaces as `DeviceError` and fails
-  safe; the worst case of a *queued* stop is a crash. **Never invert that
-  trade.** Driver primitives: PI `STP` (pending the manual's answer on
-  #24/`StopAll` — the open `TODO(manual needed)` may upgrade PI to T2-RT);
-  an HV output-off write (§4.2 discusses whether HV needs T2 at all today).
+  The base does `transport_lock.acquire(timeout=T2_BOUND)`, then sends the
+  primitive **regardless of whether the acquire succeeded**, releasing only
+  if it acquired. Rationale (unchanged from `4a89647`): the worst case of an
+  unguarded send is a garbled in-flight exchange, which surfaces as
+  `DeviceError` and fails safe; the worst case of a *queued* stop is a crash.
+  **Never invert that trade.** Driver primitives: an HV output-off write
+  (§4.2 discusses whether HV needs T2 at all today).
+  *(Update 2026-07-13 late: PI was UPGRADED from T2-B to T2-RT — the manual
+  research (`docs/research/pi_gcs_stop_semantics.md`) established that the
+  single-character `#24`/`StopAll()` IS a real-time primitive and that
+  pipython's message layer serialises per exchange internally; `stop()` is
+  now fully lock-free per commit `7a55d03`, and
+  `PIMotorStage._STOP_LOCK_TIMEOUT_S` no longer exists. T2-B currently has
+  NO live occupant — it stays defined for future in-band-only devices,
+  e.g. if the iseg emergency-off turns out to have no out-of-band form.)*
 
 **How the base enforces "a stop never takes the lock".** Three layers,
 honestly ranked:

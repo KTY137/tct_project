@@ -32,13 +32,31 @@ R1+R2 done).**
   permanent leak guard (Mary RISK-NOTES mergeable; xdist masks the
   class — serial gate is the honest one).
 
-## 🔥 IN FLIGHT
+## 🔥 IN FLIGHT (evening wave 2)
 
 | Beat | Agent | Locks / notes |
 |---|---|---|
-| Bench serial gate at `98629c1` (P0'+gates+riders package) → push on exit 0 | sophonone (background) | remote; push refspec targets gated SHA (+docs-only on top OK) |
-| S2 SAFETY_NORMATIVE_TESTS.md v0.1-draft (port-disposition manifest + completeness grep) | Abel (Fable) | `docs/SAFETY_NORMATIVE_TESTS.md` (new) |
-| Codex-C10 MAJOR fixes: params deep-copy at compile · non-finite wavegen values fail closed (validator + apply-guard; finally-flush must never raise) · R5/R1 bias-loop WAIT dwell + corpus re-freeze byte-identical | Abel#2 (acquisition-dev) | `controller/plan_compiler.py`, `controller/scan_plan_validator.py`, `controller/scan_controller.py`, `data/hdf5_writer.py`, `routines/*`, `tests/fixtures/routine_corpus/*`, executor/validator/compiler tests |
+| **Kaya-bug expiry fix** (P0: tct_gui timeout_s=None · P1: expiry bounds arm→start, checked ONCE in start_plan pre-flight, loud+actionable; per-confirm is_expired removed · P2: panel env-cache re-derive at arm, run-end clearing, on_deny wired → 3 distinguishable deny messages) | Abel (opus) | `controller/arm_envelope.py`, `controller/scan_controller.py`, `tct_gui.py` (provider lambda), `gui/planner_panel.py` (cache/gate/run-end), tests: arm_envelope, planner_panel, plan_executor, sequence_coordinator |
+| Settings-GUI for `sim_channel_count` (+ fix `_BiasSection.to_dict()` silently DROPPING the key) | Noah (ui-ux-dev) | `gui/settings_window.py` + its tests |
+| `_use_current_pos`/`_emit_set_as_start` → cached `_last_pos` (Mary RISK-3: GUI-thread get_position during PI homing = unpressable STOP) | Noah#2 | `gui/motor_panel.py` + motor-panel tests |
+| Mary review of bias-channel beat a75dfba (HV class: kill-switch coverage, channel identity, phantom-channel branch) | qa-critic | read-only + targeted |
+| Guarded-exchange design note (Kaya's abstraction ask: template-method base owns lock+limits, 3 exchange tiers, STOP never locked) | Paul (Fable) | `docs/design/guarded_exchange.md` (new) |
+| PI GCS stop semantics research (is STP real-time? #24? error latch? IsMoving start-race) — decides if PI stop() goes fully lock-free + the _wait_on_target edge-check | Prometheus#2 | `docs/research/pi_gcs_stop_semantics.md` (new) |
+
+**Kaya bug ROOT-CAUSED + reproduced (investigation report, 2 repro
+scripts in scratchpad):** the 30 s envelope expiry is stamped at
+DERIVATION (dry-run preview render), cached across runs, and re-checked
+at EVERY gate.confirm — so it bounds the RUN's duration, not the
+human's intent; the ArmedEnvelopeGate path never shows a dialog by
+design, and `_deny_abort` reports "not confirmed" for an EXPIRED
+authorization (three causes, one lying message). Kaya's mental model
+was CORRECT; the sequencer path already implements it correctly (no
+expiry, re-arm per entry — reproduced green). Variant B repro: ramp 1
+approved (HV energized), ramp 2 denied mid-run; fail-safe held.
+Separate finds: `start_voltage_scan` drives HV with NO controller-tier
+arm/gate (fail-open at the boundary; GUI-only confirm) → own beat;
+WaitStep drops `reason` at compile (physics warning invisible) → beat
+after display decision.
 
 **Landed since:** `ad38db5` P0' Mary-riders (75 passed, corpus 0/0) ·
 `98629c1` lane/ledger chore · `a6d58e0` **CAPABILITY_MODEL.md v0.1-draft**
