@@ -1734,7 +1734,50 @@ class TCTMainWindow(QMainWindow):
         """The plan executor hit a ManualPauseStep: surface the operator
         prompt; Resume continues the plan, Abort stops it fail-safe.  The
         Resume/Abort decision routes back through the coordinator (which owns the
-        ScanController); this slot is a pure modal-dialog shim."""
+        ScanController); this slot is a pure modal-dialog shim.
+
+        DEFENSE IN DEPTH (Mary A5.2b closure): a manual_pause step is REJECTED
+        fail-closed at sequencer load (A5.2a — ``assert_sequencer_compatible``,
+        checked independently by both ``SequenceCoordinator.load`` and
+        ``SequenceRunner``'s own constructor), so this should never fire while
+        an unattended sequence is driving. But a blocking ``QMessageBox`` here
+        would wedge the whole night on a human who is not there — with the
+        worker parked mid-plan holding HV at its last set point — if anything
+        ever slipped past that gate. So while ``self._sequence_active`` NO
+        dialog is ever constructed: reroute to the non-blocking status bus
+        (mirrors the modal-suppression guards in ``_show_warn_dialog`` /
+        ``_show_error_dialog`` above) and fail the sequence safe via the SAME
+        ``abort_sequence()`` path the Scan Sequencer panel's own Abort button
+        uses. ``SequenceCoordinator.abort_sequence`` calls
+        ``ScanCoordinator.abort()`` -> ``ScanController.abort()``, which sets
+        BOTH ``_abort_event`` and ``_pause_event``; the ``_pause_event.set()``
+        is what actually releases the worker — it is blocked in
+        ``_park_while_paused``'s ``self._pause_event.wait(timeout=...)`` poll
+        (entered at the top of the next step-loop iteration after the
+        ManualPauseStep cleared the event), so setting it returns the wait
+        immediately, the poll loop exits, and the step loop's
+        ``if self._abort_event.is_set(): break`` fires — the run then falls
+        through to its ``finally`` fail-safe (motor stop, waveform-gen off,
+        bias ramp-to-0 + output off) exactly like any other abort.
+        ``abort_sequence`` additionally re-parks every HV channel itself
+        (``park_safe``) belt-and-braces. Non-sequence manual_pause behavior
+        (the branch below) is unchanged."""
+        if self._sequence_active:
+            reason = (
+                f"Manual pause reached during an unattended sequence "
+                f"({prompt or 'no prompt text'}) — nobody is watching, so the "
+                f"dialog is skipped and the sequence is being aborted fail-safe."
+            )
+            logger.warning(reason)
+            notify(reason, "warn")
+            seq = getattr(self, "_seq_coordinator", None)
+            if seq is not None:
+                try:
+                    seq.abort_sequence()
+                except Exception:
+                    logger.exception(
+                        "abort_sequence() failed inside the manual_pause guard")
+            return
         box = QMessageBox(QMessageBox.Information, "Manual step",
                           prompt or "Manual intervention required.", parent=self)
         resume = box.addButton("Resume plan", QMessageBox.AcceptRole)
