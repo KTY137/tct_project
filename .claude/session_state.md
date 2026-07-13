@@ -1,0 +1,156 @@
+# Session state — Adam's externalized working memory
+
+**Purpose:** the state that would otherwise live ONLY in the orchestrator's
+context. A fresh session reads this file and is as informed as the old one.
+Updated on every dispatch and every landing. Run `.claude/beat_status.ps1`
+before every commit; stage explicit paths; never `-am`.
+
+**Updated: 2026-07-13 late evening — MASTER PLAN EXECUTING (Kaya away
+~1 h: "push und mach weiter mit dem plan"). Plan =
+`docs/ROADMAP_MASTERPLAN.md` (Kaya-approved, 6-bounce-hardened, Codex
+R1+R2 done).**
+
+## HEAD / TRUTH
+
+- `design/cockpit-v5 @ 7272233` local; **origin @ `031bc53` — PUSHED
+  2026-07-13 evening after the SERIAL bench gate went green: 1870
+  passed, 2 skipped, 1 xfailed in 24:31, exit 0, NO QThread-destroyed
+  line (Phase-0b reaper verified against the at-exit crash class).**
+  Origin = verified set; the two commits on top ride the NEXT gate.
+- Unpushed on top of origin:
+  - `5c75696` **P0' wavegen-apply** (per-point `_apply_wavegen_settings`
+    before `_acquire_core`; `/run_info` attr `wavegen_command_trace`
+    commanded-only; validator `_KNOWN_WAVEGEN_KEYS` unknown-key=ERROR;
+    `HDF5Writer.set_run_metadata`; EMITTING byte-identical, setter
+    errors → fail-safe with test; 73+72 targeted green).
+  - `7272233` **gate-enforcement pre-D1** (docs/test_bucket_map.md
+    A=47/B=18/C=39/D=5; .claude/check_bucket_a.ps1 self-tested incl.
+    true-positive vs HEAD~1; R1–R6 routines + frozen
+    tests/fixtures/routine_corpus/, all 0 ERR/0 WARN, sha256-identical).
+- Phase-0/0b history: `26538a4` identical-QSS skip (Mary APPROVE,
+  timeout 240→90 ratified) · `031bc53` conftest sessionfinish reaper +
+  permanent leak guard (Mary RISK-NOTES mergeable; xdist masks the
+  class — serial gate is the honest one).
+
+## 🔥 IN FLIGHT (evening wave 2)
+
+| Beat | Agent | Locks / notes |
+|---|---|---|
+| **Kaya-bug expiry fix** (P0: tct_gui timeout_s=None · P1: expiry bounds arm→start, checked ONCE in start_plan pre-flight, loud+actionable; per-confirm is_expired removed · P2: panel env-cache re-derive at arm, run-end clearing, on_deny wired → 3 distinguishable deny messages) | Abel (opus) | `controller/arm_envelope.py`, `controller/scan_controller.py`, `tct_gui.py` (provider lambda), `gui/planner_panel.py` (cache/gate/run-end), tests: arm_envelope, planner_panel, plan_executor, sequence_coordinator |
+| Settings-GUI for `sim_channel_count` (+ fix `_BiasSection.to_dict()` silently DROPPING the key) | Noah (ui-ux-dev) | `gui/settings_window.py` + its tests |
+| `_use_current_pos`/`_emit_set_as_start` → cached `_last_pos` (Mary RISK-3: GUI-thread get_position during PI homing = unpressable STOP) | Noah#2 | `gui/motor_panel.py` + motor-panel tests |
+| Mary review of bias-channel beat a75dfba (HV class: kill-switch coverage, channel identity, phantom-channel branch) | qa-critic | read-only + targeted |
+| Guarded-exchange design note (Kaya's abstraction ask: template-method base owns lock+limits, 3 exchange tiers, STOP never locked) | Paul (Fable) | `docs/design/guarded_exchange.md` (new) |
+| PI GCS stop semantics research (is STP real-time? #24? error latch? IsMoving start-race) — decides if PI stop() goes fully lock-free + the _wait_on_target edge-check | Prometheus#2 | `docs/research/pi_gcs_stop_semantics.md` (new) |
+
+**Kaya bug ROOT-CAUSED + reproduced (investigation report, 2 repro
+scripts in scratchpad):** the 30 s envelope expiry is stamped at
+DERIVATION (dry-run preview render), cached across runs, and re-checked
+at EVERY gate.confirm — so it bounds the RUN's duration, not the
+human's intent; the ArmedEnvelopeGate path never shows a dialog by
+design, and `_deny_abort` reports "not confirmed" for an EXPIRED
+authorization (three causes, one lying message). Kaya's mental model
+was CORRECT; the sequencer path already implements it correctly (no
+expiry, re-arm per entry — reproduced green). Variant B repro: ramp 1
+approved (HV energized), ramp 2 denied mid-run; fail-safe held.
+Separate finds: `start_voltage_scan` drives HV with NO controller-tier
+arm/gate (fail-open at the boundary; GUI-only confirm) → own beat;
+WaitStep drops `reason` at compile (physics warning invisible) → beat
+after display decision.
+
+**Landed since:** `ad38db5` P0' Mary-riders (75 passed, corpus 0/0) ·
+`98629c1` lane/ledger chore · `a6d58e0` **CAPABILITY_MODEL.md v0.1-draft**
+(Fable; honest divergences in-doc: P0' landed ⇒ P1=re-hosting, no sim
+twin file, settle-0.0 sentinel wrinkle → P2, 5-vs-6 device dict; NEW ⚑
+for Kaya: multi-channel HV id naming `bias.ch{n}.voltage`).
+
+**Codex C10 verdict (on disk in docs/CODEX_QUEUE.md §C10):** 3 MAJOR —
+params shallow-copy aliasing (post-validation mutation reaches
+hardware), non-finite floats pass validation + `allow_nan=True` JSON
+trace, R5/R1 bias loops have zero post-bias dwell (compiler settles
+only after MoveStep). 2 confirm-clean: range boundaries + setter order;
+corpus byte-identity real, no Linux encoding blocker. All three MAJORs
+→ Abel#2 beat above. Lane bug noted: watcher double-reported C10
+done+failed (outbox file consumed twice) — agent_env TODO.
+
+**Durable evidence line — [Mary] P0': gate=P0'-immediate-review,
+sha=5c75696, verdict=RISK-NOTES (emission-safe proven: setters
+setter-only vs _WFG_CMDS incl. sim parity; exception path fires with
+output OFF; finally cannot strand ON; bracket byte-identical; trace
+honest incl. partial-on-abort; validator sound, duty-0/100 reject
+defensible, amplitude-0 allowed), date=2026-07-13.** Residual: settle
+gap = P1 rider (apply→wait_settled→acquire); real-DG4000 settle timing
+= bench question; retained-ON first-point edge = pre-existing,
+documented. Mary items 2-4 → Abel rider beat above; settle-gap +
+trace-semantics rows → next Kiroku batch (TECH_DEBT.md locked now).
+
+## ✅ venv MIGRATED (2026-07-13 evening) — Codex-lane blocker gone
+
+`.venv` now runs real CPython 3.10.11 x64 (`AppData\Local\Programs\
+Python\Python310`), not the Store alias — THE root cause of the Codex
+sandbox's venv-launch failures since C1. numpy 1.26.4 / PySide6 6.11.1
+unchanged (pip-freeze diff). **Parity catch: the fresh resolve silently
+dropped PySpin (camera wheel) + py-spy — both reinstalled, `import
+PySpin` verified.** Smoke: 128 passed. Rollback: `TCT_app/.venv_old`
+(gitignored; delete only after Kaya runs `.\run.ps1` once).
+
+## NEXT (post-push chain, in order)
+
+1. Mary P0' verdict → fixes if needed (P0' rides the NEXT bench gate
+   with the gates commit).
+2. CAPABILITY_MODEL.md + SAFETY_NORMATIVE_TESTS.md drafts → [Mary] →
+   ⚑[Kaya]; then D1 slice: `capabilities/model.py` + adapters
+   (additive, [A-green] via check_bucket_a.ps1 from a stage-base ref
+   taken AFTER P0'/P1 land).
+3. venv migration (`agent_env\tools\recreate_tct_venv.ps1`, CPython
+   3.10.11 installed) — ONLY when no agent is running local pytest
+   (Mary first). Then stale-worktree cleanup
+   (`agent-aa19d2caf98c928dd`, `slice1-ui`).
+4. Phase 0.5 prep (needs Kaya): design/cockpit-v5 → main merge with
+   bench-green evidence; polish-freeze tag machinery.
+5. Follow-ups booked: P2-entry corpus-replay pytest (size≥5 guard +
+   byte-diff); xdist honesty follow-up (workeroutput/testnodedown);
+   per-test shutdown hygiene TECH_DEBT; trunk note in test_bucket_map
+   at Phase 0.5.
+
+**Part-VI parity check CLOSED (2026-07-13 evening):** experimental
+branch's test_state_fuzz variant contains NOTHING extra — its only
+unique content was the historical xfail probe for start-while-PAUSED;
+HEAD has the bug FIXED (5730644 fail-closed guard, all 4 entry points)
+and covers it with three real tests (test_state_fuzz.py:
+start_while_paused / start_z_focus_while_paused /
+start_voltage_while_paused). Worktree removal (agent-aa19d2caf98c928dd,
+slice1-ui) was DENIED by the permission classifier — needs Kaya's
+explicit go (branches keep all commits regardless). C10 second-opinion
+review enqueued on Codex lane (watcher restarted, background).
+
+## ✅ Standing verdicts (do not re-derive)
+
+- HV gate CLOSED (`df10f8e`+`0f1c012`, Mary APPROVE, bench green).
+- Sequencer safety-signed: Mary CLOSED (A5.1 surgical locks, A5.2a/b
+  manual_pause can never enter a queue).
+- Teardown-race fix `41a8ab2` Mary APPROVE.
+- E3 calibrate_affine Mary APPROVE (riders before GUI wiring).
+- Master plan: 6 bounce rounds integrated (Prometheus, Mary, Loki,
+  Völundr, Codex R1/R2); honest ledger in ROADMAP_MASTERPLAN.md.
+- Test economy binding (CLAUDE.md): agent output tail = verification;
+  bench gates only; serial bench = honest gate for at-exit class.
+- Day shift (see git log 2026-07-13): E-track E1–E7 complete, v6 glass
+  landed + ratified, motion kit, WorkerThread batch 1, 9 presets,
+  Echtglas chain (opacity pin), lane hardening (agent_env).
+
+## 🧑‍🔬 NEEDS KAYA (personal gates, from the roadmap)
+
+- ⚑ per-operation safety-routing SHAPE · ⚑ e4control seed choice
+  (upstream MIT ask vs written-permission note) · Trusted-operator
+  contradiction ruling (PLATFORM_SEED §6) · C1 top-3 routine selection ·
+  reticle tier ($17/$276/$630) · tolerance_um working value ·
+  GS-upgrade timing · S0/S2 ratifications · design-freeze declaration
+  (opens U-track) · blur eyeball + alpha tuning (0.82/0.55/blue bias) ·
+  U1.5 Design Council later · Phase 0.5 merge go.
+
+## Rules pointers (already binding, in CLAUDE.md)
+
+Test economy · test-lane policy (bench full suites; targeted local) ·
+session hygiene 1–4 · free lanes never idle · Codex = queue-file only ·
+ONE here-string commit per shell call, verify `git log --stat`.

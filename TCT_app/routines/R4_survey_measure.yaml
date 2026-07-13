@@ -1,0 +1,37 @@
+name: survey_measure_combo
+description: 'Survey+measure: snake XY map, one photo and one waveform per point (R4).'
+root:
+- type: loop
+  axis: stage_x
+  start: -1.0
+  stop: 1.0
+  step: 0.5
+  settle_s: 0.0
+  n_averages: null
+  snake: false
+  reduce: null
+  children:
+  - type: loop
+    axis: stage_y
+    start: -1.0
+    stop: 1.0
+    step: 0.5
+    settle_s: 0.05
+    n_averages: null
+    snake: true
+    reduce: null
+    children:
+    - type: action
+      action: capture_photo
+      params:
+        settle_s: 0.1
+        label: survey
+    - type: action
+      action: acquire_waveform
+      params:
+        n_averages: 16
+    - type: action
+      action: save_point
+      params:
+        label: survey_point
+safety: {}

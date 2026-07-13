@@ -1,0 +1,460 @@
+<title>TCT Bias — Glass A/B</title>
+<style>
+/* ============================================================
+   TCT Bias Supply — v5 "Slate" vs v6 "Glass" A/B decision page
+   Dark-committed by design: an instrument cockpit in a dim lab,
+   matching all eight reference images in design_assets/.
+   Side A tokens are copied 1:1 from TCT_app/gui/style.py DARK.
+   ============================================================ */
+:root{
+  /* --- v5 Slate (real app tokens, DARK dict) --- */
+  --canvas:#0A0D13; --panel:#121824; --raised:#1B253A; --well:#0B111C;
+  --sunk:#0C1019; --hairline:#27344A; --hairline-strong:#334159;
+  --text:#E9EDF5; --muted:#98A1B5; --faint:#5B657A;
+  --accent:#5AA9FF; --on-accent:#04222c;
+  --danger:#FF5A61; --armed:#FFB84D; --good:#3DD68C; --sim:#41D8E4;
+  --r-sm:8px; --r-md:12px; --r-lg:16px;
+  --mono:"Cascadia Code","SF Mono",Consolas,"Roboto Mono",monospace;
+  --sans:-apple-system,"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif;
+  /* skin-dependent (Slate defaults) */
+  --card-bg:var(--panel);
+  --card-border:var(--hairline);
+  --card-radius:var(--r-lg);
+  --card-shadow:0 1px 0 rgba(255,255,255,0.045) inset, 0 10px 24px rgba(0,0,0,0.25);
+  --chip-bg:var(--raised);
+  --well-bg:var(--well);
+  --glass-alpha:0;                 /* blur layer opacity */
+  --stage-bg:var(--canvas);
+  --ease:cubic-bezier(.22,1,.36,1);
+  --dur:.45s;
+}
+.skin-glass{
+  --card-bg:rgba(16,23,36,0.42);
+  --card-border:rgba(255,255,255,0.10);
+  --card-radius:20px;
+  --card-shadow:0 1px 0 rgba(255,255,255,0.14) inset, 0 24px 60px rgba(0,0,0,0.5);
+  --chip-bg:rgba(255,255,255,0.065);
+  --well-bg:rgba(4,7,12,0.55);
+  --glass-alpha:1;
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{
+  font-family:var(--sans); color:var(--text); background:#05070C;
+  -webkit-font-smoothing:antialiased; overflow-x:hidden;
+}
+/* Ambient lab backdrop — only visible through glass */
+.ambient{position:fixed; inset:0; z-index:0; background:
+  radial-gradient(38% 45% at 12% 20%, rgba(42,111,224,0.32), transparent 70%),
+  radial-gradient(30% 38% at 85% 15%, rgba(65,216,228,0.16), transparent 70%),
+  radial-gradient(45% 55% at 70% 85%, rgba(120,80,255,0.20), transparent 70%),
+  radial-gradient(25% 30% at 30% 75%, rgba(255,138,31,0.10), transparent 70%),
+  #05070C;
+  opacity:0; transition:opacity var(--dur) var(--ease);
+}
+.skin-glass .ambient{opacity:1}
+.stage-flat{position:fixed; inset:0; z-index:0; background:var(--canvas);
+  opacity:1; transition:opacity var(--dur) var(--ease)}
+.skin-glass .stage-flat{opacity:0}
+
+.wrap{position:relative; z-index:1; max-width:1060px; margin:0 auto; padding:28px 24px 64px}
+
+/* ---------- header ---------- */
+header{display:flex; flex-wrap:wrap; align-items:center; gap:16px; margin-bottom:22px}
+.eyebrow{font-family:var(--mono); font-size:11px; font-weight:600; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--muted)}
+h1{font-size:21px; font-weight:650; letter-spacing:-.01em; text-wrap:balance}
+.spacer{flex:1}
+.seg{display:flex; background:var(--sunk); border:1px solid var(--hairline);
+  border-radius:999px; padding:3px; gap:2px; transition:background var(--dur) var(--ease), border-color var(--dur) var(--ease)}
+.skin-glass .seg{background:rgba(0,0,0,0.35); border-color:rgba(255,255,255,0.10)}
+.seg button{appearance:none; border:0; background:transparent; color:var(--muted);
+  font:600 12.5px var(--sans); padding:7px 18px; border-radius:999px; cursor:pointer;
+  transition:background .3s var(--ease), color .3s var(--ease)}
+.seg button[aria-pressed="true"]{background:var(--accent); color:var(--on-accent)}
+.seg button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+.hint{width:100%; font-size:12.5px; color:var(--faint)}
+.hint kbd{font-family:var(--mono); font-size:11px; border:1px solid var(--hairline);
+  border-bottom-width:2px; border-radius:4px; padding:0 5px; color:var(--muted)}
+
+/* ---------- generic card ---------- */
+.card{position:relative; border-radius:var(--card-radius); border:1px solid var(--card-border);
+  background:var(--card-bg); box-shadow:var(--card-shadow);
+  transition:background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    border-radius var(--dur) var(--ease), box-shadow var(--dur) var(--ease),
+    transform .25s var(--ease)}
+.card::before{ /* the real glass: blur layer that fades in */
+  content:""; position:absolute; inset:-1px; z-index:-1; border-radius:inherit;
+  -webkit-backdrop-filter:blur(26px) saturate(150%); backdrop-filter:blur(26px) saturate(150%);
+  opacity:var(--glass-alpha); transition:opacity var(--dur) var(--ease)}
+.skin-glass .card:hover{transform:translateY(-1px);
+  box-shadow:0 1px 0 rgba(255,255,255,0.16) inset, 0 30px 70px rgba(0,0,0,0.55)}
+
+/* ---------- panel replica ---------- */
+.panel{padding:20px 22px}
+.p-head{display:flex; align-items:baseline; gap:12px; margin-bottom:16px}
+.p-eyebrow{font-family:var(--mono); font-size:11px; font-weight:600; letter-spacing:.08em;
+  text-transform:uppercase; color:var(--faint)}
+.p-title{font-size:16px; font-weight:650}
+.chip{display:inline-flex; align-items:center; gap:6px; font:600 11px var(--mono);
+  letter-spacing:.02em; text-transform:uppercase; padding:3px 10px; border-radius:999px;
+  background:var(--chip-bg); border:1px solid var(--card-border); color:var(--muted);
+  transition:background var(--dur) var(--ease), color .3s, border-color var(--dur) var(--ease)}
+.chip .dot{width:7px;height:7px;border-radius:50%;background:var(--faint);transition:background .3s}
+.chip[data-tone="armed"]{color:var(--armed); border-color:color-mix(in srgb, var(--armed) 40%, transparent)}
+.chip[data-tone="armed"] .dot{background:var(--armed)}
+.chip[data-tone="danger"]{color:var(--danger); border-color:color-mix(in srgb, var(--danger) 45%, transparent)}
+.chip[data-tone="danger"] .dot{background:var(--danger)}
+.chip[data-tone="good"]{color:var(--good)} .chip[data-tone="good"] .dot{background:var(--good)}
+
+.grid{display:grid; grid-template-columns:1.25fr .9fr; gap:14px}
+@media (max-width:760px){.grid{grid-template-columns:1fr}}
+
+/* readout tiles */
+.tiles{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:14px}
+.tile{border-radius:var(--r-md); background:var(--chip-bg); border:1px solid var(--card-border);
+  padding:10px 12px; transition:background var(--dur) var(--ease), border-color var(--dur) var(--ease)}
+.tile .lbl{font-family:var(--mono); font-size:11px; font-weight:600; letter-spacing:0;
+  text-transform:uppercase; color:var(--muted); margin-bottom:4px}
+.tile .val{font-family:var(--mono); font-size:22px; font-weight:650;
+  font-variant-numeric:tabular-nums; letter-spacing:-.01em}
+.tile .unit{font-size:12px; color:var(--muted); margin-left:3px}
+.tile.v .val{color:var(--accent)} .tile.trip .val{color:var(--danger)}
+
+/* ramp trough */
+.ramp{margin:2px 0 14px}
+.ramp .lblrow{display:flex; justify-content:space-between; margin-bottom:6px}
+.ramp .lbl{font-family:var(--mono); font-size:11px; font-weight:600; text-transform:uppercase; color:var(--muted)}
+.ramp .pct{font-family:var(--mono); font-size:11px; color:var(--faint); font-variant-numeric:tabular-nums}
+.trough{height:8px; border-radius:6px; background:var(--well-bg);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.3); overflow:hidden;
+  transition:background var(--dur) var(--ease)}
+.fill{height:100%; width:0%; border-radius:6px; background:var(--accent);
+  transition:width .6s var(--ease), background .3s}
+.state-tripped .fill{background:var(--danger)}
+
+/* sparkline */
+.spark{position:relative; border-radius:var(--r-md); background:var(--well-bg);
+  border:1px solid var(--card-border); padding:10px 12px 6px;
+  transition:background var(--dur) var(--ease), border-color var(--dur) var(--ease)}
+.spark .lbl{font-family:var(--mono); font-size:11px; font-weight:600; text-transform:uppercase;
+  color:var(--muted); display:flex; justify-content:space-between}
+.spark .lbl b{color:var(--text); font-weight:650; font-variant-numeric:tabular-nums}
+.spark svg{display:block; width:100%; height:96px; margin-top:4px}
+.tip{position:absolute; pointer-events:none; background:#0C1019; border:1px solid var(--hairline-strong);
+  border-radius:8px; padding:5px 9px; font:600 11px var(--mono); color:var(--text);
+  font-variant-numeric:tabular-nums; opacity:0; transform:translate(-50%,-130%);
+  transition:opacity .15s; white-space:nowrap; z-index:5}
+.skin-glass .tip{background:rgba(8,12,20,0.9)}
+
+/* danger well — deliberately OPAQUE in both skins */
+.dwell{border-radius:var(--r-md); border:1px solid color-mix(in srgb, var(--danger) 30%, var(--card-border));
+  background:var(--well-bg); padding:14px; display:flex; flex-direction:column; gap:12px;
+  transition:background var(--dur) var(--ease)}
+.dwell .cap{font-family:var(--mono); font-size:11px; font-weight:600; letter-spacing:.06em;
+  text-transform:uppercase; color:var(--danger)}
+.armrow{display:flex; align-items:center; gap:10px}
+.latch{appearance:none; cursor:pointer; font:650 12.5px var(--sans); color:var(--armed);
+  background:transparent; border:1.5px solid var(--armed); border-radius:var(--r-sm);
+  padding:9px 16px; transition:background .25s var(--ease), color .25s}
+.latch[aria-pressed="true"]{background:var(--armed); color:#221302}
+.latch:focus-visible,.kill:focus-visible{outline:2px solid var(--armed); outline-offset:2px}
+.setrow{display:flex; gap:8px; align-items:center; font-family:var(--mono); font-size:13px;
+  font-variant-numeric:tabular-nums; color:var(--muted)}
+.setrow input{width:86px; font:650 14px var(--mono); color:var(--text); background:var(--sunk);
+  border:1px solid var(--hairline); border-radius:var(--r-sm); padding:7px 10px; text-align:right}
+.skin-glass .setrow input{background:rgba(0,0,0,0.4); border-color:rgba(255,255,255,0.12)}
+
+/* kill switch — the W3 escalation ladder, opaque at every rung */
+.kill{appearance:none; cursor:pointer; width:100%; font:700 13px var(--sans);
+  border-radius:var(--r-sm); padding:12px 16px; letter-spacing:.02em;
+  transition:background .25s var(--ease), color .25s, border-color .25s, opacity .25s}
+.kill.ghost{background:transparent; border:1.5px dashed var(--faint); color:var(--faint)}
+.kill.inert{background:transparent; border:1.5px solid var(--hairline-strong); color:var(--muted)}
+.kill.live{background:var(--danger); border:1.5px solid var(--danger); color:#2A0508;
+  box-shadow:0 6px 22px color-mix(in srgb, var(--danger) 35%, transparent)}
+.kill .volts{font-family:var(--mono); font-variant-numeric:tabular-nums; font-weight:700}
+
+/* trip banner */
+.banner{display:none; align-items:center; gap:10px; border-radius:var(--r-sm);
+  background:var(--danger); color:#2A0508; font:700 12.5px var(--sans); padding:10px 14px}
+.state-tripped .banner{display:flex}
+.banner .mono{font-family:var(--mono); font-variant-numeric:tabular-nums}
+
+/* ---------- state selector + annotation ---------- */
+.toolbar{display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:18px 0 26px}
+.toolbar .cap{font-family:var(--mono); font-size:11px; font-weight:600; text-transform:uppercase; color:var(--faint)}
+.states{display:flex; gap:6px; flex-wrap:wrap}
+.states button{appearance:none; cursor:pointer; font:600 12px var(--sans); color:var(--muted);
+  background:var(--chip-bg); border:1px solid var(--card-border); border-radius:999px; padding:6px 14px;
+  transition:all .25s var(--ease)}
+.states button[aria-pressed="true"]{color:var(--text); border-color:var(--accent);
+  box-shadow:0 0 0 1px var(--accent) inset}
+.states button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+.notes{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; margin-top:26px}
+.note{padding:16px 18px}
+.note h2{font-size:13.5px; font-weight:650; margin-bottom:10px}
+.note ul{list-style:none; display:flex; flex-direction:column; gap:8px}
+.note li{display:flex; gap:9px; font-size:13px; line-height:1.5; color:var(--muted)}
+.note li b{color:var(--text); font-weight:600}
+.note .k{flex:none; margin-top:2px; font-family:var(--mono); font-size:10px; font-weight:700;
+  text-transform:uppercase; border-radius:5px; padding:2px 7px; letter-spacing:.03em}
+.k.tok{background:color-mix(in srgb, var(--accent) 16%, transparent); color:var(--accent)}
+.k.qml{background:color-mix(in srgb, var(--sim) 16%, transparent); color:var(--sim)}
+.k.law{background:color-mix(in srgb, var(--danger) 16%, transparent); color:var(--danger)}
+footer{margin-top:30px; font-size:12.5px; color:var(--faint); line-height:1.6; max-width:68ch}
+footer .mono{font-family:var(--mono); font-size:11.5px}
+
+@media (prefers-reduced-motion: reduce){
+  *{transition:none !important; animation:none !important}
+}
+</style>
+
+<div class="stage-flat"></div>
+<div class="ambient"></div>
+
+<div class="wrap" id="root">
+  <header>
+    <div>
+      <div class="eyebrow">TCT Control · Design A/B · 2026-07-13</div>
+      <h1>Bias Supply — v5 Slate gegen v6 Glass</h1>
+    </div>
+    <div class="spacer"></div>
+    <div class="seg" role="group" aria-label="Skin">
+      <button id="btnA" aria-pressed="true">A · v5 Slate (heute)</button>
+      <button id="btnB" aria-pressed="false">B · v6 Glass (Vorschlag)</button>
+    </div>
+    <p class="hint">Taste <kbd>G</kbd> schaltet um. Seite A nutzt byte-genau die heutigen
+    <span style="font-family:var(--mono)">style.py</span>-DARK-Tokens; Seite B ist der visionOS-Material-Vorschlag
+    aus <span style="font-family:var(--mono)">design_assets/</span>. Zustände unten durchschalten — die
+    Gefahren-Grammatik muss in beiden Skins identisch lesbar bleiben.</p>
+  </header>
+
+  <div class="toolbar">
+    <span class="cap">Panel-Zustand</span>
+    <div class="states" role="group" aria-label="Panel state">
+      <button data-state="idle" aria-pressed="true">Idle · connected</button>
+      <button data-state="ramping" aria-pressed="false">Ramping</button>
+      <button data-state="setpoint" aria-pressed="false">At setpoint</button>
+      <button data-state="tripped" aria-pressed="false">TRIPPED</button>
+    </div>
+  </div>
+
+  <!-- ================= PANEL REPLICA ================= -->
+  <section class="card panel" id="panel" aria-label="Bias supply panel replica">
+    <div class="p-head">
+      <div>
+        <div class="p-eyebrow">TCT Control · Bias Supply</div>
+        <div class="p-title">ISEG SHR — Channel 0</div>
+      </div>
+      <div class="spacer"></div>
+      <span class="chip" id="chipState"><span class="dot"></span><span id="chipTxt">Idle</span></span>
+      <span class="chip"><span class="dot" style="background:var(--sim)"></span>SIM</span>
+    </div>
+
+    <div class="grid">
+      <div>
+        <div class="tiles">
+          <div class="tile v">
+            <div class="lbl">Voltage</div>
+            <div class="val"><span id="vNow">0.0</span><span class="unit">V</span></div>
+          </div>
+          <div class="tile">
+            <div class="lbl">Current</div>
+            <div class="val"><span id="iNow">0.002</span><span class="unit">µA</span></div>
+          </div>
+          <div class="tile" id="tileTrip">
+            <div class="lbl">Compliance</div>
+            <div class="val"><span>2.000</span><span class="unit">µA</span></div>
+          </div>
+        </div>
+
+        <div class="ramp">
+          <div class="lblrow"><span class="lbl">Ramp — 10 V/s</span><span class="pct" id="rampPct">0 %</span></div>
+          <div class="trough"><div class="fill" id="rampFill"></div></div>
+        </div>
+
+        <div class="spark" id="spark">
+          <div class="lbl"><span>V(t) — last 60 s</span><b id="sparkEnd">0.0 V</b></div>
+          <svg id="svg" viewBox="0 0 560 96" preserveAspectRatio="none" role="img"
+               aria-label="Voltage over the last 60 seconds"></svg>
+          <div class="tip" id="tip"></div>
+        </div>
+      </div>
+
+      <div class="dwell">
+        <div class="cap">High Voltage — danger stays opaque</div>
+        <div class="setrow">
+          <label for="setV">Setpoint</label>
+          <input id="setV" value="-120.0" inputmode="decimal" aria-label="Voltage setpoint">
+          <span>V</span>
+        </div>
+        <div class="armrow">
+          <button class="latch" id="latch" aria-pressed="false">ARM</button>
+          <span style="font-size:12px;color:var(--faint);line-height:1.4">Zwei-Schritt-Latch —<br>unverändert aus v5</span>
+        </div>
+        <button class="kill inert" id="kill">
+          <span id="killTxt">OUTPUT OFF</span>
+        </button>
+        <div class="banner"><span>⚠ TRIP — compliance exceeded.</span><span class="mono">−87.4 V @ 2.31 µA</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= ANNOTATIONS ================= -->
+  <div class="notes">
+    <section class="card note">
+      <h2>Was sich von A nach B ändert</h2>
+      <ul>
+        <li><span class="k tok">Token</span><span><b>Material:</b> Panel wird durchscheinend (α ≈ 0.42) mit echtem Backdrop-Blur (26 px) + Sättigung — der Raum scheint durch, Inhalte bleiben opak.</span></li>
+        <li><span class="k tok">Token</span><span><b>Specular:</b> Innenkante oben von α 0.045 auf α 0.14 — die „Glaskante" aus den Referenzen.</span></li>
+        <li><span class="k tok">Token</span><span><b>Radius &amp; Elevation:</b> 16 → 20 px, Schatten weicher und tiefer (24/60 statt 10/24).</span></li>
+        <li><span class="k qml">QML</span><span><b>Motion:</b> Hover-Lift, Material-Crossfade, Zähler-Roll — hier CSS; in der App QML-Springs (QWidgets kann nur QPropertyAnimation, kein Live-Blur über Plots).</span></li>
+        <li><span class="k law">Law</span><span><b>Gefahr bleibt laut:</b> Kill-Switch, ARM-Latch und Trip-Banner sind in BEIDEN Skins opak und farbstabil — Glas endet an der Sicherheitsgrenze.</span></li>
+      </ul>
+    </section>
+    <section class="card note">
+      <h2>Entscheidungsfragen an Kaya</h2>
+      <ul>
+        <li><span class="k tok">1</span><span>Trägt das Glas-Material die Lesbarkeit der Readouts auch bei Labor-Umgebungslicht? (Hier bewusst über buntem Ambient getestet.)</span></li>
+        <li><span class="k tok">2</span><span>Ist die opake Gefahren-Insel im Glas-Umfeld richtig — oder zu hart? (Unsere Empfehlung: genau so lassen.)</span></li>
+        <li><span class="k qml">3</span><span>Reicht dieses Motion-Niveau (~450 ms, eased) oder willst du Feder-Physik? Letzteres entscheidet den QML-Umfang.</span></li>
+      </ul>
+    </section>
+  </div>
+
+  <footer>
+    Replika, kein Screenshot: Werte und Zustände sind simuliert. Seite B nutzt
+    <span class="mono">backdrop-filter</span>; im Qt-Port entspricht das DWM-Backdrop (Fensterebene, gebaut)
+    + Fake-Glas-Tokens (Panel-Ebene) + QML-Shader nur dort, wo echtes Blur über App-Inhalt gebraucht wird.
+    Einseitig dunkel mit Absicht — alle acht Referenzen sind dunkle Glas-UIs, und die Bench läuft im Dark-Mode.
+  </footer>
+</div>
+
+<script>
+(function(){
+  var root=document.documentElement, body=document.body;
+  var btnA=document.getElementById('btnA'), btnB=document.getElementById('btnB');
+  function setSkin(glass){
+    body.classList.toggle('skin-glass',glass);
+    btnA.setAttribute('aria-pressed',String(!glass));
+    btnB.setAttribute('aria-pressed',String(glass));
+  }
+  btnA.onclick=function(){setSkin(false)};
+  btnB.onclick=function(){setSkin(true)};
+  addEventListener('keydown',function(e){
+    if(e.key==='g'||e.key==='G') setSkin(!body.classList.contains('skin-glass'));
+  });
+
+  /* ---------- panel state machine ---------- */
+  var reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var vNow=document.getElementById('vNow'), rampFill=document.getElementById('rampFill'),
+      rampPct=document.getElementById('rampPct'), chip=document.getElementById('chipState'),
+      chipTxt=document.getElementById('chipTxt'), kill=document.getElementById('kill'),
+      killTxt=document.getElementById('killTxt'), latch=document.getElementById('latch'),
+      panelRoot=document.getElementById('root'), sparkEnd=document.getElementById('sparkEnd');
+  var target=-120, anim=null;
+  var STATES={
+    idle:    {v:0,    pct:0,   chip:['','Idle'],            kill:['inert','OUTPUT OFF'],            armed:false},
+    ramping: {v:-87.4,pct:73,  chip:['armed','Ramping'],    kill:['live','OUTPUT OFF — <span class="volts">−87.4 V</span>'], armed:true},
+    setpoint:{v:-120, pct:100, chip:['danger','HV live'],   kill:['live','OUTPUT OFF — <span class="volts">−120.0 V</span>'],armed:true},
+    tripped: {v:-87.4,pct:73,  chip:['danger','TRIPPED'],   kill:['live','OUTPUT OFF — <span class="volts">−87.4 V</span>'], armed:true}
+  };
+  function rollTo(val){
+    if(anim) cancelAnimationFrame(anim);
+    if(reduced){vNow.textContent=val.toFixed(1); return;}
+    var from=parseFloat(vNow.textContent)||0, t0=null;
+    function step(ts){
+      if(!t0)t0=ts; var k=Math.min(1,(ts-t0)/600); k=1-Math.pow(1-k,3);
+      vNow.textContent=(from+(val-from)*k).toFixed(1);
+      if(k<1) anim=requestAnimationFrame(step);
+    }
+    anim=requestAnimationFrame(step);
+  }
+  function setState(name){
+    var s=STATES[name];
+    document.querySelectorAll('.states button').forEach(function(b){
+      b.setAttribute('aria-pressed',String(b.dataset.state===name));
+    });
+    panelRoot.classList.toggle('state-tripped',name==='tripped');
+    rollTo(s.v);
+    rampFill.style.width=s.pct+'%';
+    rampPct.textContent=s.pct+' %';
+    chip.dataset.tone=s.chip[0]; chipTxt.textContent=s.chip[1];
+    kill.className='kill '+s.kill[0]; killTxt.innerHTML=s.kill[1];
+    latch.setAttribute('aria-pressed',String(s.armed));
+    drawSpark(name);
+  }
+  document.querySelectorAll('.states button').forEach(function(b){
+    b.onclick=function(){setState(b.dataset.state)};
+  });
+  latch.onclick=function(){ /* demo only: latch mirrors state, no free toggle on TRIP */
+    var p=latch.getAttribute('aria-pressed')==='true';
+    if(!panelRoot.classList.contains('state-tripped')) latch.setAttribute('aria-pressed',String(!p));
+  };
+  kill.onclick=function(){setState('idle')};
+
+  /* ---------- sparkline: single series (accent), faint grid,
+       emphasized endpoint, crosshair+tooltip on hover ---------- */
+  var svg=document.getElementById('svg'), tip=document.getElementById('tip'),
+      spark=document.getElementById('spark');
+  var W=560,H=96,PADT=6,PADB=10, data=[];
+  function series(name){
+    var pts=[],n=60;
+    for(var i=0;i<n;i++){
+      var t=i/(n-1), v;
+      if(name==='idle') v=0;
+      else if(name==='ramping') v=t<0.35?0:-(Math.min(1,(t-0.35)/0.6))*87.4;
+      else if(name==='setpoint') v=t<0.2?0:-(Math.min(1,(t-0.2)/0.45))*120;
+      else v=t<0.3?0 : t<0.75? -( (t-0.3)/0.45 )*87.4 : -87.4+ (t-0.75)*8; /* trip: flatline after fault */
+      pts.push(v);
+    }
+    return pts;
+  }
+  function drawSpark(name){
+    data=series(name);
+    var min=Math.min.apply(null,data.concat([0])), max=Math.max.apply(null,data.concat([0]));
+    if(max-min<1){max=1;min=-1}
+    function y(v){return PADT+(max-v)/(max-min)*(H-PADT-PADB)}
+    function x(i){return i/(data.length-1)*W}
+    var d='M'+x(0)+','+y(data[0]);
+    for(var i=1;i<data.length;i++) d+=' L'+x(i)+','+y(data[i]);
+    var area=d+' L'+W+','+(H-PADB)+' L0,'+(H-PADB)+' Z';
+    var grid='';
+    [0.25,0.5,0.75].forEach(function(g){
+      var gy=PADT+g*(H-PADT-PADB);
+      grid+='<line x1="0" x2="'+W+'" y1="'+gy+'" y2="'+gy+'" stroke="rgba(152,161,181,0.14)" stroke-width="1"/>';
+    });
+    var zero=y(0);
+    var lineCol = name==='tripped' ? 'var(--danger)' : 'var(--accent)';
+    svg.innerHTML = grid
+      +'<line x1="0" x2="'+W+'" y1="'+zero+'" y2="'+zero+'" stroke="rgba(152,161,181,0.25)" stroke-dasharray="3 4" stroke-width="1"/>'
+      +'<path d="'+area+'" fill="'+(name==='tripped'?'rgba(255,90,97,0.10)':'rgba(90,169,255,0.10)')+'"/>'
+      +'<path d="'+d+'" fill="none" stroke="'+lineCol+'" stroke-width="2" stroke-linejoin="round"/>'
+      +'<circle cx="'+x(data.length-1)+'" cy="'+y(data[data.length-1])+'" r="3.5" fill="'+lineCol+'" stroke="#0C1019" stroke-width="2"/>'
+      +'<line id="xh" y1="'+PADT+'" y2="'+(H-PADB)+'" stroke="rgba(233,237,245,0.3)" stroke-width="1" visibility="hidden"/>';
+    sparkEnd.textContent=data[data.length-1].toFixed(1)+' V';
+    svg._y=y; svg._x=x;
+  }
+  spark.addEventListener('mousemove',function(e){
+    var r=svg.getBoundingClientRect();
+    var i=Math.round((e.clientX-r.left)/r.width*(data.length-1));
+    i=Math.max(0,Math.min(data.length-1,i));
+    var xh=svg.querySelector('#xh'); if(!xh)return;
+    var px=svg._x(i)/W*r.width;
+    xh.setAttribute('x1',svg._x(i)); xh.setAttribute('x2',svg._x(i));
+    xh.setAttribute('visibility','visible');
+    tip.style.opacity=1;
+    tip.style.left=(px+12)+'px';
+    tip.style.top=(svg.getBoundingClientRect().top-spark.getBoundingClientRect().top+svg._y(data[i])/H*r.height)+'px';
+    tip.textContent='t −'+(59-i)+' s · '+data[i].toFixed(1)+' V';
+  });
+  spark.addEventListener('mouseleave',function(){
+    tip.style.opacity=0;
+    var xh=svg.querySelector('#xh'); if(xh)xh.setAttribute('visibility','hidden');
+  });
+
+  setState('idle');
+})();
+</script>

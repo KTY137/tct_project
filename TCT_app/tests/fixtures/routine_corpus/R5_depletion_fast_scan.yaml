@@ -1,0 +1,30 @@
+name: depletion_fast_scan
+description: 'Depletion-voltage fast scan: coarse bias sweep, charge reduction (R5).'
+root:
+- type: loop
+  axis: bias_V
+  start: 0.0
+  stop: -300.0
+  step: -25.0
+  settle_s: 0.0
+  n_averages: null
+  snake: false
+  reduce: charge
+  children:
+  - type: action
+    action: wait
+    params:
+      # 0.5 s covers the HV-filter RC and the depletion-capacitance (Cdet) charging after the ramp; it is NOT a leakage/polarization/trapped-charge settle (seconds to minutes) — increase it for irradiated sensors.
+      seconds: 0.5
+      reason: bias settle
+  - type: action
+    action: acquire_waveform
+    params:
+      n_averages: 8
+  - type: action
+    action: save_point
+    params:
+      label: cv_point
+      reduce: charge
+safety:
+  require_hv_confirmation: true

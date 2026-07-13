@@ -1,0 +1,196 @@
+<!-- title: v5 · Scan Planner -->
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Panel 2/11</p>
+  <h1>Scan Planner</h1>
+  <p class="lede">
+    The 3-column Mac shape stays — it was already half-built. v5 fixes the
+    language inside it: one accent per recipe row keyed to command class, the
+    pill zoo dies, and the per-row CONFIRM badge is replaced by the thing that
+    actually protects the run — the armed envelope.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">owner: Abel (grammar) · Noah (chrome)</span>
+    <span class="meta-chip">ratified: envelope once-per-run · latch untouched</span>
+    <span class="meta-chip">fixes live law-2 violation (red MOVE STAGE)</span>
+  </div>
+
+  <h2>The mockup</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:118px; left:236px">1</div>
+    <div class="callout" style="top:196px; left:236px">2</div>
+    <div class="callout" style="top:64px; right:352px">3</div>
+    <div class="callout" style="top:210px; right:14px">4</div>
+    <div class="callout" style="bottom:96px; right:14px">5</div>
+
+    <div class="panelbody">
+      <!-- palette -->
+      <div class="card" style="width:196px; flex:none">
+        <div class="hd">Add blocks</div>
+        <div class="bd" style="display:flex; flex-direction:column; gap:6px; font-size:12px">
+          <span class="chip" style="justify-content:flex-start">Loop · Bias</span>
+          <span class="chip" style="justify-content:flex-start">Loop · Stage X</span>
+          <span class="chip" style="justify-content:flex-start">Loop · Stage Y</span>
+          <span class="chip" style="justify-content:flex-start">Loop · Stage Z</span>
+          <span class="chip" style="justify-content:flex-start">Acquire waveform</span>
+          <span class="chip" style="justify-content:flex-start; border-color:var(--accent); color:var(--accent)">Acquire measurements ★</span>
+          <span class="chip" style="justify-content:flex-start; border-color:var(--accent); color:var(--accent)">Capture photo ★</span>
+          <span class="chip" style="justify-content:flex-start">Save point</span>
+          <span class="chip" style="justify-content:flex-start">Wait · Pause</span>
+          <span class="chip" style="justify-content:flex-start">Read slow control</span>
+          <span style="font-size:10.5px; color:var(--faint); margin-top:6px">drag into the recipe or double-click to append</span>
+        </div>
+      </div>
+
+      <!-- recipe tree -->
+      <div class="card" style="flex:1; display:flex; flex-direction:column">
+        <div class="hd">Recipe <span class="sub">scan-TCT · CCE(V) map</span>
+        </div>
+        <div style="display:flex; flex-direction:column">
+          <div class="rrow"><span class="spine"></span><span class="name" style="color:var(--muted)">Preflight</span><span class="eyeb">interlocks · laser safe · stage homed</span><span class="qty">gate</span></div>
+          <div class="rrow"><span class="spine"></span><span class="name">Loop · Bias</span><span class="args">0.0 → −300.0 V</span><span class="eyeb">step −50.0</span><span class="qty">7 steps</span></div>
+          <div class="rrow hv indent1"><span class="spine"></span><span class="glyph">⚡</span><span class="name">Ramp HV</span><span class="args">to setpoint · 5 V steps · 100 ms</span><span class="qty">envelope</span></div>
+          <div class="rrow indent1"><span class="spine"></span><span class="name" style="color:var(--muted)">Check leakage</span><span class="args">abort + ramp down if I &gt; 2 µA</span><span class="qty">guard</span></div>
+          <div class="rrow indent1"><span class="spine"></span><span class="name">Loop · Stage X</span><span class="args">−1.000 → 1.000 mm</span><span class="eyeb">step 0.100</span><span class="qty">21 pts</span></div>
+          <div class="rrow indent2"><span class="spine"></span><span class="name">Loop · Stage Y</span><span class="args">−1.000 → 1.000 mm</span><span class="eyeb">step 0.100 · snake</span><span class="qty">21 pts</span></div>
+          <div class="rrow motion indent3"><span class="spine"></span><span class="glyph">▲</span><span class="name">Move stage</span><span class="args">→ (x, y, z)</span><span class="qty">envelope</span></div>
+          <div class="rrow indent3"><span class="spine"></span><span class="name" style="color:var(--muted)">Settle</span><span class="args">50 ms</span><span class="qty"></span></div>
+          <div class="rrow indent3"><span class="spine"></span><span class="name" style="color:var(--muted)">Acquire waveform</span><span class="args">64 avg</span><span class="qty"></span></div>
+          <div class="rrow indent3" style="border-bottom:none"><span class="spine"></span><span class="name" style="color:var(--muted)">Save point</span><span class="args">→ HDF5</span><span class="qty"></span></div>
+        </div>
+        <div style="margin-top:auto; display:flex; gap:10px; padding:8px 12px; border-top:1px solid var(--hairline); font-size:10.5px; color:var(--faint)">
+          <span><span class="dot motion" style="width:7px;height:7px"></span> motion</span>
+          <span><span class="dot hv" style="width:7px;height:7px"></span> HV</span>
+          <span>grey = nominal, disappears into the recipe</span>
+          <span style="margin-left:auto" class="mono">motor 12.400 · 3.100 · use current · use focus z</span>
+        </div>
+      </div>
+
+      <!-- aside -->
+      <div style="width:300px; flex:none; display:flex; flex-direction:column; gap:10px">
+        <div class="card">
+          <div class="hd">Before you run</div>
+          <div class="bd" style="display:grid; grid-template-columns:1fr 1fr; gap:8px">
+            <div class="tile" style="min-width:0"><div class="k">Points</div><div class="v">3 087</div></div>
+            <div class="tile" style="min-width:0"><div class="k">Runtime</div><div class="v">1.1 <small>h</small></div></div>
+            <div class="tile" style="min-width:0"><div class="k">Data</div><div class="v">24 <small>MB</small></div></div>
+            <div class="tile" style="min-width:0"><div class="k">Travel</div><div class="v">320 <small>mm</small></div></div>
+            <div class="tile armed" style="grid-column:1/3; min-width:0"><div class="k">HV range</div><div class="v">−300 … 0 <small>V</small></div><div class="c">7 plateaus · ch0</div></div>
+          </div>
+        </div>
+        <div style="display:flex; gap:8px">
+          <span class="btn quiet" style="flex:1">Validate</span>
+          <span class="btn primary" style="flex:1">Dry run</span>
+        </div>
+        <div class="card" style="border-color:var(--armed)">
+          <div class="bd" style="display:flex; flex-direction:column; gap:8px">
+            <span class="btn amber" style="width:100%">⚡ Arm — hold 3 s</span>
+            <div style="font-size:10.5px; color:var(--muted); line-height:1.45">
+              Arming approves the <b>full envelope once</b>: HV −300…0 V ·
+              travel X/Y ±1 mm · 3 087 points. The executor re-validates every
+              step against it — no per-step confirmations.
+            </div>
+          </div>
+        </div>
+        <span class="btn red-out" style="width:100%">■ Abort</span>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> Ramp HV: the only red spine — HV class (correct today, kept) ·
+    <b>2</b> Move stage: amber spine + glyph — was RED with a red CONFIRM pill in the live audit (law-2 violation) ·
+    <b>3</b> quantities are quiet right-aligned mono chips, never colored — engraving, not status ·
+    <b>4</b> the envelope card replaces every per-row confirm: "envelope" tags on hazard rows are read-only glyph+text, not buttons ·
+    <b>5</b> Abort is outline-red while nothing runs; it fills only when a run is live.
+  </p>
+
+  <h2>NEW · Routine blocks <span style="font-weight:400; color:var(--pg-muted)">(Kaya requests)</span></h2>
+  <div class="table-scroll"><table class="spec">
+    <tr><th>Block</th><th>What it does</th><th>Notes / truth</th></tr>
+    <tr><td class="mono">Capture photo</td>
+        <td>grabs a camera frame at the current point, stores it (path + position
+            + exposure) into the run's HDF5/sidecar</td>
+        <td>nominal row (no motion of its own); precondition: camera connected;
+            feeds the sensor-mosaic feature — a mosaic is just
+            <span class="mono">Loop X → Loop Y → Move → Settle → Capture photo</span></td></tr>
+    <tr><td class="mono">Acquire measurements</td>
+        <td>reads only the scope's computed quantities (amplitude, charge/area,
+            rise, timing) and <b>discards the waveform</b> — on VISA scopes via
+            SCPI <span class="mono">MEASUrement</span> queries instead of
+            <span class="mono">CURVE?</span></td>
+        <td>orders-of-magnitude smaller runs + faster points; the Before-you-run
+            DATA tile shows the saving live (24 MB → ~0.4 MB); HDF5 gets a
+            <span class="mono">measurements</span> table, no waveform group
+            (SCAN_DATA_FORMAT extension, Jonathan); exact SCPI per scope needs
+            the manual — TODO(manual needed) per rule 4</td></tr>
+  </table></div>
+
+  <h2>NEW · Scan Sequencer <span style="font-weight:400; color:var(--pg-muted)">(Kaya request)</span></h2>
+  <p>
+    A queue of saved routines that runs unattended — the overnight workflow.
+    Each queue entry is a saved recipe with its own preflight; between entries
+    the sequencer parks safe (beam off expectations documented, HV ramped to
+    the next routine's start or to 0 per policy).
+  </p>
+  <div class="stage-wrap"><div class="stage" style="min-width:1100px; padding:14px; display:flex; flex-direction:column; gap:8px">
+    <div style="display:flex; align-items:center; gap:8px">
+      <span style="font-weight:650">Sequence · night_run_03</span>
+      <span class="chip warn">running 2/4</span>
+      <span style="flex:1"></span>
+      <span class="btn quiet">＋ Add routine</span>
+      <span class="btn red-out">■ Abort sequence</span>
+    </div>
+    <div class="rrow"><span class="spine"></span><span class="name" style="color:var(--muted)">1 · cce_v_map.routine</span><span class="args">done · 3 087 pts · 1.1 h</span><span class="qty">✓ 14:02</span></div>
+    <div class="rrow motion"><span class="spine"></span><span class="glyph">▶</span><span class="name">2 · focus_scan_z.routine</span><span class="args">running · 214/441 pts</span><span class="qty">ETA 00:12</span></div>
+    <div class="rrow"><span class="spine"></span><span class="name" style="color:var(--muted)">3 · charge_map_fine.routine</span><span class="args">queued · HV −250 V · 9 216 pts</span><span class="qty">~3.2 h</span></div>
+    <div class="rrow" style="border-bottom:none"><span class="spine"></span><span class="name" style="color:var(--muted)">4 · iv_curve_end.routine</span><span class="args">queued · ramp to 0 V at end</span><span class="qty">~10 min</span></div>
+  </div></div>
+  <p class="caption" style="max-width:76ch">
+    <b>Open safety question for Kaya:</b> the ratified envelope is approved
+    once per <em>run</em>. For a sequence, either (a) arming approves ONE
+    combined envelope spanning every queued routine (max HV, total travel,
+    total points — one hold-3-s for the night), or (b) each routine re-arms
+    and the sequencer pauses at each boundary until you confirm. (a) is the
+    true unattended workflow; (b) is stricter. Abel recommends (a) with the
+    combined envelope text listing every routine by name — same
+    re-validation machinery, and Abort/kill remain one-tap throughout.
+  </p>
+
+  <h2>Decisions</h2>
+  <ol class="decisions">
+    <li><b>One accent per row.</b> Nominal rows (loops, settle, acquire, save) are
+      grey and quiet; motion rows amber; HV rows red. The audit's rainbow
+      (amber/cyan/pink pills per row + red confirm slabs) collapses into a
+      readable hazard map of the recipe.</li>
+    <li><b>CONFIRM pill is dead.</b> A per-row confirm contradicts the ratified
+      once-per-run envelope. Hazard rows carry a read-only glyph meaning
+      "enumerated in the armed envelope" — every affordance lives in the aside.</li>
+    <li><b>Behaviors become eyebrows.</b> snake, settle-time, step width move into
+      tiny mono eyebrows inside the row — the qty chip holds exactly one number.</li>
+    <li><b>Latch flow untouched.</b> Validate → Dry run (unlocks arming) →
+      hold-3-s Arm over the full envelope text → armed ~10 s → Execute. This is
+      ratified safety flow; v5 only re-materializes it.</li>
+    <li><b>Clipping bug fixed structurally.</b> The recipe header no longer
+      overlaps the first row (the live audit shows PREFLIGHT half-cut) — the
+      header is a card .hd, rows start below it.</li>
+  </ol>
+
+  <h2>What changes vs. today</h2>
+  <div class="table-scroll"><table class="spec">
+    <tr><th>Today (audit)</th><th>v5</th></tr>
+    <tr><td>MOVE STAGE row red + red "A CONFIRM" pill</td><td>amber spine + read-only envelope glyph</td></tr>
+    <tr><td>7 STEPS / 21 PTS / SNAKE colored pill zoo</td><td>one quiet mono qty chip + eyebrow behaviors</td></tr>
+    <tr><td>Palette entries tinted per lane (cyan/pink/purple)</td><td>neutral chips; color enters only on hazard rows in the recipe</td></tr>
+    <tr><td>Header row overlaps first tree row</td><td>card header owns its band</td></tr>
+    <tr><td>ARM button + explainer split from readiness tiles</td><td>one armed-accent envelope card: tiles → dry-run → latch in one column rhythm</td></tr>
+    <tr><td>Abort filled dark slab</td><td>outline-red idle → filled-red live</td></tr>
+  </table></div>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>Red = HV rows + live abort only; motion = amber (law 2) — fixes the live violation.</li>
+    <li>Two-step arm latch + envelope text intact, one approval per run (law 5, ratified §11).</li>
+    <li>Numbers in mono, right-aligned, tabular (law 3).</li>
+    <li>Quiet nominal: a safe recipe reads as grey text until hazards enter (law 1).</li>
+    <li>No translucency anywhere in the tree — glass only on card headers (perf-honest).</li>
+  </ul>
+</main>

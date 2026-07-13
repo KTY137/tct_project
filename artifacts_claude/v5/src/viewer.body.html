@@ -1,0 +1,147 @@
+<!-- title: v5 · Scan Viewer -->
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Panel 3/11</p>
+  <h1>Scan Viewer</h1>
+  <p class="lede">
+    Already the closest panel to v5 — so v5 is surgical here. The map owns the
+    panel; every run <em>number</em> stays in the shell strip (single source of
+    truth); the overlay on the map is purely spatial. Pause/Abort move into a
+    glass corner the numbers no longer occupy.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">owner: Abel (run control) · Jonathan (map)</span>
+    <span class="meta-chip">ruling: strip owns numbers · map owns space</span>
+    <span class="meta-chip">viridis pixels stay untouched — no translucency over data</span>
+  </div>
+
+  <h2>The mockup — live run</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:60px; left:14px">1</div>
+    <div class="callout" style="top:60px; right:196px">2</div>
+    <div class="callout" style="top:150px; right:14px">3</div>
+    <div class="callout" style="bottom:120px; left:330px">4</div>
+    <div class="callout" style="bottom:56px; right:14px">5</div>
+
+    <div class="panelbody" style="flex-direction:column">
+      <div style="display:flex; align-items:center; gap:8px">
+        <span style="font-weight:650">Scan map</span>
+        <span class="chip">dut_charge · fC</span>
+        <span class="eyeb" style="font-family:var(--mono); font-size:9.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--armed)">acquiring · point 412</span>
+        <span style="flex:1"></span>
+        <span class="btn quiet">Freeze scale</span>
+        <span class="btn quiet">Export</span>
+        <span class="btn quiet">Open in Analysis</span>
+      </div>
+
+      <div class="card" style="flex:1">
+        <div class="bd" style="padding:8px">
+          <div class="well-fig" style="height:380px">
+            <div class="shade"></div>
+            <div class="plot" style="height:calc(100% - 3px)">
+              <!-- viridis-ish field -->
+              <div style="position:absolute; inset:8% 14% 10% 7%;
+                background:
+                  radial-gradient(60% 55% at 46% 52%, #fde725 0%, #7ad151 24%, #22a884 44%, #2a788e 62%, #414487 80%, #440154 100%);
+                border-radius:2px"></div>
+              <!-- unswept rows (NaN) -->
+              <div style="position:absolute; left:7%; right:14%; bottom:10%; height:26%;
+                background:repeating-linear-gradient(0deg, rgba(10,11,13,.92) 0 6px, rgba(20,22,26,.92) 6px 12px)"></div>
+              <!-- snake trail + live cursor -->
+              <div style="position:absolute; left:7%; top:47%; width:52%; height:1.5px; background:rgba(233,237,245,.5)"></div>
+              <div style="position:absolute; left:58.5%; top:45.4%; width:9px; height:9px; border:2px solid #fff; border-radius:2px; box-shadow:0 0 0 3px rgba(0,0,0,.45)"></div>
+              <!-- colorbar -->
+              <div style="position:absolute; right:5.5%; top:8%; bottom:10%; width:14px; border:1px solid #2c3648;
+                background:linear-gradient(180deg,#fde725,#7ad151,#22a884,#2a788e,#414487,#440154)"></div>
+              <span class="axis" style="right:2.2%; top:7%">6.2</span>
+              <span class="axis" style="right:2.2%; bottom:9%">0.0</span>
+              <span class="axis" style="left:8px; top:6px">y/mm</span>
+              <span class="axis" style="right:16%; bottom:6px">x/mm</span>
+              <!-- glass pause/abort corner: OUTSIDE data bounds (letterbox margin) -->
+              <div style="position:absolute; left:10px; bottom:8px; display:flex; gap:8px;
+                          background:rgba(18,24,36,.92); border:1px solid var(--hairline-strong);
+                          border-radius:10px; padding:6px 8px">
+                <span class="btn amber" style="padding:5px 14px">⏸ Pause</span>
+                <span class="btn red-fill" style="padding:5px 14px">■ Abort</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Z-focus bottom sheet, collapsed -->
+      <div class="card">
+        <div class="hd">▸ Z focus <span class="sub">focal-point assist — not a planner routine</span>
+          <span style="margin-left:auto" class="chip">no focus result</span>
+          <span class="btn primary" style="padding:4px 12px; font-size:11.5px">Find focus</span>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> quantity chip + derived sub-phase eyebrow (arming/moving/settling/acquiring/saving) — the one
+    text element the strip doesn't own ·
+    <b>2</b> map utilities stay quiet; no numeric HUD floats on the map ·
+    <b>3</b> colorbar inside the well, unit-bound (fC) ·
+    <b>4</b> live cursor + snake trail = spatial truth; unswept rows stay honestly hatched-NaN, never faked ·
+    <b>5</b> glass Pause/Abort corner sits in the letterbox margin, opaque backing, never over viridis pixels.
+  </p>
+
+  <h2>The empty state (kept, made canonical)</h2>
+  <div class="stage-wrap"><div class="stage" style="min-width:1100px">
+    <div class="panelbody">
+      <div class="card" style="flex:1">
+        <div class="bd">
+          <div class="empty" style="padding:60px 10px">
+            <div class="ico">🗺</div>
+            <div class="t1">No run in progress</div>
+            <div class="t2">Configure and start a routine in the Scan Planner.
+              Progress, ETA and position will appear in the status strip.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">One designed panel-level state (StateStack) — the four "NO RUN YET"
+     capsules die; they were four facets of one absent run. No fake axes: the map
+     extent comes <em>from</em> the plan, so no placeholder extent is invented.</p>
+
+  <h2>Decisions</h2>
+  <ol class="decisions">
+    <li><b>Single source per quantity.</b> State, HV, Progress·ETA·elapsed and
+      Position live in the shell strip (which travels with a detached viewer).
+      The old bottom tile row dies — it double-reported the strip.</li>
+    <li><b>Spatial-only overlay.</b> The map shows where: live cell cursor, snake
+      trail, stale/empty canvas, plus the sub-phase eyebrow. Codex's floating
+      numeric HUD was rejected by both Jonathan (viridis legibility) and Abel
+      (double-reporting).</li>
+    <li><b>Glass corner controls.</b> Pause/Abort return to the map's letterbox
+      margin on an opaque backing plate — reachable without leaving the hero,
+      outline→filled red discipline, same coordinator path as the strip Abort.</li>
+    <li><b>Mid-run charge glance.</b> Jonathan's addition: the current-point
+      charge (fC) joins the strip's Progress caption during a run — catches a
+      dead channel without switching to the Scope tab.</li>
+    <li><b>Paused/aborted states designed.</b> PAUSED: cursor stops, quiet amber
+      caption (+ excursion reason on WARN-hold). ABORTED: map retained,
+      stale-dimmed, neutral banner "N/M points saved · file flushed" — red is
+      the action, never the resting result.</li>
+  </ol>
+
+  <h2>What changes vs. today</h2>
+  <div class="table-scroll"><table class="spec">
+    <tr><th>Today (audit)</th><th>v5</th></tr>
+    <tr><td>4 metric tiles (Progress/ETA/Point/Elapsed) under the map</td><td>strip owns them; map area grows by the freed row</td></tr>
+    <tr><td>PAUSE/ABORT in a bottom widget row</td><td>glass corner on the map + strip Abort (same path)</td></tr>
+    <tr><td>Tiny cryptic icon-only buttons top-right</td><td>labeled quiet buttons (Freeze scale · Export · Open in Analysis)</td></tr>
+    <tr><td>Terminal banner strip between map and tiles</td><td>end-state banner rendered inside the map canvas (stale-dim + caption)</td></tr>
+    <tr><td>Z-focus collapsible card (good)</td><td>kept; snaps open with the one sanctioned drawer animation</td></tr>
+  </table></div>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>UI never lies: NaN cells stay hatched, aborted maps stale-dim, no fake extent (law 7/8).</li>
+    <li>Red only on live Abort; paused is amber attention (law 2).</li>
+    <li>Viridis data ink untouched; overlay chips opaque, in margins only (law 4).</li>
+    <li>Staleness is designed: frozen ETA reads "paused", never a stuck number (law 4).</li>
+    <li>One number, one home — strip is the single numeric source (law 3 hierarchy).</li>
+  </ul>
+</main>

@@ -1,0 +1,527 @@
+<title>TCT Cockpit v5 — Feinschliff</title>
+<style>
+/* ============================================================
+   TCT Cockpit v5 — shared artifact tokens & components
+   Source of truth: TCT_app/gui/style.py (v4 tokens) + council v5
+   (Noah chrome, Paul state ladder, Jonathan data rules, Abel grammar)
+   ============================================================ */
+
+:root {
+  /* page frame (theme-aware) */
+  --pg-bg: #f2f4f8;
+  --pg-panel: #ffffff;
+  --pg-text: #131a28;
+  --pg-muted: #525d72;
+  --pg-hairline: #d9dfea;
+  --pg-accent: #2f7fd6;
+
+  /* cockpit dark tokens — the mockup world (style.py DARK) */
+  --bg: #0a0d13;
+  --panel: #121824;
+  --chrome: #171e2f;          /* _blend(#192134,#121824,.74) */
+  --strip: #0f1520;           /* _blend(#0c1019,#121824,.55) */
+  --well: #0e1420;
+  --sunk: #0c1019;
+  --hairline: #222b3e;
+  --hairline-strong: #334159;
+  --edge: rgba(255,255,255,0.10);
+  --text: #e9edf5;
+  --muted: #98a1b5;
+  --faint: #5b657a;
+  --accent: #5aa9ff;
+  --armed: #ffb84d;
+  --danger: #ff5a61;
+  --sim: #41d8e4;
+  --error: #ff8a1f;
+  --plot-bg: #0a0b0d;
+  --plot-fg: #c7cfda;
+  --well-shade: #06080c;      /* wellShade = blend(#000, PLOT_BG, .35) */
+
+  --sans: -apple-system, "SF Pro Display", "Segoe UI Variable Display",
+          "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+
+  --r-s: 8px; --r-m: 12px; --r-l: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --pg-bg: #0d1017; --pg-panel: #151a24; --pg-text: #e9edf5;
+    --pg-muted: #98a1b5; --pg-hairline: #232c40; --pg-accent: #5aa9ff;
+  }
+}
+:root[data-theme="dark"] {
+  --pg-bg: #0d1017; --pg-panel: #151a24; --pg-text: #e9edf5;
+  --pg-muted: #98a1b5; --pg-hairline: #232c40; --pg-accent: #5aa9ff;
+}
+:root[data-theme="light"] {
+  --pg-bg: #f2f4f8; --pg-panel: #ffffff; --pg-text: #131a28;
+  --pg-muted: #525d72; --pg-hairline: #d9dfea; --pg-accent: #2f7fd6;
+}
+
+/* ---------- page frame ---------- */
+body {
+  background: var(--pg-bg); color: var(--pg-text);
+  font-family: var(--sans); line-height: 1.55;
+  margin: 0; padding: 0 20px 96px;
+}
+main { max-width: 1160px; margin: 0 auto; }
+h1, h2, h3 { text-wrap: balance; line-height: 1.2; }
+h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin: 40px 0 6px; }
+h2 { font-size: 1.25rem; font-weight: 650; margin: 44px 0 12px; }
+h3 { font-size: 1rem; font-weight: 650; margin: 26px 0 8px; }
+p  { max-width: 72ch; }
+.lede { color: var(--pg-muted); font-size: 1.05rem; max-width: 70ch; margin-top: 0; }
+.eyebrow {
+  font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--pg-muted); margin: 40px 0 4px;
+}
+a { color: var(--pg-accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--pg-accent); outline-offset: 2px; }
+
+.meta-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; }
+.meta-chip {
+  font-family: var(--mono); font-size: 0.72rem; padding: 3px 10px;
+  border: 1px solid var(--pg-hairline); border-radius: 999px;
+  color: var(--pg-muted); background: transparent;
+}
+
+/* prose tables */
+table.spec { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+table.spec th, table.spec td {
+  text-align: left; padding: 8px 12px;
+  border-bottom: 1px solid var(--pg-hairline); vertical-align: top;
+}
+table.spec th { font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pg-muted); }
+table.spec td.mono, .mono { font-family: var(--mono); }
+.table-scroll { overflow-x: auto; }
+
+/* decision list */
+ol.decisions { padding-left: 0; counter-reset: dec; list-style: none; max-width: 76ch; }
+ol.decisions > li {
+  counter-increment: dec; position: relative; padding: 10px 0 10px 44px;
+  border-bottom: 1px solid var(--pg-hairline);
+}
+ol.decisions > li::before {
+  content: counter(dec); position: absolute; left: 0; top: 12px;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--pg-accent); color: #fff; font-weight: 700;
+  font-size: 0.8rem; display: flex; align-items: center; justify-content: center;
+}
+ol.decisions b { font-weight: 650; }
+
+/* law checklist */
+ul.laws { list-style: none; padding: 0; max-width: 76ch; }
+ul.laws li { padding: 5px 0 5px 26px; position: relative; font-size: 0.92rem; }
+ul.laws li::before { content: "✓"; position: absolute; left: 2px; color: var(--pg-accent); font-weight: 700; }
+
+/* ---------- the mockup stage ---------- */
+.stage-wrap { overflow-x: auto; margin: 18px 0 8px; border-radius: var(--r-l); }
+.stage {
+  min-width: 1100px; background: var(--bg); border-radius: var(--r-l);
+  border: 1px solid var(--pg-hairline);
+  padding: 0; overflow: hidden; color: var(--text);
+  font-size: 13px;
+}
+.stage * { box-sizing: border-box; }
+.caption { font-size: 0.82rem; color: var(--pg-muted); margin: 6px 4px 0; }
+
+/* ---------- shell chrome (Noah §1: menu 24 + band 48 + strip 64) ---------- */
+.menurow {
+  height: 24px; background: var(--bg); display: flex; align-items: center;
+  gap: 18px; padding: 0 14px; color: var(--faint); font-size: 11.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.band {
+  height: 48px; background: var(--chrome);
+  border-bottom: 1px solid var(--hairline-strong);
+  box-shadow: inset 0 1px 0 var(--edge);
+  display: flex; align-items: center; gap: 10px; padding: 0 12px;
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: 0.02em; }
+.brand .mark {
+  width: 22px; height: 22px; border-radius: 7px; background: var(--accent);
+  color: #06121f; display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 12px;
+}
+.pills { display: flex; gap: 4px; margin: 0 auto; }
+.pill {
+  padding: 6px 14px; border-radius: 999px; color: var(--muted);
+  border: 1px solid transparent; white-space: nowrap;
+}
+.pill.hov { background: rgba(255,255,255,0.055); color: var(--text); border-color: var(--hairline); }
+.pill.on {
+  background: var(--panel); color: var(--text);
+  border-color: var(--hairline-strong); box-shadow: inset 0 1px 0 var(--edge);
+}
+.bandbtn {
+  padding: 6px 12px; border-radius: var(--r-s); border: 1px solid var(--hairline-strong);
+  color: var(--text); background: transparent; white-space: nowrap;
+}
+.bandbtn.quiet { color: var(--muted); border-color: var(--hairline); }
+.sim-ribbon {
+  height: 26px; display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: #062125;
+  background: repeating-linear-gradient(135deg, var(--sim) 0 14px, #33bcc8 14px 28px);
+}
+.runstrip {
+  height: 64px; background: var(--strip); border-bottom: 1px solid var(--hairline);
+  display: flex; align-items: center; gap: 10px; padding: 0 12px;
+}
+.dotrow { display: flex; align-items: center; gap: 10px; padding: 0 10px; }
+
+/* ---------- metric tiles ---------- */
+.tile {
+  min-width: 132px; padding: 7px 12px 8px; border-radius: var(--r-m);
+  background: var(--panel); border: 1px solid var(--hairline);
+  box-shadow: inset 0 1px 0 var(--edge);
+}
+.tile .k {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--faint);
+}
+.tile .v {
+  font-family: var(--mono); font-size: 19px; font-weight: 600;
+  color: var(--text); font-variant-numeric: tabular-nums; margin-top: 1px;
+}
+.tile .v small { font-size: 11px; color: var(--muted); font-weight: 500; }
+.tile .c { font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+.tile.accent .v { color: var(--accent); }
+.tile.armed  .v { color: var(--armed); }
+.tile.danger .v { color: var(--danger); }
+.tile.dim .v { color: var(--faint); }
+
+/* ---------- chips & state dots (Paul §1 ladder) ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.07em;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--hairline-strong); color: var(--muted);
+  white-space: nowrap;
+}
+.chip.warn   { border-color: var(--armed); color: var(--armed); }
+.chip.danger { border-color: var(--danger); color: var(--danger); }
+.chip.danger-fill { background: var(--danger); border-color: var(--danger); color: #2a0508; font-weight: 700; }
+.chip.simc {
+  border-color: var(--sim); color: #062125; font-weight: 700;
+  background: repeating-linear-gradient(135deg, var(--sim) 0 8px, #33bcc8 8px 16px);
+}
+.chip.unknown { border-style: dashed; color: var(--faint); }
+
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.offline { background: var(--faint); opacity: 0.5; }
+.dot.idle    { background: var(--muted); }
+.dot.active  { background: var(--accent); }
+.dot.motion  { background: var(--armed); }
+.dot.hv      { background: var(--danger); }
+.dot.simd    { background: transparent; border: 2px solid var(--sim); width: 7px; height: 7px; }
+.dot.unknown { background: transparent; border: 2px dashed var(--faint); width: 7px; height: 7px; }
+.dev { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); }
+
+/* ---------- cards / panel surfaces ---------- */
+.panelbody { padding: 14px; display: flex; gap: 12px; background: var(--bg); }
+.card {
+  background: var(--panel); border: 1px solid var(--hairline);
+  border-radius: var(--r-m); box-shadow: inset 0 1px 0 var(--edge);
+}
+.card > .hd {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--chrome);
+  border-radius: var(--r-m) var(--r-m) 0 0;
+  font-size: 12px; font-weight: 650; color: var(--text);
+}
+.card > .hd .sub { margin-left: auto; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+.card > .bd { padding: 12px; }
+
+/* instrument well (Noah §4) */
+.well-fig {
+  background: var(--plot-bg); border: 1px solid var(--hairline-strong);
+  border-radius: 10px; padding: 3px; position: relative;
+}
+.well-fig .shade { height: 3px; background: var(--well-shade); border-radius: 8px 8px 0 0; }
+.plot {
+  background: var(--plot-bg); color: var(--plot-fg); border-radius: 8px;
+  position: relative; overflow: hidden; font-family: var(--mono); font-size: 10px;
+}
+.plot .axis { position: absolute; color: #5f6875; }
+
+/* empty state (Noah §3 StateStack) */
+.empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; color: var(--faint); text-align: center; padding: 30px 10px;
+}
+.empty .ico { font-size: 26px; opacity: 0.75; }
+.empty .t1 { color: var(--muted); font-weight: 650; font-size: 13px; }
+.empty .t2 { font-size: 11.5px; max-width: 34ch; }
+
+/* ---------- FormSheet grammar (Noah §2) ---------- */
+.sheet { max-width: 560px; }
+.srow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--hairline);
+}
+.srow:last-child { border-bottom: none; }
+.srow:hover { background: rgba(255,255,255,0.03); }
+.srow .lbl { color: var(--text); font-size: 12.5px; }
+.srow .spacer { flex: 1; }
+.srow .val {
+  font-family: var(--mono); font-size: 12.5px; color: var(--text);
+  background: var(--sunk); border: 1px solid var(--hairline);
+  border-radius: var(--r-s); padding: 5px 10px; text-align: right;
+  min-width: 86px; font-variant-numeric: tabular-nums;
+}
+.srow .unit { font-family: var(--mono); font-size: 11px; color: var(--faint); min-width: 30px; }
+
+/* ---------- buttons (command classes) ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 7px 16px; border-radius: var(--r-s);
+  border: 1px solid var(--hairline-strong); color: var(--text);
+  background: transparent; font-size: 12.5px; font-weight: 550; white-space: nowrap;
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 700; }
+.btn.amber { border-color: var(--armed); color: var(--armed); }
+.btn.amber-fill { background: var(--armed); border-color: var(--armed); color: #2a1802; font-weight: 700; }
+.btn.red-out { border-color: var(--danger); color: var(--danger); }
+.btn.red-fill { background: var(--danger); border-color: var(--danger); color: #2a0508; font-weight: 700; }
+.btn.ghost { border-color: var(--hairline); color: var(--faint); }
+.btn.quiet { border-color: var(--hairline); color: var(--muted); }
+
+/* ---------- recipe rows (Abel §1) ---------- */
+.rrow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px 6px 0; border-bottom: 1px solid var(--hairline);
+  background: var(--panel);
+}
+.rrow .spine { width: 3px; align-self: stretch; border-radius: 2px; background: var(--hairline-strong); flex: none; }
+.rrow.motion .spine { background: var(--armed); }
+.rrow.hv .spine { background: var(--danger); }
+.rrow .name { font-weight: 600; font-size: 12.5px; }
+.rrow.motion .name { color: var(--armed); }
+.rrow.hv .name { color: var(--danger); }
+.rrow .args { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.rrow .eyeb { font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+.rrow .qty {
+  margin-left: auto; font-family: var(--mono); font-size: 10.5px;
+  color: var(--muted); background: var(--sunk); border: 1px solid var(--hairline);
+  border-radius: 6px; padding: 1px 8px; font-variant-numeric: tabular-nums;
+}
+.rrow .glyph { font-size: 11px; }
+.rrow.motion .glyph { color: var(--armed); }
+.rrow.hv .glyph { color: var(--danger); }
+.indent1 { margin-left: 18px; } .indent2 { margin-left: 36px; } .indent3 { margin-left: 54px; }
+
+/* ---------- annotation callouts ---------- */
+.callout {
+  position: absolute; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--pg-accent); color: #fff; font-weight: 700; font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid rgba(255,255,255,0.85); box-shadow: 0 1px 6px rgba(0,0,0,0.4);
+  z-index: 5;
+}
+
+/* before/after strip */
+.ba { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+.ba .cell { border: 1px solid var(--pg-hairline); border-radius: var(--r-m); padding: 12px; background: var(--pg-panel); }
+.ba .cell h4 { margin: 0 0 8px; font-size: 0.78rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pg-muted); }
+@media (max-width: 760px) { .ba { grid-template-columns: 1fr; } }
+
+@media (prefers-reduced-motion: no-preference) {
+  .pulse { animation: pulse 2.4s ease-in-out 1; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+}
+
+</style>
+<main>
+  <p class="eyebrow">TCT Control · Design System · v5 "Feinschliff"</p>
+  <h1>Sleek. Quiet. Honest.</h1>
+  <p class="lede">
+    The v5 redesign in one page: what the full design council ratified, rendered
+    against the real capture audit of all eleven panels. North star per Kaya:
+    a sleek, subtly translucent, genuinely Apple-feeling cockpit — that never
+    lies about hardware.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">council: Adam · Noah · Abel · Paul · Jonathan · Prometheus · Codex</span>
+    <span class="meta-chip">audit: ui_audit_20260712T184707Z</span>
+    <span class="meta-chip">laws: 8/8 unchanged (PROTECTED)</span>
+    <span class="meta-chip">status: awaiting Kaya ratification</span>
+  </div>
+
+  <h2>The shell, collapsed</h2>
+  <p>
+    Today ~204&nbsp;px of stacked chrome (menu, toolbar, device ribbon, tab row,
+    breadcrumb) sit above every panel — the ribbon even grows a scrollbar at
+    1440&nbsp;px. v5 collapses everything into <b>one band and one strip</b>
+    (~136&nbsp;px incl. native menu), owned by the QML shell:
+  </p>
+
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:30px; left:10px">1</div>
+    <div class="callout" style="top:30px; right:270px">2</div>
+    <div class="callout" style="top:104px; left:330px">3</div>
+    <div class="callout" style="top:104px; right:200px">4</div>
+    <div class="menurow"><span>File</span><span>View</span><span>Devices</span><span>Help</span></div>
+    <div class="band">
+      <div class="brand"><div class="mark">T</div>TCT Control</div>
+      <div class="pills">
+        <span class="pill on">Motor Stage</span><span class="pill hov">Scan Planner</span>
+        <span class="pill">Scan Viewer</span><span class="pill">Oscilloscope</span>
+        <span class="pill">Camera</span><span class="pill">Bias</span>
+        <span class="pill">Laser</span><span class="pill">Monitor</span><span class="pill">Analysis</span>
+      </div>
+      <span class="bandbtn quiet">Connect All</span>
+      <span class="bandbtn quiet">⚙</span><span class="bandbtn quiet">☰</span>
+    </div>
+    <div class="sim-ribbon">SIMULATION — 5 OF 6 DEVICES SIMULATED · NO HARDWARE WILL MOVE</div>
+    <div class="runstrip">
+      <div class="tile accent"><div class="k">State</div><div class="v">RUNNING</div><div class="c">since 14:02:11</div></div>
+      <div class="tile danger"><div class="k">HV · measured</div><div class="v">−120.0 <small>V</small></div><div class="c">ramping ↓ · ch0</div></div>
+      <div class="tile"><div class="k">Progress · ETA</div><div class="v">412/3087</div><div class="c">ETA 42:10 · elapsed 08:44</div></div>
+      <div class="tile"><div class="k">Position</div><div class="v">12.400 · 3.100 <small>mm</small></div><div class="c">z 1.000 · user frame</div></div>
+      <div class="dotrow">
+        <span class="dev"><span class="dot motion"></span>Motor</span>
+        <span class="dev"><span class="dot active"></span>Scope</span>
+        <span class="dev"><span class="dot hv"></span>Bias</span>
+        <span class="dev"><span class="dot idle"></span>RefMon</span>
+        <span class="dev"><span class="dot simd"></span>Camera</span>
+        <span class="dev"><span class="dot unknown"></span>WaveGen</span>
+      </div>
+      <span style="flex:1"></span>
+      <span class="chip">4/6 connected</span>
+      <span class="btn red-out">■ Abort</span>
+    </div>
+    <div style="height:120px; display:flex; align-items:center; justify-content:center; color:var(--faint); font-size:12px; background:var(--bg)">
+      panel area — each panel gets its own artifact below
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> native menu stays (keyboard/a11y truth, costs 24&nbsp;px) ·
+    <b>2</b> commands are neutral — the green Connect All dies; color only ever encodes state ·
+    <b>3</b> ONE merged status surface: today's rail chips duplicate the strip tiles — merged ·
+    <b>4</b> device dots (Paul's 9-rung ladder) replace the overflowing ribbon; Abort is
+    outline-red idle, filled-red only while live.
+  </p>
+
+  <h2>The hardware state ladder</h2>
+  <p>
+    Paul's canonical taxonomy — every chip, dot, banner and well in the app
+    draws from this single ladder. The live audit found red spent on harmless
+    states (camera offline, output-unknown) and green on nominal ones (saved,
+    valid, load) — the ladder eliminates both by construction.
+  </p>
+  <div class="stage-wrap"><div class="stage" style="padding:16px 18px; display:flex; flex-wrap:wrap; gap:14px 26px; align-items:center; min-width:1000px">
+    <span class="dev"><span class="dot offline"></span>OFFLINE <em style="color:var(--faint)">— faint solid</em></span>
+    <span class="dev"><span class="dot active pulse"></span>CONNECTING <em style="color:var(--faint)">— one pulse</em></span>
+    <span class="dev"><span class="dot simd"></span>SIM <em style="color:var(--faint)">— hatched cyan ring</em></span>
+    <span class="dev"><span class="dot idle"></span>IDLE <em style="color:var(--faint)">— muted, no color</em></span>
+    <span class="dev"><span class="dot motion"></span>ACTIVE·motion <em style="color:var(--faint)">— amber</em></span>
+    <span class="dev"><span class="dot hv"></span>ACTIVE·HV-live <em style="color:var(--faint)">— the only steady red</em></span>
+    <span class="dev"><span class="dot active"></span>ACTIVE·benign <em style="color:var(--faint)">— accent</em></span>
+    <span class="dev"><span class="dot unknown"></span>UNKNOWN <em style="color:var(--faint)">— dashed, never red, never a fill</em></span>
+    <span class="dev"><span class="dot hv pulse"></span>TRIPPED <em style="color:var(--faint)">— red + one pulse</em></span>
+  </div></div>
+  <p class="caption">
+    UNKNOWN is the load-bearing new rung: the bias output bit, manual-laser
+    emission and GRBL limit switches are genuinely unreadable today — the UI
+    says so instead of guessing (law 8), and never paints unknown as danger.
+  </p>
+
+  <h2>Six ratified pillars</h2>
+  <ol class="decisions">
+    <li><b>Chrome collapse.</b> Band + strip own navigation, global commands,
+      device state and run numbers. Toolbar, ribbon, breadcrumb and duplicate
+      status bar die; the QML shell becomes the default. <i>(Noah §1 — mostly
+      QML recomposition, zero Python signal changes.)</i></li>
+    <li><b>Glass is faked, honestly.</b> Prometheus's research: Apple itself
+      collapses vibrancy to opaque under "Reduce Transparency" — our pre-blended
+      QSS chrome/strip/edge tokens already deliver the material. Real blur only
+      ever as a snapshot-once QML effect on the static outer chrome; plots,
+      camera and maps stay fully opaque; DWM Mica skipped.</li>
+    <li><b>The settings-pane grammar.</b> New <span class="mono">settings_row</span>
+      + <span class="mono">FormSheet</span> in panel_kit: sentence-case label left,
+      intrinsic-width right-aligned mono value, muted unit — content capped at
+      ~560&nbsp;px. Kills the 1200-px field for "1000.00 Hz" in every config panel
+      at once.</li>
+    <li><b>One designed offline state per panel.</b> New
+      <span class="mono">StateStack</span>: page 0 live content, page 1 the themed
+      EmptyState. Kills seven "NO FRAME YET" capsules, four grey "NO …" chips,
+      fake 0.1–0.9 axes, and the Monitor's "All nominal" with zero readings —
+      per Jonathan's rule, an axis frame survives only where the axis is a real
+      instrument setting (scope timebase), never derived from missing data.</li>
+    <li><b>The instrument well.</b> Dark plots are a ratified law (viridis data
+      ink) — in light theme they currently read as pasted holes. v5 frames every
+      plot ONCE inside FigureCard: hairline bezel, 3-px rounding pad, glass
+      header, flat static shade strip. No shaders, no per-side borders on hot
+      paths (guard test pins this).</li>
+    <li><b>Numbers live in exactly one place.</b> Abel: the run strip owns
+      State/HV/Progress·ETA/Position; the scan map overlay is spatial only
+      (cursor, trail, sub-phase eyebrow) — nothing double-reports. Jonathan:
+      charge displays switch to <b>fC</b> (1 MIP @ 300 µm ≈ 3.6 fC — today's
+      "0.004 pC" tiles read as zero); pC stays the storage unit.</li>
+  </ol>
+
+  <h2>Found live, fixed by taxonomy</h2>
+  <div class="table-scroll"><table class="spec">
+    <tr><th>Live finding (capture audit)</th><th>Law</th><th>v5 resolution</th></tr>
+    <tr><td>"CAMERA NOT CONNECTED" in red</td><td class="mono">2</td><td>OFFLINE rung — neutral, dimmed</td></tr>
+    <tr><td>"OUTPUT STATE UNKNOWN" chip in red</td><td class="mono">2/8</td><td>UNKNOWN rung — dashed muted, "?"</td></tr>
+    <tr><td>Planner MOVE STAGE row + pill in red</td><td class="mono">2</td><td>amber spine; CONFIRM pill killed — envelope covers it (ratified once-per-run)</td></tr>
+    <tr><td>Green on Connect All / SAVED / VALID YAML / LOAD 50 Ω</td><td class="mono">1/6</td><td>commands neutral; nominal states quiet; config values plain mono</td></tr>
+    <tr><td>Monitor "ALL NOMINAL" with zero readings</td><td class="mono">8</td><td>gated on ≥1 real reading per channel; else "No data"</td></tr>
+    <tr><td>Two filled-red HV buttons while disconnected</td><td class="mono">1/2</td><td>kill-switch escalation: ghost → outline → filled red only with volts</td></tr>
+    <tr><td>Device ribbon overflow @1440 px; scope rail clipping</td><td class="mono">—</td><td>ribbon dies into dot row; rail min-width + elide</td></tr>
+  </table></div>
+
+  <h2>Panel index — one artifact each</h2>
+  <p>Each panel gets its own deep-dive artifact (mockup + decisions + spec).
+     Published iteratively; this list links them as they land.</p>
+  <div class="table-scroll"><table class="spec">
+    <tr><th>Panel</th><th>v5 move (one line)</th><th>Artifact</th></tr>
+    <tr><td>Motor Stage</td><td>Stage view becomes the hero; jog/absolute collapse into a bottom command tray; STOP + limits never hidden</td><td class="mono" id="a-motor"><a href="https://claude.ai/code/artifact/4ceb9f79-55ca-4ceb-86f7-5fb679e03649">open →</a></td></tr>
+    <tr><td>Scan Planner</td><td>3-column kept; recipe rows get one spine accent by command class; CONFIRM pills → envelope glyphs</td><td class="mono" id="a-planner"><a href="https://claude.ai/code/artifact/00a0c6fa-8f04-4913-9aca-76e6175bc092">open →</a></td></tr>
+    <tr><td>Scan Viewer</td><td>Map hero + spatial-only overlay; numbers stay in the strip; glass Pause/Abort corner</td><td class="mono" id="a-viewer"><a href="https://claude.ai/code/artifact/6c425f1f-e4d2-43f9-b778-75c44c361d80">open →</a></td></tr>
+    <tr><td>Oscilloscope</td><td>Trace as workspace; channel rail fixed-width; measurements drawer follows acquisition state</td><td class="mono" id="a-scope"><a href="https://claude.ai/code/artifact/4ad69215-dce6-49cc-afeb-487d3cc0e759">open →</a></td></tr>
+    <tr><td>Bias Supply</td><td>Safety dashboard: measured V + HV state hero pair; kill-switch escalates with real volts</td><td class="mono" id="a-bias"><a href="https://claude.ai/code/artifact/d90a244a-d28a-4eda-bca1-7926b8540a14">open →</a></td></tr>
+    <tr><td>Camera</td><td>Full-bleed camera well + glass control rail; inspector sheet collapses; offline is neutral</td><td class="mono" id="a-camera"><a href="https://claude.ai/code/artifact/d82185f5-6b79-4648-867b-b01362c76a9b">open →</a></td></tr>
+    <tr><td>Laser / Trigger</td><td>Truth banner ⟂ wavegen FormSheet; unknown is dashed, load is plain mono</td><td class="mono" id="a-laser"><a href="https://claude.ai/code/artifact/2af2d890-0e0b-498e-a0cb-db35ac74d4a9">open →</a></td></tr>
+    <tr><td>Reference Monitor</td><td>Already §7-shaped — capsules lighten, double frame dies, charge caption in fC</td><td class="mono" id="a-refmon"><a href="https://claude.ai/code/artifact/7c051fd0-16fd-4d91-be26-be093f52bc99">open →</a></td></tr>
+    <tr><td>Monitor</td><td>4 honest tiles (per-channel staleness), history hero, table demoted to drawer</td><td class="mono" id="a-monitor"><a href="https://claude.ai/code/artifact/30505b58-9f36-4dc5-aa9c-ed20500adf06">open →</a></td></tr>
+    <tr><td>Analysis</td><td>Finder pattern: recents source list + preview hero; 4 chips collapse to one status line</td><td class="mono" id="a-analysis"><a href="https://claude.ai/code/artifact/8e260cec-ddc3-495c-a622-f38a292291fa">open →</a></td></tr>
+    <tr><td>Calibration</td><td>Two procedure cards on one sheet; prose de-capsed; result strip replaces paragraph</td><td class="mono" id="a-calibration"><a href="https://claude.ai/code/artifact/b4aaf1bc-40e2-4998-b923-d18232159538">open →</a></td></tr>
+  </table></div>
+  <p class="caption">Settings + Device Manager (dialogs) are covered inside the
+     relevant artifacts: FormSheet grammar (Settings) and the state-ladder row
+     grammar replacing the 12-button zoo (Device Manager, in the Bias/overview
+     scope).</p>
+
+  <h2>Implementation waves (after ratification)</h2>
+  <ol class="decisions">
+    <li><b>W1 — taxonomy sweep.</b> State ladder + color-law fixes across all
+      panels (red/green misuse, kill-switch escalation). Small diffs, huge
+      perceived change. <i>Owners: Noah + Paul, Mary review.</i></li>
+    <li><b>W2 — kit primitives.</b> settings_row, FormSheet, StateStack,
+      instrument well in FigureCard + guard tests. <i>Noah.</i></li>
+    <li><b>W3 — chrome collapse.</b> Band+strip merge in Shell.qml, QML default
+      flip, toolbar retirement. <i>Noah, Abel wiring review.</i></li>
+    <li><b>W4 — panel recompositions.</b> In artifact order above, one panel
+      per beat, Codex on mechanical retrofits, capture audit after each.
+      <i>Crew + free lanes.</i></li>
+    <li><b>W5 — data honesty.</b> fC tiles, empty-axes rules, Monitor gating,
+      CCE fit-quality surfacing. <i>Jonathan.</i></li>
+  </ol>
+
+  <h2>For Kaya to ratify</h2>
+  <ul class="laws">
+    <li>The 8 laws stay untouched (PROTECTED) — v5 changes composition and
+        material, never the safety constitution.</li>
+    <li>Ratify: state ladder (incl. UNKNOWN rung) · chrome collapse + QML
+        default · FormSheet/StateStack/instrument-well primitives · spatial-only
+        map overlay · fC display convention · kill-switch escalation.</li>
+    <li>Open question: command palette stays D6 with Abel's allow-list
+        (fail-safe stops + dry-run only) — ok?</li>
+    <li>Open question: QML shell default flip in W3 — classic shell remains a
+        fallback flag for one release?</li>
+  </ul>
+</main>

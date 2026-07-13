@@ -1,0 +1,50 @@
+name: iv_vs_position
+description: 'IV-vs-position: at each (x,y) sweep bias and record the waveform (R2).'
+root:
+- type: loop
+  axis: stage_x
+  values:
+  - -0.5
+  - 0.0
+  - 0.5
+  settle_s: 0.0
+  n_averages: null
+  snake: false
+  reduce: null
+  children:
+  - type: loop
+    axis: stage_y
+    values:
+    - -0.5
+    - 0.0
+    - 0.5
+    settle_s: 0.0
+    n_averages: null
+    snake: false
+    reduce: null
+    children:
+    - type: loop
+      axis: bias_V
+      start: 0.0
+      stop: -200.0
+      step: -50.0
+      settle_s: 0.0
+      n_averages: null
+      snake: false
+      reduce: null
+      children:
+      - type: action
+        action: wait
+        params:
+          seconds: 0.2
+          reason: bias settle
+      - type: action
+        action: acquire_waveform
+        params:
+          n_averages: 32
+      - type: action
+        action: save_point
+        params:
+          label: iv_point
+safety:
+  require_hv_confirmation: true

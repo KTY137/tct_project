@@ -1,0 +1,27 @@
+name: backlash_raster
+description: 'Backlash/repeatability raster: explicit stage_x values with direction
+  reversals (R6).'
+root:
+- type: loop
+  axis: stage_x
+  values:
+  - -1.0
+  - 1.0
+  - -1.0
+  - 1.0
+  - -1.0
+  - 1.0
+  settle_s: 0.1
+  n_averages: null
+  snake: false
+  reduce: null
+  children:
+  - type: action
+    action: acquire_waveform
+    params:
+      n_averages: 16
+  - type: action
+    action: save_point
+    params:
+      label: backlash_point
+safety: {}

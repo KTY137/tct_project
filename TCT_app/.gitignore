@@ -1,0 +1,46 @@
+# Python / tooling
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Runtime output
+runs/
+logs/
+*.log
+
+# Measurement / analysis outputs generated locally
+*.h5
+*.hdf5
+*.csv
+*.dat
+*.root
+*.npy
+*.npz
+
+# Builds / temporary files
+build/
+dist/
+tmp/
+temp/
+
+# Secrets / local machine config
+.env
+.env.*
+secrets.*
+config.local.*
+
+# IDE / OS noise
+.vscode/
+.idea/
+.vs/
+.DS_Store
+Thumbs.db
+desktop.ini

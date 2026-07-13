@@ -1,0 +1,278 @@
+<!-- title: v5 · Theme Playground -->
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Theme Playground</p>
+  <h1>Themes, live.</h1>
+  <p class="lede">
+    Pick a preset, then pull it apart: colors, fonts, corner radius — and the
+    material itself, from fully opaque to glass. The preview uses exactly the
+    math the app uses (pre-blended surfaces, the honest Qt glass) — what you
+    see here is what Qt can actually render. Safety colors are locked by law.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">in-app twin: gui/theme_editor.py (Noah, in flight)</span>
+    <span class="meta-chip">glass = pre-blend, no fake browser blur</span>
+    <span class="meta-chip">export: copy tokens as JSON</span>
+  </div>
+
+  <div style="display:grid; grid-template-columns: 300px 1fr; gap:18px; margin-top:22px; align-items:start">
+    <!-- ===== controls ===== -->
+    <div style="border:1px solid var(--pg-hairline); border-radius:14px; background:var(--pg-panel); padding:14px; position:sticky; top:12px">
+      <h3 style="margin:2px 0 10px">Preset</h3>
+      <div id="presets" style="display:flex; flex-wrap:wrap; gap:6px"></div>
+
+      <h3 style="margin:18px 0 8px">Material</h3>
+      <label style="display:flex; align-items:center; gap:10px; font-size:0.85rem">
+        <span style="min-width:64px">Glass</span>
+        <input id="glass" type="range" min="0" max="100" value="74" style="flex:1">
+        <span id="glassv" class="mono" style="min-width:38px; text-align:right">74%</span>
+      </label>
+      <p style="font-size:0.75rem; color:var(--pg-muted); margin:6px 0 0">
+        0 % = opaque panels · 100 % = maximum frost. Plots and camera stay
+        opaque at every setting (law 4 / performance).
+      </p>
+
+      <h3 style="margin:18px 0 8px">Colors</h3>
+      <div id="colors" style="display:flex; flex-direction:column; gap:7px"></div>
+      <div style="margin-top:10px; padding:8px 10px; border:1px dashed var(--pg-hairline); border-radius:10px; font-size:0.75rem; color:var(--pg-muted)">
+        🔒 <b>Locked by law:</b>
+        <span class="mono" style="color:#ff5a61">danger #FF5A61</span> ·
+        <span class="mono" style="color:#ffb84d">armed #FFB84D</span> ·
+        <span class="mono" style="color:#41d8e4">sim #41D8E4</span> —
+        red means HV, amber means motion, hatched cyan means simulated.
+        Not themeable, not even via presets.
+      </div>
+
+      <h3 style="margin:18px 0 8px">Typography</h3>
+      <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem; margin-bottom:6px">
+        <span style="min-width:64px">Sans</span>
+        <select id="sans" style="flex:1; padding:4px 6px; border-radius:8px; border:1px solid var(--pg-hairline); background:var(--pg-bg); color:var(--pg-text)">
+          <option value='"Segoe UI Variable Display","Segoe UI",system-ui,sans-serif'>Segoe UI Variable</option>
+          <option value='-apple-system,"SF Pro Display",system-ui,sans-serif'>SF Pro / system</option>
+          <option value='"Inter",system-ui,sans-serif'>Inter (if installed)</option>
+          <option value='system-ui,sans-serif'>System default</option>
+        </select>
+      </label>
+      <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem; margin-bottom:6px">
+        <span style="min-width:64px">Mono</span>
+        <select id="mono" style="flex:1; padding:4px 6px; border-radius:8px; border:1px solid var(--pg-hairline); background:var(--pg-bg); color:var(--pg-text)">
+          <option value='"Cascadia Code",Consolas,monospace'>Cascadia Code</option>
+          <option value='ui-monospace,"SF Mono",monospace'>SF Mono / system</option>
+          <option value='"JetBrains Mono",Consolas,monospace'>JetBrains Mono (if installed)</option>
+          <option value='Consolas,monospace'>Consolas</option>
+        </select>
+      </label>
+      <label style="display:flex; align-items:center; gap:10px; font-size:0.85rem">
+        <span style="min-width:64px">Size</span>
+        <input id="fsize" type="range" min="11" max="15" value="13" style="flex:1">
+        <span id="fsizev" class="mono" style="min-width:38px; text-align:right">13px</span>
+      </label>
+
+      <h3 style="margin:18px 0 8px">Radius</h3>
+      <div style="display:flex; gap:6px">
+        <button class="rbtn" data-r="6,9,12">S</button>
+        <button class="rbtn on" data-r="8,12,16">M</button>
+        <button class="rbtn" data-r="10,16,22">L</button>
+      </div>
+
+      <h3 style="margin:18px 0 8px">Export</h3>
+      <button id="export" style="width:100%; padding:8px; border-radius:10px; border:1px solid var(--pg-accent); color:var(--pg-accent); background:transparent; font-weight:600; cursor:pointer">Copy tokens as JSON</button>
+      <textarea id="json" readonly spellcheck="false"
+        style="width:100%; height:110px; margin-top:8px; font-family:var(--mono); font-size:10.5px;
+               border:1px solid var(--pg-hairline); border-radius:10px; background:var(--pg-bg);
+               color:var(--pg-muted); padding:8px; resize:vertical"></textarea>
+    </div>
+
+    <!-- ===== live preview ===== -->
+    <div>
+      <div class="stage-wrap" style="margin-top:0"><div class="stage" id="pv" style="min-width:0">
+        <div class="menurow"><span>File</span><span>View</span><span>Devices</span><span>Help</span></div>
+        <div class="band">
+          <div class="brand"><div class="mark">T</div>TCT Control</div>
+          <div class="pills">
+            <span class="pill on">Motor</span><span class="pill hov">Planner</span>
+            <span class="pill">Viewer</span><span class="pill">Scope</span><span class="pill">Bias</span>
+          </div>
+          <span class="bandbtn quiet">Connect All</span><span class="bandbtn quiet">⚙</span>
+        </div>
+        <div class="sim-ribbon">SIMULATION — NO HARDWARE WILL MOVE</div>
+        <div class="runstrip">
+          <div class="tile accent"><div class="k">State</div><div class="v">RUNNING</div><div class="c">since 14:02</div></div>
+          <div class="tile danger"><div class="k">HV · measured</div><div class="v">−120.0 <small>V</small></div><div class="c">settled · ch0</div></div>
+          <div class="tile"><div class="k">Progress · ETA</div><div class="v">412/3087</div><div class="c">ETA 42:10 · 3.58 fC</div></div>
+          <div class="dotrow">
+            <span class="dev"><span class="dot motion"></span></span>
+            <span class="dev"><span class="dot active"></span></span>
+            <span class="dev"><span class="dot hv"></span></span>
+            <span class="dev"><span class="dot simd"></span></span>
+            <span class="dev"><span class="dot unknown"></span></span>
+          </div>
+          <span style="flex:1"></span>
+          <span class="btn red-out">■ Abort</span>
+        </div>
+        <div class="panelbody">
+          <div style="width:270px; flex:none; display:flex; flex-direction:column; gap:10px">
+            <div class="card">
+              <div class="hd">Trigger</div>
+              <div class="bd sheet" style="padding:0">
+                <div class="srow"><span class="lbl">Source</span><span class="spacer"></span><span class="val">CH1</span></div>
+                <div class="srow"><span class="lbl">Level</span><span class="spacer"></span><span class="val">−1.00</span><span class="unit">V</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="hd">Commands</div>
+              <div class="bd" style="display:flex; flex-wrap:wrap; gap:6px">
+                <span class="btn primary">▶ Live</span>
+                <span class="btn quiet">Single</span>
+                <span class="btn amber">➤ Move to</span>
+                <span class="btn red-fill">■ STOP</span>
+              </div>
+            </div>
+            <div class="card">
+              <div class="bd" style="display:flex; flex-wrap:wrap; gap:6px">
+                <span class="chip">IDLE</span><span class="chip warn">MOVING</span>
+                <span class="chip danger">HV LIVE</span><span class="chip simc">SIM</span>
+                <span class="chip unknown">LIMITS ?</span>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="flex:1; display:flex; flex-direction:column">
+            <div class="hd">Live trace
+              <span class="tile" style="min-width:100px; padding:3px 9px 4px; margin-left:10px"><div class="k">Charge</div><div class="v" style="font-size:14px">3.58 <small>fC</small></div></span>
+              <span class="sub">plots stay opaque</span>
+            </div>
+            <div class="bd" style="flex:1; padding:8px">
+              <div class="well-fig" style="height:190px">
+                <div class="shade"></div>
+                <div class="plot" style="height:calc(100% - 3px)">
+                  <svg viewBox="0 0 600 160" preserveAspectRatio="none" style="position:absolute; inset:8% 4% 10% 5%; width:91%; height:82%">
+                    <path d="M0,80 L180,80 L200,20 L215,45 L240,70 L600,79" fill="none" stroke="#ffb84d" stroke-width="1.5" opacity="0.9"/>
+                    <path d="M0,80 L185,80 L205,138 L225,98 L255,84 L600,81" fill="none" stroke="#5aa9ff" stroke-width="1.5"/>
+                  </svg>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div></div>
+      <p class="caption" id="expl">Preset: Cockpit Dark · glass 74 % — the shipped v4 material.</p>
+    </div>
+  </div>
+
+  <h2>How the glass works (and why it's honest)</h2>
+  <p>
+    Qt stylesheets have no <span class="mono">backdrop-filter</span>. The cockpit fakes
+    glass exactly the way Apple degrades it under "Reduce Transparency": the chrome and
+    strip surfaces are <b>pre-blended</b> toward the panel color —
+    <span class="mono">chrome = blend(tint, panel, amount)</span> — plus a 1-px specular
+    top edge. The slider above drives that blend amount, and the in-app editor drives the
+    identical parameter. Real blur exists in exactly one sanctioned place: a snapshot-once
+    QML effect on the static outer chrome (optional, W3).
+  </p>
+</main>
+
+<script>
+(function () {
+  var P = {
+    "Cockpit Dark": { dark: true,  bg:"#0a0d13", panel:"#121824", text:"#e9edf5", muted:"#98a1b5", faint:"#5b657a", hair:"#222b3e", hair2:"#334159", accent:"#5aa9ff", tintC:"#192134", tintS:"#0c1019", glass:74 },
+    "Graphite":     { dark: true,  bg:"#0e0f11", panel:"#17181c", text:"#eceef1", muted:"#9a9fa8", faint:"#5e636b", hair:"#26282e", hair2:"#3a3d45", accent:"#7aa7d9", tintC:"#1e2026", tintS:"#101114", glass:60 },
+    "Deep Violet":  { dark: true,  bg:"#0b0a14", panel:"#151327", text:"#eae8f5", muted:"#9d98b5", faint:"#5f5b78", hair:"#262239", hair2:"#3a3556", accent:"#8f7aff", tintC:"#1d1936", tintS:"#0e0c1c", glass:82 },
+    "Lab Light":    { dark: false, bg:"#e9edf4", panel:"#ffffff", text:"#131a28", muted:"#525d72", faint:"#949db0", hair:"#d9dfea", hair2:"#bfc9da", accent:"#2f7fd6", tintC:"#f4f7fb", tintS:"#e2e7f0", glass:70 },
+    "Paper":        { dark: false, bg:"#f2efe9", panel:"#fffdf8", text:"#1c1a15", muted:"#5d5850", faint:"#a09a8e", hair:"#e2ddd2", hair2:"#cfc8b9", accent:"#3e6b8f", tintC:"#faf7f0", tintS:"#eae6dc", glass:55 }
+  };
+  var editable = [["accent","Accent"],["bg","Background"],["panel","Panel"],["text","Text"],["hair","Hairline"]];
+  var cur = JSON.parse(JSON.stringify(P["Cockpit Dark"])); var curName = "Cockpit Dark";
+  var pv = document.getElementById("pv");
+
+  function blend(a, b, t) {
+    function h(x){ return [parseInt(x.substr(1,2),16), parseInt(x.substr(3,2),16), parseInt(x.substr(5,2),16)]; }
+    var A=h(a), B=h(b), o="#";
+    for (var i=0;i<3;i++){ o += ("0"+Math.round(A[i]*t+B[i]*(1-t)).toString(16)).slice(-2); }
+    return o;
+  }
+  function apply() {
+    var g = cur.glass/100;
+    var s = pv.style;
+    s.setProperty("--bg", cur.bg); s.setProperty("--panel", cur.panel);
+    s.setProperty("--text", cur.text); s.setProperty("--muted", cur.muted);
+    s.setProperty("--faint", cur.faint);
+    s.setProperty("--hairline", cur.hair); s.setProperty("--hairline-strong", cur.hair2);
+    s.setProperty("--accent", cur.accent);
+    s.setProperty("--chrome", blend(cur.tintC, cur.panel, g));
+    s.setProperty("--strip",  blend(cur.tintS, cur.panel, 0.75*g));
+    s.setProperty("--edge", cur.dark ? "rgba(255,255,255," + (0.10*g).toFixed(3) + ")" : "rgba(255,255,255," + (0.85*g).toFixed(2) + ")");
+    s.setProperty("--well", blend(cur.bg, cur.panel, 0.6));
+    s.setProperty("--sunk", blend(cur.bg, cur.panel, 0.8));
+    document.getElementById("glass").value = cur.glass;
+    document.getElementById("glassv").textContent = cur.glass + "%";
+    document.getElementById("expl").textContent = "Preset: " + curName + " · glass " + cur.glass + " % — chrome = blend(tint, panel, " + g.toFixed(2) + ")";
+    var j = { preset: curName, glass_amount: cur.glass/100,
+      tokens: { bg:cur.bg, panel:cur.panel, text:cur.text, muted:cur.muted, faint:cur.faint,
+                hairline:cur.hair, hairline_strong:cur.hair2, accent:cur.accent,
+                chrome_tint:cur.tintC, strip_tint:cur.tintS },
+      locked: { danger:"#FF5A61", armed:"#FFB84D", sim:"#41D8E4", error:"#FF8A1F" },
+      font: { sans: document.getElementById("sans").value, mono: document.getElementById("mono").value,
+              base_px: +document.getElementById("fsize").value } };
+    document.getElementById("json").value = JSON.stringify(j, null, 2);
+  }
+  // presets
+  var pd = document.getElementById("presets");
+  Object.keys(P).forEach(function (name) {
+    var b = document.createElement("button");
+    b.textContent = name; b.className = "rbtn" + (name===curName ? " on" : "");
+    b.onclick = function(){ curName=name; cur=JSON.parse(JSON.stringify(P[name]));
+      pd.querySelectorAll("button").forEach(function(x){x.classList.remove("on");});
+      b.classList.add("on"); syncSwatches(); apply(); };
+    pd.appendChild(b);
+  });
+  // color rows
+  var cd = document.getElementById("colors"); var inputs={};
+  editable.forEach(function (e) {
+    var row = document.createElement("label");
+    row.style.cssText = "display:flex; align-items:center; gap:8px; font-size:0.85rem";
+    row.innerHTML = "<span style='min-width:84px'>"+e[1]+"</span>";
+    var inp = document.createElement("input"); inp.type="color"; inp.value=cur[e[0]];
+    inp.style.cssText = "width:44px; height:26px; border:none; background:none; cursor:pointer";
+    inp.oninput = function(){ cur[e[0]] = inp.value;
+      if (e[0]==="hair") cur.hair2 = blend(inp.value, cur.dark?"#ffffff":"#000000", 0.8);
+      apply(); };
+    var code = document.createElement("span"); code.className="mono"; code.style.cssText="font-size:0.72rem; color:var(--pg-muted)";
+    inp.addEventListener("input", function(){ code.textContent = inp.value; });
+    code.textContent = cur[e[0]];
+    inputs[e[0]] = { inp: inp, code: code };
+    row.appendChild(inp); row.appendChild(code); cd.appendChild(row);
+  });
+  function syncSwatches(){ editable.forEach(function(e){ inputs[e[0]].inp.value=cur[e[0]]; inputs[e[0]].code.textContent=cur[e[0]]; }); }
+  // sliders
+  document.getElementById("glass").oninput = function(){ cur.glass=+this.value; apply(); };
+  document.getElementById("fsize").oninput = function(){
+    document.getElementById("fsizev").textContent = this.value+"px";
+    pv.style.fontSize = this.value+"px"; apply(); };
+  document.getElementById("sans").onchange = function(){ pv.style.setProperty("--sans", this.value); apply(); };
+  document.getElementById("mono").onchange = function(){ pv.style.setProperty("--mono", this.value); apply(); };
+  // radius
+  document.querySelectorAll(".rbtn[data-r]").forEach(function (b) {
+    b.onclick = function(){
+      document.querySelectorAll(".rbtn[data-r]").forEach(function(x){x.classList.remove("on");});
+      b.classList.add("on");
+      var r = b.getAttribute("data-r").split(",");
+      pv.style.setProperty("--r-s", r[0]+"px"); pv.style.setProperty("--r-m", r[1]+"px"); pv.style.setProperty("--r-l", r[2]+"px");
+    };
+  });
+  // export
+  document.getElementById("export").onclick = function () {
+    var t = document.getElementById("json"); t.select();
+    try { document.execCommand("copy"); this.textContent = "Copied ✓"; } catch(e) { this.textContent = "Select + copy manually"; }
+    var self=this; setTimeout(function(){ self.textContent="Copy tokens as JSON"; }, 1600);
+  };
+  document.getElementById("json").onclick = function(){ this.select(); };
+  apply();
+})();
+</script>
+<style>
+.rbtn {
+  padding: 5px 12px; border-radius: 999px; border: 1px solid var(--pg-hairline);
+  background: transparent; color: var(--pg-muted); font-size: 0.8rem; cursor: pointer;
+}
+.rbtn.on { border-color: var(--pg-accent); color: var(--pg-accent); font-weight: 650; }
+@media (max-width: 860px) { main > div[style*="grid-template-columns"] { display: block !important; } }
+</style>

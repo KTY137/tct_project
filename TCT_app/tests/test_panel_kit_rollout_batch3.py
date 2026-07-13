@@ -1,0 +1,195 @@
+"""Headless construct/grab checks for the panel_kit rollout — Batch 3 /
+"parity pass" (Phase 0.5): the camera and analysis panels that completed
+the core panel migration on 2026-07-07.
+
+Follows the existing gui test idiom (see ``test_panel_kit_rollout_batch1.py``):
+``QT_QPA_PLATFORM=offscreen``, a shared ``QApplication.instance()`` helper, no
+pytest-qt.
+
+Each batch-3 widget is constructed and rendered (``.grab()``) under BOTH
+themes (light/dark) to confirm the panel_kit Card presentation and the new
+``panel_header()``s don't crash construction or leave a blank/zero-size
+widget in either theme, and — where the panel exposes one — that
+``refresh_theme()`` runs cleanly.  A couple of behavioural spot-checks
+confirm the design-system swap kept the panels' public hooks (``_timer``,
+``ReadoutCell``s, Card surfaces) and did not put a QGraphicsEffect on any
+hot-path plot/frame-view widget (the laser/perf safety rule from
+AGENT_PROTOCOL — camera live view, histogram, 2D map, CCE curve).
+"""
+from __future__ import annotations
+
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication, QFrame
+
+from devices.camera_blackfly import BlackflyCamera
+from gui.analysis_panel import AnalysisPanel
+from gui.camera_panel import CameraPanel
+from gui.style import WARN_AMBER, WARN_RED, apply_theme
+
+
+def _app() -> QApplication:
+    return QApplication.instance() or QApplication([])
+
+
+def _grab_both_themes(make_panel, *, has_refresh: bool = True) -> None:
+    """Build *make_panel()*, render it under light then dark, call
+    ``refresh_theme`` if present, and confirm the pixmap is non-empty both
+    times. Always tears the panel down via ``shutdown()``/``_timer.stop()``
+    when available (mirrors test_panel_kit_rollout_batch1.py)."""
+    app = _app()
+    apply_theme(app, "light")
+    panel = make_panel()
+    try:
+        pm_light = panel.grab()
+        assert not pm_light.isNull()
+        assert pm_light.width() > 0 and pm_light.height() > 0
+
+        apply_theme(app, "dark")
+        if has_refresh and hasattr(panel, "refresh_theme"):
+            panel.refresh_theme("dark")
+        pm_dark = panel.grab()
+        assert not pm_dark.isNull()
+        assert pm_dark.width() > 0 and pm_dark.height() > 0
+
+        if has_refresh and hasattr(panel, "refresh_theme"):
+            panel.refresh_theme("light")
+        apply_theme(app, "light")
+    finally:
+        shutdown = getattr(panel, "shutdown", None)
+        if shutdown is not None:
+            shutdown()
+        timer = getattr(panel, "_timer", None)
+        if timer is not None:
+            timer.stop()
+
+
+# --------------------------------------------------------------------------- #
+# Construction — both themes                                                  #
+# --------------------------------------------------------------------------- #
+
+def test_camera_panel_constructs_both_themes():
+    _grab_both_themes(lambda: CameraPanel(BlackflyCamera(simulation=True)))
+
+
+def test_analysis_panel_constructs_both_themes():
+    # AnalysisPanel has no refresh_theme(): it bakes no per-theme instance
+    # colours (its plot pens are fixed semantic colours, same idiom as
+    # ScopePanel's onset/trailing/CFD markers) — has_refresh is False so the
+    # helper doesn't require the hook to exist.
+    _grab_both_themes(lambda: AnalysisPanel(), has_refresh=False)
+
+
+# --------------------------------------------------------------------------- #
+# Behavioural spot-checks: presentation swap kept every existing hook alive   #
+# --------------------------------------------------------------------------- #
+
+def test_camera_panel_hooks_survive_card_swap():
+    _app()
+    cam = BlackflyCamera(simulation=True)
+    panel = CameraPanel(cam)
+    try:
+        # New Card sections carry the design-system surface objectName.
+        assert len(panel.findChildren(QFrame, "cardPane")) >= 8
+        # Beam-stats / frame-info readouts became ReadoutCell instances
+        # (readout_cell()) — the Temp readout is a hand-built look-alike
+        # (same objectName) so it keeps its tri-state colour override hook.
+        assert len(panel.findChildren(QFrame, "readoutCell")) >= 12
+        assert panel._temp_frame.objectName() == "readoutCell"
+        # The panel's teardown hook (tct_gui.py _teardown_panels calls it): the
+        # frame grab moved off the GUI thread to a worker QThread, so the old
+        # public _timer hook is now the worker thread + shutdown().
+        assert panel._cam_thread is not None
+    finally:
+        panel.shutdown()
+
+
+def test_camera_panel_temp_readout_tristate_colours():
+    """The Temp readout's good/warn/crit colour swap (bench overheat cue)
+    survived the QLabel -> readoutCell-look-alike swap, using WARN_AMBER /
+    WARN_RED tokens instead of the old hardcoded '#ffaa00' / '#ff4444'.
+
+    Temperature now arrives as an argument to _update_stats (grabbed off-thread
+    by the worker), so drive that directly instead of the retired _refresh()."""
+    _app()
+    cam = BlackflyCamera(simulation=True)
+    cam.connect()
+    panel = CameraPanel(cam)
+    try:
+        _, meta = cam.get_frame_with_meta()
+        panel._update_stats(meta, 70.0, 10.0)   # >= 65 C -> crit
+        assert WARN_RED in panel._lbl_temp.styleSheet()
+
+        panel._update_stats(meta, 60.0, 10.0)   # >= 55 C -> warn
+        assert WARN_AMBER in panel._lbl_temp.styleSheet()
+
+        panel._update_stats(meta, 30.0, 10.0)   # normal -> style resets
+        assert panel._lbl_temp.styleSheet() == ""
+    finally:
+        panel.shutdown()
+
+
+def test_analysis_panel_hooks_survive_card_swap():
+    _app()
+    panel = AnalysisPanel()
+    # File-loader / 2D-map / CCE-curve cards.
+    assert len(panel.findChildren(QFrame, "cardPane")) >= 3
+    # Existing public hooks other code / this panel's own methods depend on.
+    assert panel._btn_open is not None
+    assert hasattr(panel, "_map_view")
+    assert hasattr(panel, "_cce_plot")
+
+
+def test_analysis_panel_replot_map_mismatched_lengths_surfaces_crit_not_raise():
+    """gui/analysis_panel.py::_replot_map wraps analysis.scan_grid.points_to_grid
+    in try/except ValueError (Mary review finding, 2026-07-08): a truncated /
+    partially-written HDF5 (x_mm, y_mm, quantity columns of different
+    lengths) must surface as 'Map invalid' / crit, not raise out of the Qt
+    slot."""
+    _app()
+    panel = AnalysisPanel()
+    panel._data = {
+        "x_mm": [0.0, 1.0, 2.0],
+        "y_mm": [0.0, 1.0],          # deliberately shorter -> ValueError inside points_to_grid
+        "dut_charge_pC": [1.0, 2.0, 3.0],
+    }
+    panel._combo_qty.setCurrentText("dut_charge_pC")
+
+    panel._replot_map()   # must not raise
+
+    assert panel._chip_map.text() == "Map invalid"
+    assert panel._chip_map.property("state") == "crit"
+
+
+def test_hot_path_widgets_have_no_graphics_effect():
+    """Laser/perf safety rule: no QGraphicsDropShadow/glow/animated effect on
+    a camera frame view or any pyqtgraph plot/histogram — static depth
+    (borders, surface, rails) only."""
+    _app()
+    cam = BlackflyCamera(simulation=True)
+    cam_panel = CameraPanel(cam)
+    ana_panel = AnalysisPanel()
+    try:
+        for w in (cam_panel._img_label, cam_panel._hist_plot,
+                  ana_panel._map_view, ana_panel._cce_plot):
+            assert w.graphicsEffect() is None
+    finally:
+        cam_panel.shutdown()
+
+
+# --------------------------------------------------------------------------- #
+# No bleed into other already-migrated panels                                 #
+# --------------------------------------------------------------------------- #
+
+def test_motor_panel_constructs_without_batch3_bleed():
+    from devices.motor_simulated import SimulatedMotorStage
+    from gui.motor_panel import MotorPanel
+    _app()
+    panel = MotorPanel(SimulatedMotorStage())
+    try:
+        pm = panel.grab()
+        assert not pm.isNull()
+    finally:
+        panel.shutdown()

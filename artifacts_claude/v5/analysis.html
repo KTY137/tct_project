@@ -1,0 +1,516 @@
+<title>v5 · Analysis</title>
+<style>
+/* ============================================================
+   TCT Cockpit v5 — shared artifact tokens & components
+   Source of truth: TCT_app/gui/style.py (v4 tokens) + council v5
+   (Noah chrome, Paul state ladder, Jonathan data rules, Abel grammar)
+   ============================================================ */
+
+:root {
+  /* page frame (theme-aware) */
+  --pg-bg: #f2f4f8;
+  --pg-panel: #ffffff;
+  --pg-text: #131a28;
+  --pg-muted: #525d72;
+  --pg-hairline: #d9dfea;
+  --pg-accent: #2f7fd6;
+
+  /* cockpit dark tokens — the mockup world (style.py DARK) */
+  --bg: #0a0d13;
+  --panel: #121824;
+  --chrome: #171e2f;          /* _blend(#192134,#121824,.74) */
+  --strip: #0f1520;           /* _blend(#0c1019,#121824,.55) */
+  --well: #0e1420;
+  --sunk: #0c1019;
+  --hairline: #222b3e;
+  --hairline-strong: #334159;
+  --edge: rgba(255,255,255,0.10);
+  --text: #e9edf5;
+  --muted: #98a1b5;
+  --faint: #5b657a;
+  --accent: #5aa9ff;
+  --armed: #ffb84d;
+  --danger: #ff5a61;
+  --sim: #41d8e4;
+  --error: #ff8a1f;
+  --plot-bg: #0a0b0d;
+  --plot-fg: #c7cfda;
+  --well-shade: #06080c;      /* wellShade = blend(#000, PLOT_BG, .35) */
+
+  --sans: -apple-system, "SF Pro Display", "Segoe UI Variable Display",
+          "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+
+  --r-s: 8px; --r-m: 12px; --r-l: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --pg-bg: #0d1017; --pg-panel: #151a24; --pg-text: #e9edf5;
+    --pg-muted: #98a1b5; --pg-hairline: #232c40; --pg-accent: #5aa9ff;
+  }
+}
+:root[data-theme="dark"] {
+  --pg-bg: #0d1017; --pg-panel: #151a24; --pg-text: #e9edf5;
+  --pg-muted: #98a1b5; --pg-hairline: #232c40; --pg-accent: #5aa9ff;
+}
+:root[data-theme="light"] {
+  --pg-bg: #f2f4f8; --pg-panel: #ffffff; --pg-text: #131a28;
+  --pg-muted: #525d72; --pg-hairline: #d9dfea; --pg-accent: #2f7fd6;
+}
+
+/* ---------- page frame ---------- */
+body {
+  background: var(--pg-bg); color: var(--pg-text);
+  font-family: var(--sans); line-height: 1.55;
+  margin: 0; padding: 0 20px 96px;
+}
+main { max-width: 1160px; margin: 0 auto; }
+h1, h2, h3 { text-wrap: balance; line-height: 1.2; }
+h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin: 40px 0 6px; }
+h2 { font-size: 1.25rem; font-weight: 650; margin: 44px 0 12px; }
+h3 { font-size: 1rem; font-weight: 650; margin: 26px 0 8px; }
+p  { max-width: 72ch; }
+.lede { color: var(--pg-muted); font-size: 1.05rem; max-width: 70ch; margin-top: 0; }
+.eyebrow {
+  font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--pg-muted); margin: 40px 0 4px;
+}
+a { color: var(--pg-accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--pg-accent); outline-offset: 2px; }
+
+.meta-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; }
+.meta-chip {
+  font-family: var(--mono); font-size: 0.72rem; padding: 3px 10px;
+  border: 1px solid var(--pg-hairline); border-radius: 999px;
+  color: var(--pg-muted); background: transparent;
+}
+
+/* prose tables */
+table.spec { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+table.spec th, table.spec td {
+  text-align: left; padding: 8px 12px;
+  border-bottom: 1px solid var(--pg-hairline); vertical-align: top;
+}
+table.spec th { font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pg-muted); }
+table.spec td.mono, .mono { font-family: var(--mono); }
+.table-scroll { overflow-x: auto; }
+
+/* decision list */
+ol.decisions { padding-left: 0; counter-reset: dec; list-style: none; max-width: 76ch; }
+ol.decisions > li {
+  counter-increment: dec; position: relative; padding: 10px 0 10px 44px;
+  border-bottom: 1px solid var(--pg-hairline);
+}
+ol.decisions > li::before {
+  content: counter(dec); position: absolute; left: 0; top: 12px;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--pg-accent); color: #fff; font-weight: 700;
+  font-size: 0.8rem; display: flex; align-items: center; justify-content: center;
+}
+ol.decisions b { font-weight: 650; }
+
+/* law checklist */
+ul.laws { list-style: none; padding: 0; max-width: 76ch; }
+ul.laws li { padding: 5px 0 5px 26px; position: relative; font-size: 0.92rem; }
+ul.laws li::before { content: "✓"; position: absolute; left: 2px; color: var(--pg-accent); font-weight: 700; }
+
+/* ---------- the mockup stage ---------- */
+.stage-wrap { overflow-x: auto; margin: 18px 0 8px; border-radius: var(--r-l); }
+.stage {
+  min-width: 1100px; background: var(--bg); border-radius: var(--r-l);
+  border: 1px solid var(--pg-hairline);
+  padding: 0; overflow: hidden; color: var(--text);
+  font-size: 13px;
+}
+.stage * { box-sizing: border-box; }
+.caption { font-size: 0.82rem; color: var(--pg-muted); margin: 6px 4px 0; }
+
+/* ---------- shell chrome (Noah §1: menu 24 + band 48 + strip 64) ---------- */
+.menurow {
+  height: 24px; background: var(--bg); display: flex; align-items: center;
+  gap: 18px; padding: 0 14px; color: var(--faint); font-size: 11.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.band {
+  height: 48px; background: var(--chrome);
+  border-bottom: 1px solid var(--hairline-strong);
+  box-shadow: inset 0 1px 0 var(--edge);
+  display: flex; align-items: center; gap: 10px; padding: 0 12px;
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: 0.02em; }
+.brand .mark {
+  width: 22px; height: 22px; border-radius: 7px; background: var(--accent);
+  color: #06121f; display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 12px;
+}
+.pills { display: flex; gap: 4px; margin: 0 auto; }
+.pill {
+  padding: 6px 14px; border-radius: 999px; color: var(--muted);
+  border: 1px solid transparent; white-space: nowrap;
+}
+.pill.hov { background: rgba(255,255,255,0.055); color: var(--text); border-color: var(--hairline); }
+.pill.on {
+  background: var(--panel); color: var(--text);
+  border-color: var(--hairline-strong); box-shadow: inset 0 1px 0 var(--edge);
+}
+.bandbtn {
+  padding: 6px 12px; border-radius: var(--r-s); border: 1px solid var(--hairline-strong);
+  color: var(--text); background: transparent; white-space: nowrap;
+}
+.bandbtn.quiet { color: var(--muted); border-color: var(--hairline); }
+.sim-ribbon {
+  height: 26px; display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: #062125;
+  background: repeating-linear-gradient(135deg, var(--sim) 0 14px, #33bcc8 14px 28px);
+}
+.runstrip {
+  height: 64px; background: var(--strip); border-bottom: 1px solid var(--hairline);
+  display: flex; align-items: center; gap: 10px; padding: 0 12px;
+}
+.dotrow { display: flex; align-items: center; gap: 10px; padding: 0 10px; }
+
+/* ---------- metric tiles ---------- */
+.tile {
+  min-width: 132px; padding: 7px 12px 8px; border-radius: var(--r-m);
+  background: var(--panel); border: 1px solid var(--hairline);
+  box-shadow: inset 0 1px 0 var(--edge);
+}
+.tile .k {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--faint);
+}
+.tile .v {
+  font-family: var(--mono); font-size: 19px; font-weight: 600;
+  color: var(--text); font-variant-numeric: tabular-nums; margin-top: 1px;
+}
+.tile .v small { font-size: 11px; color: var(--muted); font-weight: 500; }
+.tile .c { font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+.tile.accent .v { color: var(--accent); }
+.tile.armed  .v { color: var(--armed); }
+.tile.danger .v { color: var(--danger); }
+.tile.dim .v { color: var(--faint); }
+
+/* ---------- chips & state dots (Paul §1 ladder) ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.07em;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--hairline-strong); color: var(--muted);
+  white-space: nowrap;
+}
+.chip.warn   { border-color: var(--armed); color: var(--armed); }
+.chip.danger { border-color: var(--danger); color: var(--danger); }
+.chip.danger-fill { background: var(--danger); border-color: var(--danger); color: #2a0508; font-weight: 700; }
+.chip.simc {
+  border-color: var(--sim); color: #062125; font-weight: 700;
+  background: repeating-linear-gradient(135deg, var(--sim) 0 8px, #33bcc8 8px 16px);
+}
+.chip.unknown { border-style: dashed; color: var(--faint); }
+
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.offline { background: var(--faint); opacity: 0.5; }
+.dot.idle    { background: var(--muted); }
+.dot.active  { background: var(--accent); }
+.dot.motion  { background: var(--armed); }
+.dot.hv      { background: var(--danger); }
+.dot.simd    { background: transparent; border: 2px solid var(--sim); width: 7px; height: 7px; }
+.dot.unknown { background: transparent; border: 2px dashed var(--faint); width: 7px; height: 7px; }
+.dev { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); }
+
+/* ---------- cards / panel surfaces ---------- */
+.panelbody { padding: 14px; display: flex; gap: 12px; background: var(--bg); }
+.card {
+  background: var(--panel); border: 1px solid var(--hairline);
+  border-radius: var(--r-m); box-shadow: inset 0 1px 0 var(--edge);
+}
+.card > .hd {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--chrome);
+  border-radius: var(--r-m) var(--r-m) 0 0;
+  font-size: 12px; font-weight: 650; color: var(--text);
+}
+.card > .hd .sub { margin-left: auto; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+.card > .bd { padding: 12px; }
+
+/* instrument well (Noah §4) */
+.well-fig {
+  background: var(--plot-bg); border: 1px solid var(--hairline-strong);
+  border-radius: 10px; padding: 3px; position: relative;
+}
+.well-fig .shade { height: 3px; background: var(--well-shade); border-radius: 8px 8px 0 0; }
+.plot {
+  background: var(--plot-bg); color: var(--plot-fg); border-radius: 8px;
+  position: relative; overflow: hidden; font-family: var(--mono); font-size: 10px;
+}
+.plot .axis { position: absolute; color: #5f6875; }
+
+/* empty state (Noah §3 StateStack) */
+.empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; color: var(--faint); text-align: center; padding: 30px 10px;
+}
+.empty .ico { font-size: 26px; opacity: 0.75; }
+.empty .t1 { color: var(--muted); font-weight: 650; font-size: 13px; }
+.empty .t2 { font-size: 11.5px; max-width: 34ch; }
+
+/* ---------- FormSheet grammar (Noah §2) ---------- */
+.sheet { max-width: 560px; }
+.srow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--hairline);
+}
+.srow:last-child { border-bottom: none; }
+.srow:hover { background: rgba(255,255,255,0.03); }
+.srow .lbl { color: var(--text); font-size: 12.5px; }
+.srow .spacer { flex: 1; }
+.srow .val {
+  font-family: var(--mono); font-size: 12.5px; color: var(--text);
+  background: var(--sunk); border: 1px solid var(--hairline);
+  border-radius: var(--r-s); padding: 5px 10px; text-align: right;
+  min-width: 86px; font-variant-numeric: tabular-nums;
+}
+.srow .unit { font-family: var(--mono); font-size: 11px; color: var(--faint); min-width: 30px; }
+
+/* ---------- buttons (command classes) ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 7px 16px; border-radius: var(--r-s);
+  border: 1px solid var(--hairline-strong); color: var(--text);
+  background: transparent; font-size: 12.5px; font-weight: 550; white-space: nowrap;
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 700; }
+.btn.amber { border-color: var(--armed); color: var(--armed); }
+.btn.amber-fill { background: var(--armed); border-color: var(--armed); color: #2a1802; font-weight: 700; }
+.btn.red-out { border-color: var(--danger); color: var(--danger); }
+.btn.red-fill { background: var(--danger); border-color: var(--danger); color: #2a0508; font-weight: 700; }
+.btn.ghost { border-color: var(--hairline); color: var(--faint); }
+.btn.quiet { border-color: var(--hairline); color: var(--muted); }
+
+/* ---------- recipe rows (Abel §1) ---------- */
+.rrow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px 6px 0; border-bottom: 1px solid var(--hairline);
+  background: var(--panel);
+}
+.rrow .spine { width: 3px; align-self: stretch; border-radius: 2px; background: var(--hairline-strong); flex: none; }
+.rrow.motion .spine { background: var(--armed); }
+.rrow.hv .spine { background: var(--danger); }
+.rrow .name { font-weight: 600; font-size: 12.5px; }
+.rrow.motion .name { color: var(--armed); }
+.rrow.hv .name { color: var(--danger); }
+.rrow .args { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.rrow .eyeb { font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+.rrow .qty {
+  margin-left: auto; font-family: var(--mono); font-size: 10.5px;
+  color: var(--muted); background: var(--sunk); border: 1px solid var(--hairline);
+  border-radius: 6px; padding: 1px 8px; font-variant-numeric: tabular-nums;
+}
+.rrow .glyph { font-size: 11px; }
+.rrow.motion .glyph { color: var(--armed); }
+.rrow.hv .glyph { color: var(--danger); }
+.indent1 { margin-left: 18px; } .indent2 { margin-left: 36px; } .indent3 { margin-left: 54px; }
+
+/* ---------- annotation callouts ---------- */
+.callout {
+  position: absolute; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--pg-accent); color: #fff; font-weight: 700; font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid rgba(255,255,255,0.85); box-shadow: 0 1px 6px rgba(0,0,0,0.4);
+  z-index: 5;
+}
+
+/* before/after strip */
+.ba { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+.ba .cell { border: 1px solid var(--pg-hairline); border-radius: var(--r-m); padding: 12px; background: var(--pg-panel); }
+.ba .cell h4 { margin: 0 0 8px; font-size: 0.78rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pg-muted); }
+@media (max-width: 760px) { .ba { grid-template-columns: 1fr; } }
+
+@media (prefers-reduced-motion: no-preference) {
+  .pulse { animation: pulse 2.4s ease-in-out 1; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+}
+
+</style>
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Panel 10/11</p>
+  <h1>Run Analysis</h1>
+  <p class="lede">
+    The Finder pattern, properly: recent runs live in a permanent source list
+    on the left, the loaded run previews as the hero on the right — both visible
+    at once, no more either/or stacking. Four grey status chips collapse into
+    one honest run-header line.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">owner: Jonathan</span>
+    <span class="meta-chip">source list + preview simultaneous (today: stacked pages)</span>
+    <span class="meta-chip">CCE mode must show fit quality + validity range</span>
+  </div>
+
+  <h2>The mockup — run loaded, map mode</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:66px; left:14px">1</div>
+    <div class="callout" style="top:64px; left:290px">2</div>
+    <div class="callout" style="top:120px; right:14px">3</div>
+    <div class="callout" style="bottom:130px; left:290px">4</div>
+
+    <div class="panelbody">
+      <!-- source list -->
+      <div class="card" style="width:260px; flex:none; display:flex; flex-direction:column">
+        <div class="hd">Recent runs</div>
+        <div class="bd" style="padding:6px; display:flex; flex-direction:column; gap:4px">
+          <div style="border:1px solid var(--accent); background:rgba(90,169,255,.08); border-radius:8px; padding:8px 10px">
+            <div class="mono" style="font-size:11.5px">run_00042</div>
+            <div style="font-size:10px; color:var(--muted)">edge-TCT · 2 401 pts · today 18:18</div>
+          </div>
+          <div style="border:1px solid transparent; border-radius:8px; padding:8px 10px">
+            <div class="mono" style="font-size:11.5px; color:var(--muted)">run_00041</div>
+            <div style="font-size:10px; color:var(--faint)">CCE(V) · 1 087 pts · today 15:02</div>
+          </div>
+          <div style="border:1px solid transparent; border-radius:8px; padding:8px 10px">
+            <div class="mono" style="font-size:11.5px; color:var(--muted)">run_00040</div>
+            <div style="font-size:10px; color:var(--faint)">focus map · 441 pts · yesterday</div>
+          </div>
+          <span style="flex:1"></span>
+          <span class="btn ghost" style="margin:6px">Browse HDF5…</span>
+        </div>
+      </div>
+
+      <!-- preview hero -->
+      <div style="flex:1; display:flex; flex-direction:column; gap:10px">
+        <div style="display:flex; align-items:center; gap:8px">
+          <span class="mono" style="font-weight:650">run_00042</span>
+          <span style="color:var(--muted); font-size:12px">edge-TCT · 2 401 pts · map: dut_charge · exported: no</span>
+          <span style="flex:1"></span>
+          <span class="chip" style="border-color:var(--hairline-strong); color:var(--text)">2D map</span>
+          <span class="chip">CCE vs bias</span>
+          <span class="btn ghost">Export…</span>
+        </div>
+        <div class="card" style="flex:1">
+          <div class="bd" style="padding:8px">
+            <div class="well-fig" style="height:330px">
+              <div class="shade"></div>
+              <div class="plot" style="height:calc(100% - 3px)">
+                <div style="position:absolute; inset:8% 14% 10% 7%;
+                  background: radial-gradient(55% 60% at 44% 50%, #fde725 0%, #7ad151 25%, #22a884 45%, #2a788e 63%, #414487 82%, #440154 100%); border-radius:2px"></div>
+                <div style="position:absolute; right:5.5%; top:8%; bottom:10%; width:14px; border:1px solid #2c3648;
+                  background:linear-gradient(180deg,#fde725,#7ad151,#22a884,#2a788e,#414487,#440154)"></div>
+                <span class="axis" style="right:2.2%; top:7%">5.9</span>
+                <span class="axis" style="right:2.2%; bottom:9%">0.0 fC</span>
+                <span class="axis" style="left:8px; top:6px">y/mm</span>
+                <span class="axis" style="right:16%; bottom:6px">x/mm</span>
+                <!-- point readout chip -->
+                <div style="position:absolute; left:34%; top:30%; background:#121824; border:1px solid var(--hairline-strong); border-radius:8px; padding:4px 9px; font-family:var(--mono); font-size:10px">
+                  x 0.40 · y 0.20 mm · 4.81 fC
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> source list is permanent — picking a run never hides the list ·
+    <b>2</b> ONE status line replaces the four grey chips (file/dataset/map/export were facets of one state) ·
+    <b>3</b> mode switch is a segmented pair, export sits with the run it exports ·
+    <b>4</b> hover readout is an opaque chip; the map reuses ScanMapView unchanged (viridis, NaN-honest, unit-bound colorbar).
+  </p>
+
+  <h2>CCE mode — the physics contract</h2>
+  <div class="stage-wrap"><div class="stage" style="min-width:1100px; padding:14px; display:flex; gap:12px; align-items:center">
+    <div class="tile" style="min-width:150px"><div class="k">Q<sub>ref</sub></div><div class="v">4.21 <small>fC</small></div></div>
+    <div class="tile" style="min-width:150px"><div class="k">V<sub>depletion</sub></div><div class="v">−142.3 <small>V</small></div><div class="c">from fit knee</div></div>
+    <div class="tile" style="min-width:190px"><div class="k">Fit quality</div><div class="v">χ²/ndf 1.21</div><div class="c">valid −300 … −20 V</div></div>
+    <div style="flex:1; font-size:11px; color:var(--muted); max-width:420px">
+      The calibration rule is non-negotiable: a depletion-voltage line never
+      appears without its fit quality and validity range beside it — an
+      operator must see when the fit is extrapolating.
+    </div>
+  </div></div>
+
+  <h2>NEW · The 1D slicer <span style="font-weight:400; color:var(--pg-muted)">(Kaya request)</span></h2>
+  <p>
+    Drag a cut line across the map and read the profile — charge vs. position
+    along either axis, the canonical edge-TCT depth plot. NaN cells leave
+    honest gaps; an averaging width integrates ±N neighbouring rows to tame
+    noise.
+  </p>
+  <div class="stage-wrap"><div class="stage" style="min-width:1100px">
+    <div class="panelbody" style="flex-direction:column">
+      <div style="display:flex; gap:12px">
+        <div class="card" style="flex:1">
+          <div class="bd" style="padding:8px">
+            <div class="well-fig" style="height:230px">
+              <div class="shade"></div>
+              <div class="plot" style="height:calc(100% - 3px)">
+                <div style="position:absolute; inset:8% 14% 10% 7%;
+                  background: radial-gradient(55% 60% at 44% 50%, #fde725 0%, #7ad151 25%, #22a884 45%, #2a788e 63%, #414487 82%, #440154 100%); border-radius:2px"></div>
+                <!-- slice line -->
+                <div style="position:absolute; left:7%; right:14%; top:44%; height:0;
+                            border-top:1.5px solid #ffffff; opacity:.9"></div>
+                <div style="position:absolute; left:7%; right:14%; top:38%; height:12%;
+                            background:rgba(255,255,255,.07)"></div>
+                <span style="position:absolute; right:15%; top:34%; font-family:var(--mono); font-size:9.5px; color:#fff; opacity:.85">y = 0.20 mm · ±3 rows</span>
+                <span class="axis" style="left:8px; top:6px">y/mm</span>
+                <span class="axis" style="right:16%; bottom:6px">x/mm</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="flex:1">
+          <div class="hd">Profile <span class="chip" style="margin-left:8px">along X · y = 0.20 mm</span>
+            <span style="margin-left:auto" class="btn ghost" style="padding:4px 10px">Export CSV</span></div>
+          <div class="bd" style="padding:8px">
+            <div class="well-fig" style="height:180px">
+              <div class="plot" style="height:100%">
+                <svg viewBox="0 0 600 150" preserveAspectRatio="none" style="position:absolute; inset:8% 5% 16% 8%; width:87%; height:76%">
+                  <path d="M0,140 L40,138 L80,120 C120,60 160,20 240,16 C320,14 380,18 430,40 L470,90 L500,130 L560,140"
+                        fill="none" stroke="#5aa9ff" stroke-width="1.8"/>
+                </svg>
+                <span class="axis" style="left:8px; top:6px">fC</span>
+                <span class="axis" style="right:10px; bottom:6px">x/mm</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px">
+        <span class="chip" style="border-color:var(--hairline-strong); color:var(--text)">slice: X</span>
+        <span class="chip">slice: Y</span>
+        <span style="font-size:11px; color:var(--muted)">position</span>
+        <span class="val" style="border:1px solid var(--hairline); background:var(--sunk); border-radius:8px; padding:4px 10px; font-family:var(--mono); font-size:11.5px">0.200 mm</span>
+        <span style="font-size:11px; color:var(--muted)">avg width</span>
+        <span class="val" style="border:1px solid var(--hairline); background:var(--sunk); border-radius:8px; padding:4px 10px; font-family:var(--mono); font-size:11.5px">±3 rows</span>
+        <span style="flex:1"></span>
+        <span style="font-size:10.5px; color:var(--faint)">drag the line on the map or scrub the position field</span>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">The cut line + averaging band are the only overlays the map
+     carries — thin, opaque, draggable. Profile and map share the run's unit (fC)
+     and axis calibration; NaN gaps stay gaps.</p>
+
+  <h2>Decisions</h2>
+  <ol class="decisions">
+    <li><b>Simultaneous list + preview.</b> Today a QStackedWidget shows either
+      recents or the loaded run. The Finder shape keeps both — switching runs
+      is one click, comparison is a glance.</li>
+    <li><b>One status line.</b> "run_00042 · 2 401 pts · map: dut_charge ·
+      exported: no" — the four chips were facets of one loaded-run state.</li>
+    <li><b>Empty state:</b> "Pick a run" with the recents list already focused —
+      no blank plot slab, no fake extent (map range derives from the run).</li>
+    <li><b>CCE fit honesty</b> surfaced as tiles, not buried in a tooltip.</li>
+    <li><b>Charge in fC</b> on the colorbar and readouts, consistent with every
+      other panel (storage stays pC).</li>
+  </ol>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>NaN cells stay hatched; no interpolation dressed as data (law 8).</li>
+    <li>Fit results carry quality + validity — calibration rule (law 7).</li>
+    <li>Viridis untouched, readout chips opaque (law 4).</li>
+    <li>Offline analysis never touches hardware — panel has no command classes at all.</li>
+  </ul>
+</main>

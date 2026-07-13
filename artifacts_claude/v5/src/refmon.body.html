@@ -1,0 +1,112 @@
+<!-- title: v5 · Reference Monitor -->
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Panel 8/11</p>
+  <h1>Reference Monitor</h1>
+  <p class="lede">
+    The data shape was already right — two metrics, one waveform hero, one
+    command row. v5 is a materials pass: the tile slabs lighten into floating
+    capsules, the double frame around the plot dies, the charge caption finally
+    speaks fC, and the offline plot stops faking axes.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">owner: Jonathan — "ratify as-is, resist scope creep"</span>
+    <span class="meta-chip">fix: charge caption .3f pC → fC (2 dp)</span>
+    <span class="meta-chip">no third tile</span>
+  </div>
+
+  <h2>The mockup — monitoring</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:62px; left:14px">1</div>
+    <div class="callout" style="top:62px; right:14px">2</div>
+    <div class="callout" style="top:170px; left:14px">3</div>
+    <div class="callout" style="bottom:60px; right:14px">4</div>
+
+    <div class="panelbody" style="flex-direction:column">
+      <div style="display:flex; gap:10px">
+        <div class="tile" style="flex:1"><div class="k">Amplitude</div><div class="v">−96.42 <small>mV</small></div><div class="c">charge 3.58 fC · raw</div></div>
+        <div class="tile" style="flex:1"><div class="k">Stability</div><div class="v">0.84 <small>% rms</small></div><div class="c">last check 14:21 · 10 shots</div></div>
+        <div class="tile dim" style="flex:1"><div class="k">Drift vs reference</div><div class="v">—</div><div class="c">appears during scans</div></div>
+      </div>
+
+      <div class="card" style="flex:1">
+        <div class="hd">Reference waveform <span class="sub">amplitude vs time</span></div>
+        <div class="bd" style="flex:1; padding:8px">
+          <div class="well-fig" style="height:300px">
+            <div class="shade"></div>
+            <div class="plot" style="height:calc(100% - 3px)">
+              <div style="position:absolute; inset:6% 4% 12% 7%;
+                background:repeating-linear-gradient(90deg, rgba(199,207,218,.06) 0 1px, transparent 1px 60px),
+                           repeating-linear-gradient(0deg, rgba(199,207,218,.06) 0 1px, transparent 1px 44px)"></div>
+              <svg viewBox="0 0 600 200" preserveAspectRatio="none" style="position:absolute; inset:6% 4% 12% 7%; width:89%; height:82%">
+                <path d="M0,100 L170,100 L190,22 L205,60 L235,92 L600,99" fill="none" stroke="#ffb84d" stroke-width="1.8"/>
+              </svg>
+              <span class="axis" style="left:8px; top:6px">mV</span>
+              <span class="axis" style="right:10px; bottom:6px">ns · 0.1 V/div</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex; align-items:center; gap:10px">
+        <span style="font-size:12px; color:var(--muted)">Scale</span>
+        <span class="val" style="border:1px solid var(--hairline); background:var(--sunk); border-radius:8px; padding:5px 12px; font-family:var(--mono)">0.100 V/div</span>
+        <span class="btn quiet">Apply</span>
+        <span style="flex:1"></span>
+        <span class="btn primary">Check stability (10 shots)</span>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> capsules float — borderless value-first tiles on the panel surface,
+    no heavy framed slabs ·
+    <b>2</b> the third slot is honest: drift appears only when a scan provides it — dim, not fake ·
+    <b>3</b> ONE frame: waveform card is the only border; no GroupBox-inside-card double bezel ·
+    <b>4</b> the single primary action stays where the eye ends.
+  </p>
+
+  <h2>The offline state</h2>
+  <div class="stage-wrap"><div class="stage" style="min-width:1100px">
+    <div class="panelbody">
+      <div class="card" style="flex:1">
+        <div class="bd" style="padding:8px">
+          <div class="well-fig" style="height:170px; opacity:.75">
+            <div class="plot" style="height:100%; display:flex; align-items:center; justify-content:center">
+              <span class="axis" style="left:8px; top:6px">mV</span>
+              <span class="axis" style="right:10px; bottom:6px">ns · 0.1 V/div</span>
+              <div class="empty" style="padding:0">
+                <div class="t1">No live trace</div>
+                <div class="t2">Monitor offline — connect to see the reference pulse.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">Jonathan's empty-axes rule applied: the axis frame survives
+     (V/div is a real instrument setting), the grid and the fake 0.1–0.9 range do not.
+     Canvas dims to ~40%.</p>
+
+  <h2>Decisions</h2>
+  <ol class="decisions">
+    <li><b>Ratified as-is structurally</b> — this panel already implements design
+      system §7. No third metric tile invented; the drift slot only materializes
+      with scan data.</li>
+    <li><b>fC at last.</b> The amplitude caption's <span class="mono">f"{charge_pC:.3f} pC"</span>
+      prints 0.004 pC for a typical signal — switches to fC (2 dp), labeled raw
+      vs calibrated. Storage stays pC (SCAN_DATA_FORMAT).</li>
+    <li><b>Single frame rule.</b> FigureCard's instrument well replaces the
+      GroupBox+plot double bezel.</li>
+    <li><b>Stability is a procedure, not a state</b> — the button names its cost
+      ("10 shots"), the tile carries the last result with its timestamp
+      (staleness designed, law 4).</li>
+  </ol>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>Charge displayed at physical scale, labeled raw/calibrated (laws 3/7).</li>
+    <li>Offline plot never draws data-shaped furniture (law 8).</li>
+    <li>Quiet nominal — no status colors while healthy (law 1).</li>
+    <li>Plot pixels opaque, theme-invariant dark (law 4).</li>
+  </ul>
+</main>

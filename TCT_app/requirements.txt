@@ -1,0 +1,71 @@
+# ─────────────────────────────────────────────────────────────────────
+# TCT Setup — Python dependencies (pip-installable)
+# Install into a venv with:  .\setup.ps1   (Windows)
+# ─────────────────────────────────────────────────────────────────────
+
+# GUI + plotting
+PySide6>=6.5
+pyqtgraph>=0.13
+qtawesome>=1.3        # vector icons (Material Design Icons) for toolbars/buttons
+superqt>=0.6         # nicer widgets: toggle switches, labeled/range sliders
+PyOpenGL>=3.1        # 3D stage/setup view (pyqtgraph.opengl GLViewWidget)
+PySide6-QtAds>=4.1   # dockable/floating panels (multi-monitor cockpit layout)
+
+# Numerics + data
+# Upper-bounded to <2 on purpose: the vendored FLIR PySpin 3.2 wheel is built
+# against the numpy 1.x C-ABI and fails to import under numpy 2.x with
+# "_ARRAY_API not found / numpy.core.multiarray failed to import". numpy 1.26.x
+# is the last 1.x release and is compatible with scipy/pyqtgraph/PySide6/h5py here.
+numpy>=1.24,<2
+scipy>=1.11
+h5py>=3.8
+PyYAML>=6.0
+Pillow>=10.0
+
+# Sensor-pose vision (vision/sensor_align.py) — ArUco DICT_4X4_50 fiducial
+# detection + pose estimation for the alignment beat (E7b/E7c). Pinned to the
+# last opencv-python-headless release built against the numpy 1.x C-ABI (see
+# docs/research/sensor_alignment_cv.md) so it carries zero numpy-2 ABI risk
+# against the numpy<2 pin above; also the first release exposing the modern
+# cv2.aruco.ArucoDetector API (moved into base opencv's objdetect in 4.7).
+# Optional at runtime: vision/ lazy-imports cv2 and degrades cleanly (see
+# vision.sensor_align.is_available()) so the app keeps running without it.
+opencv-python-headless==4.9.0.80
+
+# Instrument I/O
+pyvisa>=1.13          # VISA oscilloscope / waveform generator (USB + LAN)
+pyserial>=3.5         # GRBL/Marlin motor stage, e4control 'usb' transport
+zeroconf>=0.130       # optional: mDNS/LXI auto-discovery of LAN instruments
+influxdb-client>=1.36 # optional slow-control sink
+
+# e4control bias-supply transports (vendored package in ./vendor/e4control)
+#   TCP/UDP ('lan', 'serial', 'lan_udp') use a built-in socket shim — no dep.
+#   'prologix' uses a built-in socket client — no dep.
+python-vxi11>=0.9     # only needed for 'gpib' / 'gpibSerial' connection types
+
+# Tektronix FastFrame oscilloscope backend (vendored package in
+# ./vendor/dustin_scope). Only needed when oscilloscope.backend = tek_fastframe;
+# these are imported transitively at load time by the vendored
+# translater.py / acquire.py modules.
+matplotlib>=3.7       # vendored translater.py imports pyplot at module scope
+pandas>=2.0           # vendored translater.py binary_to_csv helper
+tqdm>=4.65            # vendored acquire.py progress bars
+
+# Testing (dev-only; not needed to run the app itself)
+# pytest itself is not pinned here (installed ad hoc into the dev venv);
+# pytest-timeout enforces a per-test wall-clock budget (see pytest.ini) so a
+# single hung test aborts with a stack dump instead of wedging the whole
+# suite (silent ~11 min hang at 0% CPU, 2026-07-08).
+pytest-timeout>=2.3
+
+# ─────────────────────────────────────────────────────────────────────
+# NOT on PyPI — install separately for the corresponding REAL hardware.
+# The app runs fully in simulation mode without these.
+#   • FLIR PySpin (camera binding): the vendored wheel in vendor/spinnaker/ is
+#     installed automatically by setup.ps1 when the interpreter is 64-bit
+#     CPython 3.10 (the wheel is cp310/win_amd64). A real camera ALSO needs the
+#     Spinnaker SDK runtime installer (drivers + VS redistributables):
+#     https://www.flir.com/products/spinnaker-sdk/
+#   • PSI DRS4 evaluation-board driver (drs4 scope backend)
+#     https://www.psi.ch/en/drs/software-download
+# ─────────────────────────────────────────────────────────────────────

@@ -1,0 +1,456 @@
+<title>v5 · Sensor Mosaic</title>
+<style>
+/* ============================================================
+   TCT Cockpit v5 — shared artifact tokens & components
+   Source of truth: TCT_app/gui/style.py (v4 tokens) + council v5
+   (Noah chrome, Paul state ladder, Jonathan data rules, Abel grammar)
+   ============================================================ */
+
+:root {
+  /* page frame (theme-aware) */
+  --pg-bg: #f2f4f8;
+  --pg-panel: #ffffff;
+  --pg-text: #131a28;
+  --pg-muted: #525d72;
+  --pg-hairline: #d9dfea;
+  --pg-accent: #2f7fd6;
+
+  /* cockpit dark tokens — the mockup world (style.py DARK) */
+  --bg: #0a0d13;
+  --panel: #121824;
+  --chrome: #171e2f;          /* _blend(#192134,#121824,.74) */
+  --strip: #0f1520;           /* _blend(#0c1019,#121824,.55) */
+  --well: #0e1420;
+  --sunk: #0c1019;
+  --hairline: #222b3e;
+  --hairline-strong: #334159;
+  --edge: rgba(255,255,255,0.10);
+  --text: #e9edf5;
+  --muted: #98a1b5;
+  --faint: #5b657a;
+  --accent: #5aa9ff;
+  --armed: #ffb84d;
+  --danger: #ff5a61;
+  --sim: #41d8e4;
+  --error: #ff8a1f;
+  --plot-bg: #0a0b0d;
+  --plot-fg: #c7cfda;
+  --well-shade: #06080c;      /* wellShade = blend(#000, PLOT_BG, .35) */
+
+  --sans: -apple-system, "SF Pro Display", "Segoe UI Variable Display",
+          "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Code", Consolas, monospace;
+
+  --r-s: 8px; --r-m: 12px; --r-l: 16px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --pg-bg: #0d1017; --pg-panel: #151a24; --pg-text: #e9edf5;
+    --pg-muted: #98a1b5; --pg-hairline: #232c40; --pg-accent: #5aa9ff;
+  }
+}
+:root[data-theme="dark"] {
+  --pg-bg: #0d1017; --pg-panel: #151a24; --pg-text: #e9edf5;
+  --pg-muted: #98a1b5; --pg-hairline: #232c40; --pg-accent: #5aa9ff;
+}
+:root[data-theme="light"] {
+  --pg-bg: #f2f4f8; --pg-panel: #ffffff; --pg-text: #131a28;
+  --pg-muted: #525d72; --pg-hairline: #d9dfea; --pg-accent: #2f7fd6;
+}
+
+/* ---------- page frame ---------- */
+body {
+  background: var(--pg-bg); color: var(--pg-text);
+  font-family: var(--sans); line-height: 1.55;
+  margin: 0; padding: 0 20px 96px;
+}
+main { max-width: 1160px; margin: 0 auto; }
+h1, h2, h3 { text-wrap: balance; line-height: 1.2; }
+h1 { font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin: 40px 0 6px; }
+h2 { font-size: 1.25rem; font-weight: 650; margin: 44px 0 12px; }
+h3 { font-size: 1rem; font-weight: 650; margin: 26px 0 8px; }
+p  { max-width: 72ch; }
+.lede { color: var(--pg-muted); font-size: 1.05rem; max-width: 70ch; margin-top: 0; }
+.eyebrow {
+  font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--pg-muted); margin: 40px 0 4px;
+}
+a { color: var(--pg-accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+:focus-visible { outline: 2px solid var(--pg-accent); outline-offset: 2px; }
+
+.meta-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 4px; }
+.meta-chip {
+  font-family: var(--mono); font-size: 0.72rem; padding: 3px 10px;
+  border: 1px solid var(--pg-hairline); border-radius: 999px;
+  color: var(--pg-muted); background: transparent;
+}
+
+/* prose tables */
+table.spec { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+table.spec th, table.spec td {
+  text-align: left; padding: 8px 12px;
+  border-bottom: 1px solid var(--pg-hairline); vertical-align: top;
+}
+table.spec th { font-size: 0.72rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pg-muted); }
+table.spec td.mono, .mono { font-family: var(--mono); }
+.table-scroll { overflow-x: auto; }
+
+/* decision list */
+ol.decisions { padding-left: 0; counter-reset: dec; list-style: none; max-width: 76ch; }
+ol.decisions > li {
+  counter-increment: dec; position: relative; padding: 10px 0 10px 44px;
+  border-bottom: 1px solid var(--pg-hairline);
+}
+ol.decisions > li::before {
+  content: counter(dec); position: absolute; left: 0; top: 12px;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--pg-accent); color: #fff; font-weight: 700;
+  font-size: 0.8rem; display: flex; align-items: center; justify-content: center;
+}
+ol.decisions b { font-weight: 650; }
+
+/* law checklist */
+ul.laws { list-style: none; padding: 0; max-width: 76ch; }
+ul.laws li { padding: 5px 0 5px 26px; position: relative; font-size: 0.92rem; }
+ul.laws li::before { content: "✓"; position: absolute; left: 2px; color: var(--pg-accent); font-weight: 700; }
+
+/* ---------- the mockup stage ---------- */
+.stage-wrap { overflow-x: auto; margin: 18px 0 8px; border-radius: var(--r-l); }
+.stage {
+  min-width: 1100px; background: var(--bg); border-radius: var(--r-l);
+  border: 1px solid var(--pg-hairline);
+  padding: 0; overflow: hidden; color: var(--text);
+  font-size: 13px;
+}
+.stage * { box-sizing: border-box; }
+.caption { font-size: 0.82rem; color: var(--pg-muted); margin: 6px 4px 0; }
+
+/* ---------- shell chrome (Noah §1: menu 24 + band 48 + strip 64) ---------- */
+.menurow {
+  height: 24px; background: var(--bg); display: flex; align-items: center;
+  gap: 18px; padding: 0 14px; color: var(--faint); font-size: 11.5px;
+  border-bottom: 1px solid var(--hairline);
+}
+.band {
+  height: 48px; background: var(--chrome);
+  border-bottom: 1px solid var(--hairline-strong);
+  box-shadow: inset 0 1px 0 var(--edge);
+  display: flex; align-items: center; gap: 10px; padding: 0 12px;
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 650; letter-spacing: 0.02em; }
+.brand .mark {
+  width: 22px; height: 22px; border-radius: 7px; background: var(--accent);
+  color: #06121f; display: flex; align-items: center; justify-content: center;
+  font-weight: 800; font-size: 12px;
+}
+.pills { display: flex; gap: 4px; margin: 0 auto; }
+.pill {
+  padding: 6px 14px; border-radius: 999px; color: var(--muted);
+  border: 1px solid transparent; white-space: nowrap;
+}
+.pill.hov { background: rgba(255,255,255,0.055); color: var(--text); border-color: var(--hairline); }
+.pill.on {
+  background: var(--panel); color: var(--text);
+  border-color: var(--hairline-strong); box-shadow: inset 0 1px 0 var(--edge);
+}
+.bandbtn {
+  padding: 6px 12px; border-radius: var(--r-s); border: 1px solid var(--hairline-strong);
+  color: var(--text); background: transparent; white-space: nowrap;
+}
+.bandbtn.quiet { color: var(--muted); border-color: var(--hairline); }
+.sim-ribbon {
+  height: 26px; display: flex; align-items: center; justify-content: center; gap: 10px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: 0.12em; color: #062125;
+  background: repeating-linear-gradient(135deg, var(--sim) 0 14px, #33bcc8 14px 28px);
+}
+.runstrip {
+  height: 64px; background: var(--strip); border-bottom: 1px solid var(--hairline);
+  display: flex; align-items: center; gap: 10px; padding: 0 12px;
+}
+.dotrow { display: flex; align-items: center; gap: 10px; padding: 0 10px; }
+
+/* ---------- metric tiles ---------- */
+.tile {
+  min-width: 132px; padding: 7px 12px 8px; border-radius: var(--r-m);
+  background: var(--panel); border: 1px solid var(--hairline);
+  box-shadow: inset 0 1px 0 var(--edge);
+}
+.tile .k {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.13em;
+  text-transform: uppercase; color: var(--faint);
+}
+.tile .v {
+  font-family: var(--mono); font-size: 19px; font-weight: 600;
+  color: var(--text); font-variant-numeric: tabular-nums; margin-top: 1px;
+}
+.tile .v small { font-size: 11px; color: var(--muted); font-weight: 500; }
+.tile .c { font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+.tile.accent .v { color: var(--accent); }
+.tile.armed  .v { color: var(--armed); }
+.tile.danger .v { color: var(--danger); }
+.tile.dim .v { color: var(--faint); }
+
+/* ---------- chips & state dots (Paul §1 ladder) ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.07em;
+  padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--hairline-strong); color: var(--muted);
+  white-space: nowrap;
+}
+.chip.warn   { border-color: var(--armed); color: var(--armed); }
+.chip.danger { border-color: var(--danger); color: var(--danger); }
+.chip.danger-fill { background: var(--danger); border-color: var(--danger); color: #2a0508; font-weight: 700; }
+.chip.simc {
+  border-color: var(--sim); color: #062125; font-weight: 700;
+  background: repeating-linear-gradient(135deg, var(--sim) 0 8px, #33bcc8 8px 16px);
+}
+.chip.unknown { border-style: dashed; color: var(--faint); }
+
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.dot.offline { background: var(--faint); opacity: 0.5; }
+.dot.idle    { background: var(--muted); }
+.dot.active  { background: var(--accent); }
+.dot.motion  { background: var(--armed); }
+.dot.hv      { background: var(--danger); }
+.dot.simd    { background: transparent; border: 2px solid var(--sim); width: 7px; height: 7px; }
+.dot.unknown { background: transparent; border: 2px dashed var(--faint); width: 7px; height: 7px; }
+.dev { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted); }
+
+/* ---------- cards / panel surfaces ---------- */
+.panelbody { padding: 14px; display: flex; gap: 12px; background: var(--bg); }
+.card {
+  background: var(--panel); border: 1px solid var(--hairline);
+  border-radius: var(--r-m); box-shadow: inset 0 1px 0 var(--edge);
+}
+.card > .hd {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--chrome);
+  border-radius: var(--r-m) var(--r-m) 0 0;
+  font-size: 12px; font-weight: 650; color: var(--text);
+}
+.card > .hd .sub { margin-left: auto; font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--faint); }
+.card > .bd { padding: 12px; }
+
+/* instrument well (Noah §4) */
+.well-fig {
+  background: var(--plot-bg); border: 1px solid var(--hairline-strong);
+  border-radius: 10px; padding: 3px; position: relative;
+}
+.well-fig .shade { height: 3px; background: var(--well-shade); border-radius: 8px 8px 0 0; }
+.plot {
+  background: var(--plot-bg); color: var(--plot-fg); border-radius: 8px;
+  position: relative; overflow: hidden; font-family: var(--mono); font-size: 10px;
+}
+.plot .axis { position: absolute; color: #5f6875; }
+
+/* empty state (Noah §3 StateStack) */
+.empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 6px; color: var(--faint); text-align: center; padding: 30px 10px;
+}
+.empty .ico { font-size: 26px; opacity: 0.75; }
+.empty .t1 { color: var(--muted); font-weight: 650; font-size: 13px; }
+.empty .t2 { font-size: 11.5px; max-width: 34ch; }
+
+/* ---------- FormSheet grammar (Noah §2) ---------- */
+.sheet { max-width: 560px; }
+.srow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 12px; border-bottom: 1px solid var(--hairline);
+}
+.srow:last-child { border-bottom: none; }
+.srow:hover { background: rgba(255,255,255,0.03); }
+.srow .lbl { color: var(--text); font-size: 12.5px; }
+.srow .spacer { flex: 1; }
+.srow .val {
+  font-family: var(--mono); font-size: 12.5px; color: var(--text);
+  background: var(--sunk); border: 1px solid var(--hairline);
+  border-radius: var(--r-s); padding: 5px 10px; text-align: right;
+  min-width: 86px; font-variant-numeric: tabular-nums;
+}
+.srow .unit { font-family: var(--mono); font-size: 11px; color: var(--faint); min-width: 30px; }
+
+/* ---------- buttons (command classes) ---------- */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  padding: 7px 16px; border-radius: var(--r-s);
+  border: 1px solid var(--hairline-strong); color: var(--text);
+  background: transparent; font-size: 12.5px; font-weight: 550; white-space: nowrap;
+}
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 700; }
+.btn.amber { border-color: var(--armed); color: var(--armed); }
+.btn.amber-fill { background: var(--armed); border-color: var(--armed); color: #2a1802; font-weight: 700; }
+.btn.red-out { border-color: var(--danger); color: var(--danger); }
+.btn.red-fill { background: var(--danger); border-color: var(--danger); color: #2a0508; font-weight: 700; }
+.btn.ghost { border-color: var(--hairline); color: var(--faint); }
+.btn.quiet { border-color: var(--hairline); color: var(--muted); }
+
+/* ---------- recipe rows (Abel §1) ---------- */
+.rrow {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px 6px 0; border-bottom: 1px solid var(--hairline);
+  background: var(--panel);
+}
+.rrow .spine { width: 3px; align-self: stretch; border-radius: 2px; background: var(--hairline-strong); flex: none; }
+.rrow.motion .spine { background: var(--armed); }
+.rrow.hv .spine { background: var(--danger); }
+.rrow .name { font-weight: 600; font-size: 12.5px; }
+.rrow.motion .name { color: var(--armed); }
+.rrow.hv .name { color: var(--danger); }
+.rrow .args { font-family: var(--mono); font-size: 11.5px; color: var(--muted); }
+.rrow .eyeb { font-family: var(--mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); }
+.rrow .qty {
+  margin-left: auto; font-family: var(--mono); font-size: 10.5px;
+  color: var(--muted); background: var(--sunk); border: 1px solid var(--hairline);
+  border-radius: 6px; padding: 1px 8px; font-variant-numeric: tabular-nums;
+}
+.rrow .glyph { font-size: 11px; }
+.rrow.motion .glyph { color: var(--armed); }
+.rrow.hv .glyph { color: var(--danger); }
+.indent1 { margin-left: 18px; } .indent2 { margin-left: 36px; } .indent3 { margin-left: 54px; }
+
+/* ---------- annotation callouts ---------- */
+.callout {
+  position: absolute; width: 22px; height: 22px; border-radius: 50%;
+  background: var(--pg-accent); color: #fff; font-weight: 700; font-size: 11px;
+  display: flex; align-items: center; justify-content: center;
+  border: 2px solid rgba(255,255,255,0.85); box-shadow: 0 1px 6px rgba(0,0,0,0.4);
+  z-index: 5;
+}
+
+/* before/after strip */
+.ba { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+.ba .cell { border: 1px solid var(--pg-hairline); border-radius: var(--r-m); padding: 12px; background: var(--pg-panel); }
+.ba .cell h4 { margin: 0 0 8px; font-size: 0.78rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--pg-muted); }
+@media (max-width: 760px) { .ba { grid-template-columns: 1fr; } }
+
+@media (prefers-reduced-motion: no-preference) {
+  .pulse { animation: pulse 2.4s ease-in-out 1; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+}
+
+</style>
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Feature · Sensor Mosaic</p>
+  <h1>Sensor Mosaic <span style="font-weight:400; color:var(--pg-muted)">— stitched high-res</span></h1>
+  <p class="lede">
+    Raster the stage under the camera, grab a frame per tile, stitch them with
+    the px→mm calibration we already trust from the repeatability test — one
+    high-resolution photograph of the whole sensor, with real millimeter axes.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">Kaya request 2026-07-12</span>
+    <span class="meta-chip">commands motion → amber class + DangerGate + Mary review</span>
+    <span class="meta-chip">reuses: move→settle→grab loop · px→mm cal · phase correlation</span>
+  </div>
+
+  <h2>The mockup — mosaic running</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:64px; left:14px">1</div>
+    <div class="callout" style="top:160px; right:14px">2</div>
+    <div class="callout" style="bottom:170px; right:14px">3</div>
+    <div class="callout" style="bottom:70px; left:380px">4</div>
+
+    <div class="panelbody">
+      <!-- mosaic canvas -->
+      <div class="card" style="flex:1; display:flex; flex-direction:column">
+        <div class="hd">Mosaic preview
+          <span class="chip warn" style="margin-left:8px">capturing · tile 14/24</span>
+          <span class="sub">4 × 6 tiles · 15 % overlap</span>
+        </div>
+        <div class="bd" style="flex:1; padding:8px">
+          <div class="well-fig" style="height:360px">
+            <div class="shade"></div>
+            <div class="plot" style="height:calc(100% - 3px)">
+              <!-- stitched tiles: done -->
+              <div style="position:absolute; left:6%; top:8%; width:66%; height:56%; border-radius:2px;
+                background:
+                  radial-gradient(30% 26% at 40% 44%, rgba(233,237,245,.5) 0%, rgba(120,130,150,.25) 45%, transparent 75%),
+                  repeating-linear-gradient(0deg, rgba(150,160,180,.14) 0 2px, transparent 2px 26px),
+                  repeating-linear-gradient(90deg, rgba(150,160,180,.14) 0 2px, transparent 2px 26px),
+                  #1a1e26"></div>
+              <!-- tile grid lines over stitched area -->
+              <div style="position:absolute; left:6%; top:8%; width:66%; height:56%;
+                background:
+                  repeating-linear-gradient(90deg, transparent 0 calc(25% - 1px), rgba(90,169,255,.25) calc(25% - 1px) 25%),
+                  repeating-linear-gradient(0deg, transparent 0 calc(33% - 1px), rgba(90,169,255,.25) calc(33% - 1px) 33%)"></div>
+              <!-- active tile -->
+              <div style="position:absolute; left:72%; top:41%; width:16.5%; height:18.6%;
+                          border:2px solid var(--armed); border-radius:2px"></div>
+              <!-- pending area hatch -->
+              <div style="position:absolute; left:6%; right:5.5%; top:64%; height:22%;
+                background:repeating-linear-gradient(45deg, rgba(91,101,122,.12) 0 8px, transparent 8px 16px)"></div>
+              <span class="axis" style="left:8px; top:6px">y/mm</span>
+              <span class="axis" style="right:10px; bottom:6px">x/mm · real stage axes</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- setup sheet -->
+      <div style="width:300px; flex:none; display:flex; flex-direction:column; gap:10px">
+        <div class="card">
+          <div class="hd">Grid</div>
+          <div class="bd sheet" style="padding:0">
+            <div class="srow"><span class="lbl">Area</span><span class="spacer"></span><span class="val">scan area</span></div>
+            <div class="srow"><span class="lbl">Tiles</span><span class="spacer"></span><span class="val">4 × 6</span><span class="unit">auto</span></div>
+            <div class="srow"><span class="lbl">Overlap</span><span class="spacer"></span><span class="val">15</span><span class="unit">%</span></div>
+            <div class="srow"><span class="lbl">Settle per tile</span><span class="spacer"></span><span class="val">0.40</span><span class="unit">s</span></div>
+            <div class="srow" style="border-bottom:none"><span class="lbl">Est. duration · size</span><span class="spacer"></span><span class="val">~2.4 min · 46 MPx</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="hd">Preconditions</div>
+          <div class="bd" style="display:flex; flex-direction:column; gap:6px">
+            <span class="chip">✓ motor homed</span>
+            <span class="chip">✓ camera streaming</span>
+            <span class="chip">✓ px→mm calibrated · 2026-07-11</span>
+          </div>
+        </div>
+        <span class="btn amber-fill" style="width:100%">▶ Capture mosaic</span>
+        <span class="btn red-out" style="width:100%">■ Stop</span>
+        <div class="card">
+          <div class="hd">Result</div>
+          <div class="bd" style="font-size:11px; color:var(--muted); line-height:1.5">
+            Stitched TIFF/PNG + positions sidecar; opens in the camera well
+            with mm axes; linked into the run folder if a scan follows.
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> the mosaic assembles live, tile by tile — stitched, active (amber), pending (hatched) ·
+    <b>2</b> grid derives from FOV + overlap; duration/size estimated before arming ·
+    <b>3</b> preconditions gate the button exactly like the repeatability test ·
+    <b>4</b> axes are real stage millimeters — the mosaic is a measurement, not just a photo.
+  </p>
+
+  <h2>How it works</h2>
+  <ol class="decisions">
+    <li><b>It is a scan.</b> Same move→settle→grab loop as every routine; the
+      planner's <span class="mono">Capture photo</span> block is the same
+      primitive. v1 ships as a procedure in the Camera panel (like the
+      repeatability test); a planner-native mosaic routine follows free.</li>
+    <li><b>Stitching v1 = calibrated placement.</b> Tiles land at their known
+      stage positions via px→mm; overlaps linear-blend. v2 refines seams with
+      the sub-pixel phase correlation already shipped for repeatability.</li>
+    <li><b>Safety unchanged.</b> Motion = amber, DangerGate confirmation before
+      the raster, STOP always visible, envelope = the chosen area. Laser state
+      is irrelevant-but-recorded (illumination note in metadata).</li>
+    <li><b>Deliverable:</b> one TIFF/PNG + JSON sidecar (tile positions,
+      exposure, timestamp, px→mm cal id) — reproducible, citable in the
+      logbook, usable as a base layer under scan maps later.</li>
+  </ol>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>Raster start is DangerGate-confirmed; motion amber; STOP red while moving (laws 2/5, rule 2).</li>
+    <li>Preconditions honest — no capture without homed + calibrated (law 8).</li>
+    <li>Pending tiles hatched, never faked; seams from real data only (law 7).</li>
+    <li>Implementation stays with the crew (devices/motion) + Mary review — not a free-lane task.</li>
+  </ul>
+</main>

@@ -1,0 +1,170 @@
+<!-- title: v5 · Motor Stage -->
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Panel 1/11</p>
+  <h1>Motor Stage</h1>
+  <p class="lede">
+    The stage view becomes the undisputed hero. Everything that commands motion
+    collapses into one bottom tray; everything that reports truth (position,
+    limits, homing) stays permanently visible — including what the firmware
+    genuinely cannot know.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">owner: Noah · truth: Paul</span>
+    <span class="meta-chip">command class: motion = amber</span>
+    <span class="meta-chip">today: hero ≈ 55% · v5: ≈ 75%</span>
+  </div>
+
+  <h2>The mockup</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:56px; left:250px">1</div>
+    <div class="callout" style="top:130px; left:10px">2</div>
+    <div class="callout" style="top:262px; left:10px">3</div>
+    <div class="callout" style="bottom:104px; right:14px">4</div>
+    <div class="callout" style="bottom:56px; left:420px">5</div>
+
+    <div class="panelbody" style="gap:12px">
+      <!-- left truth column -->
+      <div style="width:290px; flex:none; display:flex; flex-direction:column; gap:12px">
+        <div class="card">
+          <div class="hd">Position <span class="sub">user frame · mm</span></div>
+          <div class="bd" style="display:flex; flex-direction:column; gap:8px">
+            <div style="display:flex; gap:8px">
+              <div class="tile" style="flex:1; min-width:0"><div class="k">X</div><div class="v">12.400</div></div>
+              <div class="tile" style="flex:1; min-width:0"><div class="k">Y</div><div class="v">3.100</div></div>
+              <div class="tile" style="flex:1; min-width:0"><div class="k">Z</div><div class="v">1.000</div></div>
+            </div>
+            <div style="display:flex; flex-wrap:wrap; gap:6px">
+              <span class="chip warn">MOVING · X+</span>
+              <span class="chip">HOMED</span>
+              <span class="chip unknown">LIMITS ?</span>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="hd">Frame</div>
+          <div class="bd sheet" style="padding:0">
+            <div class="srow"><span class="lbl">Origin</span><span class="spacer"></span><span class="val">machine −87.6 · −44.2</span><span class="unit">mm</span></div>
+            <div class="srow"><span class="lbl">Soft limits</span><span class="spacer"></span><span class="val">0 … 300</span><span class="unit">mm</span></div>
+            <div class="srow"><span class="lbl">Backlash comp.</span><span class="spacer"></span><span class="val">off</span><span class="unit"></span></div>
+          </div>
+        </div>
+        <div class="card" style="flex:1">
+          <div class="hd">Device</div>
+          <div class="bd" style="display:flex; flex-direction:column; gap:8px">
+            <span class="dev"><span class="dot motion"></span>GRBL stage · moving (commanded)</span>
+            <span style="font-size:11px; color:var(--faint)">Position is firmware readback; limit
+            switches are not decoded on GRBL — shown as UNKNOWN, never "OK".</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- hero: stage view -->
+      <div class="card" style="flex:1; display:flex; flex-direction:column">
+        <div class="hd">Setup View
+          <span style="display:inline-flex; gap:6px; margin-left:10px">
+            <span class="chip">● position</span><span class="chip">□ limits</span>
+            <span class="chip warn">▨ scan area</span>
+          </span>
+          <span class="sub">2D · top + side</span>
+        </div>
+        <div class="bd" style="flex:1; padding:8px">
+          <div class="well-fig" style="height:330px">
+            <div class="shade"></div>
+            <div class="plot" style="height:calc(100% - 3px)">
+              <span class="axis" style="left:8px; top:6px">y/mm</span>
+              <span class="axis" style="right:10px; bottom:6px">x/mm</span>
+              <!-- scan area -->
+              <div style="position:absolute; left:22%; top:14%; width:52%; height:62%;
+                          border:1px dashed var(--armed); border-radius:2px; opacity:.75"></div>
+              <!-- soft limits -->
+              <div style="position:absolute; left:6%; top:5%; width:88%; height:86%;
+                          border:1px solid #2c3648; border-radius:3px"></div>
+              <!-- crosshair position -->
+              <div style="position:absolute; left:38%; top:44%; width:10px; height:10px;
+                          border-radius:50%; background:var(--accent); box-shadow:0 0 0 4px rgba(90,169,255,.22)"></div>
+              <div style="position:absolute; left:0; top:47.5%; width:100%; height:1px; background:rgba(90,169,255,.18)"></div>
+              <div style="position:absolute; left:38.8%; top:0; width:1px; height:100%; background:rgba(90,169,255,.18)"></div>
+              <span style="position:absolute; left:40%; top:38%; font-family:var(--mono); font-size:10px; color:var(--accent)">12.400 · 3.100</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- bottom command tray -->
+    <div style="display:flex; align-items:center; gap:14px; padding:10px 14px;
+                background:var(--strip); border-top:1px solid var(--hairline)">
+      <div style="display:flex; gap:4px; align-items:center">
+        <span class="btn amber">← X−</span>
+        <div style="display:flex; flex-direction:column; gap:4px">
+          <span class="btn amber">↑ Y+</span><span class="btn amber">↓ Y−</span>
+        </div>
+        <span class="btn amber">X+ →</span>
+        <span style="width:10px"></span>
+        <div style="display:flex; flex-direction:column; gap:4px">
+          <span class="btn amber">Z+</span><span class="btn amber">Z−</span>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:4px">
+        <span class="chip">0.01</span><span class="chip" style="border-color:var(--hairline-strong); color:var(--text)">0.1</span>
+        <span class="chip">1</span><span class="chip">10</span><span class="chip">mm</span>
+      </div>
+      <span style="width:1px; height:34px; background:var(--hairline)"></span>
+      <div class="sheet" style="display:flex; gap:6px; align-items:center">
+        <span class="val" style="border:1px solid var(--hairline); background:var(--sunk); border-radius:8px; padding:5px 10px; font-family:var(--mono)">0.000</span>
+        <span class="val" style="border:1px solid var(--hairline); background:var(--sunk); border-radius:8px; padding:5px 10px; font-family:var(--mono)">0.000</span>
+        <span class="val" style="border:1px solid var(--hairline); background:var(--sunk); border-radius:8px; padding:5px 10px; font-family:var(--mono)">0.000</span>
+        <span class="btn amber-fill">➤ Move to</span>
+      </div>
+      <span class="btn quiet">Home</span><span class="btn quiet">Zero here</span>
+      <span style="flex:1"></span>
+      <span class="btn red-fill" style="padding:9px 26px">■ STOP</span>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> stage view hero ≈ 75% of the panel, both projections tabbed in the header ·
+    <b>2</b> position is a permanent truth block — compact when offline, never an em-dash void ·
+    <b>3</b> limits honestly UNKNOWN on GRBL (dashed) — the old "SOFT LIMITS – –" chip implied knowledge ·
+    <b>4</b> STOP: filled red while moving, outline when idle — never hidden, never behind the tray ·
+    <b>5</b> jog + absolute move live in ONE tray; per-axis rainbow brackets die (motion = amber, law 2).
+  </p>
+
+  <h2>Decisions</h2>
+  <ol class="decisions">
+    <li><b>Hero flip.</b> Today the left form stack (Position/Jog/Absolute cards)
+      crowds the stage view behind a 360/560 splitter seed. v5: truth column 290 px,
+      stage view takes the rest, commands leave the column entirely.</li>
+    <li><b>One command tray.</b> Jog cross, step presets, absolute move, Home/Zero
+      — one horizontal surface in strip material. Motion commands are amber
+      (outline = request, fill = primary), matching the planner's MOVE STAGE spine.</li>
+    <li><b>Truth over furniture.</b> Position readback, homed state, limit state
+      and motion state are chips/tiles that never scroll away. Limit switches on
+      GRBL aren't decoded (TODO manual) — UNKNOWN rung, dashed, with caption.</li>
+    <li><b>Zero-here honesty.</b> The frame card shows the user↔machine origin
+      mapping — the class of bug Kaya caught (stage view fed machine-frame limits
+      after Zero Here) becomes visible at a glance.</li>
+    <li><b>Light theme:</b> the position readout follows panel surface tokens
+      (it is not a plot); only the stage view keeps the instrument-well dark
+      canvas with bezel.</li>
+  </ol>
+
+  <h2>What changes vs. today</h2>
+  <div class="table-scroll"><table class="spec">
+    <tr><th>Today (audit)</th><th>v5</th></tr>
+    <tr><td>Left column of 3 stacked form cards before the hero</td><td>290-px truth column + hero + bottom tray</td></tr>
+    <tr><td>Jog buttons with cyan/pink/purple axis brackets</td><td>uniform amber motion class; axis identity from label + layout</td></tr>
+    <tr><td>"SOFT LIMITS – –" and "SWITCHES UNKNOWN" text chips</td><td>state-ladder chips: HOMED (idle), LIMITS ? (unknown, dashed)</td></tr>
+    <tr><td>Full-width TEST CONNECTION button in prime space</td><td>device card caption; connect lives in the shell band</td></tr>
+    <tr><td>Position slab black in light theme</td><td>panel-surface tokens; only the plot stays dark (bezeled)</td></tr>
+    <tr><td>STOP inside the left column flow</td><td>STOP pinned right in the tray, escalates with motion</td></tr>
+  </table></div>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>Motion is amber everywhere — jog, move-to, moving chip, planner spine (law 2).</li>
+    <li>Red appears only on STOP while motion is live (fail-safe stop class).</li>
+    <li>UNKNOWN limits render dashed-neutral, never green "OK", never red (law 8).</li>
+    <li>Quiet nominal: idle panel is grey + one accent position marker (law 1).</li>
+    <li>No effects on the stage-view plot; bezel is flat tokens only (law 8/perf).</li>
+  </ul>
+</main>

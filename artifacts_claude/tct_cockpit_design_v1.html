@@ -1,0 +1,721 @@
+<title>TCT Cockpit — Design Language</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{
+  --canvas:#0B0E14; --panel:#131926; --panel-2:#1A2233; --sunk:#0C1017;
+  --hairline:#232C3D; --hairline-strong:#33405A;
+  --text:#E7ECF4; --muted:#8B95A9; --faint:#5A6478;
+  --accent:#5AA9FF; --accent-soft:rgba(90,169,255,.14); --cyan:#37D4E0;
+  --danger:#FF5A61; --danger-soft:rgba(255,90,97,.14);
+  --armed:#FFB74D; --armed-soft:rgba(255,183,77,.15);
+  --good:#3DD68C; --good-soft:rgba(61,214,140,.15);
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.28);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.35);
+  --r:12px; --r-sm:8px; --r-lg:16px;
+  --sans:-apple-system,BlinkMacSystemFont,"SF Pro Display","SF Pro Text",system-ui,"Segoe UI",Roboto,sans-serif;
+  --mono:"SF Mono","JetBrains Mono",ui-monospace,"Cascadia Code","Roboto Mono",Consolas,monospace;
+}
+@media (prefers-color-scheme: light){
+  :root{
+    --canvas:#EAEEF5; --panel:#FFFFFF; --panel-2:#F5F8FC; --sunk:#E4E9F1;
+    --hairline:#DCE2EC; --hairline-strong:#C3CCDB;
+    --text:#141A26; --muted:#5C6678; --faint:#97A0B2;
+    --accent:#2C7BE5; --accent-soft:rgba(44,123,229,.10); --cyan:#0EA5B5;
+    --danger:#E5484D; --danger-soft:rgba(229,72,77,.10);
+    --armed:#C77700; --armed-soft:rgba(199,119,0,.12);
+    --good:#17A673; --good-soft:rgba(23,166,115,.12);
+    --shadow:0 1px 2px rgba(20,26,38,.08),0 10px 30px rgba(20,26,38,.10);
+    --shadow-sm:0 1px 2px rgba(20,26,38,.06);
+  }
+}
+:root[data-theme="light"]{
+  --canvas:#EAEEF5; --panel:#FFFFFF; --panel-2:#F5F8FC; --sunk:#E4E9F1;
+  --hairline:#DCE2EC; --hairline-strong:#C3CCDB;
+  --text:#141A26; --muted:#5C6678; --faint:#97A0B2;
+  --accent:#2C7BE5; --accent-soft:rgba(44,123,229,.10); --cyan:#0EA5B5;
+  --danger:#E5484D; --danger-soft:rgba(229,72,77,.10);
+  --armed:#C77700; --armed-soft:rgba(199,119,0,.12);
+  --good:#17A673; --good-soft:rgba(23,166,115,.12);
+  --shadow:0 1px 2px rgba(20,26,38,.08),0 10px 30px rgba(20,26,38,.10);
+  --shadow-sm:0 1px 2px rgba(20,26,38,.06);
+}
+:root[data-theme="dark"]{
+  --canvas:#0B0E14; --panel:#131926; --panel-2:#1A2233; --sunk:#0C1017;
+  --hairline:#232C3D; --hairline-strong:#33405A;
+  --text:#E7ECF4; --muted:#8B95A9; --faint:#5A6478;
+  --accent:#5AA9FF; --accent-soft:rgba(90,169,255,.14); --cyan:#37D4E0;
+  --danger:#FF5A61; --danger-soft:rgba(255,90,97,.14);
+  --armed:#FFB74D; --armed-soft:rgba(255,183,77,.15);
+  --good:#3DD68C; --good-soft:rgba(61,214,140,.15);
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.28);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.35);
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{
+  background:
+    radial-gradient(1200px 600px at 80% -10%, var(--accent-soft), transparent 60%),
+    var(--canvas);
+  color:var(--text); font-family:var(--sans);
+  font-size:14px; line-height:1.5; -webkit-font-smoothing:antialiased;
+  letter-spacing:-0.01em;
+}
+.wrap{max-width:1160px;margin:0 auto;padding:0 24px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:0}
+
+/* ---------- top bar ---------- */
+.topbar{position:sticky;top:0;z-index:50;
+  backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);
+  background:color-mix(in srgb, var(--canvas) 72%, transparent);
+  border-bottom:1px solid var(--hairline)}
+.topbar .wrap{display:flex;align-items:center;gap:16px;height:56px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:600;letter-spacing:-0.02em}
+.brand .dot{width:11px;height:11px;border-radius:3px;background:linear-gradient(140deg,var(--accent),var(--cyan));box-shadow:0 0 12px var(--accent-soft)}
+.brand small{color:var(--muted);font-weight:450}
+.topbar nav{margin-left:auto;display:flex;gap:4px}
+.topbar nav a{color:var(--muted);text-decoration:none;font-size:13px;padding:6px 11px;border-radius:8px}
+.topbar nav a:hover{color:var(--text);background:var(--panel)}
+.themetoggle{border:1px solid var(--hairline-strong);background:var(--panel);color:var(--text);
+  border-radius:8px;padding:6px 12px;font:inherit;font-size:12.5px;cursor:pointer}
+.themetoggle:hover{border-color:var(--accent)}
+
+/* ---------- hero ---------- */
+.hero{padding:72px 0 40px}
+.eyebrow{font-size:11.5px;font-weight:650;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+.hero h1{font-size:44px;line-height:1.05;font-weight:680;letter-spacing:-0.035em;margin:16px 0 0;text-wrap:balance;max-width:16ch}
+.hero p{color:var(--muted);font-size:17px;max-width:60ch;margin-top:18px;line-height:1.55}
+.hero .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
+
+/* ---------- section scaffolding ---------- */
+section{padding:34px 0}
+.sec-head{display:flex;align-items:flex-end;gap:16px;margin-bottom:22px;flex-wrap:wrap}
+.sec-head h2{font-size:24px;font-weight:660;letter-spacing:-0.025em}
+.sec-head .k{font-family:var(--mono);font-size:12px;color:var(--faint);padding-bottom:3px}
+.sec-head p{color:var(--muted);font-size:14px;max-width:56ch;margin-top:4px}
+.rule{height:1px;background:linear-gradient(90deg,var(--hairline),transparent);margin:6px 0 0}
+
+/* ---------- generic component kit ---------- */
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;
+  padding:3px 9px;border-radius:999px;border:1px solid var(--hairline-strong);color:var(--muted);
+  letter-spacing:.02em;white-space:nowrap}
+.chip .led{width:6px;height:6px;border-radius:50%;background:var(--faint)}
+.chip.good{color:var(--good);border-color:color-mix(in srgb,var(--good) 40%,transparent);background:var(--good-soft)}
+.chip.good .led{background:var(--good);box-shadow:0 0 8px var(--good)}
+.chip.warn{color:var(--armed);border-color:color-mix(in srgb,var(--armed) 40%,transparent);background:var(--armed-soft)}
+.chip.warn .led{background:var(--armed)}
+.chip.crit{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 45%,transparent);background:var(--danger-soft)}
+.chip.crit .led{background:var(--danger);box-shadow:0 0 8px var(--danger)}
+.chip.accent{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:var(--accent-soft)}
+.chip.accent .led{background:var(--accent);box-shadow:0 0 8px var(--accent)}
+
+.tile{background:var(--panel);border:1px solid var(--hairline);border-radius:var(--r);padding:14px 16px;position:relative;overflow:hidden}
+.tile .lab{font-size:10.5px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.tile .val{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:28px;font-weight:600;letter-spacing:-0.02em;margin-top:8px;line-height:1}
+.tile .val .u{font-size:14px;color:var(--muted);font-weight:500;margin-left:4px}
+.tile .cap{font-size:11.5px;color:var(--faint);margin-top:7px;font-family:var(--mono)}
+.tile .accentbar{position:absolute;left:0;top:12px;bottom:12px;width:3px;border-radius:3px;background:var(--accent)}
+.tile.pad-l{padding-left:22px}
+.tile.crit .val{color:var(--danger)} .tile.crit .accentbar{background:var(--danger)}
+.tile.good .val{color:var(--good)} .tile.good .accentbar{background:var(--good)}
+.tile.warn .val{color:var(--armed)} .tile.warn .accentbar{background:var(--armed)}
+.tile.stale{opacity:.5}
+
+.seg{display:inline-flex;background:var(--sunk);border:1px solid var(--hairline);border-radius:9px;padding:3px;gap:2px}
+.seg button{font:inherit;font-size:12.5px;font-weight:550;color:var(--muted);background:transparent;border:0;
+  padding:5px 13px;border-radius:6px;cursor:pointer;letter-spacing:-0.01em}
+.seg button[aria-selected="true"]{background:var(--panel-2);color:var(--text);box-shadow:var(--shadow-sm)}
+.seg button:hover:not([aria-selected="true"]){color:var(--text)}
+
+.btn{font:inherit;font-size:13px;font-weight:550;border-radius:9px;padding:8px 15px;cursor:pointer;
+  border:1px solid var(--hairline-strong);background:var(--panel-2);color:var(--text);letter-spacing:-0.01em;
+  display:inline-flex;align-items:center;gap:7px}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 1px 8px var(--accent-soft)}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn.ghost{background:transparent;border-color:var(--hairline)}
+.btn.danger{background:var(--danger);border-color:var(--danger);color:#fff;font-weight:650;
+  box-shadow:0 2px 16px var(--danger-soft)}
+.btn.danger:hover{filter:brightness(1.05)}
+.btn.wide{width:100%;justify-content:center;padding:11px}
+
+.field{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  background:var(--sunk);border:1px solid var(--hairline);border-radius:var(--r-sm);padding:9px 12px}
+.field .fl{font-size:12.5px;color:var(--muted)}
+.field .fv{font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums}
+.field .fv b{font-weight:600;color:var(--text)}
+
+.empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;
+  text-align:center;color:var(--faint);height:100%;padding:30px}
+.empty .ic{width:46px;height:46px;border-radius:14px;border:1.5px dashed var(--hairline-strong);
+  display:grid;place-items:center;color:var(--muted)}
+.empty h4{font-size:14px;color:var(--muted);font-weight:600}
+.empty p{font-size:12.5px;max-width:30ch}
+
+/* ---------- component-kit gallery grid ---------- */
+.kit{display:grid;grid-template-columns:repeat(12,1fr);gap:14px}
+.kit .card{background:var(--panel);border:1px solid var(--hairline);border-radius:var(--r);padding:18px;box-shadow:var(--shadow-sm)}
+.kit .card h5{font-size:11px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:14px}
+.span3{grid-column:span 3}.span4{grid-column:span 4}.span5{grid-column:span 5}
+.span6{grid-column:span 6}.span7{grid-column:span 7}.span8{grid-column:span 8}.span12{grid-column:span 12}
+.swatch-row{display:flex;flex-wrap:wrap;gap:9px}
+.sw{width:100%;flex:1 1 74px;border-radius:9px;height:52px;border:1px solid var(--hairline);position:relative;overflow:hidden}
+.sw span{position:absolute;left:7px;bottom:6px;font-family:var(--mono);font-size:9.5px;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6)}
+.stack{display:flex;flex-direction:column;gap:10px}
+.typerow{display:flex;align-items:baseline;gap:14px;border-bottom:1px solid var(--hairline);padding:9px 0}
+.typerow:last-child{border-bottom:0}
+.typerow .tg{color:var(--faint);font-family:var(--mono);font-size:11px;width:78px;flex:none}
+
+/* ---------- panel mock frame ---------- */
+.screen{background:var(--panel);border:1px solid var(--hairline);border-radius:var(--r-lg);
+  overflow:hidden;box-shadow:var(--shadow);margin-top:2px}
+.screen .titlebar{display:flex;align-items:center;gap:10px;padding:11px 16px;
+  border-bottom:1px solid var(--hairline);
+  background:color-mix(in srgb,var(--panel-2) 60%,var(--panel))}
+.tdots{display:flex;gap:6px}.tdots i{width:11px;height:11px;border-radius:50%;background:var(--hairline-strong)}
+.tdots i:nth-child(1){background:#FF5F57}.tdots i:nth-child(2){background:#FEBC2E}.tdots i:nth-child(3){background:#28C840}
+.titlebar .tt{font-size:12.5px;font-weight:600;color:var(--muted);letter-spacing:.01em}
+.titlebar .tt b{color:var(--text)}
+.titlebar .tr{margin-left:auto;display:flex;align-items:center;gap:8px}
+.wbhead{display:flex;align-items:flex-start;gap:14px;padding:16px 18px 14px}
+.wbhead .eb{font-size:10.5px;font-weight:650;letter-spacing:.1em;text-transform:uppercase;color:var(--accent)}
+.wbhead h3{font-size:19px;font-weight:660;letter-spacing:-0.02em;margin-top:5px}
+.wbhead .sub{color:var(--muted);font-size:12.5px;margin-top:3px}
+.wbhead .ha{margin-left:auto;display:flex;gap:8px;align-items:center}
+.pbody{padding:0 18px 18px;display:grid;gap:14px}
+.iconbtn{width:30px;height:30px;border-radius:8px;border:1px solid var(--hairline);background:var(--panel);
+  display:grid;place-items:center;color:var(--muted);cursor:pointer}
+.iconbtn:hover{color:var(--text);border-color:var(--accent)}
+
+/* figure / plot card */
+.figure{background:var(--sunk);border:1px solid var(--hairline);border-radius:var(--r);overflow:hidden;position:relative}
+.figure .fhead{display:flex;align-items:center;gap:10px;padding:10px 13px;border-bottom:1px solid var(--hairline)}
+.figure .fhead .ft{font-size:12px;font-weight:600;color:var(--muted)}
+.figure .fhead .fr{margin-left:auto;display:flex;gap:6px}
+.figure svg,.figure canvas{display:block;width:100%}
+.gridwrap{display:grid;gap:14px}
+
+.dangerzone{border:1px solid color-mix(in srgb,var(--danger) 35%,var(--hairline));
+  border-radius:var(--r);background:var(--danger-soft);padding:14px}
+.dangerzone .dh{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:700;letter-spacing:.08em;
+  text-transform:uppercase;color:var(--danger);margin-bottom:11px}
+
+.metricgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px}
+.two{display:grid;grid-template-columns:1.6fr 1fr;gap:14px}
+.three{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+@media(max-width:820px){.two,.three{grid-template-columns:1fr}.kit .card[class*="span"]{grid-column:span 12}}
+
+.notecard{background:var(--panel);border:1px solid var(--hairline);border-left:3px solid var(--accent);
+  border-radius:var(--r-sm);padding:13px 15px;font-size:13px;color:var(--muted)}
+.notecard b{color:var(--text);font-weight:600}
+
+/* verdict list on hero cards */
+.principles{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:8px}
+.principles .p{background:var(--panel);border:1px solid var(--hairline);border-radius:var(--r);padding:16px}
+.principles .p h4{font-size:13.5px;font-weight:640;margin-bottom:6px;display:flex;gap:8px;align-items:center}
+.principles .p h4 .n{font-family:var(--mono);font-size:11px;color:var(--accent)}
+.principles .p p{font-size:12.5px;color:var(--muted);line-height:1.5}
+@media(max-width:820px){.principles{grid-template-columns:1fr}}
+
+footer{padding:40px 0 70px;color:var(--faint);font-size:12.5px;border-top:1px solid var(--hairline);margin-top:30px}
+.panelnav{display:flex;flex-wrap:wrap;gap:7px;margin-top:6px}
+.panelnav a{font-size:12px;color:var(--muted);text-decoration:none;border:1px solid var(--hairline);
+  border-radius:999px;padding:4px 11px}
+.panelnav a:hover{color:var(--text);border-color:var(--accent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+@media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto}}
+</style>
+
+<div class="topbar"><div class="wrap">
+  <div class="brand"><span class="dot"></span> TCT Cockpit <small>· Design Language</small></div>
+  <nav>
+    <a href="#system">System</a>
+    <a href="#panels">Panels</a>
+    <a href="#scanviewer">Scan Viewer</a>
+    <a href="#bias">Bias</a>
+    <a href="#camera">Camera</a>
+  </nav>
+  <button class="themetoggle" id="tt">◐ Theme</button>
+</div></div>
+
+<header class="hero"><div class="wrap">
+  <div class="eyebrow">Transient Current Technique · Lab Control</div>
+  <h1>A calm cockpit for a loud experiment.</h1>
+  <p>The instrument stack is powerful; the interface should get out of its way. This is the recovered
+     design language for TCT — Apple-grade restraint applied to a real physics bench: layered material,
+     one accent, large legible readouts, and danger that stays loud only where high voltage lives.</p>
+  <div class="meta">
+    <span class="chip accent"><span class="led"></span> One accent, semantic reds</span>
+    <span class="chip"><span class="led"></span> System type · mono readouts</span>
+    <span class="chip good"><span class="led"></span> Light + dark, contrast-checked</span>
+    <span class="chip warn"><span class="led"></span> Danger hierarchy preserved</span>
+  </div>
+</div></header>
+
+<main class="wrap">
+
+<!-- ============ THE SYSTEM ============ -->
+<section id="system">
+  <div class="sec-head">
+    <h2>The system</h2><span class="k">gui/style.py · panel_kit</span>
+    <p style="margin-left:auto">Six primitives compose every panel. Build the kit once; each screen becomes a thin, consistent re-skin.</p>
+  </div>
+  <div class="rule"></div>
+
+  <div class="kit" style="margin-top:20px">
+    <!-- palette -->
+    <div class="card span5">
+      <h5>Palette — chosen, not defaulted</h5>
+      <div class="swatch-row">
+        <div class="sw" style="background:#0B0E14"><span>canvas</span></div>
+        <div class="sw" style="background:#131926"><span>panel</span></div>
+        <div class="sw" style="background:#1A2233"><span>raised</span></div>
+      </div>
+      <div class="swatch-row" style="margin-top:9px">
+        <div class="sw" style="background:#5AA9FF"><span>accent</span></div>
+        <div class="sw" style="background:#FF5A61"><span>HV / abort</span></div>
+        <div class="sw" style="background:#3DD68C"><span>live</span></div>
+        <div class="sw" style="background:#FFB74D"><span>armed</span></div>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin-top:13px">Neutrals carry a slight blue bias toward the accent.
+        Red is spent <b style="color:var(--text)">only</b> on high voltage and abort — never on chrome.</p>
+    </div>
+
+    <!-- type -->
+    <div class="card span7">
+      <h5>Type — system sans + mono data</h5>
+      <div class="stack">
+        <div class="typerow"><span class="tg">display</span><span style="font-size:26px;font-weight:680;letter-spacing:-0.03em">Scan Viewer</span></div>
+        <div class="typerow"><span class="tg">heading</span><span style="font-size:18px;font-weight:640">Acquisition Console</span></div>
+        <div class="typerow"><span class="tg">label</span><span style="font-size:11px;font-weight:650;letter-spacing:.09em;text-transform:uppercase;color:var(--muted)">Bias Voltage</span></div>
+        <div class="typerow"><span class="tg">body</span><span style="font-size:13.5px;color:var(--muted)">Restrained, readable, never shouting.</span></div>
+        <div class="typerow"><span class="tg">value</span><span class="mono" style="font-size:26px;font-weight:600">−250.0<span style="font-size:14px;color:var(--muted)"> V</span></span></div>
+      </div>
+    </div>
+
+    <!-- metric tiles -->
+    <div class="card span6">
+      <h5>MetricTile — large, soft, stateful</h5>
+      <div class="metricgrid">
+        <div class="tile pad-l"><span class="accentbar"></span><div class="lab">Progress</div><div class="val">25<span class="u">/25</span></div><div class="cap">x=0 y=050 z=250</div></div>
+        <div class="tile pad-l good"><span class="accentbar"></span><div class="lab">Charge</div><div class="val">3.84<span class="u">pC</span></div><div class="cap">1 MIP ≈ 3.9 pC</div></div>
+        <div class="tile pad-l crit"><span class="accentbar"></span><div class="lab">HV</div><div class="val">−250.0<span class="u">V</span></div><div class="cap">compliance 100 µA</div></div>
+      </div>
+    </div>
+
+    <!-- controls -->
+    <div class="card span6">
+      <h5>Controls — segmented · action bar · danger</h5>
+      <div class="stack">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <div class="seg"><button aria-selected="true">2D</button><button>3D</button></div>
+          <div class="seg"><button aria-selected="true">Live</button><button>Single</button><button>Average</button></div>
+        </div>
+        <div style="display:flex;gap:9px;flex-wrap:wrap">
+          <button class="btn primary">Start Scan</button>
+          <button class="btn">Open in Analysis</button>
+          <button class="btn ghost">Export CSV</button>
+          <button class="btn danger">Abort</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- chips + empty -->
+    <div class="card span7">
+      <h5>Status chips — state you read at a glance</h5>
+      <div style="display:flex;flex-wrap:wrap;gap:9px">
+        <span class="chip good"><span class="led"></span> Connected</span>
+        <span class="chip accent"><span class="led"></span> Scanning</span>
+        <span class="chip warn"><span class="led"></span> HV Armed</span>
+        <span class="chip crit"><span class="led"></span> HV −250 V Live</span>
+        <span class="chip"><span class="led"></span> Motor Idle</span>
+        <span class="chip good"><span class="led"></span> Simulation</span>
+      </div>
+      <p style="font-size:12px;color:var(--muted);margin-top:14px">Severity is encoded in <b style="color:var(--text)">form and color together</b> — a glow-dot plus a hue — so the one thing that needs attention wins the eye without a legend.</p>
+    </div>
+
+    <div class="card span5">
+      <h5>EmptyState — designed, not blank</h5>
+      <div class="empty" style="height:118px">
+        <div class="ic">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M3 15l5-4 4 3 3-3 6 5"/><circle cx="9" cy="9" r="1.4"/></svg>
+        </div>
+        <h4>No image yet</h4>
+        <p>Connect the camera and press Live to begin acquisition.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PANELS ============ -->
+<section id="panels">
+  <div class="sec-head">
+    <h2>Every panel, reimagined</h2><span class="k">11 surfaces · one language</span>
+    <p style="margin-left:auto">Each screen keeps its real controls and live values — the composition is what changes: map- or plot-first bodies, metrics that breathe, a single primary action, danger walled off.</p>
+  </div>
+  <div class="rule"></div>
+  <div class="panelnav">
+    <a href="#scanviewer">Scan Viewer</a><a href="#bias">Bias Supply</a><a href="#camera">Camera</a>
+    <a href="#motor">Motor Stage</a><a href="#scope">Oscilloscope</a><a href="#planner">Scan Planner</a>
+    <a href="#laser">Laser / Trigger</a><a href="#calibration">Calibration</a><a href="#monitor">Slow Monitor</a>
+    <a href="#analysis">Analysis</a><a href="#reference">Reference Monitor</a>
+  </div>
+</section>
+
+<!-- SCAN VIEWER -->
+<section id="scanviewer" style="padding-top:8px">
+  <div class="screen">
+    <div class="titlebar"><div class="tdots"><i></i><i></i><i></i></div>
+      <div class="tt"><b>Scan Viewer</b> — live acquisition</div>
+      <div class="tr"><span class="chip accent"><span class="led"></span> Scanning</span><span class="iconbtn" title="Detach">⤢</span></div>
+    </div>
+    <div class="wbhead">
+      <div><div class="eb">Run Monitor</div><h3>Grid Scan · CCE map</h3><div class="sub">simulated · started 09:41 · writing run_0142.h5</div></div>
+      <div class="ha"><div class="seg"><button aria-selected="true">2D</button><button>3D</button></div><button class="btn ghost">Open in Analysis</button></div>
+    </div>
+    <div class="pbody">
+      <div class="two">
+        <div class="figure">
+          <div class="fhead"><span class="ft">Charge map · X–Y</span><div class="fr"><span class="chip">pC</span><span class="iconbtn" title="Export PNG"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3v12m0 0l-4-4m4 4l4-4"/><path d="M5 19h14"/></svg></span></div></div>
+          <div id="heat"></div>
+        </div>
+        <div class="gridwrap" style="align-content:start">
+          <div class="metricgrid" style="grid-template-columns:1fr 1fr">
+            <div class="tile pad-l"><span class="accentbar"></span><div class="lab">Progress</div><div class="val">25<span class="u">/25</span></div><div class="cap">point 25 of 25</div></div>
+            <div class="tile pad-l"><span class="accentbar"></span><div class="lab">Elapsed</div><div class="val">00:42</div><div class="cap">ETA 00:00</div></div>
+            <div class="tile pad-l good"><span class="accentbar"></span><div class="lab">Peak charge</div><div class="val">3.84<span class="u">pC</span></div><div class="cap">at x=60 y=050</div></div>
+            <div class="tile pad-l"><span class="accentbar"></span><div class="lab">Position</div><div class="val" style="font-size:19px">0,120<span class="u">µm</span></div><div class="cap">z = 250 µm</div></div>
+          </div>
+          <div class="dangerzone">
+            <div class="dh"><span>▲</span> Run control</div>
+            <div style="display:flex;gap:9px"><button class="btn ghost" style="flex:1">Pause</button><button class="btn danger" style="flex:1">Abort scan</button></div>
+          </div>
+        </div>
+      </div>
+      <div class="figure">
+        <div class="fhead"><span class="ft">Z-focus · focal-point calibration</span><div class="fr"><span class="chip accent"><span class="led"></span> Live assist</span><span class="chip">edge scan</span></div></div>
+        <div style="padding:14px;display:grid;grid-template-columns:1.4fr 1fr;gap:14px;align-items:center">
+          <div id="zcurve"></div>
+          <div style="display:grid;gap:9px">
+            <div class="field"><span class="fl">Best Z</span><span class="fv"><b>248.6 µm</b></span></div>
+            <div class="field"><span class="fl">Sharpness</span><span class="fv"><b>0.94</b></span></div>
+            <button class="btn primary wide">Apply best Z to planner</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="notecard" style="margin-top:12px"><b>Why this wins:</b> the map is the hero, quantity/freeze/export live in the card header instead of vanishing, metrics read as soft tiles not black boxes, and <b>Abort</b> is walled in a danger zone — the loudest thing on screen, exactly as safety rule 2 demands.</div>
+</section>
+
+<!-- BIAS SUPPLY -->
+<section id="bias">
+  <div class="screen">
+    <div class="titlebar"><div class="tdots"><i></i><i></i><i></i></div>
+      <div class="tt"><b>Bias Supply</b> — ISEG · channel 0</div>
+      <div class="tr"><span class="chip crit"><span class="led"></span> HV −250 V Live</span></div>
+    </div>
+    <div class="wbhead"><div><div class="eb">High Voltage · Safety Dashboard</div><h3>Channel 0</h3><div class="sub">simulated ISEG · compliance 100 µA · negative polarity</div></div>
+      <div class="ha"><div class="seg"><button aria-selected="true">CH 0</button><button>CH 1</button></div></div></div>
+    <div class="pbody">
+      <div class="three">
+        <div class="tile pad-l crit"><span class="accentbar"></span><div class="lab">Output voltage</div><div class="val">−250.0<span class="u">V</span></div><div class="cap">target −250.0 V</div></div>
+        <div class="tile pad-l"><span class="accentbar"></span><div class="lab">Current</div><div class="val">12.4<span class="u">µA</span></div><div class="cap">compliance 100 µA</div></div>
+        <div class="tile pad-l good"><span class="accentbar"></span><div class="lab">Compliance</div><div class="val" style="font-size:20px">In range</div><div class="cap">12% of limit</div></div>
+      </div>
+      <div class="two">
+        <div class="figure" style="background:var(--panel)">
+          <div class="fhead"><span class="ft">Ramp profile</span><div class="fr"><span class="chip">5 V/step · 0.1 s</span></div></div>
+          <div style="padding:14px"><div id="ramp"></div></div>
+        </div>
+        <div style="display:grid;gap:12px;align-content:start">
+          <div class="field"><span class="fl">Target voltage</span><span class="fv"><b>−250.0 V</b></span></div>
+          <div class="field"><span class="fl">Ramp step</span><span class="fv"><b>5.0 V</b></span></div>
+          <div class="field"><span class="fl">Step delay</span><span class="fv"><b>0.10 s</b></span></div>
+          <div class="dangerzone">
+            <div class="dh"><span>▲</span> High-voltage command</div>
+            <div style="display:grid;gap:8px">
+              <button class="btn danger wide">Ramp to −250 V</button>
+              <div style="display:flex;gap:8px"><button class="btn ghost" style="flex:1">Output off</button><button class="btn danger" style="flex:1">All outputs off</button></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="notecard" style="margin-top:12px"><b>From field-slab to safety dashboard:</b> the three quantities you actually watch become hero readouts, ramp shows its shape, and every HV command sits inside the red danger well — nothing decorative is allowed to out-shout it.</div>
+</section>
+
+<!-- CAMERA -->
+<section id="camera">
+  <div class="screen">
+    <div class="titlebar"><div class="tdots"><i></i><i></i><i></i></div><div class="tt"><b>Camera</b> — FLIR Blackfly</div>
+      <div class="tr"><span class="chip"><span class="led"></span> Idle</span><span class="iconbtn">⤢</span></div></div>
+    <div class="wbhead"><div><div class="eb">Beam Imaging</div><h3>Live view</h3><div class="sub">Mono8 · 5000 µs · gain auto</div></div>
+      <div class="ha"><button class="btn primary">Live</button><button class="btn">Single</button></div></div>
+    <div class="pbody">
+      <div class="two">
+        <div class="figure" style="min-height:230px;display:grid">
+          <div class="empty">
+            <div class="ic"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="6" width="18" height="13" rx="2.5"/><circle cx="12" cy="12.5" r="3.6"/><path d="M8 6l1.5-2h5L16 6"/></svg></div>
+            <h4>No image yet</h4><p>Press Live to stream, or Single to capture one frame.</p>
+          </div>
+        </div>
+        <div style="display:grid;gap:12px;align-content:start">
+          <div style="font-size:11px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)">Acquisition</div>
+          <div class="field"><span class="fl">Exposure</span><span class="fv"><b>5000</b> µs</span></div>
+          <div class="field"><span class="fl">Gain</span><span class="fv"><b>auto</b></span></div>
+          <div class="field"><span class="fl">Frame rate</span><span class="fv"><b>30.0</b> fps</span></div>
+          <div style="font-size:11px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-top:4px">Beam statistics</div>
+          <div class="metricgrid" style="grid-template-columns:1fr 1fr">
+            <div class="tile"><div class="lab">Centroid X</div><div class="val" style="font-size:18px">640.2</div></div>
+            <div class="tile"><div class="lab">Centroid Y</div><div class="val" style="font-size:18px">512.7</div></div>
+            <div class="tile"><div class="lab">Peak</div><div class="val" style="font-size:18px">—</div></div>
+            <div class="tile"><div class="lab">FWHM</div><div class="val" style="font-size:18px">—</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="figure"><div class="fhead"><span class="ft">Histogram</span></div><div style="padding:12px 14px"><div id="hist"></div></div></div>
+    </div>
+  </div>
+  <div class="notecard" style="margin-top:12px"><b>The image is the instrument.</b> A designed empty state replaces "NO IMAGE", the console groups acquisition and beam metrics as tiles, and Live/Single read as one clear command pair rather than being buried in a form.</div>
+</section>
+
+<!-- MOTOR + SCOPE side by side -->
+<section id="motor">
+  <div class="two" style="grid-template-columns:1fr 1fr;align-items:start">
+    <div>
+      <div class="screen">
+        <div class="titlebar"><div class="tdots"><i></i><i></i><i></i></div><div class="tt"><b>Motor Stage</b></div><div class="tr"><span class="chip"><span class="led"></span> Idle</span></div></div>
+        <div class="wbhead"><div><div class="eb">Positioning</div><h3>GRBL 3-axis</h3></div></div>
+        <div class="pbody">
+          <div class="tile pad-l" style="text-align:left"><span class="accentbar"></span><div class="lab">Current position</div>
+            <div class="val" style="font-size:23px">X 0.000 &nbsp; Y 0.000 &nbsp; Z 0.000<span class="u">mm</span></div><div class="cap">user frame · homed</div></div>
+          <div class="figure"><div class="fhead"><span class="ft">Top view · X–Y</span><div class="fr"><div class="seg" style="padding:2px"><button aria-selected="true">2D</button><button>3D</button></div></div></div><div id="stage"></div></div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">
+            <button class="btn ghost">− X</button><button class="btn ghost">Home</button><button class="btn ghost">+ X</button>
+            <button class="btn ghost">− Y</button><button class="btn ghost" style="font-size:11px">step 1.0mm</button><button class="btn ghost">+ Y</button>
+          </div>
+          <div class="dangerzone"><div class="dh"><span>▲</span> Motion</div><button class="btn danger wide">Move to absolute</button></div>
+        </div>
+      </div>
+    </div>
+    <div id="scope">
+      <div class="screen">
+        <div class="titlebar"><div class="tdots"><i></i><i></i><i></i></div><div class="tt"><b>Oscilloscope</b> — DRS4</div><div class="tr"><span class="chip good"><span class="led"></span> Live</span></div></div>
+        <div class="wbhead"><div><div class="eb">Waveform</div><h3>Transient current</h3></div><div class="ha"><div class="seg"><button aria-selected="true">Live</button><button>Single</button><button>Avg</button></div></div></div>
+        <div class="pbody">
+          <div class="figure"><div class="fhead"><span class="ft">CH1 · amplitude vs time</span><div class="fr"><span class="chip accent"><span class="led"></span> DUT</span><span class="chip">CH2 ref</span></div></div><div id="wave"></div></div>
+          <div class="metricgrid">
+            <div class="tile"><div class="lab">Amplitude</div><div class="val" style="font-size:18px">42.6<span class="u">mV</span></div></div>
+            <div class="tile"><div class="lab">Rise time</div><div class="val" style="font-size:18px">1.8<span class="u">ns</span></div></div>
+            <div class="tile"><div class="lab">Charge</div><div class="val" style="font-size:18px">3.8<span class="u">pC</span></div></div>
+            <div class="tile"><div class="lab">ToT</div><div class="val" style="font-size:18px">6.4<span class="u">ns</span></div></div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary">Acquire</button><button class="btn ghost">Cursors</button><button class="btn ghost">Export CSV</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="notecard" style="margin-top:12px"><b>Physical where it counts:</b> the stage gets a hero position readout and a jog cross that reads like hardware; the scope makes the waveform the hero and stages Live / Single / Average as one command bar with measurements as tiles beneath.</div>
+</section>
+
+<!-- PLANNER -->
+<section id="planner">
+  <div class="screen">
+    <div class="titlebar"><div class="tdots"><i></i><i></i><i></i></div><div class="tt"><b>Scan Planner</b></div><div class="tr"><span class="chip warn"><span class="led"></span> Plan ready</span></div></div>
+    <div class="wbhead"><div><div class="eb">Routine Builder</div><h3>Grid + bias sweep</h3><div class="sub">2 axes · 5 bias steps · 25 leaf points</div></div><div class="ha"><button class="btn ghost">Load routine</button><button class="btn">Save routine</button></div></div>
+    <div class="pbody">
+      <div class="three" style="grid-template-columns:0.9fr 1.3fr 0.9fr">
+        <div style="display:grid;gap:9px;align-content:start">
+          <div style="font-size:11px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)">Add block</div>
+          <button class="btn ghost">＋ Loop · Stage</button><button class="btn ghost">＋ Loop · Bias</button>
+          <button class="btn ghost">＋ Acquire</button><button class="btn ghost">＋ Manual pause</button>
+        </div>
+        <div class="figure" style="background:var(--panel)"><div class="fhead"><span class="ft">Recipe</span></div>
+          <div style="padding:12px;display:grid;gap:7px;font-family:var(--mono);font-size:12px">
+            <div class="field" style="padding:7px 11px"><span class="fl mono" style="color:var(--accent)">LOOP</span><span class="fv">Bias  −50 → −250 V · 5 steps</span></div>
+            <div class="field" style="padding:7px 11px;margin-left:14px"><span class="fl mono" style="color:var(--cyan)">LOOP</span><span class="fv">Stage X  0 → 120 µm · 5</span></div>
+            <div class="field" style="padding:7px 11px;margin-left:28px"><span class="fl mono" style="color:var(--good)">ACQ</span><span class="fv">waveform + slow control</span></div>
+          </div></div>
+        <div style="display:grid;gap:9px;align-content:start">
+          <div style="font-size:11px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)">Before you run</div>
+          <div class="tile"><div class="lab">Total points</div><div class="val" style="font-size:19px">25</div></div>
+          <div class="tile"><div class="lab">Est. runtime</div><div class="val" style="font-size:19px">04:10</div></div>
+          <div class="field"><span class="fl">HV range</span><span class="fv"><b>−250 V</b></span></div>
+          <button class="btn ghost wide">Dry run</button>
+        </div>
+      </div>
+      <div class="dangerzone"><div class="dh"><span>▲</span> Arm &amp; start</div>
+        <div style="display:flex;gap:9px;align-items:center"><span style="font-size:12.5px;color:var(--muted);flex:1">Starting arms HV to −250 V and moves the stage. Confirmation required.</span><button class="btn danger">Arm &amp; Start scan</button></div></div>
+    </div>
+  </div>
+  <div class="notecard" style="margin-top:12px"><b>Already the strongest panel</b> — this is polish, not rewrite: more breathing room, refined type, the estimate as tiles, and the danger-gated arm/start as the one unmistakable primary action.</div>
+</section>
+
+<!-- LASER + CALIBRATION -->
+<section id="laser">
+  <div class="two" style="align-items:start">
+    <div>
+      <div class="screen">
+        <div class="titlebar"><div class="tdots"><i></i><i></i><i></i></div><div class="tt"><b>Laser / Trigger</b> — PDL 800</div><div class="tr"><span class="chip"><span class="led"></span> Output off</span></div></div>
+        <div class="wbhead"><div><div class="eb">Excitation</div><h3>Pulsed laser</h3><div class="sub">660 nm · external trigger</div></div></div>
+        <div class="pbody">
+          <div class="dangerzone" style="border-color:color-mix(in srgb,var(--armed) 40%,var(--hairline));background:var(--armed-soft)">
+            <div class="dh" style="color:var(--armed)"><span>◉</span> Laser output</div>
+            <div style="display:flex;gap:9px"><button class="btn primary" style="flex:1;background:var(--good);border-color:var(--good)">Output ON</button><button class="btn ghost" style="flex:1">OFF</button></div></div>
+          <div style="font-size:11px;font-weight:650;letter-spacing:.08em;text-transform:uppercase;color:var(--faint)">Waveform generator</div>
+          <div class="metricgrid" style="grid-template-columns:1fr 1fr">
+            <div class="field"><span class="fl">Frequency</span><span class="fv"><b>1000</b> Hz</span></div>
+            <div class="field"><span class="fl">Width</span><span class="fv"><b>5.0</b> ns</span></div>
+            <div class="field"><span class="fl">Amplitude</span><span class="fv"><b>3.3</b> V</span></div>
+            <div class="field"><span class="fl">Duty</span><span class="fv"><b>0.5</b> %</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div id="calibration">
+      <div class="screen">
+        <div class="titlebar"><div class="tdots"><i></i><i></i><i></i></div><div class="tt"><b>Calibration</b></div><div class="tr"><span class="chip"><span class="led"></span> Ready</span></div></div>
+        <div class="wbhead"><div><div class="eb">Procedure</div><h3>Charge calibration</h3></div></div>
+        <div class="pbody">
+          <div class="notecard">Converts raw integrated signal <span class="mono">∫I·dt</span> into charge. Pick a method, set parameters, then Apply.</div>
+          <div class="field"><span class="fl">Method</span><span class="fv"><b>1 MIP reference</b></span></div>
+          <div class="field"><span class="fl">Output units</span><span class="fv"><b>pC</b></span></div>
+          <div style="display:flex;gap:8px"><button class="btn primary" style="flex:1">Apply</button><button class="btn ghost" style="flex:1">Save</button></div>
+          <div class="figure" style="background:var(--panel)"><div class="fhead"><span class="ft">Repeatability test</span><div class="fr"><span class="chip">20 cycles</span></div></div>
+            <div style="padding:13px;display:flex;gap:10px;align-items:center">
+              <div class="tile" style="flex:1"><div class="lab">σ position</div><div class="val" style="font-size:18px">0.8<span class="u">µm</span></div></div>
+              <button class="btn ghost">Run</button><button class="btn danger">Stop</button></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="notecard" style="margin-top:12px"><b>Output as the hero, procedure over prose:</b> the laser's ON/OFF becomes the dominant control with the generator as a compact command panel; calibration reads as a procedure — summary, apply/save, a repeatability card — not an editorial wall of text.</div>
+</section>
+
+<!-- MONITOR + ANALYSIS + REFERENCE -->
+<section id="monitor">
+  <div class="three" style="grid-template-columns:1fr 1fr 1fr;align-items:start">
+    <div>
+      <div class="screen">
+        <div class="titlebar"><div class="tdots"><i></i><i></i><i></i></div><div class="tt"><b>Slow Monitor</b></div></div>
+        <div class="wbhead"><div><div class="eb">Environment</div><h3>Slow control</h3></div></div>
+        <div class="pbody">
+          <div class="metricgrid" style="grid-template-columns:1fr 1fr">
+            <div class="tile"><div class="lab">Temperature</div><div class="val" style="font-size:18px">21.4<span class="u">°C</span></div></div>
+            <div class="tile"><div class="lab">Humidity</div><div class="val" style="font-size:18px">38<span class="u">%</span></div></div>
+            <div class="tile crit"><div class="lab">Bias V</div><div class="val" style="font-size:18px">−250<span class="u">V</span></div></div>
+            <div class="tile"><div class="lab">Leakage</div><div class="val" style="font-size:18px">12<span class="u">µA</span></div></div>
+          </div>
+          <div class="figure"><div class="fhead"><span class="ft">Channel history</span></div><div id="mon"></div></div>
+          <div style="display:flex;gap:8px"><button class="btn primary" style="flex:1">Start poll</button><span class="chip">every 5 s</span></div>
+        </div>
+      </div>
+    </div>
+    <div id="analysis">
+      <div class="screen">
+        <div class="titlebar"><div class="tdots"><i></i><i></i><i></i></div><div class="tt"><b>Analysis</b></div></div>
+        <div class="wbhead"><div><div class="eb">Review</div><h3>run_0141.h5</h3></div></div>
+        <div class="pbody">
+          <div class="seg" style="width:100%"><button aria-selected="true" style="flex:1">2D map</button><button style="flex:1">CCE</button><button style="flex:1">vs Bias</button></div>
+          <div class="figure" style="min-height:150px"><div class="fhead"><span class="ft">Charge map</span><div class="fr"><span class="chip">pC</span></div></div><div id="heat2"></div></div>
+          <div style="display:flex;gap:8px"><button class="btn ghost" style="flex:1">Replot</button><button class="btn ghost" style="flex:1">Export CSV</button></div>
+        </div>
+      </div>
+    </div>
+    <div id="reference">
+      <div class="screen">
+        <div class="titlebar"><div class="tdots"><i></i><i></i><i></i></div><div class="tt"><b>Reference Monitor</b></div></div>
+        <div class="wbhead"><div><div class="eb">Stability</div><h3>Reference beam</h3></div></div>
+        <div class="pbody">
+          <div class="figure" style="min-height:150px"><div class="fhead"><span class="ft">Reference waveform</span><div class="fr"><span class="chip good"><span class="led"></span> Stable</span></div></div><div id="refwave"></div></div>
+          <div class="metricgrid" style="grid-template-columns:1fr 1fr">
+            <div class="tile"><div class="lab">Amplitude</div><div class="val" style="font-size:18px">3.30<span class="u">V</span></div></div>
+            <div class="tile good"><div class="lab">Stability</div><div class="val" style="font-size:18px">0.4<span class="u">%</span></div></div>
+          </div>
+          <button class="btn ghost wide">Check stability · 10 shots</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="notecard" style="margin-top:12px"><b>Dashboards, not tables:</b> Monitor leads with environmental tiles; Analysis feels like Preview for a run — header, segmented modes, a large map; Reference makes the plot the hero with a stability verdict you can read in a glance.</div>
+</section>
+
+<footer><div class="wrap">
+  <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:baseline">
+    <span>TCT Cockpit — recovered design language · v1</span>
+    <span style="margin-left:auto;color:var(--muted)">System: <span class="mono">gui/style.py · panel_kit · run_state_viewmodel</span></span>
+  </div>
+  <p style="margin-top:12px;max-width:70ch">Every screen above keeps its real controls and live values — this is a composition target, not a rewrite. The migration path is a thin re-skin: build the six primitives once, then each panel snaps to the language.</p>
+</div></footer>
+</main>
+
+<script>
+// theme toggle
+const ttb=document.getElementById('tt');
+ttb.addEventListener('click',()=>{
+  const r=document.documentElement;
+  const cur=r.getAttribute('data-theme')|| (matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light');
+  r.setAttribute('data-theme', cur==='dark'?'light':'dark');
+  drawAll();
+});
+const css=v=>getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+// ---- tiny chart helpers (canvas), redraw on theme change ----
+function mkCanvas(id,h){const el=document.getElementById(id);if(!el)return null;
+  el.innerHTML='';const c=document.createElement('canvas');const w=el.clientWidth||520;
+  const dpr=Math.min(2,window.devicePixelRatio||1);c.width=w*dpr;c.height=h*dpr;
+  c.style.width='100%';c.style.height=h+'px';const x=c.getContext('2d');x.scale(dpr,dpr);
+  el.appendChild(c);return {x,w,h};}
+
+function heat(id,h){const o=mkCanvas(id,h);if(!o)return;const {x,w}=o;
+  const cols=13,rows=8,pad=8,cw=(w-pad*2)/cols,ch=(h-pad*2)/rows;
+  for(let i=0;i<cols;i++)for(let j=0;j<rows;j++){
+    const dx=(i/cols-0.55),dy=(j/rows-0.5);const g=Math.exp(-(dx*dx*7+dy*dy*9))*0.9+Math.random()*0.08;
+    const c1=[11,18,30],c2=[90,169,255],c3=[55,212,224];
+    let r,gr,b;if(g<0.5){const t=g/0.5;r=c1[0]+(c2[0]-c1[0])*t;gr=c1[1]+(c2[1]-c1[1])*t;b=c1[2]+(c2[2]-c1[2])*t;}
+    else{const t=(g-0.5)/0.5;r=c2[0]+(c3[0]-c2[0])*t;gr=c2[1]+(c3[1]-c2[1])*t;b=c2[2]+(c3[2]-c2[2])*t;}
+    x.fillStyle=`rgb(${r|0},${gr|0},${b|0})`;
+    x.fillRect(pad+i*cw+0.7,pad+j*ch+0.7,cw-1.4,ch-1.4);}
+}
+function line(id,h,fn,accentVar,fill){const o=mkCanvas(id,h);if(!o)return;const {x,w}=o;
+  const pad=10,gw=w-pad*2,gh=h-pad*2;
+  x.strokeStyle=css('--hairline');x.lineWidth=1;
+  for(let i=0;i<=4;i++){const yy=pad+gh*i/4;x.beginPath();x.moveTo(pad,yy);x.lineTo(w-pad,yy);x.stroke();}
+  const pts=[];for(let i=0;i<=60;i++){const t=i/60;pts.push([pad+gw*t,pad+gh*(1-fn(t))]);}
+  const ac=css(accentVar);
+  if(fill){x.beginPath();x.moveTo(pts[0][0],h-pad);pts.forEach(p=>x.lineTo(p[0],p[1]));x.lineTo(pts[pts.length-1][0],h-pad);x.closePath();
+    const g=x.createLinearGradient(0,pad,0,h-pad);g.addColorStop(0,ac+'55');g.addColorStop(1,ac+'00');x.fillStyle=g;x.fill();}
+  x.strokeStyle=ac;x.lineWidth=2;x.beginPath();pts.forEach((p,i)=>i?x.lineTo(p[0],p[1]):x.moveTo(p[0],p[1]));x.stroke();
+  const last=pts[pts.length-1];x.fillStyle=ac;x.beginPath();x.arc(last[0],last[1],3,0,7);x.fill();
+}
+function bars(id,h){const o=mkCanvas(id,h);if(!o)return;const {x,w}=o;const n=40,pad=8,bw=(w-pad*2)/n;
+  for(let i=0;i<n;i++){const t=i/n;const v=Math.exp(-Math.pow((t-0.42)*3.2,2))*0.92+0.03;
+    x.fillStyle=i/n>0.36&&i/n<0.5?css('--accent'):css('--hairline-strong');
+    x.fillRect(pad+i*bw+0.6,h-pad-v*(h-pad*2),bw-1.2,v*(h-pad*2));}
+}
+function stage(id,h){const o=mkCanvas(id,h);if(!o)return;const {x,w}=o;const pad=14;
+  x.strokeStyle=css('--hairline');x.lineWidth=1;
+  for(let i=0;i<=6;i++){const xx=pad+(w-pad*2)*i/6;x.beginPath();x.moveTo(xx,pad);x.lineTo(xx,h-pad);x.stroke();}
+  for(let i=0;i<=4;i++){const yy=pad+(h-pad*2)*i/4;x.beginPath();x.moveTo(pad,yy);x.lineTo(w-pad,yy);x.stroke();}
+  // travel bounds
+  x.strokeStyle=css('--hairline-strong');x.setLineDash([4,4]);x.strokeRect(pad+8,pad+6,(w-pad*2)-40,(h-pad*2)-16);x.setLineDash([]);
+  // current pos
+  const px=pad+(w-pad*2)*0.28,py=pad+(h-pad*2)*0.42;
+  x.strokeStyle=css('--accent');x.lineWidth=1.4;
+  x.beginPath();x.moveTo(px-9,py);x.lineTo(px+9,py);x.moveTo(px,py-9);x.lineTo(px,py+9);x.stroke();
+  x.fillStyle=css('--accent');x.beginPath();x.arc(px,py,3.4,0,7);x.fill();
+}
+function drawAll(){
+  heat('heat',188);heat('heat2',150);
+  line('zcurve',96,t=>Math.exp(-Math.pow((t-0.55)*4.5,2))*0.85+0.05,'--cyan',true);
+  line('ramp',120,t=>Math.min(1,t*1.15)*0.9+0.05,'--danger',true);
+  line('wave',150,t=>{const p=Math.exp(-Math.pow((t-0.32)*7,2));return (p-Math.exp(-Math.pow((t-0.44)*9,2))*0.35)*0.8+0.12;},'--accent',true);
+  line('refwave',110,t=>Math.exp(-Math.pow((t-0.35)*7,2))*0.8+0.12,'--good',true);
+  bars('hist',96);
+  stage('stage',150);
+  line('mon',96,t=>0.5+Math.sin(t*9)*0.12+Math.sin(t*22)*0.05,'--accent',false);
+}
+window.addEventListener('resize',()=>{clearTimeout(window._rt);window._rt=setTimeout(drawAll,120);});
+drawAll();
+</script>

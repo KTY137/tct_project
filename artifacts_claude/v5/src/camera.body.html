@@ -1,0 +1,173 @@
+<!-- title: v5 · Camera -->
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Panel 6/11</p>
+  <h1>Camera</h1>
+  <p class="lede">
+    A full-bleed camera well. Controls float on a glass rail <em>inside</em> the
+    well's margin; acquisition settings become a collapsible inspector sheet.
+    Offline is neutral and quiet — the audit's red "NOT CONNECTED" and the fake
+    flat histogram both die.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">owner: Noah · truth: Paul</span>
+    <span class="meta-chip">streaming = ACTIVE·benign (accent, never green)</span>
+    <span class="meta-chip">saturation promoted to first-class chip</span>
+  </div>
+
+  <h2>The mockup — streaming</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:70px; left:14px">1</div>
+    <div class="callout" style="top:70px; right:300px">2</div>
+    <div class="callout" style="bottom:120px; left:14px">3</div>
+    <div class="callout" style="top:150px; right:14px">4</div>
+    <div class="callout" style="bottom:64px; left:330px">5</div>
+
+    <div class="panelbody">
+      <!-- camera well -->
+      <div class="card" style="flex:1; display:flex; flex-direction:column">
+        <div class="hd">Camera
+          <span class="chip" style="margin-left:8px">ACTIVE · streaming</span>
+          <span class="chip warn">saturation 0.3%</span>
+          <span class="sub">blackfly · mono8 · 10.0 fps</span>
+        </div>
+        <div class="bd" style="flex:1; padding:8px">
+          <div class="well-fig" style="height:420px">
+            <div class="shade"></div>
+            <div class="plot" style="height:calc(100% - 3px)">
+              <!-- beam spot -->
+              <div style="position:absolute; inset:0;
+                background: radial-gradient(18% 14% at 52% 47%, rgba(233,237,245,.95) 0%, rgba(160,170,190,.55) 30%, rgba(70,78,95,.25) 55%, transparent 75%)"></div>
+              <!-- crosshair -->
+              <div style="position:absolute; left:0; top:47%; width:100%; height:1px; background:rgba(90,169,255,.35)"></div>
+              <div style="position:absolute; left:52%; top:0; width:1px; height:100%; background:rgba(90,169,255,.35)"></div>
+              <!-- beam overlay ellipse -->
+              <div style="position:absolute; left:44.5%; top:39%; width:15%; height:16%; border:1.5px solid var(--armed); border-radius:50%; opacity:.85"></div>
+              <!-- glass control rail INSIDE the well margin -->
+              <div style="position:absolute; left:10px; bottom:10px; display:flex; gap:8px; align-items:center;
+                          background:rgba(18,24,36,.92); border:1px solid var(--hairline-strong); border-radius:12px; padding:7px 10px">
+                <span class="btn primary" style="padding:5px 14px">▶ Live</span>
+                <span class="btn quiet" style="padding:5px 12px">Single</span>
+                <span class="btn quiet" style="padding:5px 12px">■ Stop</span>
+                <span style="width:1px; height:22px; background:var(--hairline)"></span>
+                <span class="chip">crosshair</span>
+                <span class="chip">beam overlay</span>
+                <span class="btn ghost" style="padding:5px 12px">Save frame</span>
+                <span class="btn ghost" style="padding:5px 12px">ROI</span>
+              </div>
+              <!-- stats HUD: opaque, corner -->
+              <div style="position:absolute; right:10px; top:10px; display:flex; flex-direction:column; gap:4px;
+                          background:rgba(18,24,36,.92); border:1px solid var(--hairline-strong); border-radius:10px; padding:8px 10px; font-family:var(--mono); font-size:10.5px">
+                <span>c<sub>x</sub> 6.24 · c<sub>y</sub> 4.81 mm</span>
+                <span>σ<sub>x</sub> 0.42 · σ<sub>y</sub> 0.45 mm</span>
+                <span>peak 214 · mean 38.2</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- histogram strip -->
+        <div style="padding:0 8px 8px">
+          <div class="well-fig" style="height:56px">
+            <div class="plot" style="height:100%">
+              <svg viewBox="0 0 600 50" preserveAspectRatio="none" style="position:absolute; inset:4% 3%; width:94%; height:88%">
+                <path d="M0,50 L20,48 C60,44 90,10 140,18 C200,28 260,42 380,46 C460,48 540,49 600,49 L600,50 Z" fill="rgba(90,169,255,.35)" stroke="#5aa9ff" stroke-width="1"/>
+              </svg>
+              <span class="axis" style="right:8px; top:4px">0 … 255</span>
+              <div style="position:absolute; right:3%; top:0; bottom:0; width:2px; background:var(--armed); opacity:.8"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- inspector sheet -->
+      <div style="width:280px; flex:none; display:flex; flex-direction:column; gap:10px">
+        <div class="card">
+          <div class="hd">Acquisition</div>
+          <div class="bd sheet" style="padding:0">
+            <div class="srow"><span class="lbl">Exposure</span><span class="spacer"></span><span class="val">5 000</span><span class="unit">µs</span></div>
+            <div class="srow"><span class="lbl">Auto exposure</span><span class="spacer"></span><span class="val">off</span></div>
+            <div class="srow"><span class="lbl">Gain</span><span class="spacer"></span><span class="val">0.00</span><span class="unit">dB</span></div>
+            <div class="srow"><span class="lbl">Frame rate</span><span class="spacer"></span><span class="val">10.0</span><span class="unit">fps</span></div>
+            <div class="srow"><span class="lbl">Pixel format</span><span class="spacer"></span><span class="val">mono8</span></div>
+            <div class="srow"><span class="lbl">Binning</span><span class="spacer"></span><span class="val">1</span></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="hd">▸ Image processing</div>
+        </div>
+        <div class="card">
+          <div class="hd">▸ Trigger</div>
+        </div>
+        <div class="card">
+          <div class="hd">Frame</div>
+          <div class="bd sheet" style="padding:0">
+            <div class="srow"><span class="lbl">Frame #</span><span class="spacer"></span><span class="val">1 482</span></div>
+            <div class="srow"><span class="lbl">Sensor temp</span><span class="spacer"></span><span class="val">41.2</span><span class="unit">°C</span></div>
+            <div class="srow"><span class="lbl">Background</span><span class="spacer"></span><span class="val">captured</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> the well is ~75% of the panel; the image is never resized by chrome ·
+    <b>2</b> saturation/clipping promoted from the log to a standing chip (amber at threshold) ·
+    <b>3</b> glass rail floats in the well margin — opaque backing, never over the beam ·
+    <b>4</b> inspector: FormSheet rows; Image-processing/Trigger collapse ·
+    <b>5</b> histogram is a slim strip under the well with a real clip marker — no fake flat line offline.
+  </p>
+
+  <h2>The offline state</h2>
+  <div class="stage-wrap"><div class="stage" style="min-width:1100px">
+    <div class="panelbody">
+      <div class="card" style="flex:1">
+        <div class="bd">
+          <div class="empty" style="padding:56px 10px">
+            <div class="ico">📷</div>
+            <div class="t1">Camera offline</div>
+            <div class="t2">Connect from the shell band — streaming resumes on its own.
+               Beam statistics appear with the first frame.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">Neutral, dimmed, one sentence (StateStack page 1). The audit's red
+     "CAMERA NOT CONNECTED", the seven "NO FRAME YET" capsules and the fake histogram
+     line all collapse into this.</p>
+
+  <h2>Decisions</h2>
+  <ol class="decisions">
+    <li><b>Full-bleed well.</b> Today four stacked cards (histogram, beam stats,
+      frame info, view&amp;capture) crush the image to ~40% height. v5: image ~75%,
+      histogram a strip, stats an opaque corner HUD, the rest inspector rows.</li>
+    <li><b>Offline is OFFLINE-rung neutral</b> — red implied danger where none
+      exists (law 2 violation, found live).</li>
+    <li><b>Streaming is ACTIVE·benign accent</b> — a camera is not motion (amber)
+      and success-green doesn't exist in this cockpit.</li>
+    <li><b>Saturation always visible.</b> Paul: clipping ruins measurements
+      silently — chip in the header, amber when above threshold, plus the
+      histogram clip marker.</li>
+    <li><b>Stats HUD opaque.</b> Same contrast-floor rule as the scan map — the
+      beam image is data; chips sit on solid plates in the margin.</li>
+  </ol>
+
+  <h2>What changes vs. today</h2>
+  <div class="table-scroll"><table class="spec">
+    <tr><th>Today (audit)</th><th>v5</th></tr>
+    <tr><td>Image ~40% height, 4 cards stacked below</td><td>image ~75%, strip histogram, corner HUD</td></tr>
+    <tr><td>Red offline banner + fake flat histogram</td><td>neutral StateStack empty state</td></tr>
+    <tr><td>7 "NO FRAME YET" capsules</td><td>stats appear with the first frame</td></tr>
+    <tr><td>Truncated frame-info tiles ("T (…", "GAI…")</td><td>Frame FormSheet, labels never truncate</td></tr>
+    <tr><td>SINGLE/STOP/LIVE as separate loose buttons</td><td>one glass rail: acquisition + overlays + capture</td></tr>
+    <tr><td>Right column of raw forms</td><td>FormSheet inspector, advanced sections collapsed</td></tr>
+  </table></div>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>No red without danger; offline is neutral (law 2, fixes live violation).</li>
+    <li>Streaming accent, never green (laws 1/6).</li>
+    <li>Image pixels opaque; HUD/rail on solid plates in margins (law 4/perf).</li>
+    <li>No fabricated data: histogram only draws real frames (law 8).</li>
+    <li>Hardware trigger config stays explicit in the inspector (law 7).</li>
+  </ul>
+</main>

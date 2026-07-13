@@ -1,0 +1,173 @@
+<!-- title: v5 · Bias Supply -->
+<main>
+  <p class="eyebrow">TCT Cockpit v5 · Panel 5/11</p>
+  <h1>Bias Supply</h1>
+  <p class="lede">
+    A safety dashboard, not a form. Measured voltage and HV state are the hero
+    pair — big, mono, unmissable. The kill switch is always present but earns
+    its red only when real volts exist. Everything the driver cannot read says
+    so, instead of pretending.
+  </p>
+  <div class="meta-chips">
+    <span class="meta-chip">owner: Paul (truth) · Noah (composition)</span>
+    <span class="meta-chip">ruling: red arrives only with volts</span>
+    <span class="meta-chip">HV output bit: UNKNOWN until decoded (TODO manual)</span>
+  </div>
+
+  <h2>The mockup — HV live (ramping)</h2>
+  <div class="stage-wrap"><div class="stage" style="position:relative">
+    <div class="callout" style="top:64px; left:14px">1</div>
+    <div class="callout" style="top:64px; right:340px">2</div>
+    <div class="callout" style="top:64px; right:14px">3</div>
+    <div class="callout" style="bottom:170px; left:330px">4</div>
+    <div class="callout" style="bottom:64px; right:14px">5</div>
+
+    <div class="panelbody" style="flex-direction:column">
+      <div style="display:flex; align-items:center; gap:8px">
+        <span style="font-weight:650">Bias supplies</span>
+        <span class="chip">iseg · ch0</span>
+        <span class="chip simc">SIM</span>
+        <span style="flex:1"></span>
+        <span class="btn red-fill">⏻ All outputs off</span>
+      </div>
+
+      <!-- hero pair -->
+      <div style="display:flex; gap:12px">
+        <div class="card" style="flex:2">
+          <div class="bd" style="display:flex; gap:14px; align-items:center; padding:16px">
+            <div style="flex:1">
+              <div class="tile danger" style="min-width:0; border:none; background:transparent; box-shadow:none; padding:0">
+                <div class="k">Voltage · measured</div>
+                <div class="v" style="font-size:44px; line-height:1.1">−120.0 <small style="font-size:18px">V</small></div>
+                <div class="c">ramping ↓ to −300.0 V · 5 V / 100 ms</div>
+              </div>
+            </div>
+            <div style="width:1px; align-self:stretch; background:var(--hairline)"></div>
+            <div style="flex:1; display:flex; flex-direction:column; gap:8px">
+              <span class="chip danger-fill" style="align-self:flex-start; font-size:12px; padding:5px 14px">HV LIVE · RAMPING</span>
+              <div style="display:flex; gap:8px">
+                <div class="tile" style="flex:1; min-width:0"><div class="k">Current</div><div class="v">1.42 <small>µA</small></div></div>
+                <div class="tile" style="flex:1; min-width:0"><div class="k">Compliance</div><div class="v">400 <small>µA</small></div><div class="c">limit ok</div></div>
+              </div>
+              <div style="height:6px; border-radius:3px; background:var(--sunk); position:relative; overflow:hidden">
+                <div style="position:absolute; left:0; top:0; bottom:0; width:40%; background:var(--danger); border-radius:3px"></div>
+              </div>
+              <span style="font-size:10.5px; color:var(--muted)">−120 V of −300 V setpoint · envelope −300 … 0 V</span>
+            </div>
+          </div>
+        </div>
+        <!-- channel rail -->
+        <div class="card" style="width:250px; flex:none">
+          <div class="hd">Channels</div>
+          <div class="bd" style="display:flex; flex-direction:column; gap:8px">
+            <div style="display:flex; align-items:center; gap:8px; border:1px solid var(--danger); border-radius:8px; padding:8px 10px">
+              <span class="dot hv"></span><b>CH0</b><span class="mono" style="font-size:11px; color:var(--danger)">−120.0 V</span>
+              <span style="margin-left:auto" class="chip danger">live</span>
+            </div>
+            <span style="font-size:10.5px; color:var(--faint)">single-channel supply — rail collapses when only CH0 exists</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- control sheet + envelope tray -->
+      <div style="display:flex; gap:12px">
+        <div class="card" style="flex:1">
+          <div class="hd">Ramp</div>
+          <div class="bd sheet" style="padding:0">
+            <div class="srow"><span class="lbl">Target voltage</span><span class="spacer"></span><span class="val">−300.0</span><span class="unit">V</span></div>
+            <div class="srow"><span class="lbl">Ramp step</span><span class="spacer"></span><span class="val">5.0</span><span class="unit">V</span></div>
+            <div class="srow"><span class="lbl">Step delay</span><span class="spacer"></span><span class="val">0.10</span><span class="unit">s</span></div>
+            <div class="srow" style="border-bottom:none; gap:8px">
+              <span class="btn amber" style="flex:1">⇗ Ramp to voltage</span>
+              <span class="btn red-out" style="flex:1">Output off (0 V)</span>
+            </div>
+          </div>
+        </div>
+        <div class="card" style="flex:1">
+          <div class="hd">Protection</div>
+          <div class="bd sheet" style="padding:0">
+            <div class="srow"><span class="lbl">Compliance (current limit)</span><span class="spacer"></span><span class="val">400.000</span><span class="unit">µA</span></div>
+            <div class="srow"><span class="lbl">Trip behavior</span><span class="spacer"></span><span class="val">ramp down + abort scan</span></div>
+            <div class="srow"><span class="lbl">Polarity</span><span class="spacer"></span><span class="val">negative</span><span class="unit"></span></div>
+          </div>
+        </div>
+        <div class="card" style="width:250px; flex:none">
+          <div class="hd">Advanced</div>
+          <div class="bd" style="display:flex; flex-direction:column; gap:6px">
+            <span class="btn ghost">▸ IV curve sweep</span>
+            <span class="btn ghost">▸ CCE vs bias</span>
+            <span style="font-size:10.5px; color:var(--faint)">standalone sweeps collapse — scans belong to the Planner envelope</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div>
+  <p class="caption">
+    <b>1</b> hero pair: measured V (the readback, not the setpoint) + HV state chip — visible from across the lab ·
+    <b>2</b> ramp progress against setpoint and envelope, red only because volts are real ·
+    <b>3</b> kill switch filled-red now; ghost-outline when offline, neutral outline when output-off ·
+    <b>4</b> controls become two quiet FormSheets — no more full-width compliance field or "LIMIT OK" slab ·
+    <b>5</b> sweeps live behind a drawer; routine HV work belongs to the planner's armed envelope.
+  </p>
+
+  <h2>The kill-switch escalation (Paul's ruling)</h2>
+  <div class="stage-wrap"><div class="stage" style="padding:16px 18px; display:flex; gap:22px; align-items:center; min-width:900px">
+    <div style="display:flex; flex-direction:column; gap:6px; align-items:center">
+      <span class="btn ghost">⏻ All outputs off</span>
+      <span style="font-size:10px; color:var(--faint)">OFFLINE — nothing to kill</span>
+    </div>
+    <span style="color:var(--faint)">→</span>
+    <div style="display:flex; flex-direction:column; gap:6px; align-items:center">
+      <span class="btn quiet">⏻ All outputs off</span>
+      <span style="font-size:10px; color:var(--faint)">connected · output off — ready, inert</span>
+    </div>
+    <span style="color:var(--faint)">→</span>
+    <div style="display:flex; flex-direction:column; gap:6px; align-items:center">
+      <span class="btn red-fill">⏻ All outputs off</span>
+      <span style="font-size:10px; color:var(--danger)">HV LIVE — one tap, instant, no latch</span>
+    </div>
+    <span style="flex:1"></span>
+    <div style="max-width:300px; font-size:11px; color:var(--muted)">
+      Law 5: fail-safe stops are one-tap. Law 1/2: red is never
+      standing chrome — it arrives with the volts and leaves with them.
+    </div>
+  </div></div>
+
+  <h2>Decisions</h2>
+  <ol class="decisions">
+    <li><b>Measured, not commanded.</b> The hero number is the readback. When the
+      driver can't read the output bit (ISEG decode: TODO manual), HV state shows
+      the dashed UNKNOWN rung — never a confident "OFF" that might be false-safe.</li>
+    <li><b>Two reds max, both earned.</b> Kill switch + HV state carry red only
+      while volts exist. The audit's two filled-red slabs on a disconnected panel
+      drop to ghost/neutral outlines.</li>
+    <li><b>Codex's red tray rejected.</b> Paul flagged the "red-accented DangerGate
+      tray pinned to bottom" as a law-1/2 violation — the envelope summary joins
+      the ramp card, colored only while armed/live.</li>
+    <li><b>FormSheet grammar.</b> Compliance/ramp/polarity become intrinsic-width
+      right-aligned rows; the "LIMIT OK" full-width bar dies (limit state is a
+      caption on the Compliance tile).</li>
+    <li><b>Multi-channel honest.</b> The channel rail lists real channels with
+      ladder dots; with one channel it collapses — no nested-tab furniture.</li>
+  </ol>
+
+  <h2>What changes vs. today</h2>
+  <div class="table-scroll"><table class="spec">
+    <tr><th>Today (audit)</th><th>v5</th></tr>
+    <tr><td>V/I/HV-state as small equal capsules, "NOT CONNECTED" ×3</td><td>hero pair (measured V + state chip); one panel-level offline state</td></tr>
+    <tr><td>Filled-red OUTPUT OFF + ALL OUTPUTS OFF while disconnected</td><td>escalation: ghost → outline → filled with volts</td></tr>
+    <tr><td>Full-width compliance field + LIMIT OK bar-slab</td><td>Protection FormSheet + tile caption</td></tr>
+    <tr><td>POLARITY group nearly empty</td><td>one sheet row; hidden if unsupported by the supply</td></tr>
+    <tr><td>Nested channel tabs inside the main tab</td><td>channel rail cards with ladder dots</td></tr>
+    <tr><td>Amber spine on the idle Bias Voltage group</td><td>amber only while ramping is requested/armed</td></tr>
+  </table></div>
+
+  <h2>Law compliance</h2>
+  <ul class="laws">
+    <li>Red = HV-live/trip/abort exclusively; disconnected panel is fully quiet (laws 1/2).</li>
+    <li>Kill switch one-tap, no latch — it can only make things safer (law 5).</li>
+    <li>Unreadable output bit → UNKNOWN rung, never assumed OFF (law 8).</li>
+    <li>Mono numerals, measured vs setpoint always labeled apart (laws 3/7).</li>
+    <li>Ramp start remains DangerGate-confirmed; envelope covers in-scan ramps (§11).</li>
+  </ul>
+</main>

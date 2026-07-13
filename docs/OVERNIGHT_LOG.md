@@ -1,0 +1,116 @@
+# Overnight autonomous run — log & charter
+
+*Started 2026-07-08 night. User (Kaya) asleep, granted blanket approval:
+"be ambitious, do all the things we talked about; when a sequence finishes,
+construct a new one." Themes named: general style expansion, driver/intercom
+robustness, more Scan Planner features, be creative.*
+
+## Guardrails that blanket approval does NOT waive
+
+- **No real hardware, no HV, no laser, no motor motion.** Everything simulated /
+  headless. Wavegen output stays off. Bench-only verification is deferred to
+  `docs/BENCH_CHECKLIST.md` (needs Kaya physically present).
+- **Mary reviews every substantial change before commit.** Green full suite
+  (`QT_QPA_PLATFORM=offscreen … pytest tests/ -q`) is the gate.
+- **Architecture-scale work is design-first**: Prometheus stress-test + a
+  `docs/design/` or `docs/research/` note before building, not build-then-hope.
+- **The agent_env intercom/harness is meta-infra**: I *analyze and propose*
+  (a note + patch plan), I do **not** autonomously rewrite the coordination
+  layer I run on. Its changes wait for Kaya's explicit go.
+- Each theme-sequence is fully built → reviewed → committed → pushed before the
+  next starts. No half-landed towers.
+
+## Sequence ledger (append one line per beat)
+
+- **S0 DONE 2026-07-08:** viewer-prerequisites round committed+pushed (5922dbc..d990d4d, 7 commits): crew tuning, G1 ramp shaping, analysis grid/CCE, cockpit kit, pytest-timeout, pyvisa+armed fix, theme-apply AV fix. Suite 571 passed.
+- **S1 DONE 2026-07-08:** shared map widget + ramp-aware estimate + PNG-export fix (7cba862, bc59250). Mary APPROVE-WITH-NITS. Suite 594.
+- **S2a DONE 2026-07-08:** scan_coordinator extracted from tct_gui (behavior-preserving, Mary byte-identical HV verify) + AnalysisPanel.load_run seam (412abe1, 3d3b4b8). Suite 611. Next: S2b ScanViewerPanel, S2c retire ScanPanel.
+- **S2b DONE 2026-07-10:** ScanViewerPanel live scan monitor + 32 tests (8312f41). Mary APPROVE-WITH-NITS, nits fixed. Suite 643.
+- **S2c DONE 2026-07-10:** viewer wired via coordinator, ScanPanel + ScanMapWindow retired, ScanMapView export/freeze-levels, planner Use-current-position (G3), coordinator start_plan scan_started fix (46ff681, 48396c0, 884afe8). Mary APPROVE. Suite 657. T1 sequence complete.
+- **G4 DONE 2026-07-10:** ScanViewerPanel.best_z_apply_requested(float) signal + "Apply to Planner" button (gated post-Z-focus); PlannerPanel.set_focus_z(z_mm) slot wired from viewer (9e66baf). Mary APPROVE. Signal registry + ARCHITECTURE.md entries updated.
+- **T3 partial DONE 2026-07-10:** hex sweep token-ification: gui scope_measurements/calibration_panel/laser_panel/scope_panel/device_panel now token-only; style.py gained SIM_PURPLE/ERROR_ORANGE; guard test tests/test_no_inline_hex_gui.py prevents regressions (allowlist: motor_panel 1 hex, settings_window 6 hex — follow-up pass) (a87d308). Mary APPROVE-WITH-NITS (3 nearest-token approximations noted; calibration dark-mode contrast → TECH_DEBT).
+- **Driver-liveness DONE 2026-07-10:** WaveformGenerator (is_alive *STB?, _teardown_session close/null) + BlackflyCamera (is_alive PySpin IsValid, _release_hw balanced release); both idempotent after dirty death; tests/test_reconnect_liveness.py (15 tests). Root cause of Kaya's bench freeze bug (64df056). Mary APPROVE (safety lens); camera IsValid-vs-grab cross-thread → TECH_DEBT, folds into GUI-thread beat.
+- **T6 DONE 2026-07-10:** pyqtgraph accumulation hang FIXED: tests/conftest.py autouse fixture drains Qt DeferredDelete after every test (suite wedged past ~450 tests). Suite now 690 passed clean (548a7fa).
+- **Enforcement beat DONE 2026-07-11:** 3-layer-law static + dynamic enforcement landed (design/cockpit-v5 @ e85a94c): tests/test_layer_contracts.py (AST import-scan static half, layer rank matrix, "wrong layer" violations) + tests/test_gui_thread_watchdog.py (10 ms GUI heartbeat + heavy workload, dynamic half, "right layer wrong thread" catches, proof old sync path would fail ~1.31 s for 500x500 plan). Planner estimate off-thread via persistent _EstimateWorker. Suite 731. Mary APPROVE.
+- **Slice 1 DONE 2026-07-11:** QML-hybrid chrome slice 1 landed (experimental/qml-hybrid-slice1 @ 0f90573): NEW gui/qml_theme.py (Theme singleton), gui/qml_shell.py (_ShellBridge+_TabShelfAdapter), gui/scope_viewmodel.py (scope mirror), gui/qml/Shell.qml (rail+shelf). Opt-in TCT_QML_SHELL=1; classic default unchanged. tests/test_qml_shell.py (11 tests: boot default/QML, detach/redock, rail reach, fail-safe fallback, soft-reload cleanup, Theme/tab-shelf sync, no-hex). Suite 742. Mary APPROVE_WITH_NITS (2 RISKs + NIT fixed). TECH_DEBT entries (a-e) logged.
+
+## Theme backlog (ranked; I pull sequences from here top-down)
+
+### T1 — Scan Viewer (Cockpit Phase 2), already scoped
+Shared map widget → `scan_coordinator` extraction (Abel logic @Opus + Noah
+wiring, paired, behavior-preserving) → `ScanViewerPanel` → retire ScanPanel.
+Design locked in `docs/design/cockpit_style_overhaul.md` +
+`docs/research/scan_viewer_design_review.md`.
+
+### T2 — Driver robustness (sim-testable hardening)
+- `is_alive()` for every backend (the `gui_architecture_plan.md` follow-up):
+  GRBL motor `?` status poll, ISEG bias status query (needs cited form → maybe
+  Prometheus), wavegen `*STB?`, camera PySpin `IsValid`/`DeviceConnected`.
+- Fault-injection tests: connection loss mid-scan, timeout on every I/O path,
+  device fault → fail-safe (stop motion / ramp-down / surface) — extend the
+  existing `test_fault_injection*` suite.
+- Retry/timeout audit across drivers; unify the pattern; ensure no unbounded
+  retry, every read idempotent-only.
+- Wire the wavegen armed-state + `:OUTPut:LOAD?` readback (INFINITY-literal
+  safe) now that the query forms are manual-cited.
+
+### T3 — General style expansion (Cockpit Phases 1 & 4)
+- **Phase 1 CameraPanel rework**: big `FigureCard` instrument screen +
+  Acquisition Console cards + `MetricGrid` beam stats + histogram FigureCard;
+  migrate the hand-rolled temp readout to `ReadoutCell.set_state()`.
+- **Phase 4 consistency sweep**: kill the 24 legacy inline-hex across 9 gui
+  files (Mamoru has the list), tokenize `scope_measurements.py` cyan, give every
+  color-caching panel `refresh_theme(mode)`, wire the orphan kit tokens
+  (`panel_2/3`, `sunk`, `border_strong`, `hover`, `active`) into real surfaces.
+- App-shell polish (rule 5 — no logic into tct_gui): toolbar icon unification,
+  status "system ribbon", tab active-state.
+
+### T4 — Scan Planner features (creative, design-first)
+Candidates to stress-test with Prometheus then build the best 2-3:
+recipe presets/templates library; plan dry-run preview + per-step ETA using the
+new ramp-aware estimate; conditional/adaptive steps (skip-if, stop-on-threshold);
+named pause-points; multi-region (stitched sub-rasters); plan diff/versioning;
+plan import/export polish; live plan-vs-actual overlay in the viewer.
+`plan_estimate` ramp-preview follow-up folds in here.
+
+### T4.5 — Data pipeline & live TCT maps (Jonathan-led, design-first) ⭐ Kaya-requested
+- **Live 2D TCT scan maps** — largely lands *with* the ScanViewer (T1): the
+  `on_point_done` stream + Jonathan's `analysis/scan_grid.py` (already
+  NaN-counting, mid-scan tolerant) feed a live heatmap. "Epic" upgrades:
+  per-quantity selector (charge_pC / amplitude_V / ToT / drift_time / rise_time
+  / cfd_time — the set `scan_map_window` already knows), live autoscaling
+  colorbar, cursor readout of the point under the crosshair, progress overlay
+  (n_missing already available). Build the map widget once, reuse live + review.
+- **Modular save policy** — the storage-efficiency ask. Introduce a pluggable
+  `SavePolicy` in `data/save_options.py` (strategy pattern) that the
+  `hdf5_writer` consults per `ScanResult` for *what to persist*:
+  - `full` — DUT + ref waveforms + derived scalars (today's behavior; default,
+    unchanged).
+  - `derived_only` — only the DUT scalar quantities (charge/amplitude/timing),
+    **no waveforms** → order-of-magnitude smaller files for big rasters.
+  - `dut_only` — drop the reference waveform, keep DUT (or a decimated form).
+  - (stretch) `on_condition` — full waveform only when a threshold/flag is met.
+  MODULARITY + Jonathan's non-negotiables: the policy is explicit, recorded in
+  file metadata (analysis must know waveforms were *intentionally* not stored,
+  not lost), and `SCAN_DATA_FORMAT.md` documents each policy's resulting layout.
+  Never silently discard — the "waveforms omitted by policy X" state is a
+  first-class, counted attribute. Design-first: Prometheus stress-test + a
+  `docs/design/` note (format-contract change), then Jonathan implements.
+
+### T5 — Intercom/harness robustness (PROPOSE ONLY, no auto-merge)
+Read-only analysis of the `agent_env` file bus (outbox→inbox, file_bridge,
+watcher, lane routing): failure modes, lost-message handling, stale-lock
+recovery, the local_only fallback. Deliver a `docs/research/` note + patch plan.
+Do not edit the harness autonomously.
+
+### T6 — Test/infra hardening (fold in opportunistically)
+Root-cause + kill the pyqtgraph/offscreen access-violation class properly (not
+just the one call site); consider a session-scoped QApplication fixture +
+deferred-delete flush in conftest; pin pytest itself in requirements.
+
+## Open decisions parked for Kaya (I will NOT guess these)
+
+(none currently open)
+
+**Resolved decisions (archive):**
+- **Map colorbar levels (2026-07-08, RESOLVED 2026-07-10):** freeze-levels toggle built into ScanMapView, ratified by Kaya, implemented in 46ff681.

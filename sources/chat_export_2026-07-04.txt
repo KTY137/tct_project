@@ -1,0 +1,142 @@
+================================================================================
+TCT LAB APP — SESSION EXPORT (compacted)
+Date: 2026-07-04
+Orchestrator: Adam (master agent). Crew: Paul (hardware), Noah (ui-ux),
+Abel (acquisition), Jonathan (data), Mary (qa), Samantha (docs), Prometheus (research).
+================================================================================
+
+--------------------------------------------------------------------------------
+0. SESSION CONTEXT
+--------------------------------------------------------------------------------
+- App: TCT (Transient Current Technique) lab control app, PySide6 (NOT PyQt6).
+  Root: c:\Users\nukei\Desktop\project_tct
+  App:  tct_software/TCT_Setup/TCT_app/
+- Standalone, simulation-first. Hard safety rules: no auto HV/motion/scan/home;
+  dangerous actions need explicit confirmation; fail safe on hardware error;
+  everything must run in simulation with zero hardware.
+- No pre-existing in-flight task at session start; work below was defined this session.
+
+--------------------------------------------------------------------------------
+1. TASK: Integrate Dustin's Tektronix scope driver  (crew: Paul / hardware-dev)
+--------------------------------------------------------------------------------
+Source (reference-only): random_sources/dustins_software/osci_script_dustin/
+  Tektronix SCPI/PyVISA acquisition toolkit. Standout feature: FastFrame burst
+  acquisition (HORizontal:FASTframe + CURVEStream?) ~380k Aq/s vs the app's
+  one-shot-per-trigger read_channel(). Also per-frame timestamps + HW averaging.
+
+User intent: reuse his actual code (attribution matters), vendor it like
+vendor/e4control — don't rewrite. Selected: FastFrame bursts + timestamps +
+averaging + binary->array conversion (route into app HDF5, not his CSV).
+
+Done by Paul (before a plan-mode pause, later resumed):
+- Vendored vendor/dustin_scope/ : MSO5204B/ and MDO3102/ (acquire/config/translater).
+  Two authorized mechanical fixes only:
+    * removed module-level binary_to_plot(...) call in MSO5204B/translater.py
+      (violated no-side-effects-on-import).
+    * fixed PEP 701 nested-quote f-strings in config.py -> single quotes (Py 3.10).
+  DRS4/ in his source was empty (just __init__.py); unrelated to the app's own
+  devices/oscilloscope_drs4.py (different hardware).
+- New additive driver devices/oscilloscope_tek_fastframe.py :
+  TekFastFrameOscilloscope(BaseDevice). connect() only opens VISA + *IDN?.
+  Full simulation branch. Reuses translater decode via in-memory BytesIO.
+- Decisions (Adam): do NOT patch the vendored mean_waveform() bug (adapter's
+  acquire_averaged() reassembles from working funcs instead); keep MDO3102 vendoring.
+- REMAINING (Paul resumed, in flight at export time): requirements.txt
+  (matplotlib/pandas/tqdm; keep numpy<2 pin), config_validator + device_manager
+  wiring for backend: tek_fastframe (mirror bias_supply e4control precedent),
+  commented devices.yaml example, run pytest.
+  >> RESULT: see section 6 (appended when Paul reports).
+
+--------------------------------------------------------------------------------
+2. TASK: Remove "Reference Monitor" from motor tab  (crew: Noah / ui-ux-dev) — DONE
+--------------------------------------------------------------------------------
+User: the reference monitor doesn't need to live in the motor panel anymore
+because panels are detachable. Disambiguated to the Intensity Monitor panel
+(gui/intensity_panel.py has QGroupBox("Reference Monitor") + "Reference waveform"
+plot), which shared the "Motor / Intensity Monitor" tab with the motor controls.
+
+Noah's change (tct_gui.py tab-construction only): split the combined tab into two
+independent, independently-detachable tabs:
+    1. "Motor Stage"        (motor controls only)
+    2. "Reference Monitor"  (the intensity panel)
+Nothing deleted; ctrl_tab/ctrl_layout wrapper removed. Tab-state persistence
+(QSettings active_tab / detached_titles) checked — no crash; worst case one-time
+cosmetic layout reset. All 70 tests pass; app still starts in simulation.
+
+--------------------------------------------------------------------------------
+3. TASK: Motor control redesign (OctoPrint layout + um micro-steps) — PLANNING
+--------------------------------------------------------------------------------
+Status: exploration complete, design/plan not finalized (paused when user pivoted).
+Key facts gathered (for when this resumes):
+- Motor iface: devices/motor_base.py. Position NamedTuple (.x_mm/.y_mm/.z_mm, mm).
+  move_relative(dx_mm,dy_mm,dz_mm), move_to(x,y,z), home(axes), zero_position(),
+  stop(), move_to_center(). Single-axis jog is the norm.
+- limits = SoftwareLimits dataclass (x_min..z_max, flat floats, mm). Config envelope
+  (devices.yaml): X -300..0, Y -300..0, Z -400..0 mm.
+- GRBL native resolution: X/Y microstep = 0.0125 mm (12.5 um); Z = 0.0025 mm (2.5 um).
+  Full-step detent X/Y 0.2mm, Z 0.04mm. snap_mode 'off' by default.
+  => IMPORTANT: a um interface is useful, but 1 um steps are finer than X/Y hardware
+     can resolve (12.5 um). Preset um choices should respect this.
+- Current motor_panel.py is a 2-col +/- grid, NOT an OctoPrint cross. Jog step
+  spinbox 0.001-10.0 mm, default 2 decimals (so 1um not reachable at default precision).
+- MUST PRESERVE on redesign: MotorPanel(motor, parent=None) ctor; set_as_scan_start
+  signal (-> scan_panel.set_start_position); shutdown(); 500ms threaded _PositionPoller
+  with set_paused; _run_async/_MotorTask worker; _motion_widgets disable-during-move
+  (STOP excluded, runs on GUI thread, calls motor.stop() directly — guarded by
+  test_grbl_stop_sends_jog_cancel); single _on_position_updated sink that formats
+  labels AND drives stage_view.set_position(x,y,z).
+- Style: gui/style.py has light/dark theme, ACCENT #2d7ff9, WARN_RED #c0392b (inline
+  danger styling), QGroupBox cards, suffix-carrying QDoubleSpinBox (real u glyph),
+  emoji-in-text buttons. No shared mm<->um helper exists (ad-hoc *1000 elsewhere).
+- No GUI-level tests touch MotorPanel; only device-level test_motor_grbl_mock.py.
+
+--------------------------------------------------------------------------------
+4. TASK: Master/slave remote-control system  (crew: Abel / acquisition-dev) — PLANNING
+--------------------------------------------------------------------------------
+User intent (to be refined in plan):
+- Standalone TCT app should talk to a second install of itself over a server, to
+  remote-control the lab setup from home.
+- Acquisition stays LOCAL at the lab (avoid network latency during capture).
+- Full measurement data transfers AFTER the run completes (bulk, post-run).
+- Live view from home = lightweight snapshots (e.g. every Nth / decimated waveform)
+  + progress, position, bias V/I, intensity. User asked to refine/validate this idea.
+Abel tasked to write docs/design/remote_control_plan.md covering: roles (lab=master/
+authoritative vs home=remote controller; consider one app w/ two run-modes), 3 channels
+(control / live-telemetry / bulk-data), transport eval (WebSocket/ZeroMQ/gRPC/MQTT/
+TCP+JSON/REST+SSE) with a recommendation, SAFETY (network commands must not bypass
+local safety gating/interlocks; fail-safe on link drop) + security (VPN/auth), phased
+roadmap with crew ownership, open questions. Grounded in scan_controller,
+state_machine, device_manager, status_bus, hdf5_writer, save_options, influx_writer,
+SCAN_DATA_FORMAT.md.
+  >> RESULT: docs/design/remote_control_plan.md (appended when Abel reports).
+
+--------------------------------------------------------------------------------
+5. FUTURE / PARKED: InfluxDB + Grafana server telemetry
+--------------------------------------------------------------------------------
+Decision: keep in mind for the future, don't over-invest now.
+- App ALREADY has data/influx_writer.py (InfluxWriter, InfluxDB v2, slow-control
+  readings, optional + disabled by default, import-safe no-op without influxdb-client).
+- InfluxDB = time-series DB (slow signals: bias V/I, temp, humidity, intensity...).
+  Grafana = dashboards/alerts on top (NOT yet present).
+- Assessment: worthwhile incremental win for SLOW monitoring/alerting/long-run history;
+  NOT a replacement for HDF5 waveform data (wrong shape). Keep optional/import-safe.
+- Suggested staging (deferred): (1) stand up Influx+Grafana via Docker, flip
+  influx.enabled, first dashboard from existing slow-control data; (2) broaden to
+  bias/intensity time-series tagged by run_id + alerts; (3) dedicated telemetry server.
+
+--------------------------------------------------------------------------------
+6. AGENT RESULTS (appended as they complete)
+--------------------------------------------------------------------------------
+[DONE] Paul — scope integration complete. Created vendor/dustin_scope/
+  {MSO5204B,MDO3102,DRS4-placeholder} + devices/oscilloscope_tek_fastframe.py
+  (TekFastFrameOscilloscope: apply_configuration / acquire_burst /
+  acquire_burst_with_timestamps / acquire_averaged, numpy out, in-memory decode,
+  sim branch). Wired backend: tek_fastframe in config_validator + device_manager
+  (mirrors bias_supply e4control). requirements.txt += matplotlib/pandas/tqdm
+  (numpy<2 pin kept). devices.yaml example commented (default stays backend: visa).
+  Selection: set oscilloscope.backend: tek_fastframe in devices.yaml.
+  Vendored mean_waveform() bug left untouched (adapter works around it).
+  TESTS: 70 passed. App starts in simulation with no hardware.
+
+[pending] Abel — remote_control_plan.md.
+================================================================================
