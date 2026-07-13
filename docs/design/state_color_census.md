@@ -101,7 +101,7 @@ ACTIVE-HV, ACTIVE-benign, UNKNOWN, TRIPPED, or command-class/not-state.
 | `settings_window.py` | 492,505-519,544-563,612-632 | VISA/LAN scan chip good/warn/busy. | CONNECTING while scanning; found/no-found command-class discovery result. |
 | `settings_window.py` | 1177-1178,1485-1487,1699 | Data-policy note crit/muted, parse label crit, inline red YAML border. | command-class config/data warning; inline red is non-HV and should move to tokens. |
 | `settings_window.py` | 1369-1372,1518-1547,1528-1529,1728 | YAML/dirty/sim/reconnect chips; saved/good, warn, crit, simulated; save flash. | command-class config validity; SIM for sim-count chip. |
-| `stage_view.py` | 64-65,331-334 | Plot/legend colors: scan good, laser warn, Position good, Limits neutral, Scan area info, Laser path armed. | Legend/data overlay, not hardware state; avoid green implying nominal hardware. |
+| `stage_view.py` | 64-65,331-334 | (REMOVED 2026-07-13 b7f88a3) Plot legend colors: scan good, laser warn, Position good, Limits neutral, Scan area info — deprecated 3D GL view removed, replaced by 2D X-Y/X-Z views. | Legacy entry; legend colors were overlay-only, not hardware state. |
 
 ## Files with no direct state-color styling
 

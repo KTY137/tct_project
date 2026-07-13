@@ -9,8 +9,8 @@
 
 The A/B/C/D classification is the ratified ground truth from the coupling
 analysis. Every file listed here was verified to exist in `TCT_app/tests/` on
-2026-07-13 — **no drift, no missing files, nothing invented.** Counts:
-**A = 49, B = 21, C = 40, D = 5 (115 total test files).**
+2026-07-13 (updated 2026-07-13 night) — **no drift, no missing files, nothing invented.** Counts:
+**A = 49, B = 21, C = 42, D = 5 (117 total test files).**
 
 | Bucket | Meaning | Migration behavior | Gate |
 |---|---|---|---|
@@ -146,7 +146,7 @@ into `SAFETY_NORMATIVE_TESTS.md`).
 
 ---
 
-## Bucket C — QWIDGET-PINNED (40 files)
+## Bucket C — QWIDGET-PINNED (42 files)
 
 Enumerated from disk = every remaining `tests/test_*.py` not in A/B/D. Bound to
 the classic QWidget panels / theme engine / shell; U1 reclaims the high-value
@@ -194,6 +194,8 @@ third into viewmodel contract tests, the rest retire or port as panels migrate.
 | 38 | `test_ui_monkey.py` | UI monkey denial ruleset (QTest harness; ~20% portable to QML walker) |
 | 39 | `test_worker_primitive.py` | `WorkerThread` primitive (Qt teardown) |
 | 40 | `test_bias_section_sim_channel_count.py` | bias settings widget sim-channel config |
+| 41 | `test_no_render_to_texture_children_in_gui.py` | RTT-widget child tree guard (AST + dynamic) |
+| 42 | `test_panel_glass_rollout.py` | glass Z-ladder role census + hazard-exclusion gates (builds real panels) |
 
 ---
 

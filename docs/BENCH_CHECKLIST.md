@@ -520,7 +520,7 @@ Source: `docs/research/camera_optics_setup.md` (verified live 2026-07-10).
 
 | Step | Check | Expected | Notes |
 |---|---|---|---|
-| R1 | **RHI coexistence:** Motor-Stage GLViewWidget + QML chrome render correctly in one OpenGL-pinned window on the i7-10510U iGPU. | No black box, no RHI error ("Failed to make context current"). Chrome renders; motor stage updates live. | GTX/RTX not available; iGPU is the real target. |
+| R1 | (RETIRED 2026-07-13 b7f88a3) **RHI coexistence:** 3D GL stage view + QML chrome — MOOT, stage_view.py removed. | Classic cockpit is now RTT-free (2D X-Y/X-Z views, no QML shell-embedded GLViewWidget). Design-rule guard test added. | See commit b7f88a3 (3D GL stage view removed). |
 | R2 | **Detach under QML shell:** Motor Stage → float → 2nd monitor (diff DPI if available) → redock. No persistent blank frame (a one-shot `update()` nudge is OK). | Redock restores live motor updates; no permanent render gap. | Tests window lifecycle + GPU context rebuild. |
 | F3 | **Perf on i7 (5% CPU idle; 100 ms heartbeat under load):** `TCT_QML_SHELL=1` app idle: rail + pill hover ColorAnimation + 1 Hz poll < 5% CPU. With a live simulated scope acquire (pyqtgraph 15 Hz sibling), GUI-thread heartbeat gap < 100 ms. | CPU stays calm; scope/motor updates are not starved. | Reuse `tests/test_gui_thread_watchdog.py` bounds on real hardware. Integrates animation cost into budget. |
 | F2/R4 | **RDP usability:** Launch the shell via RDP into the lab laptop (Microsoft Remote Desktop on Windows). Shell must launch and be usable under `opengl32sw`/llvmpipe (Mesa software backend). | App is responsive or gracefully falls back to classic shell (TCT_QML_SHELL unset). | If RDP path fails: document it; classic shell is the supported remote mode (one-env-var fallback). |
@@ -530,7 +530,36 @@ Source: `docs/research/camera_optics_setup.md` (verified live 2026-07-10).
 
 ---
 
-## 12. Metrology Bench Protocol — Stage↔Camera (Workstream B3)
+## 12. DWM Material on Classic Main Window (Windows 11 Real Display)
+
+**Last updated:** 2026-07-13 · **Requires Kaya at the real display.**
+
+**What to check:**
+- Launch TCT app in classic mode (do NOT set `TCT_QML_SHELL=1`; the default is now classic).
+- Navigate to **Settings → Theme**.
+- Locate the **Window Backdrop** combo (values: none | mica | acrylic).
+- Test each scenario below; observe for **visual correctness** under DWM on real glass (no crashes, no grey flash, material effect visible):
+
+| Scenario | Check | Expected |
+|---|---|---|
+| A1 (main) | Main window (classic QWidget panels only, no QML shell) with Mica enabled | Frosted material effect visible; blur on underlying desktop/windows is clear |
+| A2 (main) | Main window with Acrylic enabled | Acrylic/noise pattern visible; slightly less legible text behind frosted area vs. Mica |
+| A3 (detach) | Detach a panel (e.g., Motor) to a floating window; material should be inherited | Detached window also has material applied; no regression or loss of effect |
+| A4 (reload) | Close and re-open the theme window (`Settings → Theme`) while material is active | No black screen, no loss of material, no stall |
+
+**Expected result:**
+- All four scenarios pass without visual artifacts or crashes.
+- Material effects are **real DWM effects** (not our code's fake blur) — legibility of desktop text MUST drop noticeably; if text stays crisp/readable, the frosted effect is NOT active.
+- Opacity slider behavior: when a backdrop is active, opacity is auto-pinned to 100% and slider is disabled (with visible note).
+- Material/opacity persist across theme toggles (dark/light), app close/reopen, and detach/redock cycles.
+
+**Closes:**
+- C1/C2 feature acceptance on real hardware (backdrop.py + style.py integration + theme_editor UI; classic shell verification).
+- DWM ctypes isolation and fail-safe fallback soundness.
+
+---
+
+## 13. Metrology Bench Protocol — Stage↔Camera (Workstream B3)
 
 **Last updated:** 2026-07-13 · **Requires Kaya at the bench** (every step commands stage motion or
 needs hands on the optics). Feeds: `docs/research/metrology_feasibility.md` §7 (the measured-results
