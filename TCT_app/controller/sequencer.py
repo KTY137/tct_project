@@ -44,6 +44,7 @@ from typing import Protocol, runtime_checkable
 
 import yaml
 
+from controller.plan_compiler import ManualPauseStep, compile_plan
 from controller.scan_plan import ScanPlan
 
 # Persisted-file schema version (see save/load below).
@@ -56,6 +57,58 @@ SEQUENCE_FILE_VERSION = 1
 # is no longer a gate — record_outcome accepts ANY string and fails closed — it
 # only distinguishes a standard bad-run word from an unexpected one in the log.
 _VALID_OUTCOMES: frozenset[str] = frozenset({"finished", "aborted", "error"})
+
+
+# --------------------------------------------------------------------------- #
+# Sequencer-compatibility gate — fail-closed at every add/load entry point     #
+# --------------------------------------------------------------------------- #
+#
+# Some compiled plan steps are fundamentally incompatible with an UNATTENDED
+# overnight queue and must be rejected the instant a routine is queued or a
+# sequence file is loaded — never discovered at 3 a.m. mid-run.  This is ONE
+# extensible blacklist keyed by compiled-step TYPE: to forbid a future step kind,
+# add ``(StepType, "why")`` here and every entry point (``load_sequence_yaml``,
+# :class:`SequenceRunner`, the Qt ``SequenceCoordinator``) rejects it identically.
+#
+# ManualPauseStep is listed because a human-gated pause is the antithesis of an
+# unattended run (Mary A5.2a closure):
+#   * human-gated != unattended — the step exists to BLOCK for an operator action
+#     (e.g. "change the laser filter"); an overnight queue has no operator;
+#   * wedge + HV-hold — at run time the executor clears the pause event,
+#     transitions the run to PAUSED and blocks in ``_park_while_paused`` HOLDING
+#     HV at the last set point; no terminal signal ever fires, so the coordinator
+#     never advances and the whole night wedges with HV still energized;
+#   * PAUSED->FINISHED silent-skip — a TRAILING manual_pause is promoted
+#     PAUSED->FINISHED by the executor's terminal settle, so the entry would be
+#     recorded "finished" although the required human action never happened — a
+#     silent data-integrity failure.
+_SEQUENCER_INCOMPATIBLE_STEPS: tuple[tuple[type, str], ...] = (
+    (ManualPauseStep, "a manual_pause step (human-gated; cannot run unattended)"),
+)
+
+
+def assert_sequencer_compatible(plan: ScanPlan, *, name: str = "") -> None:
+    """Raise ``ValueError`` if *plan* cannot run inside an unattended sequence.
+
+    Compiles *plan* with the SAME :func:`~controller.plan_compiler.compile_plan`
+    the executor drives, then rejects it if any compiled step is a blacklisted
+    kind (see ``_SEQUENCER_INCOMPATIBLE_STEPS``).  The raised message names the
+    routine (*name*, else ``plan.name``) and the offending step kind, so an
+    operator can find and fix the culprit routine.  Pure: no hardware, no
+    threads, no I/O — a fail-closed gate called at every sequencer entry point
+    (:func:`load_sequence_yaml`, :class:`SequenceRunner`, the Qt coordinator).
+
+    Returns ``None`` for a compatible plan.
+    """
+    routine = name or plan.name or "<unnamed>"
+    for step in compile_plan(plan):
+        for bad_type, reason in _SEQUENCER_INCOMPATIBLE_STEPS:
+            if isinstance(step, bad_type):
+                raise ValueError(
+                    f"routine {routine!r} cannot run in an unattended sequence: "
+                    f"it contains {reason} [{bad_type.__name__}]. Remove it from "
+                    f"the plan or run the routine standalone (not queued)."
+                )
 
 
 class EntryState(str, Enum):
@@ -156,6 +209,13 @@ class SequenceRunner:
 
     def __init__(self, entries, preflight: PreflightHook | None = None) -> None:
         self.entries: list[SequenceEntry] = list(entries)
+        # Belt-and-braces fail-closed gate (Mary A5.2a): entries can be built
+        # programmatically (bypassing load_sequence_yaml's gate), so re-assert
+        # here — before any state or log line — that no entry carries an
+        # unattended-incompatible plan (e.g. a manual_pause).  Raises ValueError
+        # naming the offending routine; a partly-built runner is never returned.
+        for entry in self.entries:
+            assert_sequencer_compatible(entry.plan, name=entry.name)
         self._preflight: PreflightHook = preflight or NullPreflight()
         self.log: list[str] = []
         self._append_log(f"sequence created with {len(self.entries)} entr"
@@ -382,11 +442,20 @@ def load_sequence_yaml(path: str | Path) -> list[SequenceEntry]:
             source_path = item.get("source_path")
             if source_path is not None and not isinstance(source_path, str):
                 raise ValueError("'source_path' must be a string or null")
-            entries.append(
-                SequenceEntry(name=name, plan=plan, source_path=source_path)
-            )
         except (ValueError, KeyError, TypeError) as exc:
             raise ValueError(
                 f"sequence entry [{i}] is malformed: {exc}"
             ) from exc
+        # The entry parsed; now fail closed if its plan cannot run UNATTENDED
+        # (e.g. a manual_pause).  Deliberately a distinct message from the
+        # "malformed" framing above — the entry is WELL-FORMED, it simply cannot
+        # be queued — and it names the index AND the routine so the operator can
+        # find the offending entry in a large sequence file.
+        try:
+            assert_sequencer_compatible(plan, name=name)
+        except ValueError as exc:
+            raise ValueError(f"sequence entry [{i}]: {exc}") from exc
+        entries.append(
+            SequenceEntry(name=name, plan=plan, source_path=source_path)
+        )
     return entries

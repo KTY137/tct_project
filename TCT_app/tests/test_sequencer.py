@@ -15,7 +15,7 @@ from controller.scan_plan import (
 )
 from controller.sequencer import (
     EntryState, NullPreflight, PreflightResult, SequenceEntry, SequenceRunner,
-    load_sequence_yaml, save_sequence_yaml,
+    assert_sequencer_compatible, load_sequence_yaml, save_sequence_yaml,
 )
 
 
@@ -37,6 +37,35 @@ def _plan(name: str, values=(0.0, 1.0)) -> ScanPlan:
 def _entry(name: str, values=(0.0, 1.0), source_path=None) -> SequenceEntry:
     return SequenceEntry(name=name, plan=_plan(name, values),
                          source_path=source_path)
+
+
+def _plan_with_manual_pause(name: str, *, trailing: bool) -> ScanPlan:
+    """A plan whose COMPILED step list contains a ManualPauseStep.
+
+    ``trailing=True`` puts the manual_pause as the LAST compiled step (Mary's
+    PAUSED->FINISHED silent-skip case); ``trailing=False`` places it mid-plan
+    with acquire/save steps following it (Mary's wedge-holding-HV case).  Built
+    as a plain ``SequenceEntry``/``ScanPlan`` — neither is gated — so the fixture
+    itself never trips the guard under test.
+    """
+    pause = ActionBlock(action=ActionType.MANUAL_PAUSE,
+                        params={"prompt": "change the laser filter"})
+    acquire = ActionBlock(action=ActionType.ACQUIRE_WAVEFORM, params={})
+    save = ActionBlock(action=ActionType.SAVE_POINT, params={})
+    if trailing:
+        # single point → move, acquire, save, manual_pause: pause compiles LAST.
+        loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0],
+                         children=[acquire, save, pause])
+    else:
+        # two points → the pause has acquire/save (and the next point) after it.
+        loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0, 1.0],
+                         children=[pause, acquire, save])
+    return ScanPlan(name=name, root=[loop])
+
+
+def _pause_entry(name: str, *, trailing: bool) -> SequenceEntry:
+    return SequenceEntry(name=name,
+                         plan=_plan_with_manual_pause(name, trailing=trailing))
 
 
 def _runner(n=3, preflight=None) -> SequenceRunner:
@@ -353,3 +382,68 @@ def test_entries_not_a_list_raises(tmp_path):
     path.write_text("version: 1\nentries: {}\n", encoding="utf-8")
     with pytest.raises(ValueError):
         load_sequence_yaml(path)
+
+
+# --------------------------------------------------------------------------- #
+# fail-closed: manual_pause is incompatible with an UNATTENDED sequence        #
+# (Mary A5.2a) — rejected at every add/load entry point, mid-plan AND trailing #
+# --------------------------------------------------------------------------- #
+@pytest.mark.parametrize("trailing", [False, True])
+def test_assert_sequencer_compatible_rejects_manual_pause(trailing):
+    plan = _plan_with_manual_pause("night_shift", trailing=trailing)
+    with pytest.raises(ValueError) as ei:
+        assert_sequencer_compatible(plan, name="night_shift")
+    msg = str(ei.value)
+    assert "night_shift" in msg          # names the routine
+    assert "manual_pause" in msg         # names the offending step kind
+
+
+def test_assert_sequencer_compatible_passes_clean_plan():
+    # A plan without any blacklisted step returns None (no raise), and falls back
+    # to plan.name when no explicit name is given.
+    assert assert_sequencer_compatible(_plan("clean")) is None
+
+
+@pytest.mark.parametrize("trailing", [False, True])
+def test_load_rejects_manual_pause_naming_index_and_routine(tmp_path, trailing):
+    # A queue file whose SECOND entry carries a manual_pause plan fails closed on
+    # load, naming the entry index AND the routine — never a shortened queue.
+    entries = [
+        _entry("clean_0"),
+        _pause_entry("night_shift", trailing=trailing),
+    ]
+    path = tmp_path / "seq.yaml"
+    save_sequence_yaml(path, entries)     # save is provenance-only, not gated
+
+    with pytest.raises(ValueError) as ei:
+        load_sequence_yaml(path)
+    msg = str(ei.value)
+    assert "[1]" in msg                   # the offending entry index
+    assert "night_shift" in msg           # the routine
+    assert "manual_pause" in msg          # the offending step kind
+
+
+@pytest.mark.parametrize("trailing", [False, True])
+def test_sequencerunner_init_rejects_manual_pause_entry(trailing):
+    # Belt-and-braces: an entry built PROGRAMMATICALLY (no YAML path) is rejected
+    # at SequenceRunner construction, so a bad entry can never enter a live queue.
+    good = _entry("clean")
+    bad = _pause_entry("cursed", trailing=trailing)
+    with pytest.raises(ValueError) as ei:
+        SequenceRunner([good, bad])
+    msg = str(ei.value)
+    assert "cursed" in msg
+    assert "manual_pause" in msg
+
+
+def test_clean_queue_still_loads_and_constructs(tmp_path):
+    # Backward compatibility: a manual_pause-free queue is untouched by the gate —
+    # it saves, loads and constructs a runner exactly as before.
+    entries = [_entry("a"), _entry("b")]
+    path = tmp_path / "clean.yaml"
+    save_sequence_yaml(path, entries)
+    loaded = load_sequence_yaml(path)
+    assert [e.name for e in loaded] == ["a", "b"]
+    r = SequenceRunner(loaded)
+    assert r.progress == (0, 2)
+    assert r.next_entry() is r.entries[0]

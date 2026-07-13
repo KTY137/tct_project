@@ -82,6 +82,7 @@ from controller.arm_envelope import (
 from controller.scan_plan import ScanPlan
 from controller.sequencer import (
     EntryState, NullPreflight, PreflightHook, SequenceEntry, SequenceRunner,
+    assert_sequencer_compatible,
 )
 from controller.state_machine import AppState, StateMachine
 
@@ -199,6 +200,15 @@ class SequenceCoordinator(QObject):
             raise RuntimeError("cannot load a sequence while one is active")
         if source_paths is not None and len(source_paths) != len(named_plans):
             raise ValueError("source_paths length must match named_plans")
+
+        # Fail-closed compatibility gate (Mary A5.2a) — run BEFORE building any
+        # entry or touching self, so an unattended-incompatible plan (e.g. a
+        # manual_pause) never shortens the queue, emits a row, or leaves the
+        # coordinator half-loaded.  The raised reason (naming the routine) is
+        # surfaced by the panel's fail-closed loader path (A5); the queue is not
+        # silently dropped.
+        for name, plan in named_plans:
+            assert_sequencer_compatible(plan, name=str(name))
 
         entries: List[SequenceEntry] = []
         for i, (name, plan) in enumerate(named_plans):

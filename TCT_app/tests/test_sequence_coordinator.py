@@ -162,6 +162,22 @@ def _plan(name: str, values=(0.0, 1.0)) -> ScanPlan:
     return ScanPlan(name=name, root=[loop])
 
 
+def _pause_plan(name: str) -> ScanPlan:
+    """A plan whose compiled step list contains a manual_pause (human-gated)
+    step — fundamentally incompatible with an unattended queue (Mary A5.2a)."""
+    loop = LoopBlock(
+        axis=Axis.STAGE_X,
+        values=[0.0, 1.0],
+        children=[
+            ActionBlock(action=ActionType.ACQUIRE_WAVEFORM, params={}),
+            ActionBlock(action=ActionType.MANUAL_PAUSE,
+                        params={"prompt": "change the laser filter"}),
+            ActionBlock(action=ActionType.SAVE_POINT, params={}),
+        ],
+    )
+    return ScanPlan(name=name, root=[loop])
+
+
 def _setup(n: int = 2, refuse: bool = False, log: list | None = None):
     """``(coord, fake, sm, park)`` — n entries loaded + gate built, READY."""
     _app()
@@ -468,6 +484,35 @@ def test_arm_refused_without_a_built_gate():
     coord.load([("r0", _plan("r0"))])
     with pytest.raises(RuntimeError):   # build_gate() was never called
         coord.arm_and_start()
+
+
+# --------------------------------------------------------------------------- #
+# (9b) fail-closed load: a manual_pause plan is rejected, nothing half-built   #
+# (Mary A5.2a) — the panel surfaces the raised reason; the queue is not dropped #
+# --------------------------------------------------------------------------- #
+def test_load_rejects_manual_pause_plan_fail_closed():
+    _app()
+    sm = _ready_sm()
+    fake = FakeScanCoordinator(sm)
+    coord = SequenceCoordinator(fake, sm, park_safe=lambda: None)
+    rows = Spy(coord.entry_state_changed)
+    progress = Spy(coord.sequence_progress)
+    active = Spy(coord.sequence_active)
+
+    with pytest.raises(ValueError) as ei:
+        coord.load([("clean", _plan("clean")),
+                    ("night_shift", _pause_plan("night_shift"))])
+    msg = str(ei.value)
+    assert "night_shift" in msg          # names the offending routine
+    assert "manual_pause" in msg
+
+    # Fail-closed: nothing built, no state mutated, no signal emitted, idle.
+    assert coord._runner is None
+    assert coord._entries == []
+    assert rows.count == 0
+    assert progress.count == 0
+    assert active.count == 0
+    assert coord.is_active is False
 
 
 # --------------------------------------------------------------------------- #
