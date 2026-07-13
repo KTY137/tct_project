@@ -487,7 +487,7 @@ in its own bounce ledger — read that section so you do NOT repeat them).
 
 ## S3 — Master-roadmap review round 2: the integrated delta (advisory, no code edits)
 
-**Status: OPEN** · Effort: S · Source: Kaya finalization protocol round 2 (2026-07-13)
+**Status: DONE - Wrote round-2 integrated-delta review.** · Effort: S · Source: Kaya finalization protocol round 2 (2026-07-13)
 
 Your R1 findings (docs/design/codex_masterplan_review_r1.md) were
 integrated into `docs/ROADMAP_MASTERPLAN.md` — see the new
@@ -511,6 +511,14 @@ pattern).
   (what), plus a final verdict: plan ready for execution as integrated,
   or name the remaining edit.
 - No app-code edits. No commit. Set S3 DONE with findings per Handback.
+
+**Codex findings (2026-07-13):**
+- Files touched: `docs/design/codex_masterplan_review_r2.md`, `docs/CODEX_QUEUE.md`.
+- Wrote the requested round-2 delta review, checking each R1 finding against the new `Codex-R1 corrections` block, Bounce-5 ledger entry, and nearby roadmap staging text.
+- Verdict: not ready as integrated until one text cleanup pass reconciles stale roadmap wording for the binding code sketch, P0' Planner paragraph, PORT1 effort label, D1/D4 split/sizing, and e4control "RESOLVED" language.
+- Flagged-item conclusion: per-operation safety routing and public-seed e4control cleanliness are forced safety/legal outcomes, not optional design choices; Kaya should ratify the taxonomy/permission path rather than the old unsafe/unlicensed alternatives.
+- Verification: read `docs/design/codex_masterplan_review_r1.md`, the `Codex-R1 corrections` block, the Bounce-5 ledger entry, and the related Devices/Planner/UI/Portability/Seed sections of `docs/ROADMAP_MASTERPLAN.md`. `git diff --check` passed. No pytest was run because S3 is documentation-only and requests no app-code edits.
+- Risk: review is static/advisory only; it does not execute Qt, Linux graphics, HDF5, or hardware paths.
 
 ## S1 — Visual style audit from rendered panels (advisory, no code edits)
 

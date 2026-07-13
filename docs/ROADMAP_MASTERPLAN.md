@@ -38,6 +38,9 @@ into-data, PyMeasure generated forms.
 
 ```python
 # capabilities/model.py (frozen dataclasses; no Qt; AST-layer-checked)
+# NOTE: ILLUSTRATIVE sketch — binding-level concerns (setter/getter,
+# staged lifecycle) live on CapabilityBinding per F1 + Codex BLOCKER-1,
+# NOT on the pure-data descriptor as shown shorthand below.
 class SafetyClass(Enum): BENIGN; MOTION; HV; EMITTING
 @dataclass(frozen=True)
 class CapabilityDescriptor:
@@ -202,27 +205,31 @@ failable, with named artifacts):**
   D4 schema details, B memo acceptance). Delegated decisions are
   logged in DECISIONS.md with attribution, as practiced today.
 
-**Devices:** D1 capability layer + adapters (M; exit [A-green][Mary
-taxonomy][Kaya CAPABILITY_MODEL.md]) → D2 missing ABCs
+**Devices:** **D1a contract/model (S/M) → D1b adapters/registry (M)**
+(split per Codex MINOR-1 — lifecycle/persistence/tests are the hard
+part, not the model code; exit [A-green][Mary taxonomy][Kaya
+CAPABILITY_MODEL.md]) → D2 missing ABCs
 Scope/Camera/Wavegen extracted from concrete drivers (M) → D3 e4control
 expansion via the proven one-adapter pattern (L; K2614/HMP4040/JULABO…;
-[Bench] probe per device, sim≠real check; **license status — RESOLVED
-by Kaya (2026-07-13): confirmed informally with the E4 authors — open-
-source intent, no formal license text exists because "they don't think
-about licenses". Consequence: vendoring/recoding into tct_app is
-Kaya-authorized; recommended cheap formalization: ask E4 to drop an MIT
-LICENSE file upstream (one line request) or note written permission in
-PLATFORM_SEED.md so the SEED is clean for third parties. Default
-implementation path stays reimplementation-with-e4control-as-prior-art
-(safety rule 4 requires manual-sourced commands anyway). We never push
-upstream or touch their repo.**) — **D3 is a PARALLEL, post-seed-
+[Bench] probe per device, sim≠real check; **license status — resolved
+FOR TCT-INTERNAL USE ONLY (Kaya, 2026-07-13: informal confirmation from
+the E4 authors — open-source intent, no formal license text).
+Vendoring/recoding into tct_app is Kaya-authorized. For the PUBLIC SEED
+this is NOT resolved (Codex R2: forced, not optional) — exactly two
+sound options by tag time: an upstream license/written grant exists, or
+the adapter pattern moves to a TCT-private appendix. Kaya chooses WHICH,
+not whether. Default implementation path stays
+reimplementation-with-e4control-as-prior-art (safety rule 4 requires
+manual-sourced commands anyway). We never push upstream or touch their
+repo.**) — **D3 is a PARALLEL, post-seed-
 eligible branch, NOT on the seed critical path (Loki MAJOR): the
 D-chain is D1 → D2 → D4b → D4 → seed; D3 devices join whenever their
 bench probes pass** → **D4b generic capability panel proven on
 ONE long-tail device (wavegen) — the PyMeasure-shape form; without it
 the "composable cockpit" seed claim is hollow (bounce-1 F5)** → D4
 config-driven composition replacing the fixed 6-dict; default config
-byte-identical to today (M; [Kaya] schema).
+byte-identical to today (**L per Codex MINOR-1, unless a prior spike
+proves the panel lifecycle needs no special cases**; [Kaya] schema).
 
 **Connection:** C1 transport inventory + injection (S) → C2 connection
 registry with probe/identify + simulated transport (M; [Bench]) → C3
@@ -230,8 +237,10 @@ reconnect/health policy (S).
 
 **Planner:** **P0' direct wavegen-apply fix FIRST (Loki MAJOR: Kaya's
 one concrete ask must not be held hostage by the spine) — a day-sized
-direct patch applying params['wavegen'] in the executor, writing the
-settings into run_metadata as the honesty stopgap; [Bench][Mary]** →
+direct patch applying params['wavegen'] PER-POINT in the executor (the
+grammar attaches wavegen params per ACQUIRE action; a run-level-only
+shortcut is forbidden per Codex MAJOR-2), recording a per-point command
+trace as the honesty stopgap; [Bench][Mary]** →
 P1 re-lands the same behavior AS the capability pilot (S; gated on
 behavior-equality against P0') — ordered AFTER (or bundled WITH) DA1's
 swept/-writer slice (bounce-1 F4): the pilot's proof-of-done includes
@@ -325,9 +334,12 @@ pyvisa-py all cross-platform; offscreen tests are Linux-native; the
 OpenGL RHI pin is the Linux default; QSettings abstracts storage;
 backdrop.py already no-ops cleanly off-Win11 → v6 design degrades to
 tokens without compositor glass). Real work is vendor SDKs + plumbing:
-- **PORT1 (S/M): Linux sim-mode gate** — `run.sh`/`setup.sh` twins,
-  bucket-A + offscreen GUI suite green in an Ubuntu container/VM; add as
-  a standing CI-style gate (can run on the GPU-lane PC or bench). Enters
+- **PORT1 (M/L, re-rated per Codex MAJOR-5): Linux sim-mode gate** —
+  `run.sh`/`setup.sh` twins, bucket-A + offscreen GUI suite green in an
+  Ubuntu container/VM **with an explicit graphics-stack recipe
+  (Xvfb/EGL/Mesa), a QSG_INFO=1 log parser that REJECTS silent software
+  fallback, and pixel-smoke captures for QML and pyqtgraph/GL** — these
+  artifacts are part of the standing gate, not one-off setup. Enters
   the roadmap BEFORE the seed tag — the seed ships cross-platform.
 - **PORT2 (M): hardware-on-Ubuntu validation** — FLIR Spinnaker Ubuntu
   SDK + Linux PySpin wheel, DRS4 (PSI, Linux-friendly), pyvisa-py,
@@ -457,7 +469,8 @@ start-while-PAUSED bug; anchors the A-green gate) — Abel, bench-gated.
    ramp works THIS week; P1 re-lands it as the capability pilot later,
    behavior-equality-gated.
 5. CAPABILITY_MODEL.md + SAFETY_NORMATIVE_TESTS.md drafts → [Mary] →
-   [Kaya]; then capabilities/model.py + adapters (D1 slice, additive).
+   [Kaya]; then capabilities/model.py (D1a) and adapters/registry (D1b)
+   as SEPARATE beats (Codex MINOR-1 split).
 Parallel: B1 Prometheus research + C1 Abel proposal + S1 seed doc.
 
 # Verification
@@ -518,6 +531,19 @@ Internal rounds (honest ledger):
   Kaya's nod (they touch his prior decisions); everything else is
   design-hardening consistent with plan intent, integrated under the
   autonomy mandate.
+- Bounce 6 — Codex R2 (delta review): DONE, APPLIED — verdict "not
+  ready as integrated; one text cleanup pass"; all 5 reconciliations
+  made (illustrative-sketch note on the model code block; P0' wording
+  now per-point command trace, run-level-only forbidden; PORT1 labeled
+  M/L everywhere with graphics artifacts in the standing gate; D1a/D1b
+  split + D4=L in Devices AND Part VI; e4control "resolved" scoped to
+  TCT-internal use only). R2's reframing ADOPTED: both ⚑ items are
+  FORCED safety/cleanliness corrections — Kaya ratifies the SHAPE
+  (taxonomy compatibility with Völundr's ordering; upstream grant vs
+  private appendix), not the whether. Review:
+  docs/design/codex_masterplan_review_r2.md.
+  **FINALIZATION PROTOCOL COMPLETE (2026-07-13 night) — execution
+  begins per the plan sequence: Phase 0 → push → Part-V/VI wave.**
 
 **Finalization protocol (Kaya directive): after Kaya approves this
 plan, TWO Codex-lane bounces run as the FIRST execution steps** (queue-
