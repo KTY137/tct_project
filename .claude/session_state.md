@@ -74,11 +74,37 @@ inactive-window fallback) · `9e525f5` Mary's review booked · `f934e65` **G-B2b
 the contract wired to reality** (the RDP ceiling had NEVER fired) · `cf18550`
 **50 black icons** killed at the root · `37cead3` the activation scan gate.
 
+## 🔴 THE BENCH IS RED — a NATIVE CRASH, and the gate caught it
+
+Full suite at `37cead3` on sophonone: **exit `-1073741819` = `0xC0000005` =
+ACCESS VIOLATION.** Not a failed assertion — the process died.
+
+```
+gui/status_widgets.py:457   eventFilter      <- _IconThemeWatcher, NEW in cf18550
+gui/style.py:3350           apply_theme
+tct_gui.py:992              _toggle_theme    <- a REAL user action
+tests/test_qml_shell.py:1028
+```
+
+`cf18550` (the icon fix) passed **110 targeted tests** and crashes the process on
+a **theme toggle** once enough windows have been torn down. Root cause is written
+in its own docstring **as a false claim**: *"Filters die with the widget they
+watch, so nothing here can touch a half-destroyed QWidget."* `_icon_watcher` is a
+module-level singleton with **no parent** — it dies with nothing, and it outlives
+the `QApplication` that created it. The sentence that justifies the safety is the
+sentence that is not true.
+
+**This is exactly what the wave-boundary bench gate exists for**, and it is the
+fourth appearance tonight of the same widget-corpse class (`panel_kit`'s pane
+registry, caught independently by three agents).
+
+**DO NOT PUSH OR MERGE `37cead3`.** Fix in flight.
+
 ## 🔥 IN FLIGHT
 
 | Beat | Agent | Locks |
 |---|---|---|
-| **Full suite on the bench** (wave-boundary gate) at `37cead3` | sophonone | — |
+| **Fix the `_IconThemeWatcher` use-after-free** | Noah (Opus) | `gui/status_widgets.py`, icon tests |
 
 ## ⚠️ ADAM'S OWN ERROR, ON THE RECORD
 
