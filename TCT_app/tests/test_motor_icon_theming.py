@@ -170,18 +170,22 @@ def test_stop_glyph_wears_the_danger_fills_own_label_ink():
 
 def test_every_icon_in_the_panel_is_token_bound():
     """Guards the guard: a future icon added with a bare ``_apply_icon`` would
-    silently reintroduce the frozen-black bug. Every icon this panel paints must
-    be registered with a palette token."""
-    pytest.importorskip("qtawesome")
-    import re
-    from pathlib import Path
+    silently reintroduce the frozen-black bug in this panel.
 
-    source = Path(__file__).resolve().parent.parent / "gui" / "motor_panel.py"
-    body = source.read_text(encoding="utf-8")
-    # Strip the helper's own definition/docstring references; what matters is
-    # that no CALL SITE builds an icon outside _register_icon/_restyle_icons.
-    calls = re.findall(r"^\s+_apply_icon\(([^)]*)\)", body, re.M)
-    stray = [c for c in calls if not c.startswith("button, name")]
+    THE OLD GUARD WAS BLIND (Mary, review of 4ca8331). It regexed exactly one
+    form — ``^\\s+_apply_icon\\(`` — in exactly one file, so it could not see
+    ``_icon(...) + setPixmap`` two hundred lines above it in the SAME file, and
+    of course not the 50 colourless call sites in the other fourteen. It is now
+    an AST scan over all of ``gui/*.py``
+    (``tests/test_icon_theming_gui.py::icon_call_sites``), applied here to
+    motor_panel: every icon construction in this panel must carry a colour,
+    whatever syntax it is written in. The repo-wide version of the same scan
+    lives in that module."""
+    pytest.importorskip("qtawesome")
+    from tests.test_icon_theming_gui import icon_call_sites
+
+    stray = [(f, ln, name) for f, ln, name, coloured in icon_call_sites()
+             if f == "motor_panel.py" and not coloured]
     assert not stray, (
         "icon(s) attached without a palette token — use self._register_icon(): "
         f"{stray}")

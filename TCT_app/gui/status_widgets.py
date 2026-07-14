@@ -8,13 +8,16 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QEvent, QObject, QTimer, Qt
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
-    QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy, QVBoxLayout, QWidget,
+    QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
+    QVBoxLayout, QWidget,
 )
 
-from gui.style import repolish, set_chip_state
+from gui import style as _style
+from gui.app_settings import theme_mode
+from gui.style import palette, repolish, set_chip_state
 
 
 # cockpit v5 (docs/design/cockpit_design_system.md law 1/6/7) state
@@ -365,11 +368,165 @@ def flash_button(
     QTimer.singleShot(timeout_ms, button, _restore)
 
 
-def set_button_icon(button: QPushButton, icon_name: str, color: str | None = None) -> None:
-    """Attach a qtawesome icon when available; silently keep text-only fallback."""
+# ─────────────────────────────────────────────────────────────────────
+# Icons (qtawesome) — THE COLOURLESS-ICON BUG, killed at the root.
+#
+# ``qta.icon(name)`` with no ``color=`` does NOT mean "inherit the theme". It
+# resolves qtawesome's default option, which reads the **Qt palette** — and this
+# app themes through QSS ONLY (no ``QApplication.setPalette`` beyond the
+# Window/WindowText backstop in ``gui.style._apply_app_palette``). So the glyph
+# came out the default palette's BLACK, baked into a PIXMAP at construction and
+# never re-tinted afterwards: black-on-slate on the shipped dark theme, and
+# frozen there through every light/dark toggle for the life of the widget.
+# Measured on the dark default: 1.11:1 against a panel, 1.37:1 against a
+# field/raised surface — i.e. invisible. (Icons are non-text UI components:
+# WCAG 1.4.11 wants >= 3:1.)
+#
+# The fix lives HERE, in the shared helper, not in the ~50 call sites: a call
+# that passes no colour now resolves the ACTIVE theme's palette token (default
+# "text" — the button's own label ink) instead of falling through to qtawesome.
+# Every existing ``set_button_icon(btn, "mdi.play")`` is fixed where it stands.
+#
+# Re-tinting on a theme switch is per-widget and event-driven (no locked file,
+# no panel edits, and explicitly NOT a QApplication.allWidgets() walk — that
+# walk is a documented native-crash vector, see gui.style._apply_pyqtgraph):
+# gui.style.apply_theme sets its module-level ``_active_mode`` BEFORE it installs
+# the new stylesheet, and Qt then delivers QEvent.StyleChange to every widget
+# (measured: parented, unparented, shown and unshown alike). A registered button
+# rebuilds its pixmap from the palette on that event; a same-mode re-assert
+# installs an identical stylesheet, emits nothing, and costs nothing.
+#
+# NOTE — hazard controls are deliberately NOT in this system. STOP / Abort /
+# Execute / Output OFF / Switch-polarity carry their glyph as a unicode
+# character in the button's LABEL TEXT, which takes the QSS ``color`` like any
+# other text and is theme-correct already. They must never be converted into
+# pixmaps.
+# ─────────────────────────────────────────────────────────────────────
+_ICON_NAME_PROP = "_ui_icon_name"     # qtawesome name, e.g. "mdi.play"
+_ICON_TOKEN_PROP = "_ui_icon_token"   # palette token the ink must MATCH
+_ICON_COLOR_PROP = "_ui_icon_color"   # ink currently baked into the pixmap
+_ICON_WATCHED_PROP = "_ui_icon_watched"
+
+
+def active_theme_mode() -> str:
+    """The theme mode an icon built *right now* must be tinted for.
+
+    ``gui.style.apply_theme`` records the mode it is applying (``_active_mode``)
+    *before* it calls ``setStyleSheet``, so during the resulting StyleChange
+    delivery this is already the NEW theme — whereas the persisted QSettings key
+    is still the old one at that moment (``tct_gui._toggle_theme`` writes it
+    last). Fall back to the persisted setting when no stylesheet has been
+    installed at all (a panel constructed standalone in a test, before/without
+    ``apply_theme``) — the same source every panel's ``__init__`` already uses.
+    """
+    app = QApplication.instance()
+    if app is not None and app.styleSheet():
+        mode = getattr(_style, "_active_mode", "")
+        if mode:
+            return str(mode)
+    return theme_mode()
+
+
+def icon_ink(token: str = "text", mode: str | None = None) -> str:
+    """Palette ink for an icon: the token an icon must carry in *mode*.
+
+    The tokenized replacement for "no colour" (see the block comment above) and
+    for hand-rolled hex at a call site (``tests/test_no_inline_hex_gui.py``).
+    """
+    return palette(mode or active_theme_mode())[token]
+
+
+def _build_qta_icon(icon_name: str, color: str):
+    """A qtawesome icon tinted *color*, or None when qtawesome/the glyph is
+    unavailable (icons are never a hard dependency for a control to work — the
+    button keeps its text-only fallback)."""
     try:
         import qtawesome as qta
-        icon = qta.icon(icon_name, color=color) if color else qta.icon(icon_name)
+        return qta.icon(icon_name, color=color)
     except Exception:
+        return None
+
+
+class _IconThemeWatcher(QObject):
+    """Re-tints a registered button's icon when the app stylesheet changes.
+
+    One shared instance, installed as an event filter on each button that asked
+    for a token-bound icon. Filters die with the widget they watch, so nothing
+    here can touch a half-destroyed QWidget."""
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt override
+        if event.type() == QEvent.Type.StyleChange:
+            _retint_button_icon(obj)
+        return False
+
+
+_icon_watcher: _IconThemeWatcher | None = None
+
+
+def _watcher() -> _IconThemeWatcher:
+    global _icon_watcher
+    if _icon_watcher is None:
+        _icon_watcher = _IconThemeWatcher()
+    return _icon_watcher
+
+
+def _retint_button_icon(button) -> None:
+    """Rebuild a token-bound icon's pixmap against the live palette (no-op for
+    an unregistered button, or one whose ink has not actually changed — Qt
+    delivers StyleChange more than once per apply, and a pixmap rebuild is the
+    only expensive thing in this path)."""
+    name = button.property(_ICON_NAME_PROP)
+    token = button.property(_ICON_TOKEN_PROP)
+    if not name or not token:
         return
+    try:
+        color = icon_ink(str(token))
+    except KeyError:
+        return
+    if button.property(_ICON_COLOR_PROP) == color:
+        return
+    icon = _build_qta_icon(str(name), color)
+    if icon is None:
+        return
+    button.setProperty(_ICON_COLOR_PROP, color)
+    button.setIcon(icon)
+
+
+def set_button_icon(
+    button: QPushButton,
+    icon_name: str,
+    color: str | None = None,
+    *,
+    token: str = "text",
+) -> None:
+    """Attach a qtawesome icon when available; silently keep text-only fallback.
+
+    With no *color*, the icon is bound to the palette *token* (default "text",
+    the button's own label ink) in the ACTIVE theme and re-tinted automatically
+    on every theme switch — see the block comment above; never qtawesome's
+    palette-derived black.
+
+    An explicit *color* is the caller's own (e.g. a fixed safety token like
+    ``WARN_AMBER``, or a colour a panel re-resolves itself inside its
+    ``refresh_theme``): it is applied verbatim and NOT auto-re-tinted, so a
+    panel that owns its icon ink keeps owning it.
+    """
+    if color is None:
+        try:
+            color = icon_ink(token)
+        except KeyError:
+            return
+        button.setProperty(_ICON_NAME_PROP, icon_name)
+        button.setProperty(_ICON_TOKEN_PROP, token)
+        if not button.property(_ICON_WATCHED_PROP):
+            button.installEventFilter(_watcher())
+            button.setProperty(_ICON_WATCHED_PROP, True)
+    else:
+        # Caller-owned ink: drop any token binding a previous call left behind,
+        # so the watcher cannot fight the panel for this button's icon.
+        button.setProperty(_ICON_TOKEN_PROP, None)
+    icon = _build_qta_icon(icon_name, color)
+    if icon is None:
+        return
+    button.setProperty(_ICON_COLOR_PROP, color)
     button.setIcon(icon)
