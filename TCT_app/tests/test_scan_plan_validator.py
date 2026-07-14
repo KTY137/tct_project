@@ -523,3 +523,32 @@ def test_oversize_by_leaf_visits_with_points_under_gate(monkeypatch):
     errs = errors(validate_plan(plan, limits(max_points=500_000)))
     assert calls["n"] == 0
     assert any("max_points" in e for e in errs)
+
+
+def test_ultrawide_loop_shape_never_materializes(monkeypatch):
+    """Loop-SHAPE explosion: ONE loop of ~2e9 values (-1e6..1e6 step 1e-3, all
+    within the planner spinbox ranges).  materialize() would allocate a
+    multi-GB list UPSTREAM of the size check (inside _walk / total_leaf_visits);
+    the structural pre-gate must size it arithmetically and reject it WITHOUT
+    ever calling materialize() — the third member of the estimate/validate bug
+    family."""
+    loop = LoopBlock(axis=Axis.STAGE_X, start=-1e6, stop=1e6, step=1e-3,
+                     children=[_acq(), _save()])
+    plan = ScanPlan(name="ultrawide", root=[loop])
+
+    calls = {"n": 0}
+    orig = LoopBlock.materialize
+
+    def spy(self):
+        calls["n"] += 1
+        return orig(self)
+
+    monkeypatch.setattr(LoopBlock, "materialize", spy)
+
+    t0 = time.monotonic()
+    errs = errors(validate_plan(plan, limits(max_points=1_000_000)))
+    elapsed = time.monotonic() - t0
+
+    assert calls["n"] == 0, "validate_plan materialized an ultra-wide loop"
+    assert elapsed < 1.0, f"structural pre-gate took {elapsed:.3f}s"
+    assert any("max_points" in e for e in errs)

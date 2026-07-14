@@ -18,6 +18,7 @@ Proven here, hardware-free:
 """
 from __future__ import annotations
 
+import itertools
 import os
 import time
 
@@ -71,6 +72,15 @@ def _tiny_plan() -> ScanPlan:
     x = LoopBlock(axis=Axis.STAGE_X, values=[0.0, 1.0], children=[_acq(), _save()])
     b = LoopBlock(axis=Axis.BIAS_V, values=[-50.0], children=[x])
     return ScanPlan(root=[b], safety={"require_hv_confirmation": True})
+
+
+def _ultrawide_plan() -> ScanPlan:
+    """ONE loop of ~2e9 values by SHAPE, not nesting: -1e6..1e6 step 1e-3, all
+    within the planner spinbox ranges.  materialize() would allocate a multi-GB
+    list; value_count() sizes it in O(1)."""
+    loop = LoopBlock(axis=Axis.STAGE_X, start=-1e6, stop=1e6, step=1e-3,
+                     children=[_acq(), _save()])
+    return ScanPlan(root=[loop])
 
 
 # --------------------------------------------------------------------------- #
@@ -147,6 +157,79 @@ def test_normal_plan_is_unaffected():
     assert est.estimated is True
     assert est.est_runtime_s is not None
     assert isinstance(est.stage_travel_mm, dict)
+
+
+# --------------------------------------------------------------------------- #
+# Loop-SHAPE explosion: an ultra-wide single loop must be sized without ever   #
+# calling materialize() (the multi-GB allocation).                            #
+# --------------------------------------------------------------------------- #
+
+def test_estimate_ultrawide_loop_never_materializes(monkeypatch):
+    plan = _ultrawide_plan()
+    # ~2e9 values * (acquire+save) = ~4e9 leaf visits, all sized arithmetically.
+    assert plan.structural_leaf_visit_bound() > ESTIMATE_MAX_LEAF_VISITS
+
+    calls = {"n": 0}
+    orig = LoopBlock.materialize
+
+    def spy(self):
+        calls["n"] += 1
+        return orig(self)
+
+    monkeypatch.setattr(LoopBlock, "materialize", spy)
+
+    t0 = time.monotonic()
+    est = estimate_plan(plan)
+    elapsed = time.monotonic() - t0
+
+    assert calls["n"] == 0, "estimate_plan materialized an ultra-wide loop"
+    assert elapsed < 1.0, f"structural bound took {elapsed:.3f}s"
+    assert est.estimated is False
+    assert est.est_runtime_s is None
+    assert est.total_leaf_visits == plan.structural_leaf_visit_bound()
+    assert est.total_points == plan.structural_point_bound()
+    assert est.warnings and "too large" in est.warnings[0].lower()
+
+
+# --------------------------------------------------------------------------- #
+# The pin: value_count() must equal len(materialize()) across tricky ranges    #
+# (step sign, zero span, floating-point endpoint inclusion, banker's rounding).#
+# --------------------------------------------------------------------------- #
+
+def test_value_count_matches_materialize_length():
+    starts = [-5.0, -3.3, 0.0, 0.25, 2.5, 4.0]
+    stops = [-5.0, -1.0, 0.0, 0.25, 1.5, 2.5, 5.0]
+    steps = [0.1, 0.25, 0.3, 0.5, 1.0, 2.0, 3.0, -0.5, -1.0]
+    checked = 0
+    for start, stop, step in itertools.product(starts, stops, steps):
+        loop = LoopBlock(axis=Axis.STAGE_X, start=start, stop=stop, step=step,
+                         children=[_acq()])
+        assert loop.value_count() == len(loop.materialize()), (
+            f"value_count drift at start={start} stop={stop} step={step}")
+        checked += 1
+    assert checked == len(starts) * len(stops) * len(steps)
+
+
+def test_value_count_explicit_values_and_invalid():
+    # explicit values -> exact length
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0, 1.0, 2.0, 3.0],
+                     children=[_acq()])
+    assert loop.value_count() == len(loop.materialize()) == 4
+
+    # zero step -> same ValueError as materialize (never a silent count)
+    bad = LoopBlock(axis=Axis.STAGE_X, start=0.0, stop=1.0, step=0.0,
+                    children=[_acq()])
+    with pytest.raises(ValueError):
+        bad.value_count()
+    with pytest.raises(ValueError):
+        bad.materialize()
+
+    # missing fields -> same ValueError
+    missing = LoopBlock(axis=Axis.STAGE_X, children=[_acq()])
+    with pytest.raises(ValueError):
+        missing.value_count()
+    with pytest.raises(ValueError):
+        missing.materialize()
 
 
 # --------------------------------------------------------------------------- #

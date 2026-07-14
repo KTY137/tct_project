@@ -148,28 +148,39 @@ def estimate_plan(
     timing = timing or Timing()
     sizing = sizing or Sizing()
 
-    # Structural short-circuit BEFORE any leaf walk.  ``total_leaf_visits`` is
-    # cheap (O(sum of loop lengths): each LoopBlock materializes its own values
-    # once and counts are multiplied, never the full cartesian product), so this
-    # is instant even for a plan whose walk would take minutes.  Above the
-    # ceiling we return the structural counts with not-estimated sentinels
-    # rather than block the estimate worker's shutdown join (see
-    # ESTIMATE_MAX_LEAF_VISITS).
-    leaf_visits = plan.total_leaf_visits()
-    if leaf_visits > ESTIMATE_MAX_LEAF_VISITS:
+    # Structural short-circuit BEFORE any leaf walk — AND before any
+    # materialize().  ``structural_leaf_visit_bound`` / ``structural_point_bound``
+    # are pure O(#blocks) arithmetic (LoopBlock.value_count(), no allocation), so
+    # a plan that is huge by SHAPE (an ultra-wide range loop, ≈2e9 values, all
+    # within the planner spinbox ranges) is sized WITHOUT allocating its multi-GB
+    # value list, exactly as a deeply-nested one is.  Above the ceiling we return
+    # the structural counts with not-estimated sentinels rather than block the
+    # estimate worker's shutdown join (see ESTIMATE_MAX_LEAF_VISITS).  An invalid
+    # loop range makes the bound raise; we fall through to total_leaf_visits()
+    # below, which raises the same ValueError (the historic behaviour for an
+    # un-materializable plan — the estimate worker surfaces it as an error).
+    try:
+        bound = plan.structural_leaf_visit_bound()
+    except ValueError:
+        bound = None
+    if bound is not None and bound > ESTIMATE_MAX_LEAF_VISITS:
         return PlanEstimate(
-            total_points=plan.total_points(),
-            total_leaf_visits=leaf_visits,
+            total_points=plan.structural_point_bound(),
+            total_leaf_visits=bound,
             est_runtime_s=None,
             est_data_bytes=None,
             stage_travel_mm=None,
             hv_range_V=None,
             warnings=[
                 f"Plan too large to estimate precisely "
-                f"({leaf_visits:,} leaf visits) — reduce loop ranges."
+                f"({bound:,} leaf visits) — reduce loop ranges."
             ],
             estimated=False,
         )
+
+    # Under the structural ceiling every loop's value list is bounded, so this
+    # walk-free count materializes only small lists (and equals ``bound``).
+    leaf_visits = plan.total_leaf_visits()
 
     runtime = 0.0
     travel = {"x": 0.0, "y": 0.0, "z": 0.0}
