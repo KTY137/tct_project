@@ -111,16 +111,25 @@ is DONE.
 
 **🔁 SESSION RESTART HANDOFF (Kaya restarts for the migration epoch):**
 
-- **LANDED LAST: `856281b` laser 'Output on' DangerGate** (rule-2,
-  fail-safe refusal, HazardSurface on the emission cluster, OFF never
-  gated, submitted write identity-pinned). **Mary's safety review of
-  856281b was IN FLIGHT when this session ended — if no verdict is
-  recorded below this line, RE-DISPATCH a fresh qa-critic review of
-  856281b first thing** (concerns: every emission path gated incl.
-  P0'-apply/output_on separation in scan_controller; decline ⇒ zero
-  submissions + honest UI; gate-exception fail-safe not fail-open;
-  OFF never confirmed; double-click re-entrancy). Old session's agent
-  instances are DEAD — do not SendMessage them.
+- **LANDED: `856281b` laser 'Output on' DangerGate — Mary: APPROVED,
+  clean for its scope** (decline ⇒ zero submissions + honest UI; OFF
+  never gated pinned; modal gate blocks double-click; P0'-apply vs
+  output_on separation VERIFIED in scan_controller; executor arming is
+  authorized-run-scoped, acceptable).
+- **🔴 HER BLOCKER (found by the every-submitter grep): SIBLING ungated
+  emission in calibration_panel._run_reference** — one click of 'Run
+  reference-diode calibration' starts _ReferenceWorker whose run()
+  calls waveform_generator.output_on() (calibration_panel.py:85), NO
+  confirmation; the panel HAS self._gate (:109) but only uses it for
+  motion. **FIX IN FLIGHT (noah-laser-danger-gate resumed):** gate the
+  worker START in _run_reference (mirror laser _output_on; fail-safe
+  refuse without gate) + tests + the tct_gui construction-order assert
+  (her nit). LOCKS: gui/calibration_panel.py, tct_gui.py, calibration
+  test file. **If this session died mid-fix: the tree may carry the
+  partial edit — check git status; the fix spec above is complete;
+  finish + fresh Mary confirm + THEN push (22d2201..HEAD are
+  local-only until this clears).** Old session's agents are DEAD —
+  do not SendMessage them.
 - **THE NEW EPOCH: U-track (QML migration) is the priority.** Entry
   point **U0**: cut `ui-qml-migration` at tag `polish-freeze`
   (= main@45781fa, verified) + RHI/GL pin probe on the bench GPU
