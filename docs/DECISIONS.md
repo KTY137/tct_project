@@ -352,3 +352,57 @@ Verbatim: *"ja drop die regel wir sind designer und designen geile Sachen"*
 
 Affects: `tests/test_glass_text_contract.py`, `docs/DECISIONS.md`, `artifacts_claude/semantic_ink_on_glass/`. (No QSS gate existed — the law lived only in the test; `gui/style.py` untouched.)
 Status: **RATIFIED** — glass ink law extended; enforced by the derived-floor test.
+
+## 2026-07-15 — LANTERN is the QML kit; the ground auto-calms during a run (Kaya)
+
+Verbatim: *"DO LANTERN"* · auto-calm amendment: *"you have my nod"* — the nod
+was followed by his question *"but what is auto calm?"*; the mechanism (idle =
+flow per off/subtle/full + speed; RUNNING = freeze to static wash; resume after)
+AND the one collision (if he wanted glass alive *during* runs, auto-calm is the
+opposite) were explained in full, and **"DO LANTERN" came after that
+explanation** — Lantern's spec contains auto-calm verbatim, so the pick is
+informed consent for both decisions.
+
+**Adopted: candidate LANTERN** (`docs/design/qml_kit_forge/candidate_lantern.md`)
+as the U1.5 QML component-kit direction — one `Surface` material (elevation rung
++ baked position-sampled frost + edge ladder + springs), the living ground as
+layer 0 and the frost source, living glass default **subtle**, deliberate
+classic-shell divergence during U1–U6 (classic = fallback, not design target —
+consistent with the owned-glass ratification of 2026-07-14).
+
+**kit.md §1.2 amended** (PROTECTED region, per-change approval given as above):
+"never animates during a run" → "auto-calms to static during a run", with the
+band law holding per frame (washes move position, never alpha — what makes
+living glass legal at all).
+
+**Scope refinement (Kaya, same session):** verbatim *"also auto calm should
+only then apply to that panel"* — the calm is **PANEL-SCOPED**: during a run,
+only the ground behind the panel that owns the run stills; the rest of the room
+keeps flowing. A detached panel is its own top-level with its own ground, so it
+calms whole. Two consequences, on the record: (1) the Baldr distraction gate is
+no longer fully satisfied by auto-calm — motion in the operator's periphery
+during a live run is back in scope, explicitly booked as attack-pass item #1;
+(2) a locally-calm pane now *signals* which panel is running — permitted as a
+redundant cue, but never the only run indicator (the status chip stays the
+carrier; state never by motion alone).
+
+**Conditions carried with the ratification** (Adam's recommendation, on which
+the pick was made — "the frost-bake spike is the entry ticket"):
+1. The **frost-bake spike runs BEFORE any U2 architecture commits to Lantern**:
+   N sampling panes + one pyqtgraph island at 30 Hz, re-bake 6–12 Hz, measured
+   on the weakest realistic GPU (the laptop iGPU), per the standing
+   spikes-are-routine rule. If the bake fails, Lantern collapses into
+   Twin-with-springs and the pick returns to Kaya with the numbers.
+2. The **Loki/Baldr attack pass** runs against Lantern WITH the spike numbers
+   in hand (queued after U0; attack surface pre-mapped in
+   `docs/design/qml_kit_forge/00_comparison.md` §3).
+3. **Twin's Theme-gap audit is prerequisite homework regardless of pick**
+   (real `gui/qml_theme.py` TOKEN_MAP gaps); **Ledger's LOCKED-safety-row idea
+   stays available for merge** — a merge is a decision, not a diff.
+
+What did NOT change: hazard surfaces opaque at every tier; the never-migrates
+list; the ink laws; the Baldr distraction gate (auto-calm IS its satisfaction).
+
+Affects: `docs/design/iterations/glasshell-cockpit/round-03/kit.md` §1.2,
+`docs/design/qml_kit_forge/`, the U1.5 deliverable, U2 reference implementation.
+Status: **RATIFIED**.

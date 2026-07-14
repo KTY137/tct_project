@@ -115,8 +115,18 @@ can move it by less than 0.2 : 1.
 The ground may be tinted **only** with `accent` and neutrals (`specular`, `raised`).
 It may **never** be tinted with `danger`, `armed`, `good` or `sim`. A faintly amber room is a
 faintly hazard-coloured room, and an operator four metres away reads the room before they read
-the card. It also **never animates during a run** (it may cross-fade on a theme change, and
-that is all).
+the card. It also **auto-calms per panel during a run**: the moment a scan enters RUNNING, the
+living-glass flow stills to a static wash **behind the panel that owns the run** — only there
+(Kaya: "auto calm should only then apply to that panel"); the rest of the room may keep
+flowing, and the flow resumes when the run ends. A detached panel is its own top-level with its
+own ground, so it calms whole. While idle the ground may animate per the persisted living-glass
+setting (off/subtle/full + speed; reduced-motion honored; band law ΔL* ≤ 4.0 / summed tint
+α ≤ 0.07 holds at every pixel of every frame — washes move position, never alpha). It may also
+cross-fade on a theme change. A locally-calm pane may serve as a redundant run cue but never
+the only one (the status chip stays the indicator; state never by motion alone). Peripheral
+motion during a live run is booked for the Lantern attack pass (Baldr). *(Amended 2026-07-15
+from "never animates during a run", panel-scoped same day — both with Kaya's explicit
+per-change approval; see DECISIONS.md 2026-07-15; living-glass directive of 2026-07-14.)*
 
 ### 1.3 What the OS gets: the garnish slot
 

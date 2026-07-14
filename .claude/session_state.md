@@ -37,8 +37,30 @@ design round. Dispatched (see in-flight).
 - main == origin/main == `cf6dd58` (verified this session). Branch push
   waits until U0b evidence is in.
 
+## 🏛️ RATIFIED THIS SESSION (Kaya, 2026-07-15 — full entry in DECISIONS.md)
+
+- **"DO LANTERN"** — candidate LANTERN is the U1.5 QML kit direction.
+  Conditions carried: frost-bake spike BEFORE U2 commits (in flight,
+  below); Loki/Baldr attack pass against Lantern WITH spike numbers
+  (queued after U0); Twin's Theme-gap audit = prerequisite homework;
+  Ledger's LOCKED-row idea stays mergeable.
+- **kit.md §1.2 amended** (PROTECTED, per-change approval given):
+  "never animates during a run" → **auto-calms PER PANEL** — Kaya's
+  refinement "auto calm should only then apply to that panel": only the
+  ground behind the running panel stills, the room keeps flowing;
+  detached panels calm whole. Consequence on the record: the Baldr
+  distraction gate is no longer fully satisfied → attack-pass item #1;
+  local calm is a redundant run cue, never the only indicator.
+
 ## 🔥 IN-FLIGHT BEATS (locks)
 
+- **noah-frost-spike** (ui-ux-dev instance #2, Sonnet): the LANTERN
+  frost-bake spike — bake-once-sample-N mechanism, matrix N∈{2,4,8} ×
+  re-bake∈{6,12} Hz + AMBIENT baseline + 30 Hz pyqtgraph island, on the
+  laptop iGPU (worst case, deliberate). Verdict criteria: O(1)-in-N
+  slope <2pp/pane · QML ≥55 fps · island ≥28 Hz · 0 crashes/20
+  launches. LOCKS: `TCT_app/scripts/spikes/lantern_frost_bake_spike.py`
+  and `artifacts_claude/lantern_frost_spike_*/`.
 - **noah-u0-probe** (ui-ux-dev, Sonnet): U0b RHI/GL pin probe script.
   LOCKS: `TCT_app/scripts/rhi_gl_probe.py` (verified free before
   dispatch). Then Adam runs it on the bench (sophonone, reachability
