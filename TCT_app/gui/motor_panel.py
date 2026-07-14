@@ -20,6 +20,24 @@ Two deliberate exceptions:
   pending a ruling from Kaya.
 * **STOP is NOT gated** (cockpit design law 5): an emergency stop can only make
   the setup safer, so it stays ONE TAP.  Never put a confirmation in front of it.
+
+Round-03 glass kit migration (panel wave beat 10/12, HAZARD PANEL — mirrors the
+bias pilot's blanket stance, commit 074943f, and the sequencer/calibration
+hazard panels, bf41854/18469ca).  The whole panel is now ONE ``GlassPane``
+shelf (chrome head + position readout + hazard-wrapped motion controls + scan
+helpers, over the live stage view), and the shelf opts NOTHING into the
+panel-glass switch — ``register=False``, and no other surface here registers
+either: this panel has zero rollout-vetted readout registrations to preserve
+and every card is motion-adjacent, so nothing may ever depend on a translucent
+tier.  Every widget that COMMANDS the stage — the jog cluster, the absolute
+Move-to, and Home/Center/Zero + the emergency STOP — sits on one opaque
+``HazardSurface`` (``armed``/motion-class stripe, the kind the round-03 census
+gives Motor Stage's homing/jog ceremony), a PURE PARENT-FRAME WRAP: the jog
+wiring, the ``DangerGate``/``_confirm_motion`` path, the transport-lock
+discipline and every slot are byte-identical, only the container changed.  The
+position readout + status chips (they DISPLAY state, they do not command) and
+the scan-integration helpers (copy/emit, no motion) stay OUTSIDE the hazard
+wrap — the danger topology is display vs trigger.
 """
 from __future__ import annotations
 
@@ -37,7 +55,7 @@ from PySide6.QtWidgets import (
 from controller.danger_gate import DangerAction, DangerGate
 from devices.motor_base import MotorStageBase
 from gui.app_settings import theme_mode
-from gui.panel_kit import Card, panel_header
+from gui.panel_kit import Card, GlassPane, HazardSurface, panel_header
 from gui.stage_view import StageView
 from gui.status_bus import notify
 from gui.style import axis_color, palette, repolish
@@ -308,10 +326,15 @@ class MotorPanel(QWidget):
     # ------------------------------------------------------------------ #
 
     def _build_ui(self) -> None:
-        controls = QWidget()
-        root = QVBoxLayout(controls)
-        root.setContentsMargins(4, 4, 4, 4)
-        root.setSpacing(14)
+        # ── The one shelf (round-03 kit §2.1) ─────────────────────────
+        # HAZARD PANEL — blanket ``register=False`` (bias pilot 074943f /
+        # sequencer / calibration stance): this panel has zero rollout-vetted
+        # readout registrations to preserve and every card is motion-adjacent,
+        # so the shelf, and every surface inside it, opts NOTHING into the
+        # panel-glass switch.
+        shelf = GlassPane(register=False)
+        self._shelf = shelf
+        root = shelf.body
 
         root.addWidget(panel_header("TCT Control — Motion", "Motor Stage"))
 
@@ -372,6 +395,25 @@ class MotorPanel(QWidget):
         btn_test.clicked.connect(self._test_connection)
         pos_v.addWidget(btn_test)
         root.addWidget(pos_box)
+
+        # ── Motion-command hot zone, on the HazardSurface (kit §4.6) ──
+        # "The stone in the glass room": every control that COMMANDS the stage
+        # — the jog cluster, the absolute Move-to, and Home/Center/Zero + the
+        # emergency STOP — sits on ONE opaque HazardSurface carrying a 4px
+        # ``armed`` (motion-class) stripe + 45° hatch (the same stripe kind the
+        # round-03 census gives Motor Stage's homing/jog ceremony). Opaque at
+        # every tier, never registered. A PURE PARENT-FRAME WRAP: the jog
+        # wiring (bound methods, never lambdas), the DangerGate/_confirm_motion
+        # path, the transport-lock discipline and every slot are byte-identical
+        # — only the parent frame changed. The position readout + status chips
+        # (display, not command) stay OUTSIDE, above; the scan-integration
+        # helpers (copy/emit, no motion) stay OUTSIDE, below (display vs
+        # trigger — the danger topology). The eyebrow supplies the redundant
+        # hazard WORD channel (stripe colour + hatch texture + word survive
+        # greyscale / a dead projector).
+        hazard = HazardSurface(
+            "Stage motion", stripe="armed", theme_mode=self._theme_mode)
+        self._hazard = hazard
 
         # ── Jog controls (OctoPrint-style XY cross + Z column) ────────
         # The cross, Z column and step-size presets all live inside one
@@ -542,7 +584,7 @@ class MotorPanel(QWidget):
         cluster_v.addLayout(step_row)
 
         jog_v.addWidget(cluster)
-        root.addWidget(jog_box)
+        hazard.add_widget(jog_box)
 
         # ── Absolute move ─────────────────────────────────────────────
         abs_box = Card("Absolute move")
@@ -575,7 +617,7 @@ class MotorPanel(QWidget):
         abs_layout.addWidget(btn_move, 2, 0, 1, 3)
         self._motion_widgets.extend([self._spin_x, self._spin_y, self._spin_z, btn_move])
         abs_box.add_layout(abs_layout)
-        root.addWidget(abs_box)
+        hazard.add_widget(abs_box)
 
         # ── Action buttons ─────────────────────────────────────────────
         # Clear hierarchy: Home/Center/Zero are ordinary secondary buttons
@@ -617,7 +659,12 @@ class MotorPanel(QWidget):
                             "ahead of any queued motion")
         btn_stop.clicked.connect(self._emergency_stop)
         actions_v.addWidget(btn_stop)
-        root.addWidget(actions_box)
+        hazard.add_widget(actions_box)
+
+        # The one hazard surface now holds every stage-commanding cluster
+        # (jog + absolute move + Home/Center/Zero + STOP); drop it into the
+        # shelf between the display readout above and the scan helpers below.
+        root.addWidget(hazard)
 
         # ── Scan-integration helpers ──────────────────────────────────
         helper_box = Card("Scan integration")
@@ -663,7 +710,7 @@ class MotorPanel(QWidget):
         stage_card_v.addWidget(self._stage_view)
 
         split = QSplitter(Qt.Horizontal)
-        split.addWidget(controls)
+        split.addWidget(shelf)
         split.addWidget(stage_card)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
@@ -778,6 +825,12 @@ class MotorPanel(QWidget):
         self._restyle_jog_buttons()
         self._restyle_icons()      # qtawesome pixmaps are NOT re-tinted by QSS
         self._restyle_abs_move_captions()
+        # The HazardSurface caches its stripe/hatch colours + pins an opaque
+        # instance fill per theme at construction, so a live light/dark switch
+        # must re-resolve them (same idiom as the sequencer/calibration panels).
+        hazard = getattr(self, "_hazard", None)
+        if hazard is not None:
+            hazard.refresh_theme(self._theme_mode)
         stage_view = getattr(self, "_stage_view", None)
         if stage_view is not None:
             stage_view.refresh_theme(self._theme_mode)
