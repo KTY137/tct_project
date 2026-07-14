@@ -383,7 +383,9 @@ class _CountingRM:
         counters["rm_open"] += 1
         self._counters = counters
 
-    def open_resource(self, addr: str) -> _CountingInstr:
+    def open_resource(self, addr: str, open_timeout=None, **kw) -> _CountingInstr:
+        # Accept (and ignore) open_timeout: the driver now forwards the
+        # connection-establishment cap to viOpen (7b4ea94 + follow-up).
         self._counters["sess_open"] += 1
         return _CountingInstr(self._counters)
 

@@ -119,9 +119,20 @@ class KeithleyBiasSupply(BiasSupplyBase):
 
         try:
             self._rm = pyvisa.ResourceManager()
+            # timeout= is the per-operation I/O timeout (effective only AFTER
+            # the link is open); open_timeout bounds viOpen itself — the
+            # connection-ESTABLISHMENT wait.  Without open_timeout an offline
+            # Keithley over GPIB/USB/LAN blocks inside viOpen for the full OS
+            # socket window and freezes the connect worker — the same
+            # unbounded-open freeze fixed for the wavegen in 7b4ea94.  Reuses the
+            # same _timeout_ms; no new config key.
+            # TODO(bench): confirm NI-VISA honors open_timeout on the Keithley
+            # link (GPIB/USB/LAN) when the instrument is powered off — it can
+            # only shorten today's unbounded block, never lengthen it.
             self._inst = self._rm.open_resource(
                 self._visa_address,
                 timeout=self._timeout_ms,
+                open_timeout=self._timeout_ms,
             )
             idn = self._query("*IDN?")
             self.logger.info("Keithley IDN: %s", idn.strip())
@@ -142,6 +153,25 @@ class KeithleyBiasSupply(BiasSupplyBase):
             self._connected = True
             self.logger.info("KeithleyBiasSupply connected at %s", self._visa_address)
         except Exception as exc:
+            # Fail safe (rule 5): a failed connect must leak no half-open VISA
+            # session / ResourceManager and must not leave _connected True over a
+            # dead link on a reconnect.  connect() never enables HV (it *RST/
+            # configures and parks the source at 0 V), so closing the link on any
+            # connect failure energizes nothing and changes no HV ramp behavior —
+            # the energized-teardown path with retries lives in disconnect().
+            if self._inst is not None:
+                try:
+                    self._inst.close()
+                except Exception:
+                    pass
+                self._inst = None
+            if self._rm is not None:
+                try:
+                    self._rm.close()
+                except Exception:
+                    pass
+                self._rm = None
+            self._connected = False
             raise DeviceError(f"Keithley connect failed: {exc}") from exc
 
     def disconnect(self) -> None:

@@ -339,8 +339,12 @@ class WaveformGenerator(BaseDevice):
             # ResourceManager leak and the reconnect can inherit a wedged session
             # (the silent-death reconnect bug).  No-op on a clean first connect.
             self._teardown_session()
-            self._rm = pyvisa.ResourceManager()
             try:
+                # ResourceManager construction lives INSIDE the try so a missing
+                # / broken VISA backend surfaces as the same DeviceError as an
+                # open failure (uniform fail-safe surface), not an un-wrapped
+                # raise that skips the teardown below.
+                self._rm = pyvisa.ResourceManager()
                 # open_timeout caps viOpen — the connection-ESTABLISHMENT wait,
                 # which is distinct from self._instr.timeout (the per-operation
                 # I/O timeout set just below, effective only AFTER the link is
@@ -367,8 +371,12 @@ class WaveformGenerator(BaseDevice):
             except Exception as exc:
                 # Fail safe (rule 5): never leave a half-open ResourceManager /
                 # session behind on a failed or timed-out open — tear it down
-                # before raising so a retry starts clean and nothing leaks.
+                # before raising so a retry starts clean and nothing leaks.  Also
+                # drop _connected: on a RECONNECT a failed viOpen must not leave
+                # the flag True over a dead session (a starting scan would else
+                # silently drop trigger-arm writes for up to one liveness poll).
                 self._teardown_session()
+                self._connected = False
                 raise DeviceError(
                     f"WaveformGenerator VISA open failed: {exc}") from exc
 

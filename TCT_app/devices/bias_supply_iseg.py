@@ -214,7 +214,19 @@ class IsegBiasSupply(BiasSupplyBase):
             raise DeviceError("pyvisa not installed: pip install pyvisa") from exc
         try:
             self._rm = pyvisa.ResourceManager()
-            self._inst = self._rm.open_resource(self._address)
+            # open_timeout bounds viOpen (the connection-ESTABLISHMENT wait),
+            # distinct from ._inst.timeout (the per-operation I/O timeout set
+            # just below, effective only AFTER the link is open).  Without it an
+            # offline iseg over the isolated LAN / USB blocks inside viOpen for
+            # the full OS socket window (tens of seconds to minutes) and freezes
+            # the connect worker — the same unbounded-open freeze fixed for the
+            # wavegen in 7b4ea94.  Reuses the same _timeout_ms the per-op path
+            # already uses; no new config key.
+            # TODO(bench): confirm NI-VISA honors open_timeout on the iseg link
+            # (LAN or ASRL/serial) when the module is powered off — it can only
+            # shorten today's unbounded block, never lengthen it.
+            self._inst = self._rm.open_resource(
+                self._address, open_timeout=self._timeout_ms)
             self._inst.timeout = self._timeout_ms
             # iseg always uses CR-LF framing regardless of transport.
             self._inst.read_termination = "\r\n"
@@ -241,6 +253,25 @@ class IsegBiasSupply(BiasSupplyBase):
             self.logger.info("IsegBiasSupply connected at %s (CH%d)",
                              self._address, self._ch)
         except Exception as exc:
+            # Fail safe (rule 5): a failed connect must leak no half-open VISA
+            # session / ResourceManager and must not leave _connected True over a
+            # dead link on a reconnect.  connect() never enables HV (it only
+            # parks the setpoint at 0 V), so closing the link on any connect
+            # failure energizes nothing and changes no HV ramp behavior — the
+            # energized-teardown path with retries lives in disconnect().
+            if self._inst is not None:
+                try:
+                    self._inst.close()
+                except Exception:
+                    pass
+                self._inst = None
+            if self._rm is not None:
+                try:
+                    self._rm.close()
+                except Exception:
+                    pass
+                self._rm = None
+            self._connected = False
             raise DeviceError(f"iseg connect failed: {exc}") from exc
 
     def disconnect(self) -> None:

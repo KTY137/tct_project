@@ -208,11 +208,41 @@ class TekFastFrameOscilloscope(BaseDevice):
 
         self._acquire, self._config, self._translater = _import_dustin_mso5204b()
 
-        self._rm = pyvisa.ResourceManager()
         try:
-            self._instr = self._rm.open_resource(self._address)
+            # RM construction inside the try so a missing/broken VISA backend
+            # surfaces as the same DeviceError as an open failure.
+            self._rm = pyvisa.ResourceManager()
+            # open_timeout caps viOpen — the connection-ESTABLISHMENT wait,
+            # distinct from self._instr.timeout (the per-operation I/O timeout
+            # set just below, effective only AFTER the link is open).  Without
+            # it an offline/unreachable TCPIP…::INSTR target blocks inside
+            # viOpen for the full OS socket window (tens of seconds to minutes)
+            # and freezes the connect worker — the same unbounded-open freeze
+            # fixed for the wavegen in 7b4ea94.  pyvisa forwards open_timeout
+            # (ms) straight to viOpen.
+            # TODO(bench): confirm NI-VISA honors open_timeout on the real
+            # MSO5204B's VXI-11 link when the instrument is powered off — it can
+            # only shorten today's unbounded block, never lengthen it.
+            self._instr = self._rm.open_resource(
+                self._address, open_timeout=self._timeout_ms)
             self._instr.timeout = self._timeout_ms
         except Exception as exc:
+            # Fail safe (rule 5): a failed / timed-out open must leave no
+            # half-open session or ResourceManager behind and must not keep a
+            # stale _connected True over a dead link on a reconnect.
+            if self._instr is not None:
+                try:
+                    self._instr.close()
+                except Exception:
+                    pass
+                self._instr = None
+            if self._rm is not None:
+                try:
+                    self._rm.close()
+                except Exception:
+                    pass
+                self._rm = None
+            self._connected = False
             raise DeviceError(f"TekFastFrameOscilloscope VISA open failed: {exc}") from exc
 
         try:
