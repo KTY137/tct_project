@@ -6,10 +6,11 @@ feedback without each panel owning its own inline styles.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 
-from PySide6.QtCore import QEvent, QObject, QTimer, Qt
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtCore import QTimer, Qt
+from PySide6.QtGui import QFontMetrics, QIcon, QIconEngine, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
     QVBoxLayout, QWidget,
@@ -18,6 +19,8 @@ from PySide6.QtWidgets import (
 from gui import style as _style
 from gui.app_settings import theme_mode
 from gui.style import palette, repolish, set_chip_state
+
+logger = logging.getLogger(__name__)
 
 
 # cockpit v5 (docs/design/cockpit_design_system.md law 1/6/7) state
@@ -387,14 +390,38 @@ def flash_button(
 # "text" — the button's own label ink) instead of falling through to qtawesome.
 # Every existing ``set_button_icon(btn, "mdi.play")`` is fixed where it stands.
 #
-# Re-tinting on a theme switch is per-widget and event-driven (no locked file,
-# no panel edits, and explicitly NOT a QApplication.allWidgets() walk — that
-# walk is a documented native-crash vector, see gui.style._apply_pyqtgraph):
-# gui.style.apply_theme sets its module-level ``_active_mode`` BEFORE it installs
-# the new stylesheet, and Qt then delivers QEvent.StyleChange to every widget
-# (measured: parented, unparented, shown and unshown alike). A registered button
-# rebuilds its pixmap from the palette on that event; a same-mode re-assert
-# installs an identical stylesheet, emits nothing, and costs nothing.
+# The icon is NEVER BAKED. A token-bound icon is a QIcon backed by
+# ``_TokenIconEngine``, which resolves the palette token at PAINT time. There is
+# therefore nothing to "re-tint" on a theme switch: the next repaint (which Qt
+# schedules for every widget anyway when the app stylesheet changes) draws the
+# new ink. Zero work per toggle, zero registry, zero object lifetimes.
+#
+# WHY NOT AN EVENT FILTER — this is the fix for the cf18550 native crash, and it
+# is MEASURED, not argued (spikes, PySide6 6.11.1, this repo):
+#
+#   1. ``QApplication.setStyleSheet`` makes QStyleSheetStyle repolish every
+#      widget in its style-rule cache, and it iterates a RAW POINTER SNAPSHOT of
+#      those widgets. Deleting a cached widget from inside a StyleChange handler
+#      segfaults the process on the very next iteration (reproduced in isolation:
+#      40 buttons, delete 20 from the filter -> SIGSEGV).
+#   2. cf18550 installed a Python event filter on every icon button, so ~50-3700
+#      Python callbacks — each building a qtawesome pixmap, i.e. an allocation
+#      storm — ran INSIDE that walk. CPython's automatic gc then fires inside the
+#      walk (observed on every single toggle), and a gc pass frees unreachable
+#      Python-OWNED QWidgets: shiboken deletes their C++ objects, right there,
+#      mid-walk. That is (1). The bench full suite died with an ACCESS VIOLATION;
+#      the same path locally took 15.6 s per toggle (3690 rebuilds) and blew the
+#      60 s per-test timeout.
+#   3. Neither side of the filter was ever a corpse (measured: ``self`` and
+#      ``obj`` were shiboken-valid on all 19 000 dispatches). Qt is careful here —
+#      ``QObjectPrivate::eventFilters`` is a QPointer list, so a dead filter is
+#      skipped, and a dead receiver is never dispatched to. The corpse was a
+#      THIRD widget, one Qt itself was holding a raw pointer to.
+#
+# The rule this leaves behind: **never run Python inside Qt's stylesheet repolish
+# walk** — no event filter on widgets for StyleChange/Polish, and (as
+# gui.style._apply_pyqtgraph already documents) no QApplication.allWidgets() walk
+# either. Resolve the theme where it is safe: at paint.
 #
 # NOTE — hazard controls are deliberately NOT in this system. STOP / Abort /
 # Execute / Output OFF / Switch-polarity carry their glyph as a unicode
@@ -403,9 +430,7 @@ def flash_button(
 # pixmaps.
 # ─────────────────────────────────────────────────────────────────────
 _ICON_NAME_PROP = "_ui_icon_name"     # qtawesome name, e.g. "mdi.play"
-_ICON_TOKEN_PROP = "_ui_icon_token"   # palette token the ink must MATCH
-_ICON_COLOR_PROP = "_ui_icon_color"   # ink currently baked into the pixmap
-_ICON_WATCHED_PROP = "_ui_icon_watched"
+_ICON_TOKEN_PROP = "_ui_icon_token"   # palette token the ink must MATCH (None: caller-owned)
 
 
 def active_theme_mode() -> str:
@@ -447,49 +472,81 @@ def _build_qta_icon(icon_name: str, color: str):
         return None
 
 
-class _IconThemeWatcher(QObject):
-    """Re-tints a registered button's icon when the app stylesheet changes.
+class _TokenIconEngine(QIconEngine):
+    """A qtawesome glyph whose ink is the palette *token*, resolved AT PAINT.
 
-    One shared instance, installed as an event filter on each button that asked
-    for a token-bound icon. Filters die with the widget they watch, so nothing
-    here can touch a half-destroyed QWidget."""
+    The icon is never baked, so it can never be stale and never needs a
+    re-tint pass: a theme switch changes what ``icon_ink(token)`` returns, Qt
+    repaints the button (it does that for every widget on an app-stylesheet
+    change regardless), and the glyph comes out in the new theme's ink.
 
-    def eventFilter(self, obj, event) -> bool:  # noqa: N802 - Qt override
-        if event.type() == QEvent.Type.StyleChange:
-            _retint_button_icon(obj)
-        return False
+    Lifetime: the engine belongs to the QIcon, which belongs to the button. It
+    is not a QObject, holds no reference to any widget, and is registered
+    nowhere — there is nothing here that can outlive, or be outlived by, the
+    widget it draws for. (This is the same construction qtawesome itself uses:
+    every ``qta.icon()`` is a QIcon over a Python ``CharIconEngine``.)
 
+    Cost: the ink probe is ~25 us; the qtawesome icon and the rendered pixmap
+    are cached per ink, so a repaint in a settled theme is a dict hit. The
+    caches are dropped the moment the ink moves, which is the only time this
+    class does any work at all.
+    """
 
-_icon_watcher: _IconThemeWatcher | None = None
+    def __init__(self, icon_name: str, token: str) -> None:
+        super().__init__()
+        self._name = icon_name
+        self._token = token
+        self._ink: str = ""
+        self._icon = None                       # qtawesome QIcon for self._ink
+        self._pixmaps: dict[tuple, QPixmap] = {}
 
+    def _resolve(self):
+        """The qtawesome icon for the ink the ACTIVE theme wants right now."""
+        try:
+            ink = icon_ink(self._token)
+        except KeyError:                        # token vanished from the palette
+            ink = self._ink                     # keep the last good ink
+        if ink != self._ink or self._icon is None:
+            self._ink = ink
+            self._icon = _build_qta_icon(self._name, ink) if ink else None
+            self._pixmaps.clear()
+        return self._icon
 
-def _watcher() -> _IconThemeWatcher:
-    global _icon_watcher
-    if _icon_watcher is None:
-        _icon_watcher = _IconThemeWatcher()
-    return _icon_watcher
+    # NOTE — pixmap()/paint() are C++ VIRTUALS. A Python exception raised inside
+    # one does not propagate to a caller: it unwinds into Qt's painting code,
+    # which then uses a return value that was never produced. Measured while
+    # building this class: a stray TypeError in pixmap() (int() on a PySide6
+    # QIcon.Mode, which is an enum.Enum, not an IntEnum) came out as an ACCESS
+    # VIOLATION, not a traceback. So both overrides swallow-and-degrade: a broken
+    # glyph must cost the user an icon, never the process. (Nothing here can hold
+    # a stale widget — the engine references no QObject at all — so this catch
+    # cannot be hiding a use-after-free; it is only keeping Python errors on the
+    # Python side of the boundary.)
+    def pixmap(self, size, mode, state) -> QPixmap:  # noqa: N802 - Qt override
+        try:
+            icon = self._resolve()
+            if icon is None:
+                return QPixmap()
+            key = (self._ink, size.width(), size.height(), mode, state)
+            pm = self._pixmaps.get(key)
+            if pm is None:
+                pm = icon.pixmap(size, mode, state)
+                self._pixmaps[key] = pm
+            return pm
+        except Exception:                       # pragma: no cover - see NOTE
+            logger.debug("token icon pixmap failed", exc_info=True)
+            return QPixmap()
 
+    def paint(self, painter, rect, mode, state) -> None:  # noqa: N802 - Qt override
+        try:
+            icon = self._resolve()
+            if icon is not None:
+                icon.paint(painter, rect, Qt.AlignmentFlag.AlignCenter, mode, state)
+        except Exception:                       # pragma: no cover - see NOTE
+            logger.debug("token icon paint failed", exc_info=True)
 
-def _retint_button_icon(button) -> None:
-    """Rebuild a token-bound icon's pixmap against the live palette (no-op for
-    an unregistered button, or one whose ink has not actually changed — Qt
-    delivers StyleChange more than once per apply, and a pixmap rebuild is the
-    only expensive thing in this path)."""
-    name = button.property(_ICON_NAME_PROP)
-    token = button.property(_ICON_TOKEN_PROP)
-    if not name or not token:
-        return
-    try:
-        color = icon_ink(str(token))
-    except KeyError:
-        return
-    if button.property(_ICON_COLOR_PROP) == color:
-        return
-    icon = _build_qta_icon(str(name), color)
-    if icon is None:
-        return
-    button.setProperty(_ICON_COLOR_PROP, color)
-    button.setIcon(icon)
+    def clone(self) -> "_TokenIconEngine":
+        return _TokenIconEngine(self._name, self._token)
 
 
 def set_button_icon(
@@ -508,25 +565,29 @@ def set_button_icon(
 
     An explicit *color* is the caller's own (e.g. a fixed safety token like
     ``WARN_AMBER``, or a colour a panel re-resolves itself inside its
-    ``refresh_theme``): it is applied verbatim and NOT auto-re-tinted, so a
-    panel that owns its icon ink keeps owning it.
+    ``refresh_theme``): it is baked verbatim into a static pixmap and NOT
+    theme-tracked, so a panel that owns its icon ink keeps owning it.
     """
     if color is None:
         try:
-            color = icon_ink(token)
+            ink = icon_ink(token)
         except KeyError:
+            return
+        # Build once, up front, purely to decide the fallback: qtawesome is not
+        # a hard dependency, and a button whose glyph cannot be built must keep
+        # its text-only look rather than reserve space for an icon that draws
+        # nothing. (It also warms qtawesome's own icon cache for this glyph.)
+        if _build_qta_icon(icon_name, ink) is None:
             return
         button.setProperty(_ICON_NAME_PROP, icon_name)
         button.setProperty(_ICON_TOKEN_PROP, token)
-        if not button.property(_ICON_WATCHED_PROP):
-            button.installEventFilter(_watcher())
-            button.setProperty(_ICON_WATCHED_PROP, True)
-    else:
-        # Caller-owned ink: drop any token binding a previous call left behind,
-        # so the watcher cannot fight the panel for this button's icon.
-        button.setProperty(_ICON_TOKEN_PROP, None)
+        button.setIcon(QIcon(_TokenIconEngine(icon_name, token)))
+        return
+
+    # Caller-owned ink: drop any token binding a previous call left behind.
+    button.setProperty(_ICON_TOKEN_PROP, None)
     icon = _build_qta_icon(icon_name, color)
     if icon is None:
         return
-    button.setProperty(_ICON_COLOR_PROP, color)
+    button.setProperty(_ICON_NAME_PROP, icon_name)
     button.setIcon(icon)
