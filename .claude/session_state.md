@@ -109,12 +109,32 @@ changes. Adam claimed it unstarted without checking git — session
 hygiene rule 4 violation, corrected here. Masterplan Part VI beat #4
 is DONE.
 
-**IN FLIGHT:** noah-laser-danger-gate (Opus — laser 'Output on' joins
-rule-2, Kaya-approved via re-anchor plan; LOCKS gui/laser_panel.py,
-tct_gui.py, laser tests) → Mary immediately. Noah-glass findings note
-pending (read-only). **NEXT after laser gate lands: U0** (branch cut
-at polish-freeze@45781fa + bench GPU RHI probe) — the migration is
-now the priority track.
+**🔁 SESSION RESTART HANDOFF (Kaya restarts for the migration epoch):**
+
+- **LANDED LAST: `856281b` laser 'Output on' DangerGate** (rule-2,
+  fail-safe refusal, HazardSurface on the emission cluster, OFF never
+  gated, submitted write identity-pinned). **Mary's safety review of
+  856281b was IN FLIGHT when this session ended — if no verdict is
+  recorded below this line, RE-DISPATCH a fresh qa-critic review of
+  856281b first thing** (concerns: every emission path gated incl.
+  P0'-apply/output_on separation in scan_controller; decline ⇒ zero
+  submissions + honest UI; gate-exception fail-safe not fail-open;
+  OFF never confirmed; double-click re-entrancy). Old session's agent
+  instances are DEAD — do not SendMessage them.
+- **THE NEW EPOCH: U-track (QML migration) is the priority.** Entry
+  point **U0**: cut `ui-qml-migration` at tag `polish-freeze`
+  (= main@45781fa, verified) + RHI/GL pin probe on the bench GPU
+  (QSG_RHI_BACKEND=opengl, GL_RENDERER == bench GPU, zero
+  software-fallback lines, probe log in ledger). Then U1
+  (viewmodel-first test reclaim — planner slice waits for trunk-P2).
+  Kaya's binding course settings above: lean U1.5, full glass/SCENE
+  design round AFTER the migrate, fast DAQ, zero capability loss.
+- Tree at handoff: clean except this ledger (commit it). Trunk
+  main@856281b pushed? — 45781fa is pushed; 22d2201+856281b are
+  LOCAL-ONLY until the laser review clears (push after Mary's
+  verdict, per review-then-push discipline).
+- Read also: memory tct-current-work.md (rewritten for this handoff),
+  TECH_DEBT :185-188 (freeze-family riders + deferred glass bug).
 
 **KAYA LIVE FEEDBACK (2026-07-14 night):** he saw the QML preview's
 in-scene blur ("kit panel") and calls it "the most awesome" — the SCENE
