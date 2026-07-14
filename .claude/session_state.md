@@ -117,7 +117,17 @@ Against the OWNED ambient ground (kit §1.1: dark L* ∈ [0, 7.61], light
   really produce ΔL*4.0 in BOTH themes?); kit §2.1 is missing the light-shelf
   SCENE row (inference `panel`@0.55 reproduces kit's own 5.86 within 0.2%).
 
-## 🔴 THE BENCH IS STILL RED — and DO NOT PUSH OR MERGE
+## 🟡 BENCH RUN 3 (@ `cc14db7`, leak fix + thread finalizers): DIED OF NETWORK, NOT OF TESTS
+
+**83 % clean, zero failures, then `client_loop: send disconnect: Connection
+reset`** (exit 255 = SSH, not pytest). Runs 1 and 2 crashed natively at ~23 %.
+This is the strongest signal yet that the fix holds — but a signal is not a
+verdict. The bench (Kaya's home PC via Tailscale) is currently UNREACHABLE
+(port 22 timeout); a background watcher polls every 90 s for up to an hour and
+re-launches the gate automatically when it returns. **Still: DO NOT PUSH OR
+MERGE until a full run finishes green.**
+
+## 🔴 PRIOR BENCH HISTORY — kept for the record
 
 Two full-suite runs on sophonone, both `exit -1073741819` (`0xC0000005`).
 
