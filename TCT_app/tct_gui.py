@@ -381,6 +381,10 @@ class TCTMainWindow(QMainWindow):
         # bias panels, and the motor panel's homing / absolute moves / Zero
         # Here all confirm through this same object.
         self._danger_gate     = QtDangerGate(parent=self)
+        # A future reorder that moves gated-panel construction ABOVE this line
+        # must fail loudly at startup, not silently degrade every arm/ramp/move
+        # into the fail-safe "no gate wired" refusal (Mary's nit, 2026-07-15).
+        assert self._danger_gate is not None
         # Home all, Move to, Center and Zero here are danger-gated (rule 2);
         # jog stays bounded-and-ungated and STOP stays one-tap (law 5).
         self._motor_panel     = MotorPanel(self._devices.motor,

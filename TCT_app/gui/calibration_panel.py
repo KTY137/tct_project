@@ -12,6 +12,13 @@ Exposes both calibration methods from the GUI:
 Results are persisted to ``configs/charge_calibration.yaml`` (a sidecar so the
 documented ``devices.yaml`` is left untouched) and applied live to the running
 DeviceManager.
+
+HAZARD note (2026-07-15 lab-safety fix): ``_run_reference``'s
+``_ReferenceWorker`` arms the wavegen output — the SAME PDL 800 laser trigger
+path ``gui/laser_panel.py``'s "Output on" button arms — so it is a rule-2
+dangerous action and confirms through the injected ``DangerGate`` (see
+``_confirm_reference_arm``) exactly like the repeatability test's motion does;
+no gate ⇒ refuse, same fail-safe stance.
 """
 from __future__ import annotations
 
@@ -29,7 +36,7 @@ from PySide6.QtWidgets import (
 
 from analysis.charge_calibration import ChargeCalibration, q_one_mip_pC
 from analysis.waveform_analysis import analyse_waveform
-from controller.danger_gate import DangerGate
+from controller.danger_gate import DangerAction, DangerGate
 from controller.repeatability import RepeatabilityTester
 from gui.app_settings import theme_mode
 from gui.panel_kit import GlassPane, HazardSurface, panel_header, register_glass_pane
@@ -109,10 +116,14 @@ class CalibrationPanel(QWidget):
                  *, gate: DangerGate | None = None) -> None:
         super().__init__(parent)
         self._devices = devices
-        # Confirmation gate for the (motion-driving) repeatability test.  The
-        # main window injects the same QtDangerGate the plan executor uses; with
-        # no gate the tester refuses to move (fail-safe), so the panel surfaces
-        # that up front rather than firing a worker that will raise.
+        # Confirmation gate for every dangerous action this panel can start:
+        # the (motion-driving) repeatability test, AND the reference-diode
+        # acquisition (2026-07-15 fix — Mary's every-submitter grep found
+        # _ReferenceWorker.run() arms the wavegen output, the PDL 800 laser
+        # trigger; that is emission, same class as laser_panel._output_on).
+        # The main window injects the same QtDangerGate the plan executor
+        # uses; with no gate BOTH actions refuse (fail-safe), so the panel
+        # surfaces that up front rather than firing a worker that will raise.
         self._gate = gate
         self._loading = True
         self._ref_thread: QThread | None = None
@@ -437,6 +448,44 @@ class CalibrationPanel(QWidget):
     # Reference routine                                                   #
     # ------------------------------------------------------------------ #
 
+    def _confirm_reference_arm(self, n: int) -> bool:
+        """Ask the injected gate to confirm arming the wavegen output for the
+        reference-diode acquisition (rule 2).
+
+        ``_ReferenceWorker.run()`` calls ``waveform_generator.output_on()`` —
+        the same wavegen output ``laser_panel._output_on`` arms, i.e. the PDL
+        800 laser trigger; arming it is emission if the manual head is armed.
+        Confirms through the SAME injected gate, called on the GUI thread
+        BEFORE the worker/thread are even constructed: a refusal must start
+        nothing.
+
+        With **no gate injected** the arm is REFUSED and surfaced — the same
+        fail-safe stance this panel already takes for gate-less motion (see
+        ``_run_repeatability`` below): an un-wired confirmation path must
+        never degrade into "no confirmation needed".
+        """
+        wfg = self._devices.waveform_generator
+        freq = getattr(wfg, "_frequency", None)
+        ampl = getattr(wfg, "_amplitude", None)
+        summary = f"Arm laser trigger — reference-diode acquisition ({n} averages)"
+        if freq is not None and ampl is not None:
+            summary += f", wavegen {freq:g} Hz / {ampl:g} Vpp"
+        detail: dict = {"averages": n}
+        if freq is not None:
+            detail["frequency_Hz"] = freq
+        if ampl is not None:
+            detail["amplitude_Vpp"] = ampl
+        action = DangerAction(kind="laser_arm", summary=summary, detail=detail)
+        if self._gate is None:
+            QMessageBox.warning(
+                self, "Confirmation unavailable",
+                f"{summary}\n\n"
+                "This arms the laser trigger (wavegen output → PDL 800 "
+                "trigger input) and needs a confirmation gate, which is not "
+                "wired. Cannot proceed.")
+            return False
+        return bool(self._gate.confirm(action))
+
     def _run_reference(self) -> None:
         scope = self._devices.scope
         if not getattr(scope, "connected", False):
@@ -446,6 +495,11 @@ class CalibrationPanel(QWidget):
         if self._ref_thread is not None and self._ref_thread.isRunning():
             return
         n = self._ref_averages.value()
+        # Rule 2: confirm arming the laser trigger BEFORE the worker (which
+        # arms the wavegen output) is even constructed. A decline (or no gate)
+        # starts NOTHING — the worker/thread are never created.
+        if not self._confirm_reference_arm(n):
+            return
         self._chip_ref.set_status("Reference running", "busy")
         set_button_busy(self._btn_run, True, "Running...")
         self._ref_worker = _ReferenceWorker(self._devices, n)

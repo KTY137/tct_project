@@ -40,6 +40,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 import yaml
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication, QGroupBox
 
 from analysis.charge_calibration import ChargeCalibration
@@ -257,6 +258,145 @@ def test_injected_gate_is_stored_verbatim():
     panel = CalibrationPanel(_ReadyDevices(), gate=gate)
     try:
         assert panel._gate is gate
+    finally:
+        _dispose(panel)
+
+
+# --------------------------------------------------------------------------- #
+# 2026-07-15 lab-safety fix — the reference-diode acquisition ALSO arms the    #
+# wavegen output (the PDL 800 laser trigger, same path laser_panel._output_on #
+# confirms through), so it is gated the same way. Mary's every-submitter grep #
+# found _ReferenceWorker.run() calling waveform_generator.output_on() with no #
+# confirmation; _confirm_reference_arm (calibration_panel.py) closes that.    #
+# --------------------------------------------------------------------------- #
+
+class _ReadyScope:
+    connected = True
+
+
+class _ReadyWaveformGenerator:
+    """A wavegen stand-in exposing the same private numbers
+    ``laser_panel._output_on`` reads via ``getattr`` — proves the real
+    acquisition numbers reach the confirmation payload when cheaply
+    available."""
+
+    _frequency = 1234.0
+    _amplitude = 2.5
+
+
+class _ReadyDevicesWithScope(_ReadyDevices):
+    """``_ReadyDevices`` + a connected scope + a wavegen with real numbers, so
+    ``_run_reference`` reaches its own gate check — the only branch that
+    exercises the fail-safe 'no gate ⇒ refuse to arm' path for the
+    reference-diode acquisition, without touching real hardware."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.scope = _ReadyScope()
+        self.waveform_generator = _ReadyWaveformGenerator()
+
+
+class _CountingRefWorker(QObject):
+    """Stand-in for ``_ReferenceWorker`` that records how many times it was
+    constructed instead of performing a real acquisition — these tests pin
+    the confirm-THEN-start wiring, not the acquisition itself (that is
+    ``_ReferenceWorker``'s own job, unchanged by this beat)."""
+
+    finished = Signal(object)
+    instances: list = []
+
+    def __init__(self, devices, n) -> None:
+        super().__init__()
+        _CountingRefWorker.instances.append((devices, n))
+
+    def run(self) -> None:
+        pass   # never invoked here — no event loop is pumped in these tests
+
+
+class _SpyGate:
+    """Records every action it was asked to confirm, then answers ``answer``."""
+
+    def __init__(self, answer: bool) -> None:
+        self.answer = answer
+        self.actions: list = []
+
+    def confirm(self, action) -> bool:
+        self.actions.append(action)
+        return self.answer
+
+
+def test_reference_no_gate_refuses_and_starts_no_worker(monkeypatch):
+    """Fail-safe path (``_confirm_reference_arm``): with NO confirmation gate
+    the panel surfaces a warning and starts NO worker/thread — mirrors
+    ``test_no_gate_refuses_to_move_and_starts_no_worker`` above and
+    ``test_output_on_no_gate_refuses_with_message_and_submits_nothing`` in
+    ``tests/test_laser_panel_output_state.py``."""
+    _app()
+    _FakeMessageBox.calls.clear()
+    monkeypatch.setattr(cp, "QMessageBox", _FakeMessageBox)
+    monkeypatch.setattr(cp, "_ReferenceWorker", _CountingRefWorker)
+    _CountingRefWorker.instances.clear()
+    panel = CalibrationPanel(_ReadyDevicesWithScope())        # no gate injected
+    try:
+        assert panel._gate is None
+        panel._run_reference()
+        assert panel._ref_thread is None
+        assert panel._ref_worker is None
+        assert _CountingRefWorker.instances == [], "no gate must start NOTHING"
+        assert _FakeMessageBox.calls, "expected a fail-safe warning"
+        assert _FakeMessageBox.calls[-1][0] == "Confirmation unavailable"
+    finally:
+        _dispose(panel)
+
+
+def test_reference_gate_declines_starts_no_worker(monkeypatch):
+    """A denied confirmation must start NOTHING — the worker/thread are never
+    constructed, so nothing arms the wavegen output. Mirrors
+    ``test_output_on_gate_declines_submits_nothing``."""
+    _app()
+    monkeypatch.setattr(cp, "_ReferenceWorker", _CountingRefWorker)
+    _CountingRefWorker.instances.clear()
+    gate = _SpyGate(answer=False)
+    panel = CalibrationPanel(_ReadyDevicesWithScope(), gate=gate)
+    try:
+        panel._run_reference()
+        # The gate WAS consulted, with the emission action…
+        assert len(gate.actions) == 1
+        assert gate.actions[0].kind == "laser_arm"
+        # …and a decline started NOTHING.
+        assert panel._ref_thread is None
+        assert panel._ref_worker is None
+        assert _CountingRefWorker.instances == []
+    finally:
+        _dispose(panel)
+
+
+def test_reference_gate_accepts_starts_worker_exactly_once(monkeypatch):
+    """An approved confirmation starts the worker exactly once, with the real
+    acquisition parameters (averages + the wavegen's cheaply-available
+    frequency/amplitude) in the confirmation payload, and the confirmation
+    happens BEFORE the worker is constructed. Mirrors
+    ``test_output_on_gate_accepts_submits_exactly_once``."""
+    _app()
+    monkeypatch.setattr(cp, "_ReferenceWorker", _CountingRefWorker)
+    _CountingRefWorker.instances.clear()
+    gate = _SpyGate(answer=True)
+    panel = CalibrationPanel(_ReadyDevicesWithScope(), gate=gate)
+    try:
+        panel._ref_averages.setValue(7)
+        panel._run_reference()
+        assert len(gate.actions) == 1
+        action = gate.actions[0]
+        assert action.kind == "laser_arm"
+        assert "reference-diode" in action.summary.lower()
+        assert "7" in action.summary
+        assert action.detail["averages"] == 7
+        assert action.detail["frequency_Hz"] == 1234.0
+        assert action.detail["amplitude_Vpp"] == 2.5
+        # Exactly one worker started — confirm-then-start, not start-then-confirm.
+        assert len(_CountingRefWorker.instances) == 1
+        assert panel._ref_thread is not None
+        assert panel._ref_worker is not None
     finally:
         _dispose(panel)
 
