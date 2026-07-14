@@ -86,7 +86,9 @@ def _glass_disqualifiers(pane) -> list[str]:
     """Every reason *pane* is ineligible for glass, per the Z-ladder. Empty list
     == a legitimate Z1/Z2 chrome surface."""
     import pyqtgraph as pg
-    from PySide6.QtWidgets import QTableWidget, QWidget
+    from PySide6.QtWidgets import (
+        QComboBox, QListView, QListWidget, QTableWidget, QWidget,
+    )
 
     from gui.arm_latch import ArmLatch
     from gui.panel_kit import FigureCard
@@ -107,6 +109,15 @@ def _glass_disqualifiers(pane) -> list[str]:
             reasons.append("Z3 instrument screen")
         if isinstance(w, QTableWidget):
             reasons.append("Z4 live data table")
+        if isinstance(w, (QListWidget, QListView)):
+            # A QComboBox's internal popup view is a QListView parented under
+            # the combo itself — parameter chrome, not a data list. Only
+            # standalone list views disqualify.
+            anc = w.parent()
+            while anc is not None and not isinstance(anc, QComboBox):
+                anc = anc.parent()
+            if anc is None:
+                reasons.append("Z4 live data list")
     return reasons
 
 
@@ -248,8 +259,10 @@ def test_wired_panels_register_their_chrome_panes(panels):
         assert id(panels["laser"]._card_pdl) in registered
         # Calibration: the electronics-gain group (pure parameter chrome).
         assert id(panels["calibration"]._elec_box) in registered
-        # Planner: the "add blocks" palette (a rail of draggable buttons).
-        assert id(panels["planner"]._palette_card) in registered
+        # Planner: the "add blocks" palette is NOT registered — it hosts a
+        # QListWidget, disqualified by type since the Z4 census widened
+        # (Mary's wave-boundary rider, Adam's ruling 2026-07-14).
+        assert id(panels["planner"]._palette_card) not in registered
     finally:
         panel_kit.set_panel_glass(False)
 

@@ -1072,7 +1072,8 @@ class TCTMainWindow(QMainWindow):
                       getattr(self, "_calib_panel", None),
                       getattr(self, "_analysis_panel", None),
                       getattr(self, "_settings_window", None),
-                      getattr(self, "_theme_editor", None)):
+                      getattr(self, "_theme_editor", None),
+                      getattr(self, "_device_manager_window", None)):
             if panel is not None and hasattr(panel, "refresh_theme"):
                 try:
                     panel.refresh_theme(self._theme_mode)

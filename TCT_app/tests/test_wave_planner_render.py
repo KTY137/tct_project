@@ -99,10 +99,12 @@ def test_shelf_never_registers_but_the_palette_stays_registered():
             id(p) for p in panel_kit.registered_glass_panes()
             if panel is p or panel.isAncestorOf(p)
         }
-        # The palette keeps its individual opt-in (pinned by the rollout test).
-        assert id(panel._palette_card) in registered
-        # Exactly that one, and nothing else under this panel.
-        assert registered == {id(panel._palette_card)}
+        # The palette is NOT registered: it hosts a QListWidget, and the Z4
+        # census disqualifies list/table views by type (Mary's wave-boundary
+        # rider; Adam's ruling 2026-07-14 — rule uniformity over one cosmetic
+        # pane). Nothing under the planner registers for glass.
+        assert id(panel._palette_card) not in registered
+        assert registered == set()
         # The shelf is a content shell — it must NOT register.
         assert id(panel._shelf) not in registered
         assert panel._shelf.property("glassPane") in (None, "")

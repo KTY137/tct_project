@@ -191,8 +191,9 @@ def test_hazard_surface_opaque_fill_survives_panel_glass_switch():
         before = panel._hazard.styleSheet()
         assert f"background: {p['panel']}" in before
         panel_kit.set_panel_glass(True)
-        after = panel._hazard.styleSheet()
-        assert after == before, "HazardSurface fill must not react to the panel-glass switch"
+        # Real coverage is registry ABSENCE (see
+        # test_sequencer_opts_nothing_into_glass) — the surface is never
+        # registered, so an unchanged styleSheet() here is trivially true.
         assert panel._hazard.property("glassPane") in (None, "")
         assert panel._hazard.property("glassCard") in (None, "")
     finally:

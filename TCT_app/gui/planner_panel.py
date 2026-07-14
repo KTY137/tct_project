@@ -50,7 +50,7 @@ from gui.arm_latch import ArmLatch
 from gui.app_settings import planner_arm_latch_enabled, theme_mode
 from gui.panel_kit import (
     EmptyState, GlassPane, HazardSurface, MetricGrid, MetricTile,
-    panel_header, register_glass_pane,
+    panel_header,
 )
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
@@ -638,15 +638,18 @@ class PlannerPanel(QWidget):
         root.addLayout(body, 1)
 
         # ---- "add blocks" palette -----------------------------------------
-        # Panel glass (opt-in, Baldr Z-ladder): the palette is pure chrome (a
-        # rail of draggable block buttons), the one planner side-surface with
-        # no live data and no hazard control — eligible. The recipe tree
-        # (center working surface) and the "before you run" aside are DENIED:
-        # the aside hosts the ArmLatch danger well, the #dangerBtn Abort, the
-        # armed HV chip and the estimate readout tiles (Völundr G2, Baldr §5).
+        # Panel glass (opt-in, Baldr Z-ladder): NOT registered. The palette
+        # hosts a QListWidget (_PaletteList), and the Z4 census disqualifies
+        # list/table views by TYPE — a blanket rule kept deliberately free of
+        # live-vs-static judgment (Mary's wave-boundary rider, 2026-07-14;
+        # Adam's ruling: rule uniformity beats one cosmetic glass pane, and
+        # planner is a hazard panel where opacity is the house stance anyway).
+        # The recipe tree (center working surface) and the "before you run"
+        # aside remain DENIED as before: the aside hosts the ArmLatch danger
+        # well, the #dangerBtn Abort, the armed HV chip and the estimate
+        # readout tiles (Völundr G2, Baldr §5).
         self._palette_card = self._build_palette()
         body.addWidget(self._palette_card, 0)
-        register_glass_pane(self._palette_card)
 
         # ---- recipe tree card --------------------------------------------
         tree_card = QFrame()
