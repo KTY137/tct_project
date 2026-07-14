@@ -5,15 +5,21 @@ context. A fresh session reads this file and is as informed as the old one.
 Updated on every dispatch and every landing. Run `.claude/beat_status.ps1`
 before every commit; stage explicit paths; never `-am`.
 
-**Updated: 2026-07-14 evening, WAVE BRANCH CUT + BUG PIVOT. Branch
-`design/glass-wave-1` (from 7f3d863); first commit `11407b6` lands the orphaned
-`scripts/glass_probe.py`. Mamoru wave-boundary standup GREEN (trunk chain
-verified; the handoff's two "stale prose" items are actually current). KAYA
-REPORTED A BUG mid-boundary: connect to REAL devices → full GUI freeze, then
-intermittent crash, observed on the WAVEFORM GENERATOR (Rigol,
-TCPIP0::192.168.0.10). Paul is on it as a priority beat, parallel to wave
-beat 0. Bench gates stay DETACHED only (schtasks + poller; bundle-sync with
-GIT_LFS_SKIP_SMUDGE=1).**
+**Updated: 2026-07-14, SESSION-CRASH RECOVERY. The previous session lost
+connection mid-wave; a fresh session recovered from this ledger + git. Branch
+`design/glass-wave-1`, HEAD `b99b5a6`. Everything the old ledger listed as
+in-flight LANDED before the crash (see git log): runbg-affinity fix `e0a9d91`
++ Mary rider `5576378`, wavegen driver sweep `8e85f2a`, waves 1–3
+(`3a6d0ea` stage_view, `2e02b8d` intensity, `5971741` laser). Wave 4
+(scan_map_view) was orphaned complete-with-test in the working tree →
+verified green (57 targeted) and committed `b99b5a6`. Wave 5 (sequencer,
+HAZARD) was orphaned WITHOUT its test → Noah re-dispatched to finish it.
+Bench gates stay DETACHED only (schtasks + poller).**
+
+**DRIFT NOTE (RETRACTED):** the recovery session first claimed
+`.claude/beat_status.ps1` missing — WRONG (Glob false-negative on the dot
+directory; Mamoru standup caught it). The script exists and runs; used from
+here on. Lesson: verify "missing file" claims with `ls`, not Glob alone.
 
 ## ⚠️ TREE / MACHINE STATE (read before staging ANYTHING)
 
@@ -23,34 +29,117 @@ GIT_LFS_SKIP_SMUDGE=1).**
 - ⇒ REAL INSTRUMENTS MAY BE CABLED TO THIS MACHINE. No agent runs the app or
   full suites locally; targeted headless (offscreen) pytest only; safety rule 6.
 
-## ✅ LANDED THIS SESSION
+## ✅ LANDED (pre-crash session + recovery session)
 
-- `11407b6` orphaned `scripts/glass_probe.py` committed (was never in history).
-- `ab0cbee` **wave beat 0**: panel_kit registry never yields dead C++ widgets
-  (prune-on-read via shiboken6.isValid at the one choke-point). **Mary:
-  APPROVED**, one NIT rider (GUI-thread-only note) applied to the docstring.
-- `7b4ea94` **wavegen bug, driver half (Paul)**: open_timeout bounds viOpen on
-  offline TCPIP instruments; _teardown_session serialized on io_lock against
-  the LivenessMonitor's `*STB?` (the "sometimes" crash = liveness poll landing
-  inside a reconnect); fail-safe teardown on open error. 56 targeted green.
+- `11407b6` orphaned `scripts/glass_probe.py` · `ab0cbee` wave beat 0
+  (panel_kit prune-on-read, Mary APPROVED) · `7b4ea94` + `8e85f2a` wavegen
+  freeze class swept across all five VISA drivers (Paul + Mary riders) ·
+  `e0a9d91` + `5576378` _run_bg GUI-thread affinity + teardown join (Mary
+  reviewed, RISK rider applied).
+- **Wave 1/12** `3a6d0ea` stage_view · **2/12** `2e02b8d` intensity ·
+  **3/12** `5971741` laser · **4/12** `b99b5a6` scan_map_view (recovered
+  from crash-orphaned tree, 57 targeted green, committed by recovery
+  session).
+- `211618d` rotation bookkeeping.
+- ⚠️ Mary review status of waves 1–4: laser beat produced the UNGATED
+  'Output on' finding (item 0 below). Non-hazard wave beats batch at the
+  wave boundary per review cadence; scan_map (4/12, non-hazard) joins that
+  batch.
 
 ## 🔥 IN-FLIGHT BEATS (locks)
 
-1. **noah-runbg-affinity** (ui-ux-dev, OPUS, PRIORITY — Kaya's bug, GUI half):
-   both `_run_bg` done-signals connect to a bare closure with no receiver
-   QObject ⇒ slot runs on the WORKER thread (widget access + modal QMessageBox
-   off the GUI thread = the hang/crash; Paul proved it with a tid probe). Fix:
-   bound-method receiver + Qt.QueuedConnection. LOCKS: `tct_gui.py`,
-   `gui/device_panel.py`, `tests/test_run_bg_thread_affinity.py` (new).
-   → Mary review IMMEDIATELY after landing (concurrency class).
-2. **mary-wavegen-review** (qa-critic, read-only): reviewing `7b4ea94`
-   (deadlock surface, lock ordering, open_timeout semantics, rule-5 fail-safe).
-3. **noah-wave-intensity** (ui-ux-dev, Sonnet): intensity panel onto the kit.
-   LOCKS: `gui/intensity_panel.py`, `tests/test_wave_intensity_render.py` (new).
-   NOTE: panel has NO refresh_theme BY DESIGN (fixed-dark waveform canvas).
-4. **noah-wave-stageview** (ui-ux-dev, Sonnet): stage_view onto the kit.
-   LOCKS: `gui/stage_view.py`, `tests/test_wave_stage_view_render.py` (new).
-   Frame contract (test_stage_view_frame_contract.py) must stay green.
+**🏁 THE WAVE IS COMPLETE — 12/12 landed. HEAD `90a3a23`.**
+Boundary machinery in flight (no code beats, no file locks):
+
+NONE — no code beats in flight, no file locks.
+
+**RIDER BEAT LANDED `b900a80`** (Noah + Adam): census widened to
+QListWidget/QListView WITH a QComboBox-popup exemption (the blanket rule
+flagged combo popups in laser/calibration — found by probe, fixed);
+the widened census then correctly caught planner's registered
+_palette_card (hosts a QListWidget) → **Adam's ruling: unregistered**
+(rule uniformity > one cosmetic pane; planner is hazard anyway; planner
+now registers NOTHING). Device window wired into _toggle_theme fan-out.
+Trivially-true asserts dropped. **182 passed** across all wave/rollout/
+theme suites. NOTE for Mary's awareness (not re-reviewed: change removes
+glass from a hazard panel — safety-positive direction, driven by her own
+rider): planner diff is one register call + comment + test asserts.
+**DOCS LANDED `f48f281`**: ARCHITECTURE changelog waves 4-12 +
+BENCH_CHECKLIST §15.
+
+**BOUNDARY VERDICTS (all in):**
+
+- Wave 12 planner: **Mary APPROVED, zero riders** (keyboard tab-order
+  nit only). ALL FOUR hazard beats now clean-approved.
+- Non-hazard batch (4·6·8·9·11): **Mary APPROVED_WITH_RIDERS** — every
+  flagged judgment call ruled CORRECT (camera info_card = set-once
+  device identity, PDL precedent; scope/analysis live-value exclusions
+  right). Riders → noah-wave-riders above. Open items for later:
+  scope `_lbl_probe_warn` (warn ink) on a registered card — defensible
+  per Mary, flag for a uniformity pass; durable live-value-QLabel
+  MARKER as kit enhancement (design item, needs an owner decision).
+- Mamoru standup: all nine landing claims VERIFIED against git;
+  devices.yaml in no wave commit; beat_status.ps1 EXISTS (the ledger's
+  "missing" claim was Adam's Glob false-negative — retracted above).
+- Kiroku bookkeeping DONE (uncommitted): ARCHITECTURE.md changelog
+  waves 4-12 (:647-663) + BENCH_CHECKLIST.md §15 glass-wave visual
+  acceptance (:895-996). Commit with the rider beat.
+
+[LANDED wave 12/12: `90a3a23` planner (hazard) — HazardSurface over the
+danger aside (latch + Abort), _palette_card kept, per-action gate/
+mutation/executor/teardown byte-identical, Abort in no bulk-disable set;
+97 targeted green. Mary review in flight above.]
+
+AFTER the three reports: Kiroku bookkeeping rotation (ARCHITECTURE
+changelog + wave summary), contact sheet (cross-panel META), detached
+bench gate (schtasks + poller) — then the branch is Kaya's to merge.
+
+[LANDED wave 11/12: `34453ab` analysis — zero registrations (plot/data
+dense, bias-shaped outcome for content reasons); math/loading/fade_swap
+byte-identical; 107 targeted + 28 supplementary green; header/recent-runs
+exclusion judgment calls → boundary batch.]
+[LANDED wave 9/12: `4b74c1c` scope — chrome registers, live-value cards
+out, _TriggerDialog satellite idiom; 45 targeted + 63 supplementary
+green; Channels/Measurements exclusion judgment calls → boundary batch.]
+[LANDED wave 10/12: `f86675d` motor (hazard) — **Mary: APPROVED, zero
+riders.** Hazard invariant verified by construction; STOP live mid-move
+(absent from _motion_widgets by design); outside widgets never command
+motion. Recurring trivially-true-assertion nit → queued batch chore.]
+
+[LANDED wave 8/12: `4725f64` camera — shelf register=False, 5 chrome
+cards in / 4 content cards out, _ROIDialog satellite idiom, worker
+untouched; 63 targeted + 159 supplementary green. info_card
+registration (laser-PDL precedent) flagged for the wave-boundary batch.
+Non-hazard ⇒ joins the boundary Mary batch with waves 4 + 6.]
+
+[LANDED wave 7/12: `18469ca` calibration (hazard) — rollout registrations
+kept, opaque HazardSurface on the repeatability section, DangerGate/
+homed/workers byte-identical per Noah (Opus). 49 targeted + 37 adjacent
+green. **Mary: APPROVED, nits only.** Stop-inside-HazardSurface ruled
+SAFE (no opacity/mouse-transparency, stylesheet doesn't cascade, stripe
+clipped to 4px left strip; Stop enabled-state driven solely by run
+lifecycle). RECURRING NIT (waves 5+7): the "fill unchanged across
+set_panel_glass(True)" assertion in both wave hazard tests is trivially
+true by construction — batch micro-chore: drop/comment it in
+test_wave_sequencer_render.py + test_wave_calibration_render.py, the
+registry-absence asserts are the real coverage.]
+
+[LANDED wave 6/12: `dc3592c` device manager window — shelf register=False
+as CONTENT consequence (QTableWidget Z4 disqualifier), bulk-actions Card
+registers; _run_bg fix untouched, affinity tests green; 25 targeted + 129
+supplementary green. Follow-up micro-chore: add the window to
+tct_gui._toggle_theme refresh_theme fan-out (out of beat file-scope).
+Non-hazard ⇒ joins the wave-boundary Mary batch.]
+
+[LANDED wave 5/12: `bf41854` sequencer (hazard) — crash-orphaned diff
+recovered intact, Noah audit no-gaps, 57 targeted green. **Mary: APPROVED,
+zero riders** ("I would ship this to a bench with HV cabled"). One nit,
+strength-of-proof only: `test_hazard_surface_opaque_fill_survives_panel_
+glass_switch` is trivially true (surface never registered ⇒ set_panel_glass
+provably no-ops); real invariant held 3 ways (no #hazardSurface glass QSS
+variant style.py:1799-1806 · register_glass_pane refuses HazardSurface
+panel_kit.py:1295 · instance-sheet pin re-asserted by the theme round-trip
+test). → optional micro-chore, not a defect.]
 
 ## HEAD / TRUTH
 
@@ -182,6 +271,17 @@ to a bench with HV cabled") · monkey wiring-classification `d13af76` · ground 
 
 ## 🧑‍🔬 NEEDS KAYA (at 10:00)
 
+0. **🔴 NEW (wave find, 2026-07-14): the laser 'Output on' button is UNGATED.**
+   `armedBtn` in gui/laser_panel.py is the real PDL 800 trigger (wavegen output
+   → laser trigger input = emission if the manual box is armed), and
+   `_output_on()` submits straight to the VISA worker — no DangerGate, no
+   confirm. Every HV-energizing path in bias_panel rides `_confirm_hv`; the
+   census classed laser non-hazard, which is why nobody looked. Behavior left
+   byte-identical by the wave beat (flagged, not changed). DECISION: should
+   laser emission join the rule-2 danger list (confirm dialog / DangerGate like
+   HV enable)? If yes → Paul+Noah beat; also reclassify laser as a hazard panel
+   (opaque surfaces) and re-run its wave beat's register decisions.
+
 1. **The SCENE decision** (above). Everything downstream hangs on it.
 2. **Chip labels are now neutral ink.** Fill and border keep the hue; the text
    still names the state. Mary's cheaper alternative to the offered "8 more
@@ -203,13 +303,13 @@ to a bench with HV cabled") · monkey wiring-classification `d13af76` · ground 
 
 ## NEXT (queue)
 
-1. **Mary reviews for both in-flight beats** the moment they land (safety +
-   concurrency class — never batched).
-2. **The 7 simple-panel beats** (AFTER beat 0 lands — every panel test imports
-   panel_kit, so no cross-cutting runs while beat 0 holds that lock):
-   intensity 224 · stage_view 255 · device 348 (IS a QMainWindow — extra glass
-   surface) · sequencer 456 (HAZARD) · calibration 578 (HAZARD) ·
-   scan_map_view 615 · laser 703. Copy-handoff verbatim from pilot `074943f`:
+1. **Mary review for wave 5 (sequencer, HAZARD)** the moment it lands —
+   never batched. Then the wave-boundary batch review for waves 1–4
+   (non-hazard).
+2. **Remaining simple-panel beats**: device 348 (IS a QMainWindow — extra
+   glass surface) · calibration 578 (HAZARD → immediate Mary).
+   [DONE: intensity · stage_view · laser · scan_map_view; sequencer in
+   flight.] Copy-handoff verbatim from pilot `074943f`:
    shelf + panel_header; `_well()` for inputs; HazardSurface as pure
    parent-frame wrap; kit surfaces into refresh_theme; non-hazard panels
    REGISTER for glass (bias's register=False is bias-specific); dynamic danger
