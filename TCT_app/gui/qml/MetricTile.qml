@@ -35,7 +35,8 @@
 //      "DISCONNECTED-overflow" bug: a long value/title used to just paint
 //      past the tile's own bounds with no clipping and no shrink/truncate.
 //   7. Stale ink — a stale tile (law 4) now desaturates its text colour to
-//      `Theme.faint` (title/value/caption), not just the pre-existing
+//      `Theme.muted` (title/value/caption; `Theme.faint` is RETIRED for
+//      text as of the 2026-07-14 WCAG pass — it was 2.6:1), not just the pre-existing
 //      opacity dim, matching the QWidget-kit's ink-based treatment.
 //   8. Behavior durations now bind `Theme.transitionMs` (law 8: "state
 //      transitions ease ~200 ms") instead of a hardcoded `150`, so the QML
@@ -145,7 +146,7 @@ Rectangle {
             // repo convention (ReadoutCell/MetricTile title.upper()) rather
             // than the draft's SmallCaps.
             font.capitalization: Font.AllUppercase
-            color: root.stale ? Theme.faint : Theme.muted
+            color: root.stale ? Theme.muted : Theme.muted
 
             Behavior on color { ColorAnimation { duration: Theme.transitionMs } }
         }
@@ -167,7 +168,7 @@ Rectangle {
                 font.family: Theme.monoFamily
                 font.pixelSize: root.compact ? Theme.fontValueCompact : Theme.fontValue
                 font.weight: Font.DemiBold
-                color: root.stale ? Theme.faint : Theme.text
+                color: root.stale ? Theme.muted : Theme.text
                 // Bounded to the row minus the unit label's own width (when
                 // shown) so a long value shrinks/elides instead of pushing
                 // the unit off the tile or bleeding past it (§3).
@@ -188,7 +189,7 @@ Rectangle {
                 // Unit role (§3): "units 11-12 px muted" — subordinated to
                 // the value, never the value's own size/ink.
                 font.pixelSize: Theme.fontUnit
-                color: root.stale ? Theme.faint : Theme.muted
+                color: root.stale ? Theme.muted : Theme.muted
                 anchors.baseline: valueLabel.baseline
             }
         }
@@ -200,7 +201,7 @@ Rectangle {
             font.pixelSize: Theme.fontXs
             // Caption ink steps DOWN from the (muted) label — faint, like the
             // artifact's `.tile .cap` and the QSS metricTileCaption rule.
-            color: Theme.faint
+            color: Theme.muted
             elide: Text.ElideRight
             width: parent.width
         }
@@ -219,7 +220,7 @@ Rectangle {
                 objectName: "tileMeterFill"
                 height: parent.height
                 radius: parent.radius
-                color: root.stale ? Theme.faint : root.accent
+                color: root.stale ? Theme.muted : root.accent
                 width: parent.width * Math.max(0, Math.min(1, root.meterFraction))
 
                 Behavior on width { NumberAnimation { duration: Theme.transitionMs } }

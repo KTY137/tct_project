@@ -750,6 +750,58 @@ def test_qml_rail_readiness_reaches_bridge_and_tracks_state(monkeypatch):
         app.processEvents()
 
 
+def test_island_shows_leakage_and_compliance(monkeypatch):
+    """The two chips the QML island DROPPED (audit 2026-07-14).
+
+    Leakage current (``_chip_bias_i``) and compliance (``_chip_bias_comp``) both
+    exist in the classic ribbon and were simply not carried across when the
+    island was built — so an operator on the QML shell could not see the HV
+    channel go into COMPLIANCE, which is a fault state on the supply. Losing a
+    hardware fault indicator in a shell rewrite is a law-7 regression ("never lie
+    about hardware") by omission.
+
+    End-to-end, the same path every other readout takes: the cached ribbon chip
+    -> _collect_shell_state() -> _ShellBridge property -> the QML StatChip.
+    """
+    app = _app()
+    win = _make_window(monkeypatch, qml=True)
+    try:
+        bridge = win._shell_bridge
+
+        state = win._collect_shell_state()
+        assert "hv_i" in state, "leakage current missing from the shell state"
+        assert "hv_comp" in state, "compliance missing from the shell state"
+
+        # Drive the real ribbon chips, then tick the shared light timer that
+        # feeds the bridge — no extra poll, no hardware I/O.
+        win._chip_bias_i.set_status("I +1.234 uA", "warn")
+        win._chip_bias_comp.set_status("Compliance TRIPPED", "crit")
+        win._light_timer.timeout.emit()
+        _pump()
+
+        assert bridge.hvCurrentText == "I +1.234 uA"
+        assert bridge.hvCurrentState == "warn"
+        assert bridge.hvComplianceText == "Compliance TRIPPED"
+        assert bridge.hvComplianceState == "crit"
+    finally:
+        _destroy(win)
+        app.processEvents()
+
+
+def test_island_binds_the_leakage_and_compliance_chips(monkeypatch):
+    """The Python side can carry the values, but the ISLAND has to render them:
+    pin that Shell.qml actually binds both new bridge properties, so a future
+    edit cannot quietly drop the chips again while the bridge keeps feeding
+    them."""
+    from pathlib import Path
+
+    qml = (Path(__file__).resolve().parent.parent
+           / "gui" / "qml" / "Shell.qml").read_text(encoding="utf-8")
+    for prop in ("shell.hvCurrentText", "shell.hvCurrentState",
+                 "shell.hvComplianceText", "shell.hvComplianceState"):
+        assert prop in qml, f"the status island does not render {prop}"
+
+
 # --------------------------------------------------------------------------- #
 # 8. D2 — device-dot fault state (attempted-and-failed connect)                 #
 # --------------------------------------------------------------------------- #

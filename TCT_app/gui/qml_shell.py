@@ -203,6 +203,16 @@ class _ShellBridge(QObject):
         self._devices: list[list[str]] = []
         self._readouts: dict[str, list[str]] = {
             "hv": ["HV --", "neutral"],
+            # Leakage current + compliance. These EXIST in the classic ribbon
+            # (tct_gui's _chip_bias_i / _chip_bias_comp) and were simply DROPPED
+            # on the way into the QML island — so an operator running the QML
+            # shell could not see that the HV channel had gone into compliance,
+            # or watch a leakage current climb. Compliance is a fault state on
+            # the HV supply; losing it in a shell rewrite is a law-7 regression
+            # ("never lie about hardware" — including by omission).
+            # Guard: tests/test_qml_shell.py::test_island_shows_leakage_and_compliance.
+            "hv_i": ["I --", "neutral"],
+            "hv_comp": ["Compliance --", "neutral"],
             "motion": ["Motion offline", "neutral"],
             "scan": ["Scan --", "neutral"],
             "laser": ["Laser --", "neutral"],
@@ -233,7 +243,7 @@ class _ShellBridge(QObject):
         try:
             state = self._provider() or {}
             self._devices = list(state.get("devices", []))
-            for key in ("hv", "motion", "scan", "laser", "app"):
+            for key in ("hv", "hv_i", "hv_comp", "motion", "scan", "laser", "app"):
                 val = state.get(key)
                 if val:
                     self._readouts[key] = list(val)
@@ -311,6 +321,18 @@ class _ShellBridge(QObject):
 
     @Property(str, notify=changed)
     def hvState(self) -> str: return self._readouts["hv"][1]
+
+    @Property(str, notify=changed)
+    def hvCurrentText(self) -> str: return self._readouts["hv_i"][0]
+
+    @Property(str, notify=changed)
+    def hvCurrentState(self) -> str: return self._readouts["hv_i"][1]
+
+    @Property(str, notify=changed)
+    def hvComplianceText(self) -> str: return self._readouts["hv_comp"][0]
+
+    @Property(str, notify=changed)
+    def hvComplianceState(self) -> str: return self._readouts["hv_comp"][1]
 
     @Property(str, notify=changed)
     def motionText(self) -> str: return self._readouts["motion"][0]

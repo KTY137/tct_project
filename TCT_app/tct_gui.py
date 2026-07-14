@@ -12,7 +12,7 @@ import os
 import sys
 import weakref
 
-from PySide6.QtCore import Qt, Slot, Signal, QObject, QThread, QTimer, QUrl
+from PySide6.QtCore import Qt, Slot, Signal, QMargins, QObject, QThread, QTimer, QUrl
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QTabWidget, QApplication, QStyle,
@@ -44,6 +44,7 @@ from gui.monitor_panel import MonitorPanel
 from gui.analysis_panel import AnalysisPanel
 from gui.calibration_panel import CalibrationPanel
 from gui.device_panel import DeviceManagerWindow, device_state
+from gui.flow_layout import make_wrapping_strip
 from gui.liveness import LivenessMonitor
 from gui.motion import ActivityRing, set_pulse
 from gui.settings_window import SettingsWindow
@@ -423,11 +424,23 @@ class TCTMainWindow(QMainWindow):
         # System ribbon: grouped cached status, always visible regardless of
         # active tab. Pure widget composition; device I/O remains in the
         # existing pollers/workers below.
+        # WRAPPING, NOT SCROLLING (safety fix, 2026-07-14). This strip used to
+        # live in a fixed-height QScrollArea whose horizontal policy was left at
+        # Qt's default: at the shipped window width the content overflowed and
+        # the right-hand groups — MOTION among them, the motor/homing state chip
+        # — were simply cut off at the edge, with no usable affordance that
+        # anything was there (see artifacts_claude/ui_onscreen_20260713T202649Z/
+        # acrylic_lablight_A_light.png). A status strip that can silently hide a
+        # hazard chip lies about the machine (law 7). Nobody scrolls a status
+        # readout — they GLANCE at it — so the strip now WRAPS: on a narrow
+        # window it grows a second row and every chip stays on screen. Nothing
+        # safety-relevant can go off-screen, because nothing can go off-screen.
+        # Guard: tests/test_ribbon_never_clips.py.
         ribbon = QFrame()
         ribbon.setObjectName("systemRibbon")
-        status_strip = QHBoxLayout(ribbon)
-        status_strip.setContentsMargins(10, 7, 10, 7)
-        status_strip.setSpacing(8)
+        self._ribbon = ribbon
+        status_strip = make_wrapping_strip(
+            ribbon, margins=QMargins(10, 7, 10, 7), spacing=8)
 
         brand = QFrame()
         brand.setObjectName("ribbonBrand")
@@ -480,16 +493,8 @@ class TCTMainWindow(QMainWindow):
         status_strip.addWidget(_group("Motion", [self._chip_motion]))
         status_strip.addWidget(_group("Scan", [self._ring_scan, self._chip_scan]))
         status_strip.addWidget(_group("Laser", [self._chip_laser]))
-        status_strip.addStretch(1)
-        # Horizontal scroll so the device lights + bias readout never clip on a
-        # narrow window; fixed height keeps it a thin strip.
-        strip_scroll = QScrollArea()
-        strip_scroll.setObjectName("ribbonScroll")
-        strip_scroll.setWidgetResizable(True)
-        strip_scroll.setFrameShape(QFrame.NoFrame)
-        strip_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        strip_scroll.setFixedHeight(54)
-        strip_scroll.setWidget(ribbon)
+        # (No trailing stretch and no scroll area: the FlowLayout above wraps
+        #  instead of clipping — see its comment at the ribbon's construction.)
 
         # Main tabs — detachable (double-click / ⧉ to pop into a window).  Each
         # page is wrapped in a QScrollArea so panels scroll instead of cropping.
@@ -558,8 +563,8 @@ class TCTMainWindow(QMainWindow):
                 self._qml_chrome = chrome
                 self._shell_bridge = bridge
                 self._scope_vm = scope_vm
-                strip_scroll.setParent(central)   # keep chips alive; not shown
-                strip_scroll.hide()
+                ribbon.setParent(central)   # keep chips alive; not shown
+                ribbon.hide()
                 self._toolbar.setVisible(False)
                 # Round-2 composition: the chrome is a full-bleed topbar
                 # (the v4 artifact's rail/shelf/strip run edge-to-edge, like
@@ -582,11 +587,11 @@ class TCTMainWindow(QMainWindow):
                 notify("QML chrome failed to load — using the classic shell. "
                        "See the log for the QML error.", "error")
                 self._toolbar.setVisible(True)
-                outer.addWidget(strip_scroll)
+                outer.addWidget(ribbon)
                 outer.addWidget(self._tabs)
         else:
             self._toolbar.setVisible(True)
-            outer.addWidget(strip_scroll)
+            outer.addWidget(ribbon)
             outer.addWidget(self._tabs)
 
         # Status bar
@@ -1176,6 +1181,12 @@ class TCTMainWindow(QMainWindow):
         return {
             "devices": devices,
             "hv": _chip(self._chip_bias_v),
+            # Leakage current + compliance — present in the classic ribbon and
+            # previously DROPPED on the way into the QML island (an operator on
+            # the QML shell could not see the HV channel go into compliance).
+            # Same cached chips, no extra I/O.
+            "hv_i": _chip(self._chip_bias_i),
+            "hv_comp": _chip(self._chip_bias_comp),
             "motion": _chip(self._chip_motion),
             "scan": _chip(self._chip_scan),
             "laser": _chip(self._chip_laser),

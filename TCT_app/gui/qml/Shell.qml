@@ -158,7 +158,7 @@ Item {
                 // 1/6): real-connected (solid MUTED — IDLE-nominal, quiet,
                 // no colour) / simulated (a hatched-cyan RING — never a
                 // solid cyan fill, so it can never be mistaken for "good" at
-                // a glance — law 6) / disconnected (faint hollow ring) /
+                // a glance — law 6) / disconnected (quiet hollow ring) /
                 // fault (solid red — attempted-and-failed, from the last
                 // connect_all() result; distinct from a plain never-attempted
                 // disconnect — see tct_gui._collect_shell_state).
@@ -175,7 +175,7 @@ Item {
                             color: st === "on" ? Theme.muted
                                  : st === "fault" ? Theme.crit : "transparent"
                             border.width: st === "sim" ? 1.6 : (st === "off" ? 1 : 0)
-                            border.color: st === "sim" ? Theme.sim : Theme.faint
+                            border.color: st === "sim" ? Theme.sim : Theme.muted
 
                             HoverHandler { id: deviceHover }
                             ToolTip.visible: deviceHover.hovered
@@ -193,6 +193,13 @@ Item {
                     Layout.alignment: Qt.AlignVCenter
                     spacing: 14
                     StatChip { lab: "HV"; val: shell.hvText; state: shell.hvState }
+                    // Leakage + compliance: these exist in the classic ribbon
+                    // (tct_gui._chip_bias_i / _chip_bias_comp) and were dropped
+                    // when the island was built. Compliance is a FAULT state on
+                    // the HV supply — an island that cannot show it is lying by
+                    // omission (law 7).
+                    StatChip { lab: "I"; val: shell.hvCurrentText; state: shell.hvCurrentState }
+                    StatChip { lab: "Compliance"; val: shell.hvComplianceText; state: shell.hvComplianceState }
                     StatChip { lab: "Motion"; val: shell.motionText; state: shell.motionState }
                     StatChip { lab: "Scan"; val: shell.scanText; state: shell.scanState }
                     StatChip { lab: "Laser"; val: shell.laserText; state: shell.laserState }
@@ -544,7 +551,7 @@ Item {
                  : (state === "warn" || state === "armed") ? Theme.warn
                  : state === "crit" ? Theme.crit
                  : (state === "busy" || state === "info") ? Theme.accent
-                 : state === "simulated" ? Theme.sim : Theme.faint
+                 : state === "simulated" ? Theme.sim : Theme.muted
         }
         Text {
             text: chipRoot.trimmed(); color: Theme.text

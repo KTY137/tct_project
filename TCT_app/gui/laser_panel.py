@@ -678,9 +678,26 @@ class LaserPanel(QWidget):
         # Amber state banner (law 7): warn-token rail + warn ink, scoped to
         # this card only via the dynamic bannerKind property (the same
         # instance-stylesheet scoping idiom Card.set_rail uses).
+        #
+        # HAZARD SURFACES ARE OPAQUE AT EVERY TIER (ratified; Völundr G1). The
+        # ``background`` below is not decoration — it is the guarantee. This card
+        # is deliberately NOT registered via ``register_glass_pane`` (see the
+        # registration block in __init__), so today nothing can set
+        # ``glassPane=true`` on it; the explicit opaque fill makes that hold even
+        # if a future pass registered it by accident, because a widget's OWN
+        # stylesheet outranks the app-wide ``QFrame#cardPane[glassPane="true"]``
+        # rule at equal specificity. A safety warning may never be composited
+        # against an unknown desktop.
+        #
+        # The INK is the ``warn`` token, which the 2026-07-14 WCAG pass darkened
+        # in light mode precisely so this banner clears AA: it measured 4.07:1
+        # (and ~3.0:1 in the worst glass corner the scrim-floor contract never
+        # actually checked for this token). It is now 5.68:1 light / 10.98 dark,
+        # on a surface that cannot become translucent.
+        # Guard: tests/test_glass_text_contract.py.
         self._banner_card.setStyleSheet(
             f'QFrame#cardPane[bannerKind="laserManual"] '
-            f'{{ border-left: 3px solid {p["warn"]}; }}')
+            f'{{ border-left: 3px solid {p["warn"]}; background: {p["panel"]}; }}')
         self._lbl_banner.setStyleSheet(
             f"color: {p['warn']}; font-weight: 600;")
 

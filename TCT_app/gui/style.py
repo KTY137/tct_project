@@ -310,7 +310,15 @@ def _blend(fg_hex: str, bg_hex: str, alpha: float) -> str:
 # ``accent_strong`` is DERIVED (``_darken(accent, 0.15)``, no longer a
 # separately hand-picked hex) — the hover/pressed/default-fill variant.
 # ---------------------------------------------------------------------------
-ACCENT_LIGHT = "#2A6FE0"
+# WCAG pass (2026-07-14): the v5 light accent (#2A6FE0) is the ink of every
+# outline button (Connect, "secondary") and of the info/busy chip, whose fill is
+# an accent WASH — ink on a tint of itself. That pair measured 4.16:1, and the
+# plain-surface pairs sat on the line at 4.51. Darkened by the smallest amount
+# that lifts the whole accent family clear (tint 4.58, field 5.02, white-on-
+# accent 5.25); hue preserved, and the DARK accent — the dominant theme — is
+# untouched. Unlike the safety tokens this one stays user-overridable.
+_ACCENT_LIGHT_V5 = "#2A6FE0"
+ACCENT_LIGHT = _darken(_ACCENT_LIGHT_V5, 0.10)          # #2563c9
 ACCENT_LIGHT_STRONG = _darken(ACCENT_LIGHT, 0.15)
 ACCENT_DARK = "#5AA9FF"
 ACCENT_DARK_STRONG = _darken(ACCENT_DARK, 0.15)
@@ -328,9 +336,48 @@ ACCENT_DARK_STRONG = _darken(ACCENT_DARK, 0.15)
 OK_GREEN = "#3DD68C"          # dark "good" (spec §2)
 WARN_AMBER = "#FFB84D"        # dark "armed" (spec §2) — kept under the old
 WARN_RED = "#FF5A61"          # dark "danger" (spec §2)   name for compat
-OK_GREEN_LIGHT = "#128A63"
-WARN_AMBER_LIGHT = "#B26F00"
-WARN_RED_LIGHT = "#DE434B"
+
+# ---------------------------------------------------------------------------
+# LIGHT semantic accents — WCAG-AA CONTRAST PASS (2026-07-14).
+#
+# The v5 artifact's light hexes (``*_V5`` below, kept as the named source they
+# are derived FROM — not deleted, so the derivation stays auditable) were
+# measured against the surfaces they are actually painted on and FAILED WCAG AA
+# (4.5:1) as text, systemically, and two of them are SAFETY tokens:
+#
+#     sim   #0C9FB0   3.18 on panel / 2.66 on canvas   (law 6: "SIMULATED")
+#     warn  #B26F00   4.07 / 3.40                      (law 5: motion/homing)
+#     crit  #DE434B   4.19 / 3.50                      (danger ink)
+#     good  #128A63   4.34                             (near-miss)
+#
+# A status colour an operator cannot read is not a status colour. Each token is
+# now DERIVED from its v5 hex with the module's own ``_darken`` primitive (house
+# rule: derived, not sprinkled — a hand-picked "looks about right" hex is exactly
+# how a palette drifts out of compliance again), at the SMALLEST amount that
+# clears 4.5:1 on every surface it actually lands on, with margin.
+#
+# ``_darken`` scales R/G/B by one factor, so the HUE IS PRESERVED EXACTLY —
+# this is a contrast fix, not a re-theme: amber stays amber, cyan stays cyan
+# (sim's 186° vs good's 160° hue separation is byte-for-byte what it was, so
+# law 6's "sim never borrows green" is untouched).
+#
+# Guard: tests/test_palette_contrast.py measures every pair, both themes.
+# ---------------------------------------------------------------------------
+_OK_GREEN_LIGHT_V5 = "#128A63"
+_WARN_AMBER_LIGHT_V5 = "#B26F00"
+_WARN_RED_LIGHT_V5 = "#DE434B"
+
+OK_GREEN_LIGHT = _darken(_OK_GREEN_LIGHT_V5, 0.14)      # #0f7657 — 5.6 panel / 4.7 canvas
+WARN_AMBER_LIGHT = _darken(_WARN_AMBER_LIGHT_V5, 0.18)  # #915b00 — 5.7 / 4.7
+WARN_RED_LIGHT = _darken(_WARN_RED_LIGHT_V5, 0.22)      # #ad343a — 6.3 / 5.3
+
+# NOTE for the reader of docs/design/glass_council/baldr.md: that note proposes
+# ``crit_ink_light = #C22A33``, described as "WARN_RED_LIGHT darkened ~22%".
+# It is NOT what ``_darken(WARN_RED_LIGHT, 0.22)`` produces — #C22A33's channel
+# ratios are not uniform, so that hex was HSL-derived or hand-picked. The
+# codebase's own primitive yields #AD343A, which measures BETTER (6.31/5.27/6.31
+# vs 5.72/4.78/5.72). The derived value wins; the doc's arithmetic claim was the
+# thing that was wrong, not the direction.
 
 # Canonical spec names (§2) as their own constants/aliases, for new call
 # sites (and the dict keys below) that want to say what they mean instead of
@@ -338,6 +385,40 @@ WARN_RED_LIGHT = "#DE434B"
 GOOD_DARK, GOOD_LIGHT = OK_GREEN, OK_GREEN_LIGHT
 ARMED_DARK, ARMED_LIGHT = WARN_AMBER, WARN_AMBER_LIGHT
 DANGER_DARK, DANGER_LIGHT = WARN_RED, WARN_RED_LIGHT
+
+# ---------------------------------------------------------------------------
+# HAZARD FILL + ITS LABEL — the pair nobody had ever measured.
+#
+# ``crit`` has two incompatible jobs: it is the INK of a danger state (it must
+# be bright to read on a DARK panel) and it was ALSO the FILL of the HV / scan-
+# abort button, under a hardcoded ``color: white`` label. Those pull in opposite
+# directions, and in the dark theme the fill won: white on #FF5A61 measures
+# **3.05:1** — the Abort button's own label, below even the 3:1 non-text floor.
+# (Light was 4.19 — also failing.) Nobody checked it because the QSS said the
+# quiet word "white" instead of naming a token.
+#
+# So the two jobs are now two tokens. ``crit``/``danger`` stays the INK (bright
+# in dark, darkened in light, above); ``danger_fill`` is the button BODY — dark
+# enough in BOTH themes to carry a white label — and ``on_danger`` is that
+# label, a real token instead of a literal. Both are LOCKED (SAFETY_TOKENS).
+# Hover/pressed derive by darkening the fill further, so the label's contrast
+# only ever IMPROVES as the button is pressed (monotone by construction — a
+# later tweak to the hover amount cannot silently break the label).
+# The dark fill is a NARROW window, and worth spelling out: it must be dark
+# enough for a white label (>=4.5:1) yet light enough that the button BODY is
+# still identifiable against the dark cluster surface it sits on (>=3:1, WCAG
+# 1.4.11). That leaves relative luminance in roughly [0.163, 0.185] — 0.22 lands
+# at white 4.80 / body 3.19, the only amount with margin on BOTH sides.
+DANGER_FILL_LIGHT = WARN_RED_LIGHT                    # #ad343a — white 6.31, body 6.03
+DANGER_FILL_DARK = _darken(WARN_RED, 0.22)            # #c6464b — white 4.80, body 3.19
+ON_DANGER = "#FFFFFF"                                 # both themes: one danger language
+
+# The motion command class (law 5) fills with ``armed`` while pressed, so it
+# needs its own label ink: light "armed" is a dark ochre (white reads on it),
+# dark "armed" is a bright amber (only a near-black ink reads on it — white
+# would be 1.72:1). Derived from the armed token itself, so the pair tracks it.
+ON_ARMED_LIGHT = "#FFFFFF"                            # on #915b00 — 5.68:1
+ON_ARMED_DARK = _darken(WARN_AMBER, 0.86)             # on #FFB84D — 11.9:1
 
 # Device-manager status accents (gui/device_panel.py's ``_STATUS_STYLE``) —
 # "simulated" and "error", alongside OK_GREEN/WARN_AMBER/WARN_RED above.
@@ -351,10 +432,17 @@ DANGER_DARK, DANGER_LIGHT = WARN_RED, WARN_RED_LIGHT
 # unchanged — not one of the four spec semantic tokens, left for a future
 # Bias/Camera EmptyState-error pass (D4) to reconsider.
 SIM_PURPLE = "#41D8E4"
-SIM_PURPLE_LIGHT = "#0C9FB0"
+# WCAG pass (2026-07-14): the light sim cyan was the WORST token in the palette
+# — 3.18:1 on a panel, 2.66:1 on the canvas, i.e. below even the 3:1 non-text
+# floor for the StatusLamp dot. "This data is SIMULATED" is a law-6 safety
+# claim; it has to be readable. Derived (see the LIGHT semantic block above);
+# the hue is preserved exactly, so it is the same cyan, just legible.
+_SIM_CYAN_LIGHT_V5 = "#0C9FB0"
+SIM_PURPLE_LIGHT = _darken(_SIM_CYAN_LIGHT_V5, 0.28)    # #086f7b — 5.6 / 4.7
 SIM_CYAN_DARK, SIM_CYAN_LIGHT = SIM_PURPLE, SIM_PURPLE_LIGHT
 ERROR_ORANGE = "#ff8a1f"
-ERROR_ORANGE_LIGHT = "#d96c00"
+_ERROR_ORANGE_LIGHT_V5 = "#d96c00"
+ERROR_ORANGE_LIGHT = _darken(_ERROR_ORANGE_LIGHT_V5, 0.28)   # #9c4d00 — 6.0 / 5.1
 
 # General amber token (distinct from the warn status colour): matches the
 # bias axis-rail hue so a "bias" accent is amber everywhere. Unchanged by the
@@ -434,6 +522,11 @@ LIGHT = {
     # added so new code can read/write the name the design contract actually
     # uses instead of the legacy good/warn/crit vocabulary.
     "danger": DANGER_LIGHT, "armed": ARMED_LIGHT,
+    # Hazard FILL + its label ink (see the DANGER_FILL_* block above): a filled
+    # danger/armed control is a different job from the danger INK, and conflating
+    # them is what put a 3.05:1 label on the dark theme's Abort button.
+    "danger_fill": DANGER_FILL_LIGHT, "on_danger": ON_DANGER,
+    "on_armed": ON_ARMED_LIGHT,
     # Codex S1 audit (2026-07-13) item 2: canvas nudged one step darker so
     # panel/raised/well read as a real material ladder instead of a flat pale
     # grey stack; bg/material_strong stay byte-synced to canvas (pre-existing
@@ -462,6 +555,22 @@ LIGHT = {
     # toplight" direction gets a much smaller absolute step than dark's.
     "specular": "rgba(255, 255, 255, 0.92)",
     "toplight": "#F8FAFD",
+    # ── INK LADDER ────────────────────────────────────────────────────────
+    # text  — body/value ink.
+    # muted — THE quiet-text ink: captions, chip labels, group titles, table
+    #         headers, stale readouts. Certified for text on every surface in
+    #         both themes (worst opaque pair 4.64, worst GLASS pair 4.91 —
+    #         Baldr's scrim floor, docs/design/glass_council/baldr.md §1.2).
+    # faint — RETIRED FOR TEXT (2026-07-14 WCAG pass). It measures 2.73:1 on a
+    #         panel and 2.28:1 on the canvas — below even the 3:1 non-text
+    #         floor — and there is NO fix: a third grey that clears 4.5:1 in
+    #         light mode necessarily collapses onto `muted` (the arithmetic is
+    #         in tests/test_palette_contrast.py). So the token survives ONLY
+    #         for ink that WCAG 1.4.3 explicitly exempts — the text of an
+    #         INACTIVE (disabled) control — and for non-text decoration (the
+    #         jog pad's decorative crosshair). Caption hierarchy is carried by
+    #         size/weight/case instead of by contrast we cannot afford.
+    #         Guard: test_faint_is_never_used_as_text_ink_in_the_qss.
     "text": "#131A28", "muted": "#525D72", "faint": "#949DB0",
     "on_accent": "#ffffff",
     # tint/active: accent-tinted wash, blended (see ``_blend``) at the
@@ -545,7 +654,7 @@ LIGHT = {
     # themes, so its grid/overlay accents don't repaint on a theme switch
     # either. Present in both dicts so FigureCard/panels can resolve them
     # via palette(mode) without a fixed-vs-per-theme special case.
-    "plot_grid": None, "plot_overlay": None,
+    "plot_grid": None, "plot_overlay": None, "plot_accent": None,
 }
 
 DARK = {
@@ -554,6 +663,11 @@ DARK = {
     "good": OK_GREEN, "warn": WARN_AMBER, "crit": WARN_RED,
     "sim": SIM_PURPLE, "error": ERROR_ORANGE,
     "danger": DANGER_DARK, "armed": ARMED_DARK,
+    # See LIGHT. The dark theme is where the danger-button label was WORST
+    # (white on the bright #FF5A61 fill = 3.05:1), so the fill darkens here
+    # while the danger INK stays bright for chips/lamps/hero values.
+    "danger_fill": DANGER_FILL_DARK, "on_danger": ON_DANGER,
+    "on_armed": ON_ARMED_DARK,
     "canvas": "#0A0D13", "bg": "#0A0D13",
     # v6 glass pass: material/panel now read the pre-blended _DARK_PANEL_V6
     # (see the module comment above LIGHT) — the artifact's own
@@ -569,6 +683,9 @@ DARK = {
     # value (``0 1px 0 rgba(255,255,255,0.14) inset``), applied verbatim.
     "specular": "rgba(255, 255, 255, 0.14)",
     "toplight": "#1B253A",
+    # See the INK LADDER comment in LIGHT. `faint` is retired for text here too
+    # — 3.23:1 on a panel, and only 2.61 on `raised`, the surface the metric
+    # tiles actually use.
     "text": "#E9EDF5", "muted": "#98A1B5", "faint": "#5B657A",
     "on_accent": "#04222c",
     "tint": _blend(ACCENT_DARK, _DARK_PANEL_V6, 0.13),
@@ -606,7 +723,7 @@ DARK = {
     "strip": _blend(_DARK_WELL_V6, _DARK_PANEL_V6, 0.55),
     "edge": _blend("#FFFFFF", "#27344A", 0.14),
     "edge_shade": _blend("#000000", "#27344A", 0.30),
-    "plot_grid": None, "plot_overlay": None,
+    "plot_grid": None, "plot_overlay": None, "plot_accent": None,
 }
 
 # ---------------------------------------------------------------------------
@@ -838,7 +955,9 @@ QWidget#mainShell {{ background: {p['bg']}; }}
    type selector (QLabel#statusChip, QLabel#ribbonMark, ...). */
 QLabel, QCheckBox, QRadioButton {{ background: transparent; }}
 
-QScrollArea#ribbonScroll {{ background: transparent; border: none; }}
+/* (The QScrollArea#ribbonScroll rule is gone with the scroll area itself: the
+   ribbon WRAPS now instead of scrolling — a fixed-height scroll strip was
+   silently clipping the MOTION chip off the right edge. See tct_gui.py.) */
 QFrame#systemRibbon {{
     background: {p['chrome']}; border: 1px solid {p['hairline']};
     border-top-color: {p['edge']};
@@ -856,8 +975,13 @@ QFrame#ribbonGroup {{
     border-top-color: {p['edge']};
     border-radius: {RADIUS_MD}px;
 }}
+/* Ribbon group caption ("DEVICES", "BIAS", "MOTION", ...). WCAG pass: was
+   `faint` (2.73:1 — unreadable); the ink ladder's quiet-text token is `muted`
+   (6.34:1 on the ribbon group's own surface). The caption still reads as
+   quieter than the chips beside it — through size (11px) and case, not through
+   contrast we cannot afford. */
 QLabel#ribbonLabel {{
-    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
+    color: {p['muted']}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
 }}
 
 /* Group boxes: card-like with breathing room — padding matches the v5
@@ -971,17 +1095,19 @@ QPushButton[state="busy"] {{
     background: {p['tint']}; color: {p['accent']};
     border: 1px solid {_rgba(p['accent'], 0.55)};
 }}
+/* State buttons: the same ink/fill decoupling as QLabel#statusChip below (see
+   the long comment there) — coloured fill + coloured border, `text` label. */
 QPushButton[state="good"] {{
-    background: {_rgba(p['good'], 0.16)}; color: {p['good']};
+    background: {_rgba(p['good'], 0.16)}; color: {p['text']};
     border: 1px solid {_rgba(p['good'], 0.55)};
 }}
 QPushButton[state="warn"], QPushButton#armedBtn, QPushButton[state="armed"] {{
-    background: {_rgba(p['warn'], 0.16)}; color: {p['warn']};
+    background: {_rgba(p['warn'], 0.16)}; color: {p['text']};
     border: 1px solid {_rgba(p['warn'], 0.65)};
     font-weight: 700;
 }}
 QPushButton[state="crit"] {{
-    background: {_rgba(p['crit'], 0.16)}; color: {p['crit']};
+    background: {_rgba(p['crit'], 0.16)}; color: {p['text']};
     border: 1px solid {_rgba(p['crit'], 0.55)};
 }}
 
@@ -998,7 +1124,13 @@ QPushButton[state="secondary"] {{
 QPushButton[state="secondary"]:hover {{
     background: {p['tint']}; border-color: {p['accent']};
 }}
-QPushButton[state="secondary"]:pressed {{ background: {_rgba(p['accent'], 0.18)}; }}
+/* Pressed FILLS instead of deepening the accent wash under an accent label
+   (that wash reached 0.18 — accent ink on a 0.18 tint of itself is ~4.2:1).
+   An outline button that fills on press is the stronger affordance anyway, and
+   `on_accent` on `accent` is a measured pair. Same move as the motion key. */
+QPushButton[state="secondary"]:pressed {{
+    background: {p['accent']}; color: {p['on_accent']}; border-color: {p['accent']};
+}}
 QPushButton[state="secondary"]:disabled {{
     color: {p['faint']}; background: {p['disabled_bg']}; border-color: transparent;
 }}
@@ -1020,15 +1152,27 @@ QPushButton[state="ghost"]:disabled {{ color: {p['faint']}; background: transpar
    "armed" (the canonical spec name — see the palette dicts) rather than the
    legacy "warn" key so a reader can tell this rule was written against the
    ratified command-class law, not a generic warning look. */
+/* WCAG pass: the motion button is the ONE place the armed ink survives on a
+   plain surface (it is the law-5 command class — a stage move must READ as
+   amber, not as a neutral button), which is exactly why the light `armed` token
+   was darkened until it clears 4.5:1 there (5.43 on a control cluster).
+   Its hover/pressed feedback may NOT be an armed wash, though: ink on a tint of
+   itself caps out around 4.3 even at 0.14 (see the statusChip comment). So hover
+   is border-only — which is the artifact's own `.btn:hover` recipe anyway — and
+   pressed FILLS with armed and flips to the `on_armed` label ink (white in
+   light, near-black on dark's bright amber). A motion key that lights up when
+   you push it is a better affordance than a wash, and it is AA in both themes. */
 QPushButton[state="motion"] {{
     background: transparent; color: {p['armed']};
     border: 1.5px solid {_rgba(p['armed'], 0.55)}; font-weight: 620;
     padding: {SPACE_SM - 1}px {SPACE_LG}px;
 }}
 QPushButton[state="motion"]:hover {{
-    background: {_rgba(p['armed'], 0.14)}; border-color: {p['armed']};
+    background: transparent; border-color: {p['armed']};
 }}
-QPushButton[state="motion"]:pressed {{ background: {_rgba(p['armed'], 0.24)}; }}
+QPushButton[state="motion"]:pressed {{
+    background: {p['armed']}; color: {p['on_armed']}; border-color: {p['armed']};
+}}
 QPushButton[state="motion"]:disabled {{
     color: {p['faint']}; background: transparent; border-color: {p['hairline']};
 }}
@@ -1043,7 +1187,10 @@ QToolButton {{
     border-radius: {RADIUS_SM}px; padding: {SPACE_XS}px {SPACE_SM}px;
 }}
 QToolButton:hover {{ background: {p['field']}; border-color: {p['hairline']}; }}
-QToolButton:pressed {{ background: {_rgba(p['accent'], 0.18)}; }}
+/* Fills on press (see QPushButton[state="secondary"]:pressed): a CHECKED
+   toolbutton carries accent ink, so an accent wash underneath it was ink on a
+   tint of itself. */
+QToolButton:pressed {{ background: {p['accent']}; color: {p['on_accent']}; }}
 QToolButton:checked {{
     background: {p['tint']}; color: {p['accent']};
     border-color: {_rgba(p['accent'], 0.55)};
@@ -1059,7 +1206,9 @@ QToolButton#detachTabButton:hover {{
     background: {p['tint']}; color: {p['accent']};
     border-color: {_rgba(p['accent'], 0.45)};
 }}
-QToolButton#detachTabButton:pressed {{ background: {_rgba(p['accent'], 0.20)}; }}
+QToolButton#detachTabButton:pressed {{
+    background: {p['accent']}; color: {p['on_accent']};
+}}
 
 /* Connect/Disconnect toolbar buttons (objectName set by tct_gui.py after
    building the QToolBar action widgets — "objectNames for the green/red QSS
@@ -1084,7 +1233,7 @@ QPushButton#connectBtn:hover, QToolButton#connectBtn:hover {{
     background: {p['tint']}; border-color: {p['accent']};
 }}
 QPushButton#connectBtn:pressed, QToolButton#connectBtn:pressed {{
-    background: {_rgba(p['accent'], 0.24)};
+    background: {p['accent']}; color: {p['on_accent']}; border-color: {p['accent']};
 }}
 QPushButton#disconnectBtn, QToolButton#disconnectBtn {{
     background: {p['field']}; color: {p['text']};
@@ -1303,15 +1452,31 @@ QTreeWidget::item:hover, QListWidget::item:hover {{ background: {p['raised']}; }
    folded into the same selectors byte-for-byte — an opt-in via the state
    property reaches the identical look instead of a second danger language
    (cockpit_style_overhaul.md §1 rule 2: one danger visual language). */
+/* WCAG pass (2026-07-14) — THE worst finding of the audit. This rule used to
+   read ``background: {{crit}}; color: white``. Nobody ever measured that pair,
+   because the QSS said the quiet word "white" instead of naming a token: white
+   on the DARK theme's bright #FF5A61 is **3.05:1** — the label of the HV /
+   scan-abort button, below even the 3:1 non-text floor. Light was 4.19, also
+   failing. An Abort button you cannot read is a hazard, not a control.
+   The fill is now its own token (``danger_fill`` — dark enough in BOTH themes to
+   carry a label) and the label is ``on_danger``, so the pair is a thing that can
+   be, and is, measured (tests/test_palette_contrast.py). ``crit``/``danger``
+   stays the bright INK for chips/lamps/hero values — the two jobs are no longer
+   one token. Hover/pressed darken the FILL, so the label only ever gets MORE
+   readable as the button is pressed. */
 QPushButton#dangerBtn, QPushButton[state="danger"] {{
-    background: {p['crit']}; color: white; border: 1px solid {p['crit']};
+    background: {p['danger_fill']}; color: {p['on_danger']};
+    border: 1px solid {p['danger_fill']};
     font-weight: 700;
     padding: {SPACE_SM - 1}px {SPACE_LG}px;
 }}
 QPushButton#dangerBtn:hover, QPushButton[state="danger"]:hover {{
-    background: {_darken(p['crit'], 0.12)}; border-color: {_darken(p['crit'], 0.12)};
+    background: {_darken(p['danger_fill'], 0.12)};
+    border-color: {_darken(p['danger_fill'], 0.12)};
 }}
-QPushButton#dangerBtn:pressed, QPushButton[state="danger"]:pressed {{ background: {_darken(p['crit'], 0.22)}; }}
+QPushButton#dangerBtn:pressed, QPushButton[state="danger"]:pressed {{
+    background: {_darken(p['danger_fill'], 0.22)};
+}}
 QPushButton#dangerBtn:focus, QPushButton[state="danger"]:focus {{ outline: 2px solid {_rgba(p['crit'], 0.40)}; outline-offset: 1px; }}
 QPushButton#dangerBtn:disabled, QPushButton[state="danger"]:disabled {{
     background: {p['disabled_bg']}; color: {p['muted']}; border: 1px solid {p['border']};
@@ -1329,8 +1494,12 @@ QFrame#instrumentReadout {{
 QLabel#readoutAxis {{
     color: {PLOT_FG}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
 }}
+/* The value ink is the FIXED instrument-screen accent, not the theme accent:
+   this label sits on PLOT_BG (a dark screen in BOTH themes), so painting the
+   LIGHT theme's accent on it gave 4.17:1 — a failing pair on a real hardware
+   readout (stage position). See PLOT_ACCENT. */
 QLabel#readoutValue {{
-    color: {p['accent']};
+    color: {p['plot_accent']};
     font-family: {MONO_FAMILY};
     font-size: {FONT_XL}px; font-weight: 600;
 }}
@@ -1387,8 +1556,14 @@ QLabel#readoutCellValue[state="crit"], QLabel#readoutCellValue[state="danger"] {
     color: {p['danger']}; font-weight: 700;
 }}
 QLabel#readoutCellValue[state="sim"] {{ color: {p['sim']}; }}
-QLabel#readoutCellValue[stale="true"] {{ color: {p['faint']}; font-weight: 400; }}
-QLabel#readoutCellTitle[stale="true"] {{ color: {p['faint']}; }}
+/* Stale ink (law 4: "staleness is designed"). WCAG pass: this used to desaturate
+   to `faint` ON the recessed `well` surface — 1.91:1 in light, the single worst
+   pair in the app, on the LAST KNOWN VALUE of a live instrument. An operator has
+   to be able to READ a stale reading (that is the whole point of showing it) and
+   see that it is stale. Staleness now reads through the recessed surface + the
+   dropped weight + the caption ("value aged Ns"), and the ink stays legible. */
+QLabel#readoutCellValue[stale="true"] {{ color: {p['muted']}; font-weight: 400; }}
+QLabel#readoutCellTitle[stale="true"] {{ color: {p['muted']}; }}
 QFrame#readoutCell[stale="true"] {{ background: {p['well']}; }}
 /* MetricTile caption (gui/panel_kit.py) — the law-4 "why" line under a stale
    tile ("not connected" / "no run" / "value aged Ns"), and any live tile's
@@ -1396,9 +1571,9 @@ QFrame#readoutCell[stale="true"] {{ background: {p['well']}; }}
    3: "Explanations: sentence-case sans. Never uppercase prose."), never the
    tracked-mono-uppercase label treatment above. */
 QLabel#metricTileCaption {{
-    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: {WEIGHT_BODY};
+    color: {p['muted']}; font-size: {FONT_XS}px; font-weight: {WEIGHT_BODY};
 }}
-QLabel#metricTileCaption[stale="true"] {{ color: {p['faint']}; }}
+QLabel#metricTileCaption[stale="true"] {{ color: {p['muted']}; }}
 QFrame#readoutCell[flash="accent"] {{
     border: 1px solid {p['accent']}; background: {_rgba(p['accent'], 0.10)};
 }}
@@ -1510,7 +1685,7 @@ QGroupBox[glassPane="true"] {{ background: {_rgba(p['panel'], _panel_glass_alpha
    exact same "reused for punctuation-bearing captions" risk: eyebrow_title
    AND form_row's per-field caption both key off it). */
 QLabel#eyebrow {{
-    color: {p['faint']};
+    color: {p['muted']};
     font-size: {FONT_METRIC_LABEL_PX}px; font-weight: {WEIGHT_METRIC_LABEL};
     letter-spacing: {TRACKING_METRIC_LABEL_PX}px;
 }}
@@ -1570,24 +1745,46 @@ QLabel#statusChip[state="neutral"] {{
     background: {p['chip']}; color: {p['muted']}; border: 1px solid {p['hairline']};
 }}
 QLabel#statusChip[state="disconnected"] {{
-    background: transparent; color: {p['faint']}; border: 1px solid {p['hairline']};
+    background: transparent; color: {p['muted']}; border: 1px solid {p['hairline']};
 }}
 QLabel#statusChip[state="unknown"] {{
     background: {p['chip']}; color: {p['muted']};
     border: 1px dashed {p['hairline_strong']};
 }}
+/* ── WHY THE STATE CHIPS' LABEL IS `text`, NOT THE STATE COLOUR ──────────────
+   (WCAG pass, 2026-07-14 — this is the structural half of the palette fix.)
+
+   A state chip paints ``rgba(token, 0.16)`` over its parent surface and then
+   put a label ON it IN THE SAME TOKEN: ink on a wash OF ITSELF. That wash pulls
+   the background toward the ink, so the pair is capped far below where the
+   token's own plain-surface contrast suggests — light `good` on its own chip
+   measured 3.53:1, `warn` 3.35, `sim` 2.78. Darkening the tokens does not
+   rescue it: to clear 4.5:1 at these alphas the light hues have to go 25-36%
+   darker, at which point amber is brown, sim's cyan collapses toward good's
+   green (law 6!), and it IS the re-theme Kaya ruled out.
+
+   So the ink and the fill are decoupled: the chip keeps its coloured FILL and
+   its coloured BORDER — the colour language an operator reads at a glance is
+   untouched — and the LABEL takes the neutral `text` ink, which clears 10.3:1
+   (light) / 6.4:1 (dark) on EVERY one of these washes at EVERY alpha. That is
+   also robust by construction: a future tweak to a fill alpha cannot make a
+   label unreadable. State is never colour-alone anyway (the chip's own text
+   names it — house rule), so nothing is lost from the redundant channel.  */
 QLabel#statusChip[state="good"] {{
-    background: {_rgba(p['good'], 0.16)}; color: {p['good']};
+    background: {_rgba(p['good'], 0.16)}; color: {p['text']};
     border: 1px solid {_rgba(p['good'], 0.55)};
 }}
 QLabel#statusChip[state="warn"], QLabel#statusChip[state="fault"] {{
-    background: {_rgba(p['warn'], 0.16)}; color: {p['warn']};
+    background: {_rgba(p['warn'], 0.16)}; color: {p['text']};
     border: 1px solid {_rgba(p['warn'], 0.55)};
 }}
 QLabel#statusChip[state="crit"] {{
-    background: {_rgba(p['crit'], 0.16)}; color: {p['crit']};
+    background: {_rgba(p['crit'], 0.16)}; color: {p['text']};
     border: 1px solid {_rgba(p['crit'], 0.55)};
 }}
+/* The accent family is the ONE exception: `tint` is a fixed 0.10/0.13 wash
+   computed at palette-build time (not a per-rule rgba), and the darkened light
+   accent clears it at 4.58:1 — so info/busy keep their accent ink. */
 QLabel#statusChip[state="info"], QLabel#statusChip[state="busy"] {{
     background: {p['tint']}; color: {p['accent']};
     border: 1px solid {_rgba(p['accent'], 0.50)};
@@ -1598,39 +1795,49 @@ QLabel#statusChip[state="info"], QLabel#statusChip[state="busy"] {{
    gui/status_widgets.py — see StatusChip.set_pulse_phase()); distinct from
    the pre-existing per-subsystem ``motionPulse``/``motionPulsePhase`` hooks
    below, which stay as-is for their own laser/HV/scan call sites. */
+/* The busy pulse used to swing the FILL to rgba(accent, 0.30) — a wash that
+   deep drags the accent label down to 3.3:1 on the beat. The pulse now lives
+   entirely in the BORDER (law 8 is satisfied by any visible periodic change),
+   so the label's contrast is constant across both phases instead of dipping
+   every second. */
 QLabel#statusChip[state="busy"][pulsePhase="1"] {{
-    background: {_rgba(p['accent'], 0.30)}; border: 1px solid {p['accent']};
+    background: {p['tint']}; border: 1px solid {p['accent']};
 }}
+/* armed / simulated / the motion-pulse chips: same ink/fill decoupling as the
+   good/warn/crit block above (these carry the DEEPEST washes — 0.20 armed,
+   0.24 at pulse phase 1 — so they were the worst offenders of the lot). The
+   sim chip keeps its dashed cyan ring: law 6's "sim can never pass as real"
+   never rested on the ink colour alone. */
 QLabel#statusChip[state="armed"] {{
-    background: {_rgba(p['warn'], 0.20)}; color: {p['warn']};
+    background: {_rgba(p['warn'], 0.20)}; color: {p['text']};
     border: 1px solid {_rgba(p['warn'], 0.70)};
 }}
 QLabel#statusChip[state="simulated"] {{
-    background: {_rgba(p['sim'], 0.12)}; color: {p['sim']};
+    background: {_rgba(p['sim'], 0.12)}; color: {p['text']};
     border: 1px dashed {_rgba(p['sim'], 0.70)};
 }}
 QLabel#statusChip[motionPulse="laser"][motionPulsePhase="0"] {{
-    background: {_rgba(p['crit'], 0.14)}; color: {p['crit']};
+    background: {_rgba(p['crit'], 0.14)}; color: {p['text']};
     border: 1px solid {_rgba(p['crit'], 0.42)};
 }}
 QLabel#statusChip[motionPulse="laser"][motionPulsePhase="1"] {{
-    background: {_rgba(p['crit'], 0.24)}; color: {p['crit']};
+    background: {_rgba(p['crit'], 0.24)}; color: {p['text']};
     border: 1px solid {_rgba(p['crit'], 0.78)};
 }}
 QLabel#statusChip[motionPulse="hv"][motionPulsePhase="0"] {{
-    background: {_rgba(p['warn'], 0.14)}; color: {p['warn']};
+    background: {_rgba(p['warn'], 0.14)}; color: {p['text']};
     border: 1px solid {_rgba(p['warn'], 0.42)};
 }}
 QLabel#statusChip[motionPulse="hv"][motionPulsePhase="1"] {{
-    background: {_rgba(p['warn'], 0.24)}; color: {p['warn']};
+    background: {_rgba(p['warn'], 0.24)}; color: {p['text']};
     border: 1px solid {_rgba(p['warn'], 0.78)};
 }}
 QLabel#statusChip[motionPulse="scan"][motionPulsePhase="0"] {{
-    background: {_rgba(p['accent'], 0.14)}; color: {p['accent']};
+    background: {_rgba(p['accent'], 0.14)}; color: {p['text']};
     border: 1px solid {_rgba(p['accent'], 0.42)};
 }}
 QLabel#statusChip[motionPulse="scan"][motionPulsePhase="1"] {{
-    background: {_rgba(p['accent'], 0.24)}; color: {p['accent']};
+    background: {_rgba(p['accent'], 0.24)}; color: {p['text']};
     border: 1px solid {_rgba(p['accent'], 0.78)};
 }}
 
@@ -1646,11 +1853,17 @@ QFrame#statusLamp {{
     border-radius: 4px; background: {p['muted']}; border: none;
 }}
 QFrame#statusLamp[state="neutral"] {{ background: {p['muted']}; border: none; }}
+/* WCAG pass: a StatusLamp is a 9px dot with NO label — its colour is the SOLE
+   carrier of the state, so it owes 3:1 (WCAG 1.4.11), and `faint` gave it
+   2.72:1 in light / 2.61 on a dark card. "Disconnected" and "unknown" are
+   law-7 states (never lie about hardware); an invisible one lies by omission.
+   Both move to `muted` — still the quiet, colourless end of the ladder, but a
+   dot you can actually see (6.63:1). */
 QFrame#statusLamp[state="disconnected"] {{
-    background: transparent; border: 1px solid {p['faint']};
+    background: transparent; border: 1px solid {p['muted']};
 }}
 QFrame#statusLamp[state="unknown"] {{
-    background: {p['faint']}; border: 1px dashed {p['hairline_strong']};
+    background: {p['muted']}; border: 1px dashed {p['hairline_strong']};
 }}
 QFrame#statusLamp[state="good"] {{ background: {p['good']}; border: none; }}
 QFrame#statusLamp[state="warn"], QFrame#statusLamp[state="armed"], QFrame#statusLamp[state="fault"] {{
@@ -1763,9 +1976,18 @@ PLOT_FG = "#c7cfda"
 # token the same way via palette(mode) instead of a special case for these two.
 PLOT_GRID = "#242a33"
 PLOT_OVERLAY = "#ffb454"
+# PLOT_ACCENT — accent ink ON the instrument screen, fixed in both themes for
+# exactly the same reason as PLOT_BG/PLOT_FG above. WCAG pass (2026-07-14): the
+# motor position LCD (``QLabel#readoutValue``) painted the *theme* accent on
+# this fixed dark canvas, so in LIGHT mode it was the light accent on near-black
+# — 4.17:1, a failing pair on a genuine instrument readout (stage position). The
+# plot canvas does not repaint on a theme switch, so its ink must not depend on
+# the theme either: the dark accent is the only one that belongs here (8.02:1).
+PLOT_ACCENT = ACCENT_DARK
 for _p in (LIGHT, DARK):
     _p["plot_grid"] = PLOT_GRID
     _p["plot_overlay"] = PLOT_OVERLAY
+    _p["plot_accent"] = PLOT_ACCENT
 del _p
 
 
@@ -1849,7 +2071,12 @@ _GLASS_BLEND_ALPHAS = {
 # "crit" writable would be a bypass, since most QSS rules read p['crit'].
 # There is NO override path — apply_theme_overrides raises, and
 # sanitize_overrides silently drops these on any preset-JSON load.
-SAFETY_TOKENS = frozenset({"danger", "armed", "sim", "error", "crit", "warn"})
+# WCAG pass (2026-07-14): "danger_fill"/"on_danger"/"on_armed" join the lock.
+# They ARE the hazard surfaces (the HV/abort button body and the ink on it, the
+# pressed motion key) — a user-editable "on_danger" would let a preset paint the
+# Abort label in any colour it liked, including one that vanishes into the fill.
+SAFETY_TOKENS = frozenset({"danger", "armed", "sim", "error", "crit", "warn",
+                           "danger_fill", "on_danger", "on_armed"})
 
 # User-editable token GROUPS: one editor swatch fans out to every dict key
 # that names the same concept (bg/canvas are byte-equal aliases today;
