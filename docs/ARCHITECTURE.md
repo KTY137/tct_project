@@ -632,6 +632,18 @@ Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 ## Changelog
 
+- 2026-07-14 — **feat(controller): glass_probe.py instrument scan/diagnostic utility (11407b6).** Scripted open-timeout + io_lock probe for every VISA/serial device; fail-fast verification (names + SCPI ID queries) without operator GUI intervention; parametric timeout sweep output. One-shot diagnostic harness.
+
+- 2026-07-14 — **refactor(controller): panel_kit registry prune-on-read + async UI-thread gate (ab0cbee).** glassPane registry now self-cleans dead C++ wrappers on each read query (GUI thread only). Safe for dynamic panel add/remove without stale references. Eliminates prune-on-close call.
+
+- 2026-07-14 — **fix(devices): open_timeout bounds all VISA/serial open calls; fail-safe on timeout (7b4ea94, 8e85f2a).** WaveformGenerator (DG4162 open_timeout 5 s default), OscilloscopeVISA, BiasSupplyISEG, BiasSupplyKeithley, oscilloscope_drs4 all now use bounded open() with explicit timeout. Connect-phase timeout no longer drifts to minutes on powered-off instruments. Fail-safe: on open failure, `_teardown_session()` immediately closes/nulls VISA handles + RM; io_lock-guarded close chain prevents reentrant use of dead sessions. E2E integration test: reconnect stress (Disconnect All/Connect All cycles with liveness monitoring) now crash-free.
+
+- 2026-07-14 — **fix(controller): _run_bg completion now bound-method + QueuedConnection delivery (e0a9d91).** ScanController._run_bg workers complete on the main thread via bound method + QueuedConnection to _on_run_bg_done (not QThread.finished signal). Eliminates cross-thread race on worker teardown + result delivery. GUI-thread-affine result handling; app quit+wait semantics unchanged.
+
+- 2026-07-14 — **fix(gui): main-window bg-thread (liveness monitor) now joins on teardown (5576378).** TCTMainWindow._teardown_panels() explicit `liveness_thread.quit(); liveness_thread.wait()` before widget close. Eliminates background thread lingering past app shutdown.
+
+- 2026-07-14 — **feat(gui): wave 1-3 stage_view/intensity/laser panels onto glass kit (3a6d0ea, 2e02b8d, 5971741).** PanelKit adoption: `stage_view.py` (2D X-Y top/X-Z side), `intensity_panel.py`, `laser_panel.py` now render on panel_kit Cards; `_toggle_theme()` includes all three; glass registry + PANEL_GLASS_ALPHA tuning per Z-ladder.
+
 - 2026-07-14 — **fix(gui): ribbon wrap + theme icons + status-chip ink retune (4ca8331).** NEW `gui/flow_layout.py` wrapping QLayout (heightForWidth, replaces silent QScrollArea clipping). Icon buttons now re-tint live on theme toggle (frozen pixmap bug fixed). NEW palette tokens: `danger_fill`, `on_danger`, `on_armed`, `plot_accent`; `SAFETY_TOKENS` widened (locked danger/armed/sim/error + aliases). Every hazard chip label now uses neutral `text` ink; hue lives in fill+border. NEW `_ShellBridge` property pairs: `hvCurrentText`/`hvCurrentState`, `hvComplianceText`/`hvComplianceState` (leakage + compliance restored to QML island). Mary: APPROVE-WITH-NITS (shippable to bench). Bench-gate: 14a ribbon wrap / 14b icon retinting / 14c chip look verification at real DPI (Kaya's eye on saturated-dot callback).
 
 - 2026-07-13 (night) — **feat(glass): run.ps1 defaults to QML shell (76c2370).**

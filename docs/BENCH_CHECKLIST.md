@@ -752,6 +752,67 @@ post-ROI distortion pass).
 
 ---
 
+## 13. Open-Timeout Bounds Verification (Wave-1 Fix 2026-07-14)
+
+**Last updated:** 2026-07-14  
+**Requires Kaya at the bench** (every step verifies real powered-off instrument behavior).
+
+### 13a. Wavegen Connect Fail-Fast (5 s expected)
+
+**What to check:**
+- Start the TCT app in simulated mode (no bench connection).
+- Manually shut down the DG4162 waveform generator at the power switch (or unplug the Ethernet cable to 192.168.0.10).
+- In the GUI, click **Connect All** (or manually re-enable the wavegen in Devices panel).
+- Observe the **connection attempt timeout behavior:**
+  - Old behavior: hang for ~90 s (PyVISA default).
+  - New behavior: fail fast within ~5 s (now bounded by `open_timeout=5.0` in config).
+- Check the log for a clean "Timeout opening resource" message (not a hung thread or crash).
+- Power the DG4162 back on and reconnect; verify it connects normally.
+
+**Expected result:**
+- Wavegen connect timeout ~5 s (instead of minutes). Connection state reported cleanly to the GUI. No thread leaks or zombie VISA sessions left behind.
+
+**Closes:**
+- 7b4ea94 + 8e85f2a fix (open_timeout bounds on all VISA devices).
+- Addresses Kaya's bench observation: "reconnect on a powered-off wavegen used to hang the app."
+
+---
+
+### 13b. All-VISA Reconnect Stress (Liveness-Monitored Cycles)
+
+**What to check:**
+- With all instruments powered on (DG4162, TBS1052C scope, iseg HV, Keithley HV, DRS4 if present):
+  - Click **Disconnect All** in the GUI (Devices panel).
+  - Observe liveness monitor (§4b/§5 heartbeat probes) report all devices as DISCONNECTED within 3 s.
+  - Immediately click **Connect All** and observe all devices report CONNECTED.
+  - Repeat the cycle **5 times** without any app crash, thread stall, or GUI freeze.
+- Log the time taken for each Disconnect/Connect cycle (expect ~1–2 s per cycle; hangs >5 s indicate an io_lock deadlock or incomplete teardown).
+
+**Expected result:**
+- Disconnect/Connect stress cycles crash-free. All devices re-connect on subsequent attempts. No accumulation of stale VISA sessions or file descriptors (check Process Monitor or `Get-NetTCPConnection` for TCP/IP port leaks if using physical instruments).
+
+**Closes:**
+- e0a9d91 + 5576378 fixes (io_lock teardown + _run_bg completion + main-window bg-thread join).
+- Verifies the fail-safe open-failure path on all backends (VISA timeout recovery, session cleanup).
+
+---
+
+### 13c. Per-Driver TODO(bench) Items from 7b4ea94/8e85f2a
+
+**What to check (read-only audit):**
+- `TCT_app/devices/waveform_generator.py`: open_timeout set to 5.0 s (VISA DG4162 TCPIP).
+- `TCT_app/devices/oscilloscope.py`: open_timeout set to 5.0 s (VISA TBS1052C or DRS4).
+- `TCT_app/devices/bias_supply_iseg.py`: open_timeout set to 5.0 s (iseg VISA/serial).
+- `TCT_app/devices/bias_supply_keithley.py`: open_timeout set to 5.0 s (Keithley VISA).
+- `TCT_app/devices/oscilloscope_drs4.py`: open_timeout set to 5.0 s (DRS4 USB).
+- All drivers implement `_teardown_session()` (called on disconnect) to close/null VISA instrument + RM.
+
+**Expected result:**
+- Confirm source code matches the list above (grep for `open_timeout` and `_teardown_session`). No TODO(bench) markers remain in those files.
+
+**Closes:**
+- 7b4ea94/8e85f2a implementation audit (no manual instrumentation needed; code review).
+
 ---
 
 ## 14. On-Screen Rendering (Post-4ca8331 Theme Commit)
