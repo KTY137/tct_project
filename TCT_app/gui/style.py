@@ -45,6 +45,8 @@ import re
 import weakref
 from typing import Callable
 
+import numpy as np
+
 from PySide6.QtCore import QRect, Qt, QTimer
 from PySide6.QtGui import (
     QBrush, QColor, QFont, QImage, QLinearGradient, QPainter, QPalette,
@@ -2172,6 +2174,15 @@ _GROUND_CLAMP_TARGET_LSTAR = GROUND_BAND_MAX_DELTA_LSTAR - 0.1   # clamp margin
 _GROUND_BUCKET_PX = 256                 # size-bucket step for the pixmap cache
 _GROUND_CACHE_MAX = 12
 _GROUND_PROBE_SIZE = (96, 72)           # clamp-measurement render (build-time only)
+# RISK 2 (Mary's pilot review): the wash is a LOW-FREQUENCY gradient, so the
+# cached pixmap need not match the full window x DPR resolution — at 4K/DPR2 a
+# 1:1 render is ~141 MB PER cache entry (up to ~1.7 GB retained). We render at
+# a capped long edge and let AmbientGround.paintEvent's
+# ``drawPixmap(self.rect(), pm)`` scale it up; the gradient has no detail to
+# lose, so there is no banding at scale (before/after pair in
+# artifacts_claude/ground_perf/). 1024 keeps every existing cache case
+# (<=512-bucket up to DPR2 == 1024 physical) byte-identical.
+_GROUND_MAX_RENDER_PX = 1024
 
 _ground_pixmaps: "dict[tuple, QPixmap]" = {}
 _ground_clamp_cache: dict[tuple, float] = {}
@@ -2238,6 +2249,33 @@ def _ground_wash_image(width_px: int, height_px: int, mode: str,
     return img
 
 
+def _image_lstar_array(img: QImage) -> np.ndarray:
+    """Per-pixel CIE L* of an (opaque) QImage, vectorised.
+
+    RISK 1 (Mary's pilot review): the band probe below used to walk the probe
+    with a pure-Python nested ``pixelColor()`` loop (~96x72 x up to 6 clamp
+    iterations, tens-to-hundreds of ms) synchronously on the first paint. This
+    moves that inner loop off Python and onto numpy — the SAME independent
+    idiom tests/test_ambient_ground.py already measures the shipped pixmap with,
+    so the measured band is unchanged (the clamp scale stays byte-stable)."""
+    img = img.convertToFormat(QImage.Format.Format_ARGB32)
+    h, w = img.height(), img.width()
+    buf = np.frombuffer(img.constBits(), dtype=np.uint8)
+    px = buf.reshape(h, img.bytesPerLine() // 4, 4)[:, :w, :]
+    # ARGB32 on little-endian is B,G,R,A in memory.
+    b = px[..., 0].astype(np.float64)
+    g = px[..., 1].astype(np.float64)
+    r = px[..., 2].astype(np.float64)
+
+    def _lin(c):
+        c = c / 255.0
+        return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+    y = 0.2126 * _lin(r) + 0.7152 * _lin(g) + 0.0722 * _lin(b)
+    knee = (6 / 29) ** 3
+    return np.where(y > knee, 116.0 * np.cbrt(y) - 16.0, y * (29 / 3) ** 3)
+
+
 def _ground_band_probe(mode: str, scale: float) -> float:
     """Max |ΔL*| of the wash composited over the live canvas token — measured
     on a small probe render (build-time only, never on a paint path)."""
@@ -2251,14 +2289,7 @@ def _ground_band_probe(mode: str, scale: float) -> float:
     painter.drawImage(0, 0, wash)
     painter.end()
     canvas_l = _lstar_of_rgb(canvas.red(), canvas.green(), canvas.blue())
-    worst = 0.0
-    for y in range(ph):
-        for x in range(pw):
-            c = probe.pixelColor(x, y)
-            d = abs(_lstar_of_rgb(c.red(), c.green(), c.blue()) - canvas_l)
-            if d > worst:
-                worst = d
-    return worst
+    return float(np.abs(_image_lstar_array(probe) - canvas_l).max())
 
 
 def _ground_clamp_scale(mode: str) -> float:
@@ -2289,6 +2320,23 @@ def ground_band_measured(mode: str) -> float:
     return _ground_band_probe(mode, _ground_clamp_scale(mode))
 
 
+def prewarm_ground(mode: str) -> None:
+    """Prime the ground band clamp for *mode* OFF the GUI paint path (RISK 1).
+
+    The clamp's measurement probe is the only non-trivial step in
+    ``ground_pixmap`` (the wash render itself is a handful of gradient fills).
+    Priming it here — from ``AmbientGround.__init__`` / ``refresh_theme``, off
+    the paint hot path — means the first ``paintEvent`` renders + caches a
+    (capped) pixmap and hits an already-computed clamp, never runs the probe.
+    Size/DPR-independent (the clamp keys only on mode/canvas/accent), so one
+    call per theme covers every window size. Never lets a probe failure break
+    widget construction."""
+    try:
+        _ground_clamp_scale("dark" if str(mode).lower() == "dark" else "light")
+    except Exception:  # pragma: no cover - defensive: prewarm is best-effort
+        logger.debug("ground clamp prewarm skipped", exc_info=True)
+
+
 def _ground_bucket(size_px: int) -> int:
     return max(_GROUND_BUCKET_PX,
                int(math.ceil(size_px / _GROUND_BUCKET_PX)) * _GROUND_BUCKET_PX)
@@ -2317,7 +2365,19 @@ def ground_pixmap(width: int, height: int, mode: str, dpr: float = 1.0) -> QPixm
     if pm is not None:
         return pm
     scale = _ground_clamp_scale(mode)
-    img = _ground_wash_image(int(bw * dpr), int(bh * dpr), mode, scale)
+    # RISK 2: render the low-frequency wash at a capped long edge and let the
+    # caller's ``drawPixmap(rect, pm)`` scale it up (no banding — the gradient
+    # has no detail to lose). Aspect ratio is preserved so the radial anchors
+    # (proportional to w/h) land identically. Sub-cap sizes render exactly as
+    # before, so every existing cache case stays byte-identical.
+    pw = int(bw * dpr)
+    ph = int(bh * dpr)
+    long_edge = max(pw, ph)
+    if long_edge > _GROUND_MAX_RENDER_PX:
+        shrink = _GROUND_MAX_RENDER_PX / long_edge
+        pw = max(1, int(round(pw * shrink)))
+        ph = max(1, int(round(ph * shrink)))
+    img = _ground_wash_image(pw, ph, mode, scale)
     pm = QPixmap.fromImage(img)
     pm.setDevicePixelRatio(dpr)
     while len(_ground_pixmaps) >= _GROUND_CACHE_MAX:

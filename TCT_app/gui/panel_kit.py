@@ -40,7 +40,7 @@ from gui.status_widgets import ReadoutCell, StatusLamp
 from gui.style import (
     FONT_BODY_PX, FONT_LG, FONT_PANEL_TITLE_PX, PLOT_BG, SPACE_LG,
     SPACE_SM, SPACE_XS, WEIGHT_BODY, WEIGHT_PANEL_TITLE, axis_color,
-    ground_pixmap, palette, repolish,
+    ground_pixmap, palette, prewarm_ground, repolish,
 )
 
 # Default Card body padding — the v4 artifact's own card padding (`.card`
@@ -992,6 +992,12 @@ class AmbientGround(QWidget):
         self.setAutoFillBackground(False)
         self._theme_mode = "dark" if str(theme_mode).lower() == "dark" else "light"
         self._tier: GlassTier = GlassTier.TOKEN
+        # RISK 1 (Mary's pilot review): prime the band clamp OFF the paint path.
+        # The clamp's measurement probe is the only heavy step in
+        # ``ground_pixmap``; warming it here (and in ``refresh_theme``) keeps the
+        # first ``paintEvent`` a cheap capped render + cache hit instead of a
+        # tens-to-hundreds-of-ms GUI stall.
+        prewarm_ground(self._theme_mode)
         if parent is not None:
             parent.installEventFilter(self)
             self.setGeometry(parent.rect())
@@ -1032,6 +1038,9 @@ class AmbientGround(QWidget):
 
     def refresh_theme(self, mode: str) -> None:
         self._theme_mode = "dark" if str(mode).lower() == "dark" else "light"
+        # Warm the new theme's clamp before the repaint the update() below
+        # schedules — keep the theme-switch repaint off the probe path (RISK 1).
+        prewarm_ground(self._theme_mode)
         self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
