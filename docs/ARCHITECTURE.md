@@ -644,6 +644,24 @@ Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 - 2026-07-14 — **feat(gui): wave 1-3 stage_view/intensity/laser panels onto glass kit (3a6d0ea, 2e02b8d, 5971741).** PanelKit adoption: `stage_view.py` (2D X-Y top/X-Z side), `intensity_panel.py`, `laser_panel.py` now render on panel_kit Cards; `_toggle_theme()` includes all three; glass registry + PANEL_GLASS_ALPHA tuning per Z-ladder.
 
+- 2026-07-14 — **feat(gui): wave 4/12 scan_map_view onto the glass kit (b99b5a6).** PanelKit adoption of scan_map_view (2D heatmap rendering); glass registry + threshold/invert controls as content cards; test file `test_wave_scan_map_render.py` added.
+
+- 2026-07-14 — **feat(gui): wave 5/12 sequencer panel onto the glass kit (bf41854).** NEW `sequencer_panel.py`: queue table with StatusChips, add/remove/reorder UI; ArmLatch wrapped in opaque HazardSurface (register=False); chrome cards register. Mary APPROVED (HAZARD).
+
+- 2026-07-14 — **feat(gui): wave 6/12 device manager window onto the glass kit (dc3592c).** QMainWindow satellite with icon/state summary; chrome cards register (bulk-action Cards); shelf register=False (content consequence); `_DetachedWindow` inheritance.
+
+- 2026-07-14 — **feat(gui): wave 7/12 calibration panel onto the glass kit (18469ca).** HAZARD: rollout registrations kept; opaque HazardSurface on repeatability section (abort gate); Mary APPROVED w/ nits.
+
+- 2026-07-14 — **feat(gui): wave 8/12 camera panel onto the glass kit (4725f64).** 5 chrome cards register / 4 content cards out; `_ROIDialog` satellite surface idiom (independent window material).
+
+- 2026-07-14 — **feat(gui): wave 9/12 scope panel onto the glass kit (4b74c1c).** Chrome cards register; live-value cards out (waveform/curve dense); `_TriggerDialog` satellite idiom.
+
+- 2026-07-14 — **feat(gui): wave 10/12 motor panel onto the glass kit (f86675d).** HAZARD: blanket register=False with one opaque HazardSurface over all commanding cards; Mary APPROVED.
+
+- 2026-07-14 — **feat(gui): wave 11/12 analysis panel onto the glass kit (34453ab).** Zero registrations — plot/data dense; grid/curve surface content-only.
+
+- 2026-07-14 — **feat(gui): wave 12/12 planner panel onto the glass kit (90a3a23).** HAZARD: opaque HazardSurface over ArmLatch+Abort aside; `_palette_card` kept as content; Mary APPROVED.
+
 - 2026-07-14 — **fix(gui): ribbon wrap + theme icons + status-chip ink retune (4ca8331).** NEW `gui/flow_layout.py` wrapping QLayout (heightForWidth, replaces silent QScrollArea clipping). Icon buttons now re-tint live on theme toggle (frozen pixmap bug fixed). NEW palette tokens: `danger_fill`, `on_danger`, `on_armed`, `plot_accent`; `SAFETY_TOKENS` widened (locked danger/armed/sim/error + aliases). Every hazard chip label now uses neutral `text` ink; hue lives in fill+border. NEW `_ShellBridge` property pairs: `hvCurrentText`/`hvCurrentState`, `hvComplianceText`/`hvComplianceState` (leakage + compliance restored to QML island). Mary: APPROVE-WITH-NITS (shippable to bench). Bench-gate: 14a ribbon wrap / 14b icon retinting / 14c chip look verification at real DPI (Kaya's eye on saturated-dot callback).
 
 - 2026-07-13 (night) — **feat(glass): run.ps1 defaults to QML shell (76c2370).**

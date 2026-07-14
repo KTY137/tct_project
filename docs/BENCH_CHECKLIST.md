@@ -889,3 +889,108 @@ Once all checklist items are complete:
 5. Update `TCT_app/devices/bias_supply_iseg.py` if the 0.5 s relay-settle budget needs adjustment.
 
 Report back to Adam with findings and any hardware quirks discovered.
+
+---
+
+## 15. Glass-Kit Wave Panel Checks (Waves 1–12 Visual Acceptance)
+
+**Last updated:** 2026-07-14  
+**Requires Kaya at the real display** (all items are visual verification; app launched in classic or QML mode).
+
+**Scope:** The 12-wave glass-kit rollout (stage_view, intensity, laser, scan_map, sequencer, device_manager, calibration, camera, scope, motor, analysis, planner) is complete. This checklist verifies the PanelKit adoption, HazardSurface opacity, and window-material inheritance across all panels.
+
+---
+
+### 15a. Theme Toggle Re-Resolution (All Panels)
+
+**What to check:**
+- Launch TCT app with QML shell or classic mode.
+- Open all 12 panels (or navigate through them in sequence): Stage View, Intensity, Laser, Scan Map, Sequencer, Device Manager, Calibration, Camera, Scope, Motor, Analysis, Planner.
+- For each panel, perform a **light → dark → light** theme toggle (Settings → Theme, dark/light selector, repeat twice).
+- Observe: do all Kit surfaces (glass pane backgrounds, registered chrome cards) re-resolve their appearance each time?
+
+**Expected result:**
+- Glass pane surfaces, chrome card backgrounds, and any hazard stripes/hatching re-tint cleanly on every theme toggle.
+- No stale surface colors carried over from a prior theme.
+- No visual jank, flicker, or grey flash during transitions.
+
+**Closes:**
+- Glass-kit design assurance: theme toggle correctness across all 12 panels.
+
+---
+
+### 15b. Hazard Surface Opacity (Hazard Panels: Bias, Sequencer, Calibration, Motor, Planner)
+
+**What to check:**
+- In the 5 hazard panels (Bias, Sequencer, Calibration, Motor, Planner), locate the opaque HazardSurface regions (typically overlaid on command buttons, ArmLatch, Abort, or motion-control cards).
+- Verify the surface is **visibly opaque** at every glass tier:
+  - **Tier 1 (no backdrop):** hazard stripe/hatch pattern visible, not transparent.
+  - **Tier 2 (Mica backdrop active):** hazard surface remains opaque *over* the frosted material; no ghosting or transparency showing through to the desktop.
+  - **Tier 3 (Acrylic backdrop active):** same opacity guarantee.
+  - **After enabling window material in Theme editor (Material → Acrylic):** opacity persists.
+
+**Expected result:**
+- All 5 hazard panels show opaque HazardSurface regions at every glass tier and material level.
+- Hazard intent is visually clear; operator cannot mistake a hazard region for a safe content card.
+
+**Closes:**
+- Safety assurance: opaque hazard marking across glass-kit rollout.
+
+---
+
+### 15c. Command Control Liveness During Active Operations
+
+**What to check:**
+- **Motor panel:** while a motor jog or move is in progress, verify the **STOP button is clickable/enabled** (not greyed out). Click it mid-jog and confirm the motor halts.
+- **Calibration panel:** during a live repeatability test, verify the **Stop button is enabled and functional** — click it to abort the calibration run.
+- **Planner panel:** during a live scan run, verify the **Abort button is enabled (red/danger styling) and clickable** — one-tap abort (design law 5: no second confirmation).
+
+**Expected result:**
+- Motor STOP, Calibration Stop, and Planner Abort remain enabled and responsive during their respective active operations.
+- No UI deadlock or delayed response (expected sub-100 ms button latency).
+
+**Closes:**
+- Functional assurance: safety stop controls remain live across glass-kit panels.
+
+---
+
+### 15d. Satellite Window Material Inheritance (Device Manager, Camera ROI Dialog, Scope Trigger Dialog)
+
+**What to check:**
+- In the GUI, open or trigger each satellite window:
+  - **Device Manager:** a QMainWindow satellite with icon/state summary (detachable).
+  - **Camera ROI Dialog:** a floating dialog spawned from the Camera panel (if ROI feature is enabled).
+  - **Scope Trigger Dialog:** a floating dialog spawned from the Scope panel.
+- For each satellite window, enable a window material (Theme editor → Material → Acrylic or Mica).
+- Detach any existing panels to separate floating windows (tab/panel → detach, or dock → undocked).
+- Verify: **each satellite window and detached panel carries its own window material** (not orphaned or revert to None).
+
+**Expected result:**
+- All satellite windows and detached panels inherit the active window material setting.
+- Material persists when resizing, moving, or re-docking the window.
+- No visual regression (no blank/opaque window until material reapplies).
+
+**Closes:**
+- Glass-kit design assurance: material uniformity across main + satellite windows.
+
+---
+
+### 15e. Registered Chrome vs. Content Card Rendering (All Panels)
+
+**What to check:**
+- In each of the 12 panels, identify **registered chrome cards** (typically: toolbar buttons, column headers, configuration headers; register=True) vs. **content cards** (tables, plots, readouts, data grids; register=False).
+- Enable panel glass: Settings → Theme → (panel glass setting, if available; rollout currently theme-editor cards only).
+- Observe:
+  - **Chrome cards (register=True):** should show glass (background tint/frosted effect if glass is on).
+  - **Content cards (register=False):** should remain opaque, hiding desktop detail behind them.
+- Toggle panel glass on/off; verify the distinction remains clear.
+
+**Expected result:**
+- Chrome cards visibly respond to panel-glass toggle (glassy appearance when on; opaque when off).
+- Content cards remain consistently opaque regardless of panel-glass state.
+- No visual confusion between chrome and content regions.
+
+**Closes:**
+- Glass-kit design assurance: registration semantics and visual feedback.
+
+---
