@@ -647,7 +647,7 @@ valid verdict if you name what you checked.
 
 ## C12 - U1 prep survey: viewmodel-portability of the four U1 test suites (advisory, read-only)
 
-**Status: QUEUED** - Effort: M - Source: Adam, 2026-07-15 (Kaya: bring the Codex lane into the QML-migration session)
+**Status: DONE - Appended U1 viewmodel-portability survey for four suites.** - Effort: M - Source: Adam, 2026-07-15 (Kaya: bring the Codex lane into the QML-migration session)
 
 The QML-migration epoch opened today on branch `ui-qml-migration`. Stage U1
 of `docs/ROADMAP_MASTERPLAN.md` (Part II, "UI" section) is the
@@ -688,3 +688,207 @@ summary per file, appended below this brief. Ranked observations welcome
 (e.g. "this suite is 80% (a) once X is injectable"). Do NOT modify any repo
 file other than appending here. Running the four suites is allowed
 (offscreen, venv `TCT_app\.venv\Scripts\python.exe`) but not required.
+
+**Codex findings (2026-07-15):**
+- Files touched: `docs/CODEX_QUEUE.md` only. The four target test files were read and run but not modified.
+- Legend: `(a)` portable-to-viewmodel; `(b)` GUI-half; `(c)` safety-normative; `(d)` obsolete/duplicate.
+- Verification: from `TCT_app`, `$env:QT_QPA_PLATFORM='offscreen'; .\.venv\Scripts\python.exe -m pytest --collect-only -q tests/test_planner_panel.py tests/test_scan_map_view.py tests/test_scan_viewer_panel.py tests/test_sequencer_panel.py` collected 156 tests. The full run with the same four files passed: `156 passed, 3 warnings in 72.01s`; warnings were the existing pyqtgraph all-NaN slice warnings in `test_scan_map_view.py::test_all_nan_grid_does_not_raise_and_levels_are_finite`. `git diff --check` passed.
+- Cross-suite observation: no target suite uses QTest key/mouse synthesis. The blocking couplings are private widget-tree introspection, pyqtgraph/ImageView state, QMessageBox/QtDangerGate, coordinator/controller references in sequencer tests, and `Axis` enum shape in planner tests.
+- Planner observation: U1 can reclaim 36/67 tests into a planner VM once trunk-P2 `AxisSpec` replaces direct `Axis` enum assumptions. The QtDangerGate cluster is 9 tests at HEAD and is a hard carve-out before U1 per `SAFETY_NORMATIVE_TESTS.md`; `test_arm_confirmation_uses_live_plan_bias_range_not_stale_estimate` is also safety-sensitive HV confirmation text and should be preserved with the arm-summary contract.
+- Scan-map observation: 17/32 tests are pure map data/model/export behavior; the GUI residue is almost entirely pyqtgraph image/histogram/toolbar/theme/export-PNG behavior.
+- Scan-viewer observation: 15/40 tests map cleanly to `RunStateViewModel`/z-focus/open-analysis state. Abort/pause tests here are button-signal GUI affordances, not the S2 normative wiring host; the manifest points safety wiring to `test_scan_viewer_wiring.py`.
+- Sequencer observation: only 6/17 tests are normal VM candidates. 10/17 are safety-normative sequence-active, manual-danger-lock, abort, modal-shim, or manual-pause/fail-safe tests. `SequencerPanel` currently holds a `SequenceCoordinator` and command callables; U1 needs a read-only queue/run VM plus a retained command/safety host, not a direct port of this panel shape.
+
+### `TCT_app/tests/test_planner_panel.py` totals
+
+Totals: `(a)=36`, `(b)=21`, `(c)=10`, `(d)=0` (67 tests).
+
+File-level blockers: `Axis` enum appears through template/default-plan helpers and explicit `Axis.STAGE_X/Y/Z/BIAS_V`; QTreeWidget/QListWidget private state (`_tree`, `_palette`, `_ghost_item`, `_loop_editors`); Qt MIME payloads; QThread/timer estimate machinery; QMessageBox/QtDangerGate; private command signals (`start_plan_requested`, `arm_hv_requested`, `abort_requested`). No direct controller reference and no QTest key/mouse interaction.
+
+| Test | Class | Blocking coupling |
+|---|---|---|
+| `test_panel_constructs_light_and_dark_theme` | (b) | QWidget construction/theme/tree smoke. |
+| `test_empty_plan_shows_empty_state_row_and_survives_theme_switch` | (b) | `EmptyState` widget and QTree row introspection. |
+| `test_default_template_validates_clean_under_default_limits` | (a) | Axis-coupled default plan; pure validation result. |
+| `test_default_template_matches_frozen_r1_routine` | (a) | Axis-coupled template/corpus round-trip. |
+| `test_large_estimate_runs_off_gui_thread` | (a) | Estimate worker currently panel-owned QThread. |
+| `test_estimate_worker_thread_not_parented_to_panel` | (a) | Worker lifetime should move to VM/service. |
+| `test_estimate_shutdown_bounded_when_estimate_in_flight` | (a) | VM/service shutdown contract; no widget needed. |
+| `test_rapid_estimate_edits_coalesce_latest_wins` | (a) | Estimate latest-wins state; Axis plan fixture. |
+| `test_safe_estimate_routes_large_plan_off_gui_thread` | (a) | Async estimate routing; panel-private cache today. |
+| `test_safe_estimate_small_plan_still_runs_inline` | (a) | Estimate fast path; panel-private cache today. |
+| `test_drag_preview_large_candidate_skips_synchronous_estimate` | (a) | Candidate-estimate logic; Axis + drag helper coupling. |
+| `test_spinbox_edit_updates_plan_and_invalidates_armed` | (a) | QSpinBox editor today; VM setter can expose result. |
+| `test_start_enable_requires_armed_and_dry_run_ok` | (a) | `can_execute` state; currently `_btn_start`. |
+| `test_start_plan_requested_carries_scan_plan` | (b) | Start button/signal command surface; VM must not own callable. |
+| `test_dry_run_sets_ok_flag_and_arm_requires_confirmation_signal` | (a) | Arm/dry-run state; command request must stay outside VM. |
+| `test_arm_confirmation_uses_live_plan_bias_range_not_stale_estimate` | (c) | HV arm confirmation text via QMessageBox; preserve safety wording. |
+| `test_palette_new_inserts_into_loop_children` | (a) | Axis + drop-decision model currently called on panel. |
+| `test_palette_double_click_appends_new_loop_to_root` | (a) | Axis + palette append fallback; model mutation portable. |
+| `test_internal_move_reorders_with_same_parent_index_shift` | (a) | Axis + move decision; tree item helper today. |
+| `test_self_and_descendant_move_rejected` | (a) | Axis + drop validation; no widget required after VM split. |
+| `test_action_leaf_rejects_into_drop` | (a) | Drop validation; tree item helper today. |
+| `test_decorative_rows_are_not_drop_targets` | (b) | Decorative QTree rows are a GUI construct. |
+| `test_structural_change_invalidates_latches_even_when_armed` | (a) | Axis + latch invalidation state. |
+| `test_undo_restores_pre_drop_plan_and_invalidates` | (a) | Axis + undo/latch state. |
+| `test_undo_stack_is_capped` | (a) | Pure undo-stack policy. |
+| `test_duplicate_and_remove_block_mutate_plan_and_invalidate` | (a) | Axis + plan mutation/latch state. |
+| `test_reorder_block_swaps_and_boundary_move_is_a_noop` | (a) | Axis + plan mutation/undo policy. |
+| `test_palette_mime_data_carries_new_op_payload` | (b) | Qt `mimeData()` override. |
+| `test_recipe_tree_mime_data_carries_move_op_payload` | (b) | QTreeWidget MIME override. |
+| `test_recipe_tree_mime_data_empty_for_decorative_row` | (b) | QTree decorative row MIME behavior. |
+| `test_public_api_surface_unchanged` | (b) | Classic `tct_gui.py` panel wiring surface. |
+| `test_run_end_clears_stale_arm_so_second_execute_needs_rearm` | (a) | Arm/latch state; safety-sensitive but VM-portable. |
+| `test_on_error_also_clears_the_per_run_arm` | (a) | Arm/latch terminal-state contract. |
+| `test_set_position_from_motor_stores_value_and_updates_label` | (a) | Motor position state; label is presentational. |
+| `test_use_current_position_writes_x_loop_start_and_invalidates_latches` | (a) | Axis + selected-loop state; QTree selection today. |
+| `test_use_current_position_writes_z_loop_start` | (a) | Axis + selected-loop state; QTree selection today. |
+| `test_use_current_position_disabled_before_position_and_for_non_axis_loop` | (a) | Axis + selection eligibility; QTree selection today. |
+| `test_set_focus_z_stores_value_and_updates_label` | (a) | Focus-Z state; label is presentational. |
+| `test_use_focus_z_writes_z_loop_start_and_invalidates_latches` | (a) | Axis + selected-loop state; QTree selection today. |
+| `test_use_focus_z_disabled_for_x_and_y_loops` | (a) | Axis eligibility; QTree selection today. |
+| `test_use_focus_z_disabled_before_result_and_while_running` | (a) | Focus/run state; QTree selection today. |
+| `test_drag_preview_ghost_appears_for_palette_new_at_correct_index` | (b) | Ghost QTree row rendering. |
+| `test_drag_preview_ghost_appears_for_internal_move_at_correct_index` | (b) | Ghost QTree row rendering. |
+| `test_drag_preview_ghost_for_new_loop_at_root_after_preflight_offset` | (b) | Axis + root ghost row offset. |
+| `test_drag_preview_ghost_absent_for_self_and_descendant_move` | (b) | Ghost/chip visibility around drop rejection. |
+| `test_drag_preview_ghost_absent_for_leaf_into_target` | (b) | Ghost row visibility around leaf target. |
+| `test_drag_preview_candidate_change_moves_ghost_without_duplicate` | (b) | Ghost row lifecycle and QTree traversal. |
+| `test_drag_preview_same_candidate_slot_does_not_recreate_ghost` | (b) | Ghost row identity/repaint behavior. |
+| `test_drag_preview_delta_computes_correct_candidate_points` | (b) | Delta chip text plus Axis candidate model. |
+| `test_drag_preview_delta_warns_when_candidate_exceeds_max_points` | (b) | Delta chip state/property. |
+| `test_drag_preview_cleared_by_clear_drag_preview` | (b) | Ghost/chip/timer widget cleanup. |
+| `test_drag_preview_survives_into_real_drop_with_no_stray_ghost` | (b) | Ghost-to-drop widget lifecycle. |
+| `test_shutdown_mid_drag_clears_ghost_and_stops_timers` | (b) | Widget shutdown and QTimer cleanup. |
+| `test_drag_preview_never_touches_plan_or_undo_stack_across_a_session` | (a) | Core invariant portable; current proof uses preview widgets. |
+| `test_qt_danger_gate_confirms_true_on_gui_thread` | (c) | QtDangerGate carve-out; QMessageBox seam. |
+| `test_qt_danger_gate_denies_false_on_gui_thread` | (c) | QtDangerGate denial semantics. |
+| `test_qt_danger_gate_confirm_from_worker_thread` | (c) | QtDangerGate cross-thread confirmation. |
+| `test_qt_danger_gate_timeout_denies` | (c) | QtDangerGate fail-closed timeout. |
+| `test_qt_danger_gate_no_stray_dialog_after_shutdown` | (c) | QtDangerGate teardown denial. |
+| `test_qt_danger_gate_timeout_then_pump_shows_no_stray_dialog` | (c) | QtDangerGate stale-request denial. |
+| `test_qt_danger_gate_dialog_exception_releases_worker_as_deny` | (c) | QtDangerGate exception fail-closed. |
+| `test_qt_danger_gate_shutdown_denies_pending_and_future` | (c) | QtDangerGate shutdown fail-closed. |
+| `test_qt_danger_gate_abort_denies_pending_but_stays_usable` | (c) | QtDangerGate abort semantics. |
+| `test_palette_has_capture_photo_block` | (b) | Palette widget payload. |
+| `test_capture_photo_validates_with_camera_and_rejects_without` | (a) | Pure validator/model behavior. |
+| `test_default_planner_limits_enable_camera` | (a) | Static limits contract. |
+| `test_plan_limits_camera_available_from_devices` | (a) | Composition-root limits helper; no widget required. |
+
+### `TCT_app/tests/test_scan_map_view.py` totals
+
+Totals: `(a)=17`, `(b)=15`, `(c)=0`, `(d)=0` (32 tests).
+
+File-level blockers: pyqtgraph `ImageView`/histogram/image item state; toolbar private widgets (`_combo_qty`, `_btn_freeze`, export buttons); redraw timer; `grab()`, `show()`, and PNG export geometry. No start/stop callables, no controller reference beyond `ScanPoint`/`ScanResult` dataclasses, and no QTest key/mouse interaction.
+
+| Test | Class | Blocking coupling |
+|---|---|---|
+| `test_construct_headless_no_hardware` | (b) | QWidget construction smoke. |
+| `test_quantities_list_matches_scan_result_fields` | (a) | Pure data schema contract. |
+| `test_update_point_streams_and_builds_grid` | (a) | Grid model state. |
+| `test_update_point_partial_scan_reports_nan_missing_cells` | (a) | Grid missing-cell model. |
+| `test_update_point_last_write_wins_on_revisit` | (a) | Dedup/last-write model. |
+| `test_update_point_coalesces_rebuilds_until_timer_tick` | (b) | Qt redraw timer and pyqtgraph repaint. |
+| `test_flush_pending_redraw_renders_immediately` | (b) | Timer flush and redraw call. |
+| `test_quantity_switch_rerenders_without_restreaming` | (a) | Selected quantity + accumulated data model. |
+| `test_set_points_batch_load_from_iterable_of_results` | (a) | Batch-load model. |
+| `test_set_points_batch_load_from_mapping_replaces_state` | (a) | Batch-load replacement model. |
+| `test_set_points_mapping_branch_counts_rounding_collisions` | (a) | Rounding-collision accounting. |
+| `test_set_points_accepts_plain_dict_values` | (a) | Input normalization. |
+| `test_cursor_readout_formats_with_value` | (a) | Cursor text derivation; label today. |
+| `test_cursor_readout_default_before_any_motion` | (a) | Cursor empty-state derivation. |
+| `test_cursor_readout_out_of_bounds_shows_dashes` | (a) | Cursor bounds derivation. |
+| `test_theme_switch_survives_and_grid_intact` | (b) | Theme refresh and widget grab. |
+| `test_no_graphics_effect_on_figure_card_or_plot` | (b) | QWidget/pyqtgraph effect guard. |
+| `test_nan_value_does_not_skew_autoscale_levels` | (a) | Finite-range model. |
+| `test_write_csv_writes_expected_rows` | (a) | CSV export data contract. |
+| `test_write_csv_uses_currently_selected_quantity` | (a) | CSV selected-quantity contract. |
+| `test_write_png_writes_nonzero_file` | (b) | pyqtgraph PNG exporter + shown geometry. |
+| `test_write_csv_on_empty_view_writes_header_only` | (a) | CSV empty-state contract. |
+| `test_freeze_levels_keeps_colorbar_fixed_while_new_points_widen_range` | (b) | Toolbar toggle + ImageItem levels. |
+| `test_unfreeze_levels_resumes_live_autoscale` | (b) | Toolbar toggle + ImageItem levels. |
+| `test_unsampled_cells_stay_nan_in_displayed_image` | (b) | ImageItem displayed image. |
+| `test_unsampled_cells_render_transparent_not_vmin_color` | (b) | ImageItem render/qimage alpha. |
+| `test_colorbar_unit_bound_to_selected_quantity` | (b) | Histogram axis unit state. |
+| `test_viridis_colormap_applied` | (b) | pyqtgraph colormap object. |
+| `test_missing_and_duplicate_counts_surfaced` | (a) | Counts model; chips/subtitle are current view. |
+| `test_empty_view_shows_placeholder_page_with_toolbar_live` | (b) | Placeholder stack and toolbar visibility. |
+| `test_all_nan_grid_does_not_raise_and_levels_are_finite` | (b) | pyqtgraph all-NaN ImageView path. |
+| `test_freeze_toggled_before_any_data_captures_on_first_arrival` | (b) | Freeze toolbar + first ImageItem levels. |
+
+### `TCT_app/tests/test_scan_viewer_panel.py` totals
+
+Totals: `(a)=15`, `(b)=23`, `(c)=0`, `(d)=2` (40 tests).
+
+File-level blockers: private button/metric/card state; nested `ScanMapView` internals; pyqtgraph z-focus curve/marker; command signals for pause/abort/z-focus/open-analysis; theme `grab()`; source-lint tests. No direct controller reference, no start/stop callables passed in, and no QTest key/mouse interaction.
+
+| Test | Class | Blocking coupling |
+|---|---|---|
+| `test_construct_headless_no_hardware` | (b) | QWidget construction smoke. |
+| `test_initial_state_shows_empty_state_and_disabled_run_control` | (b) | Buttons/map/banner widget state. |
+| `test_map_toolbar_reachable_in_empty_state` | (b) | Nested map toolbar widgets. |
+| `test_scan_started_enables_run_control_and_arms_tiles` | (a) | Run-state derivation; buttons/metrics today. |
+| `test_first_progress_de_stales_the_progress_tile` | (a) | Progress VM property. |
+| `test_point_done_fills_map_and_updates_point_metric` | (a) | Run point/map VM state. |
+| `test_point_done_before_scan_started_still_swaps_to_map` | (b) | Stack/map visibility behavior. |
+| `test_progress_updates_progress_and_eta_and_elapsed_tiles` | (a) | Progress/ETA/elapsed derivation. |
+| `test_progress_before_any_elapsed_time_reports_eta_dashes` | (a) | ETA derivation. |
+| `test_scan_finished_disables_run_control_and_keeps_map` | (a) | Terminal run state; buttons/banner today. |
+| `test_abort_finish_shows_aborted_banner_variant` | (b) | Abort button click + banner variant. |
+| `test_new_run_clears_previous_map` | (a) | New-run reset state. |
+| `test_pause_toggle_emits_signal_only_while_enabled` | (b) | Pause button command signal. |
+| `test_abort_button_emits_abort_requested` | (b) | Abort button command signal. |
+| `test_abort_disabled_when_idle_rule` | (b) | Abort affordance enabled-state. |
+| `test_manual_pause_sets_warn_chip` | (a) | Manual-pause display state. |
+| `test_set_current_position_updates_point_tile` | (a) | Current-position display derivation. |
+| `test_z_focus_start_emits_config_and_resets_curve` | (b) | Find-focus button command signal. |
+| `test_z_focus_point_accumulates_curve_data` | (a) | Z-focus curve data model. |
+| `test_z_focus_done_sets_marker_and_label` | (b) | pyqtgraph marker + label. |
+| `test_apply_best_z_disabled_until_z_focus_done` | (b) | Apply button enabled-state. |
+| `test_apply_best_z_redisabled_on_new_z_focus_run` | (b) | Find-focus button + apply button state. |
+| `test_apply_best_z_click_emits_last_value` | (b) | Apply button command signal. |
+| `test_apply_best_z_noop_without_result` | (b) | Command no-op signal guard. |
+| `test_z_focus_mode_switch_toggles_edge_and_amp_frames` | (b) | Form frame visibility. |
+| `test_z_focus_card_collapsed_by_default_with_header_controls` | (b) | Expandable card/header controls. |
+| `test_z_focus_done_updates_header_chip` | (a) | Best-Z summary property. |
+| `test_open_in_analysis_disabled_until_path_and_finished` | (a) | Open-analysis eligibility state. |
+| `test_open_in_analysis_enables_immediately_if_path_set_after_finish` | (a) | Open-analysis eligibility state. |
+| `test_open_in_analysis_click_emits_path` | (b) | Open-analysis command signal. |
+| `test_new_run_invalidates_previous_run_path` | (a) | Run-path invalidation state. |
+| `test_zf_spin_suffixes_match_units` | (b) | Spinbox widget suffixes. |
+| `test_open_in_analysis_noop_without_path` | (b) | Command signal no-op guard. |
+| `test_full_simulated_run_sequence` | (a) | Integrated run-state VM sequence. |
+| `test_theme_switch_survives_with_data` | (b) | Theme refresh/grab + nested plot state. |
+| `test_theme_switch_before_any_data_does_not_raise` | (b) | Theme refresh smoke. |
+| `test_abort_uses_shared_danger_language` | (b) | Abort button style/state; not S2 wiring host. |
+| `test_no_graphics_effect_on_map_or_zfocus_plot` | (b) | Widget/plot effect guard. |
+| `test_scan_viewer_panel_source_has_zero_inline_hex` | (d) | Duplicates global inline-hex/style lint coverage. |
+| `test_scan_viewer_panel_never_calls_set_graphics_effect` | (d) | Duplicates source-level graphics-effect guard. |
+
+### `TCT_app/tests/test_sequencer_panel.py` totals
+
+Totals: `(a)=6`, `(b)=1`, `(c)=10`, `(d)=0` (17 tests).
+
+File-level blockers: `SequencerPanel(coord, ...)` directly holds `SequenceCoordinator`; tests drive `FakeScanCoordinator`, `StateMachine`, `SequenceCoordinator`, `park_safe` callable, `abort_sequence`, `TCTMainWindow` unbound methods, and in one case a real simulated `DeviceManager` + `ScanController`. Private table/button state and real panel child lookup also block direct VM porting. No QTest key/mouse interaction.
+
+| Test | Class | Blocking coupling |
+|---|---|---|
+| `test_panel_constructs_and_theme_switches` | (b) | QWidget/theme/envelope HTML smoke. |
+| `test_arm_text_contains_every_routine_hv_and_travel` | (a) | Envelope summary VM; latch HTML today. |
+| `test_queue_edit_rederives_envelope_no_stale` | (a) | Queue/envelope model state. |
+| `test_abort_button_calls_abort_sequence` | (c) | Abort command must stay live while sequence active. |
+| `test_rows_track_running_and_done_states` | (a) | Entry-state VM; table chips today. |
+| `test_rows_track_failed_and_skipped_states` | (a) | Entry-state VM; table chips today. |
+| `test_save_load_queue_round_trip` | (a) | Queue YAML model/persistence. |
+| `test_loader_error_surfaces_and_preserves_queue` | (a) | Loader failure state/notification; no widget needed. |
+| `test_on_sequence_active_locks_and_unlocks_manual_danger_panels` | (c) | `TCTMainWindow._on_sequence_active` manual danger lock law. |
+| `test_manual_danger_reenables_after_failure_path` | (c) | Sequence failure unlock law. |
+| `test_modal_shims_suppressed_while_active_and_restored` | (c) | Modal suppression while unattended sequence runs. |
+| `test_sequence_active_wired_in_build_central` | (c) | Composition-root safety wiring/source guard. |
+| `test_real_panels_surgical_lock_round_trip_via_coordinator_signal` | (c) | Real Bias/Motor STOP/OFF-live surgical-lock round trip. |
+| `test_manual_pause_during_sequence_no_dialog_notify_and_abort` | (c) | Manual-pause no-dialog + abort-sequence law. |
+| `test_manual_pause_during_sequence_missing_seq_coordinator_does_not_crash` | (c) | Manual-pause defensive no-dialog path. |
+| `test_non_sequence_manual_pause_still_shows_dialog_resume_and_abort` | (c) | Non-sequence manual-pause resume/abort behavior. |
+| `test_manual_pause_during_real_sequence_aborts_fail_safe_and_parks_hv` | (c) | Real simulated fail-safe HV park on manual pause during sequence. |
+
+Risk: classification is advisory and static except for running the current suites; it does not implement the U1 viewmodels or carve out the safety hosts.
