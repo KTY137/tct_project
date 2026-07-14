@@ -9,8 +9,8 @@ before every commit; stage explicit paths; never `-am`.
 
 ## HEAD / TRUTH
 
-- Local `design/cockpit-v5 @ 37cead3`. **NOT pushed, NOT merged.** Nothing
-  touched real hardware. The branch is Kaya's to review.
+- Local `design/cockpit-v5 @ 11ec433`. **NOT pushed, NOT merged, BENCH IS RED.**
+  Nothing touched real hardware. The branch is Kaya's to review.
 - **origin/main @ `a7dca3f` = THE TRUNK** (unchanged).
 - **Night briefing (open this first):**
   https://claude.ai/code/artifact/8dfa85d2-692f-4603-b69f-4087d31b9d9f
