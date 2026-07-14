@@ -5,11 +5,11 @@ context. A fresh session reads this file and is as informed as the old one.
 Updated on every dispatch and every landing. Run `.claude/beat_status.ps1`
 before every commit; stage explicit paths; never `-am`.
 
-**Updated: 2026-07-14 evening — THE GATE IS GREEN at `f7a1a3e` (2685 passed, 0 failed). The branch waits on Kaya: card-token veto, pilot PNGs, merge decision. Both interrupted beats from the morning landed and are committed.**
+**Updated: 2026-07-14, MERGED. `main @ 98a66b1` is the trunk (gate 2685 green at f7a1a3e; delta to merge head docs+tests only). design/cockpit-v5 is RETIRED — cut a fresh branch for the 12-panel wave. The wave handoff lives in the pilot commit `074943f`; bench gates run DETACHED only (schtasks + poller; bundle-sync with GIT_LFS_SKIP_SMUDGE=1).**
 
 ## HEAD / TRUTH
 
-- Local `design/cockpit-v5 @ c9615c1`. **NOT pushed, NOT merged — GATE GREEN, Kaya's call.**
+- **main @ `98a66b1` = THE TRUNK** (merged + pushed, Kaya's order).
   Nothing touched real hardware. The branch is Kaya's to review.
 - **origin/main @ `a7dca3f` = THE TRUNK** (unchanged).
 - **Night briefing (open this first):**
