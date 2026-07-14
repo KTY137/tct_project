@@ -52,6 +52,29 @@ refreshing it — HEAD was stale by 7 commits. Reconstructed from `git log`
 | **A11Y palette fix** — light mode fails AA systemically (sim/warn/crit/faint/good); white-on-crit fails in DARK too; `faint` on glass = 2.0:1; the laser SAFETY BANNER = 3.0:1; ribbon clips MOTION; jog icons bypass the token system | Noah (Opus) | `gui/style.py`, `gui/motor_panel.py`, `gui/laser_panel.py`, `tct_gui.py`, tests |
 | **MultiEffect spike** — is the shader ban earned? Can we blur BEHIND the window? Crash rate over N≥20 | Noah (Opus) | `scripts/spikes/qml_multieffect_glass_spike.py` (NEW) |
 
+## ⚠️ VERIFIED DEFECT — the elevation ladder does not exist (2026-07-14, Adam recomputed)
+
+Brokkr claimed it by hand (no execution tool); Adam verified computationally
+against the real `gui.style.palette()`. **Confirmed to the second decimal**, and
+the recomputation found MORE than he claimed — the two themes have **INVERTED
+ladders**:
+
+| | canvas → panel | panel → raised |
+|---|---|---|
+| **dark** | ΔL* **1.46** (invisible, 1.03:1) | ΔL* 9.68 |
+| **light** | ΔL* 7.11 | ΔL* **1.80** (invisible) |
+
+**Neither theme has a continuous three-tone ladder.** Each has exactly ONE
+visible step, and it is the OTHER one. So candidate C's "salvaged three-tone
+FLAT ladder" — the thing round 01 declared the best in the round — **does not
+exist in the code**. We would have built both round-02 candidates on it and
+wondered why the result looked flat.
+Brokkr's proposed fix (derived, not chosen): `card = _blend(raised, panel, 0.60)`
+→ `#151D2D` in dark (ΔL* 7.16, a match to light's 7.11), `= panel` in light.
+**Needs Kaya's nod: it partially reverses the v6 "cards recede toward the canvas"
+pass, ratified two days ago.**
+BLOCKED: `gui/style.py` is held by the a11y palette beat. Land after it.
+
 ## NEXT (Adam's queue)
 
 1. **3 lines at the composition root** for the sticky alarm chip
