@@ -259,6 +259,7 @@ class TCTMainWindow(QMainWindow):
         self._scanner = ScanController(self._devices, self._sm)
         self._bg_thread: QThread | None = None
         self._bg_task: _BgTask | None = None
+        self._bg_on_done = None
 
         # Aux windows (created lazily) + one-time wiring
         # (self._settings / self._theme_mode / load_theme_customization now run
@@ -1579,21 +1580,36 @@ class TCTMainWindow(QMainWindow):
             return False
         self._bg_task = _BgTask(fn)
         self._bg_thread = QThread(self)
+        self._bg_on_done = on_done
         self._bg_task.moveToThread(self._bg_thread)
         self._bg_thread.started.connect(self._bg_task.run)
-
-        def _finish(result, err):
-            thread = self._bg_thread
-            self._bg_thread = None
-            self._bg_task = None
-            if thread is not None:
-                thread.quit()
-                thread.wait(2000)
-            on_done(result, err)
-
-        self._bg_task.done.connect(_finish)
+        # Receiver MUST be a bound method of this GUI-thread QObject.  A bare
+        # closure has no receiver QObject, so PySide6 delivers ``done`` on the
+        # *worker* thread (the sender was moveToThread'd) — running widget
+        # access, panel rebuilds, state-machine transitions and a modal
+        # QMessageBox off the GUI thread (the intermittent crash + hard freeze;
+        # Paul's thread-id probe, 2026-07-14).  A bound method routes queued
+        # delivery to this window's (GUI) thread.
+        self._bg_task.done.connect(self._bg_finished, Qt.QueuedConnection)
         self._bg_thread.start()
         return True
+
+    def _bg_finished(self, result, err) -> None:
+        """Runs on the GUI thread (bound-method receiver + queued delivery).
+
+        The worker has already emitted ``done`` and is unwinding, so the GUI
+        thread quitting/waiting on it here can never deadlock (unlike the old
+        closure, where the worker waited on itself)."""
+        thread = self._bg_thread
+        on_done = self._bg_on_done
+        self._bg_thread = None
+        self._bg_task = None
+        self._bg_on_done = None
+        if thread is not None:
+            thread.quit()
+            thread.wait(2000)
+        if on_done is not None:
+            on_done(result, err)
 
     @Slot()
     def _connect_all(self) -> None:

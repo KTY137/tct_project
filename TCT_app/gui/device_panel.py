@@ -84,6 +84,7 @@ class DeviceManagerWindow(QMainWindow):
         self._last_errors: dict[str, str] = {}
         self._bg_thread: QThread | None = None
         self._bg_task: _DeviceTask | None = None
+        self._bg_on_done = None
         self._build_ui()
         # Same cockpit material + opacity + event-spine guard as every other
         # satellite window (theme editor, settings, torn-off panels) — through
@@ -297,22 +298,37 @@ class DeviceManagerWindow(QMainWindow):
         self._set_busy(True)
         self._bg_task = _DeviceTask(fn)
         self._bg_thread = QThread(self)
+        self._bg_on_done = on_done
         self._bg_task.moveToThread(self._bg_thread)
         self._bg_thread.started.connect(self._bg_task.run)
-
-        def _finish(result, err):
-            thread = self._bg_thread
-            self._bg_thread = None
-            self._bg_task = None
-            if thread is not None:
-                thread.quit()
-                thread.wait(2000)
-            self._set_busy(False)
-            on_done(result, err)
-
-        self._bg_task.done.connect(_finish)
+        # Receiver MUST be a bound method of this GUI-thread QObject.  A bare
+        # closure has no receiver QObject, so PySide6 delivers ``done`` on the
+        # *worker* thread (the sender was moveToThread'd) — running _set_busy,
+        # _refresh panel rebuilds and a modal QMessageBox off the GUI thread
+        # (the intermittent crash + hard freeze; Paul's thread-id probe,
+        # 2026-07-14).  A bound method routes queued delivery to this window's
+        # (GUI) thread.
+        self._bg_task.done.connect(self._bg_finished, Qt.QueuedConnection)
         self._bg_thread.start()
         return True
+
+    def _bg_finished(self, result, err) -> None:
+        """Runs on the GUI thread (bound-method receiver + queued delivery).
+
+        The worker has already emitted ``done`` and is unwinding, so quitting/
+        waiting on it here can never deadlock (unlike the old closure, where the
+        worker waited on itself)."""
+        thread = self._bg_thread
+        on_done = self._bg_on_done
+        self._bg_thread = None
+        self._bg_task = None
+        self._bg_on_done = None
+        if thread is not None:
+            thread.quit()
+            thread.wait(2000)
+        self._set_busy(False)
+        if on_done is not None:
+            on_done(result, err)
 
     def _set_busy(self, busy: bool) -> None:
         self._chip_busy.set_status("Working..." if busy else "Idle",
