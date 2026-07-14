@@ -316,9 +316,16 @@ architecture stands; revisit only at Qt 6.10+ LTS with a bench spike):
   binding deliverable: the **QML component-kit spec** (the panel_kit
   analogue: Card/ActionBar/SegmentedControl/EmptyState/StatusPill…,
   tokens via the existing Theme singleton, motion via native
-  Behavior/springs). Sits AFTER U1 (viewmodels first — data before
-  paint) and BEFORE U2 (the hero slice implements against the ratified
-  artifacts). QML's advantage: artifact≈implementation — springs and
+  Behavior/springs). **Scope addition (Kaya wish, 2026-07-14 night):
+  "living glass" — an animated ambient ground (liquid-flow motion
+  behind the panes), as a persisted user setting (off/subtle/full +
+  speed; honors reduced-motion; auto-calms while a scan is RUNNING —
+  Baldr distraction gate). GPU-shader path in the QML shell (legal:
+  ambient ground is not a hot-path island). Classic-shell backport only
+  if a measured spike clears the AmbientGround repaint budget (the
+  0fde84c stall class) — spike before architecture.** Sits AFTER U1
+  (viewmodels first — data before paint) and BEFORE U2 (the hero slice
+  implements against the ratified artifacts). QML's advantage: artifact≈implementation — springs and
   in-scene glass are the same technology class, so the v5-era
   translation loss largely disappears.
 - U2 ScanViewer hero slice (M; proves panel-VM-island pattern +

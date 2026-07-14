@@ -51,7 +51,85 @@ here on. Lesson: verify "missing file" claims with `ls`, not Glob alone.
 **🏁 THE WAVE IS COMPLETE — 12/12 landed. HEAD `90a3a23`.**
 Boundary machinery in flight (no code beats, no file locks):
 
-NONE — no code beats in flight, no file locks.
+**🟢 GATE #3 GREEN on `d073b32`: 2842 passed, 0 failed, 2 skipped,
+1 xfailed, 9:36.** The freeze family held against the full suite.
+
+**FREEZE FAMILY CLOSED (3/3):** `99b6f74` (O(1) structural bounds)
+landed; **Mary final pass: APPROVED_WITH_RIDERS** — value_count parity
+verified as TEXTUAL IDENTITY (same bytes computed, no float regime can
+diverge); the oversize-early-return behavior change SIGNED OFF as safe
+(independent HV arm gate at scan_controller.py:568; size error blocks
+start on every consumer path). Rider (queued, Kiroku writing
+TECH_DEBT): per-loop-tolerant structural bound (malformed-YAML shape
+only, not GUI-reachable) + oversize diagnostic-collapse hint + the
+option-c worker abort.
+
+**Roadmap artifact** built at
+`artifacts_claude/roadmap_status_20260714/roadmap_status.html`
+(incl. Kaya's "living glass" U1.5 scope addition, also written into
+ROADMAP_MASTERPLAN.md U1.5 per his ask). Artifact deploy service 503ing
+— page viewable from the repo file; retry publish later.
+
+**REMAINING before the branch is merge-ready:** Noah's theme-editor
+fix (below) → commit → **gate #4 on final HEAD** (the merge evidence)
+→ Kaya: merge + polish-freeze tag + laser-gate + SCENE decisions.
+
+1. **noah-theme-editor-glass-loss** (ui-ux-dev, Sonnet — LIVE KAYA BUG):
+   with Acrylic enabled, changing ANY other theme-editor setting kills
+   the glass. Prime suspect: non-material re-apply reads PERSISTED
+   backdrop (`none`) instead of live state. LOCKS: `gui/style.py`,
+   theme editor file, `tct_gui.py` (if needed), one theme test file.
+   Escalates to Opus if root cause is threading/lifecycle class.
+
+**KAYA LIVE FEEDBACK (2026-07-14 night):** he saw the QML preview's
+in-scene blur ("kit panel") and calls it "the most awesome" — the SCENE
+appetite is REAL now. Standing Loki verdict (+13pp/pane, 3 reversals,
+9-plot rewrite on a segfaulting API) explained to him; his call framed
+as a roadmap track needing a Brokkr/Loki round, with the cheap middle
+path = QML shell as chrome (SCENE legal there already). NO ratification
+yet — awaiting his word.
+
+**Mary on `d073b32`: APPROVED_WITH_RIDERS.** Item 1 resolved fully in
+Abel's favor — PlanLimits' docstring already caps total_leaf_visits and
+the pre-existing (e) gate already compared visits: "not even a change".
+Items 2/3/5 verified clean (only per-leaf iteration was the gated one;
+bounded-proof holds on every path incl. the ValueError path; spies are
+load-bearing). Item 4 = the pulled-forward beat above. Residual noted:
+no general "no sync unbounded walk in a click handler" invariant test.
+
+[LANDED `d073b32` validator walk bound (Abel, resumed instance):
+oversize = total_leaf_visits > max_points computed STRUCTURALLY before
+the walk (subsumes points gate + catches visits-explosion-with-points-
+under); trailing-MANUAL_PAUSE walk skipped on oversize; structural
+checks unconditional; remaining walk provably ≤ max_points. 3 new
+tests incl. walk-skip spy. 120 targeted green. Residual documented:
+ultra-wide single loop slows materialize itself pre-gate (primitive
+concern, separate beat).]
+
+[LANDED `44e17d4` estimate cap fix (Abel): estimated=False + None
+sentinels above ESTIMATE_MAX_LEAF_VISITS=1M (structural gate, instant);
+render shows "—" + warning, never fake 0 s; core traversal untouched.
+99 + 68 targeted green. **Mary: APPROVED_WITH_RIDERS — "the bench-gate
+red is genuinely dissolved."** Consumer audit CLEAN (only planner_panel
+formats the cost fields, both paths guarded).]
+[LANDED `0e247d8` her riders: residual DOCUMENTED on the constant
+(Adam's ruling: ceiling stays 1M — lowering would deny estimates to
+validator-legal plans; option-c cooperative walk abort = the queued
+real mitigation) · constant pinned ≤1M by test · PlanEstimate
+__post_init__ invariant (estimated ⟺ runtime not None). 100 green.]
+
+**DIAGNOSIS (Abel, CONFIRMED, repro timed):** estimate walk is
+O(Π loop-counts), NO cap; 342k visits/s ⇒ monkey's 21⁶ plan ≈250 s ≫
+90 s timeout; stuck worker in C-level generator loop never services
+quit() ⇒ wait(3000) times out ⇒ QThread destroyed while running =
+the 0xC0000005. scan_plan.py + plan_estimate.py have EMPTY diffs vs
+merge-base — pre-existing bug, wave only changed the monkey's dice.
+
+**🔴 GATE RESULT (f48f281): RED — EXITCODE 0xC0000005** after 675s at
+~91% (everything before the monkey was green dots). Log copied to
+%TEMP%\gate_out.txt locally. NOT a wave regression by current evidence
+(see diagnosis beat above) — but the gate stays red until fixed;
+NO merge. Fix beat after Abel's diagnosis → Mary (concurrency class).
 
 **RIDER BEAT LANDED `b900a80`** (Noah + Adam): census widened to
 QListWidget/QListView WITH a QComboBox-popup exemption (the blanket rule
