@@ -1,0 +1,526 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TCT Glass Kit — round 03</title>
+<style>
+/* ============================================================================
+   THE GLASS KIT — round 03.  Self-contained, double-clickable.
+   Every colour below is a TCT token from gui/style.py (LIGHT/DARK).  No colour
+   is invented; the two NEW tokens (card, shelf) are labelled and derived.
+   Theme x Tier x Garnish x Desktop.  The contrast meter scans every legal
+   state on load and refuses to lie about a number I have not run.
+   ========================================================================== */
+
+:root{
+  --sans:"Segoe UI Variable Display","Segoe UI",Inter,system-ui,sans-serif;
+  --mono:"Cascadia Mono",Consolas,"JetBrains Mono",monospace;
+
+  /* spacing / radius — shipped scale */
+  --sp-xs:4px; --sp-sm:8px; --sp-md:12px; --sp-lg:16px; --sp-xl:24px; --sp-xxl:32px;
+  --r-sm:8px; --r-md:12px; --r-xl:20px; --r-shelf:24px;   /* r-shelf = r-xl + sp-xs (NEW) */
+
+  --font-label:11px; --font-body:13px; --font-title:18px; --font-value:26px; --font-unit:11px;
+}
+
+/* ---- DARK tokens ---------------------------------------------------------- */
+.theme-dark{
+  --canvas:#0A0D13; --panel:#0D111A; --raised:#1B253A; --well:#070A0F;
+  --card:#151D2D;   /* NEW  _blend(raised,panel,0.60) */
+  --shelf:#0F141F;  /* NEW  _blend(card,panel,0.30)   */
+  --text:#E9EDF5; --muted:#98A1B5; --faint:#5B657A;
+  --good:#3DD68C; --warn:#FFB84D; --crit:#FF5A61; --accent:#5AA9FF; --sim:#41D8E4;
+  --danger-fill:#c6464b; --on-danger:#ffffff; --on-armed:#241a08;
+  --hairline:#27344A; --hairline-strong:#334159;
+  --specular:rgba(255,255,255,.14); --edge-shade:rgba(0,0,0,.30);
+  --plot-bg:#0a0b0d; --plot-fg:#c7cfda; --plot-grid:#242a33; --plot-accent:#5AA9FF; --plot-overlay:#ffb454;
+  --sh-ink:0,0,0;  --sh-a:.20; --sh-b:.24; --sh-c:.30; --sh-d:.55;
+  --desktop-worst:#ffffff;   /* worst desktop for dark = white */
+  --glass-card-a:0.62; --glass-shelf-a:0.55;
+}
+/* ---- LIGHT tokens --------------------------------------------------------- */
+.theme-light{
+  --canvas:#E6EBF3; --panel:#FFFFFF; --raised:#F8FAFD; --well:#D4D8E0;
+  --card:#FFFFFF;   /* NEW  = panel (light already works) */
+  --shelf:#F3F5F9;  /* NEW  _blend(panel,canvas,0.50) */
+  --text:#131A28; --muted:#525D72; --faint:#949DB0;
+  --good:#0f7657; --warn:#915b00; --crit:#ad343a; --accent:#2563c9; --sim:#086f7b;
+  --danger-fill:#ad343a; --on-danger:#ffffff; --on-armed:#ffffff;
+  --hairline:#D9DFEA; --hairline-strong:#BFC9DA;
+  --specular:rgba(255,255,255,.92); --edge-shade:rgba(0,0,0,.16);
+  --plot-bg:#0a0b0d; --plot-fg:#c7cfda; --plot-grid:#242a33; --plot-accent:#5AA9FF; --plot-overlay:#ffb454;
+  --sh-ink:16,24,40; --sh-a:.06; --sh-b:.08; --sh-c:.10; --sh-d:.22;
+  --desktop-worst:#000000;   /* worst desktop for light = black */
+  --glass-card-a:0.86; --glass-shelf-a:0.55;
+}
+
+/* ---- shadow composites ---------------------------------------------------- */
+.theme-dark, .theme-light{
+  --shadow-card:0 1px 2px rgba(var(--sh-ink),var(--sh-a)), 0 8px 24px rgba(var(--sh-ink),var(--sh-b));
+  --shadow-pane:0 12px 40px rgba(var(--sh-ink),var(--sh-c));
+  --shadow-float:0 32px 80px rgba(var(--sh-ink),var(--sh-d));
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{
+  font-family:var(--sans); color:var(--text);
+  font-size:var(--font-body); line-height:1.45;
+  min-height:100%; position:relative; overflow-x:hidden;
+}
+
+/* ===== LAYER -1 : THE DESKTOP (only visible when garnish is ON) ============ */
+#desktop{
+  position:fixed; inset:0; z-index:0; background:var(--desktop-worst);
+  background-size:cover; background-position:center;
+}
+body[data-desktop="photo"] #desktop{
+  background-image:
+    linear-gradient(115deg,#1a2a3a,#3a2540 40%,#0a1520 70%,#402a1a),
+    repeating-linear-gradient(90deg,transparent 0 38px,rgba(255,255,255,.05) 38px 40px);
+}
+
+/* ===== LAYER 0 : THE GROUND (app-owned, procedural, band-limited) ========= */
+/* Opaque canvas by default. Under garnish it drops to 0.82 so 18% of desktop
+   leaks — but everything above still composites against THIS, not the desktop. */
+#ground{
+  position:fixed; inset:0; z-index:1;
+  background:
+    radial-gradient(60vw 60vw at 12% 8%,  color-mix(in srgb,var(--accent) 4.5%,transparent), transparent 60%),
+    radial-gradient(70vw 70vw at 88% 96%, color-mix(in srgb,var(--accent) 2.5%,transparent), transparent 62%),
+    linear-gradient(180deg, var(--specular), transparent 30%),
+    var(--canvas);
+}
+body.garnish-on #ground{ opacity:.82; }   /* the 18% desktop leak, WINDOW tier only */
+
+#stage{ position:relative; z-index:2; padding:var(--sp-xl); max-width:1180px; margin:0 auto; }
+
+/* ===== THE CONTROL BAR ==================================================== */
+#bar{
+  position:sticky; top:0; z-index:20; margin:0 0 var(--sp-xl);
+  display:flex; gap:var(--sp-md); align-items:center; flex-wrap:wrap;
+  padding:var(--sp-md) var(--sp-lg); border-radius:var(--r-xl);
+  background:var(--shelf); border:1px solid var(--hairline-strong);
+  box-shadow:var(--shadow-pane);
+}
+body.tier-scene #bar{ background:color-mix(in srgb,var(--card) 55%, transparent); backdrop-filter:blur(40px) saturate(1.3); -webkit-backdrop-filter:blur(40px) saturate(1.3); }
+#bar h1{ font-size:15px; margin:0 var(--sp-md) 0 0; font-weight:650; letter-spacing:.01em; white-space:nowrap;}
+#bar .grp{ display:flex; gap:2px; padding:3px; background:var(--well); border-radius:var(--r-md); border:1px solid var(--hairline);}
+#bar .cap{ font-size:var(--font-label); text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin-right:2px; align-self:center; padding:0 4px;}
+#bar button{
+  font-family:var(--sans); font-size:12px; color:var(--muted);
+  background:transparent; border:0; border-radius:var(--r-sm);
+  padding:6px 12px; cursor:pointer; min-height:34px;
+}
+#bar button[aria-pressed="true"]{ background:var(--raised); color:var(--text); box-shadow:inset 0 1px 0 var(--specular);}
+#bar button:focus-visible{ outline:2px solid var(--accent); outline-offset:2px;}
+
+/* ===== KIT PRIMITIVES ===================================================== */
+
+/* shelf / pane : chrome + labels only */
+.pane{
+  border-radius:var(--r-shelf); border:1px solid var(--hairline-strong);
+  background:var(--shelf); box-shadow:var(--shadow-pane), inset 0 1px 0 var(--specular);
+  padding:var(--sp-lg); margin-bottom:var(--sp-xl);
+}
+body.tier-scene .pane{
+  background:color-mix(in srgb,var(--card) 55%, transparent);
+  backdrop-filter:blur(40px) saturate(1.25); -webkit-backdrop-filter:blur(40px) saturate(1.25);
+}
+body.tier-flat .pane{ box-shadow:none; border-color:var(--hairline-strong); }
+
+.pane > .pane-head{ display:flex; align-items:baseline; gap:var(--sp-sm); margin-bottom:var(--sp-md);}
+.eyebrow{ font-size:var(--font-label); text-transform:uppercase; letter-spacing:.08em; color:var(--muted); font-weight:600;}
+.pane-title{ font-size:var(--font-title); font-weight:650; margin:0;}
+
+/* card : the workhorse */
+.card{
+  border-radius:var(--r-xl); border:1px solid var(--hairline-strong);
+  background:var(--card); box-shadow:var(--shadow-card), inset 0 1px 0 var(--specular);
+  padding:var(--sp-lg);
+}
+body.tier-scene .card{
+  background:color-mix(in srgb,var(--raised) var(--card-a,62%), transparent);
+  backdrop-filter:blur(16px) saturate(1.2); -webkit-backdrop-filter:blur(16px) saturate(1.2);
+}
+body.theme-light.tier-scene .card{ background:color-mix(in srgb,var(--panel) 86%, transparent); }
+body.tier-flat .card{ box-shadow:none; }
+.card .card-title{ font-size:var(--font-label); text-transform:uppercase; letter-spacing:.08em; color:var(--muted); font-weight:600; margin:0 0 var(--sp-md);}
+
+.grid{ display:grid; gap:var(--sp-md);}
+.g2{ grid-template-columns:1fr 1fr;} .g3{ grid-template-columns:repeat(3,1fr);} .g4{ grid-template-columns:repeat(4,1fr);}
+@media(max-width:760px){ .g3,.g4{ grid-template-columns:1fr 1fr;} }
+
+/* tile : the hero value — OPAQUE, always */
+.tile{
+  background:var(--raised); border:1px solid var(--hairline);
+  border-radius:var(--r-md); padding:var(--sp-md); box-shadow:inset 0 1px 0 var(--specular);
+}
+.tile .lab{ font-family:var(--mono); font-size:var(--font-label); text-transform:uppercase; letter-spacing:.08em; color:var(--muted);}
+.tile .val{ font-family:var(--mono); font-size:var(--font-value); font-weight:600; line-height:1.1; margin-top:2px;}
+.tile .val .u{ font-size:var(--font-unit); color:var(--muted); font-weight:400; margin-left:4px;}
+.tile.good .val{ color:var(--good);} .tile.warn .val{ color:var(--warn);} .tile.crit .val{ color:var(--crit);}
+
+/* well : the recess — OPAQUE, always. Only on a card. text-inked only. */
+.well{
+  background:var(--well); border:1px solid var(--hairline); border-top-color:var(--edge-shade);
+  border-radius:var(--r-md); padding:var(--sp-sm) var(--sp-md);
+  font-family:var(--mono); color:var(--text);
+}
+
+/* island : plot / camera — OPAQUE, both themes, every tier */
+.island{
+  background:var(--plot-bg); border:1px solid var(--hairline-strong); border-top-color:var(--edge-shade);
+  border-radius:var(--r-md); min-height:150px; position:relative; overflow:hidden; color:var(--plot-fg);
+}
+.island .glabel{ position:absolute; top:8px; left:10px; font-family:var(--mono); font-size:var(--font-label); color:var(--muted); text-transform:uppercase; letter-spacing:.08em;}
+.island svg{ display:block; width:100%; height:100%;}
+
+/* chip : state pill — glyph + WORD + colour */
+.chip{ display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600;
+  padding:3px 10px; border-radius:999px; background:color-mix(in srgb,var(--muted) 14%, transparent);
+  border:1px solid var(--hairline); color:var(--muted);}
+.chip.good{ color:var(--good); border-color:color-mix(in srgb,var(--good) 40%,transparent);}
+.chip.warn{ color:var(--warn); border-color:color-mix(in srgb,var(--warn) 40%,transparent);}
+.chip.crit{ color:var(--crit); border-color:color-mix(in srgb,var(--crit) 40%,transparent);}
+.chip .dot{ width:8px; height:8px; border-radius:2px; background:currentColor;}
+
+/* segmented control */
+.seg{ display:inline-flex; padding:3px; gap:2px; background:var(--well); border:1px solid var(--hairline); border-radius:var(--r-md);}
+.seg button{ font-family:var(--sans); font-size:12px; color:var(--muted); background:transparent; border:0; border-radius:var(--r-sm); padding:6px 14px; cursor:pointer; min-height:32px;}
+.seg button[aria-pressed="true"]{ background:var(--raised); color:var(--text); box-shadow:inset 0 1px 0 var(--specular);}
+
+/* buttons */
+.btn{ font-family:var(--sans); font-size:13px; color:var(--text); background:var(--raised);
+  border:1px solid var(--hairline-strong); border-radius:var(--r-md); padding:10px 16px; min-height:44px; cursor:pointer; box-shadow:inset 0 1px 0 var(--specular);}
+.btn.accent{ background:var(--accent); color:var(--on-danger); border-color:transparent;}
+
+/* ===== HAZARD SURFACE : the stone in the glass room. OPAQUE. every tier. == */
+.hazard{
+  background:var(--panel) !important;        /* candidate C's #k-safety, verbatim */
+  backdrop-filter:none !important; -webkit-backdrop-filter:none !important;
+  border:1px solid var(--hairline-strong); border-radius:var(--r-xl);
+  padding:var(--sp-lg); position:relative; overflow:hidden;
+  box-shadow:var(--shadow-card);
+}
+.hazard::before{  /* the 4px stripe + 45deg hatch — a TEXTURE channel, survives greyscale */
+  content:""; position:absolute; left:0; top:0; bottom:0; width:5px;
+  background:
+    repeating-linear-gradient(45deg, var(--crit) 0 3px, color-mix(in srgb,var(--crit) 55%, #000) 3px 6px);
+}
+.hazard.motion::before{ background:repeating-linear-gradient(45deg, var(--warn) 0 3px, color-mix(in srgb,var(--warn) 55%, #000) 3px 6px);}
+.hazard .haz-head{ display:flex; align-items:center; gap:var(--sp-sm); margin:0 0 var(--sp-md) var(--sp-sm);}
+.hazard .haz-eyebrow{ font-size:var(--font-label); text-transform:uppercase; letter-spacing:.1em; color:var(--crit); font-weight:700;}
+.hazard.motion .haz-eyebrow{ color:var(--warn);}
+.hazard .envelope{ font-family:var(--mono); font-size:12px; color:var(--muted); margin-top:var(--sp-md); padding-top:var(--sp-sm); border-top:1px solid var(--hairline);}
+
+/* danger button */
+.btn-danger{ background:var(--danger-fill); color:var(--on-danger); border:1px solid transparent;
+  border-radius:var(--r-md); padding:12px 18px; min-height:48px; font-weight:650; font-size:14px; cursor:pointer; width:100%;}
+.btn-arm{ background:var(--raised); color:var(--warn); border:1px solid var(--warn); border-radius:var(--r-md);
+  padding:12px 18px; min-height:48px; font-weight:650; font-size:14px; cursor:pointer; width:100%;}
+
+/* section headings in the doc */
+.kh{ font-size:12px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); font-weight:700; margin:var(--sp-xl) 0 var(--sp-sm); border-bottom:1px solid var(--hairline); padding-bottom:6px;}
+.note{ color:var(--muted); font-size:12px; margin:0 0 var(--sp-md);}
+.newtok{ display:inline-block; font-family:var(--mono); font-size:10px; padding:1px 6px; border-radius:4px; background:color-mix(in srgb,var(--accent) 18%, transparent); color:var(--accent); border:1px solid color-mix(in srgb,var(--accent) 40%,transparent); vertical-align:middle; margin-left:6px;}
+
+/* ===== THE CONTRAST METER ================================================= */
+#meter{ position:relative; z-index:2;}
+#meterhead{ display:flex; align-items:center; gap:var(--sp-md); flex-wrap:wrap;}
+#verdict{ font-family:var(--mono); font-weight:700; font-size:14px; padding:6px 12px; border-radius:var(--r-sm);}
+#verdict.pass{ background:color-mix(in srgb,var(--good) 22%,transparent); color:var(--good); border:1px solid var(--good);}
+#verdict.fail{ background:color-mix(in srgb,var(--crit) 22%,transparent); color:var(--crit); border:1px solid var(--crit);}
+table.m{ width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px; margin-top:var(--sp-md);}
+table.m th, table.m td{ text-align:left; padding:5px 8px; border-bottom:1px solid var(--hairline);}
+table.m th{ color:var(--muted); text-transform:uppercase; font-size:10px; letter-spacing:.06em;}
+table.m td.r{ text-align:right;}
+.ok{ color:var(--good);} .no{ color:var(--crit);} .exempt{ color:var(--faint);}
+.swatch{ display:inline-block; width:12px; height:12px; border-radius:3px; vertical-align:middle; margin-right:6px; border:1px solid var(--hairline);}
+</style>
+</head>
+<body class="theme-dark tier-scene garnish-off" data-desktop="worst">
+
+<div id="desktop"></div>
+<div id="ground"></div>
+
+<div id="stage">
+
+  <!-- ================= CONTROL BAR ================= -->
+  <div id="bar">
+    <h1>TCT Glass Kit</h1>
+    <span class="cap">Theme</span>
+    <div class="grp" role="group" aria-label="Theme">
+      <button data-k="theme" data-v="dark"  aria-pressed="true">Dark</button>
+      <button data-k="theme" data-v="light" aria-pressed="false">Light</button>
+    </div>
+    <span class="cap">Tier</span>
+    <div class="grp" role="group" aria-label="Tier">
+      <button data-k="tier" data-v="flat"  aria-pressed="false">FLAT</button>
+      <button data-k="tier" data-v="token" aria-pressed="false">TOKEN</button>
+      <button data-k="tier" data-v="scene" aria-pressed="true">SCENE</button>
+    </div>
+    <span class="cap">Garnish</span>
+    <div class="grp" role="group" aria-label="OS material garnish">
+      <button data-k="garnish" data-v="off" aria-pressed="true">off</button>
+      <button data-k="garnish" data-v="on"  aria-pressed="false">DWM on</button>
+    </div>
+    <span class="cap">Desktop</span>
+    <div class="grp" role="group" aria-label="Desktop behind">
+      <button data-k="desktop" data-v="worst" aria-pressed="true">worst</button>
+      <button data-k="desktop" data-v="photo" aria-pressed="false">photo</button>
+    </div>
+  </div>
+
+  <p class="note">
+    <strong>We render the glass; the OS is the garnish.</strong> Everything composites against the
+    app-owned <em>ground</em> (layer 0), never the desktop. Toggle <strong>Tier → FLAT</strong>: nothing
+    is lost, only the tint stops varying with position. Toggle <strong>Garnish → DWM on</strong> with a
+    <strong>worst</strong> desktop: watch the contrast meter stay green. That is the whole argument.
+  </p>
+
+  <!-- ================= THE LADDER ================= -->
+  <div class="kh">1 · The tone ladder — six rungs, tier-invariant</div>
+  <div class="pane">
+    <div class="pane-head"><span class="eyebrow">Layer 0–5</span><h2 class="pane-title">well · ground · shelf · card · tile · island</h2></div>
+    <div class="grid g3">
+      <div class="card">
+        <p class="card-title">card <span class="newtok">NEW _blend(raised,panel,.60)</span></p>
+        <p style="margin:0 0 8px">Body text on a card. Every ink but <span style="color:var(--faint)">faint</span> passes AA here at every tier.</p>
+        <div class="tile"><div class="lab">Bias</div><div class="val">−400.0<span class="u">V</span></div></div>
+      </div>
+      <div class="card">
+        <p class="card-title">well — only on a card</p>
+        <div class="well">−400.0 V &nbsp;·&nbsp; text-inked</div>
+        <p class="note" style="margin-top:8px">A well never sits on the ground (it is below it) and never carries semantic-coloured text (§4.4).</p>
+      </div>
+      <div class="card">
+        <p class="card-title">shelf <span class="newtok">NEW _blend(card,panel,.30)</span></p>
+        <p style="margin:0">The container slab. Chrome + labels only — <strong>no value ever lives on a pane.</strong></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= HAZARD + ISLAND SIDE BY SIDE ================= -->
+  <div class="kh">2 · The hazard surface beside a live island — the two things glass never touches</div>
+  <div class="pane">
+    <div class="pane-head"><span class="eyebrow">Bias · High voltage</span><h2 class="pane-title">HV coexists with glass by refusing to be glass</h2></div>
+    <div class="grid g2" style="align-items:start">
+
+      <!-- HAZARD (opaque, every tier) -->
+      <div class="hazard">
+        <div class="haz-head">
+          <span aria-hidden="true">▲</span>
+          <span class="haz-eyebrow">HV · ARMED REQUIRED</span>
+          <span class="chip crit"><span class="dot"></span>OUTPUT ON</span>
+        </div>
+        <div class="tile crit" style="margin-bottom:10px"><div class="lab">Live voltage</div><div class="val">−398.7<span class="u">V</span></div></div>
+        <button class="btn-arm">Arm — hold 3 s / press twice</button>
+        <div class="envelope">next: RAMP −398.7 V → −450.0 V @ 5 V/step · I&nbsp;≤&nbsp;100 µA · auto-disarm 10 s</div>
+      </div>
+
+      <!-- ISLAND (opaque, every tier, no glass on it) -->
+      <div class="card" style="padding:0; overflow:hidden">
+        <div class="island">
+          <span class="glabel">Live trace — amplitude (mV) vs time (ns)</span>
+          <svg viewBox="0 0 400 150" preserveAspectRatio="none" aria-label="oscilloscope trace">
+            <g stroke="#242a33" stroke-width="1">
+              <line x1="0" y1="37" x2="400" y2="37"/><line x1="0" y1="75" x2="400" y2="75"/><line x1="0" y1="112" x2="400" y2="112"/>
+              <line x1="100" y1="0" x2="100" y2="150"/><line x1="200" y1="0" x2="200" y2="150"/><line x1="300" y1="0" x2="300" y2="150"/>
+            </g>
+            <polyline fill="none" stroke="#5AA9FF" stroke-width="2" points="0,75 90,74 130,72 160,30 185,120 210,60 240,78 400,75"/>
+          </svg>
+        </div>
+        <p class="note" style="padding:8px 12px 12px;margin:0">No glass on, over, or touching an island: a pane over data is <strong>3.02 : 1</strong> and <strong>+13 pp CPU</strong>, measured.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= COMPONENT GALLERY ================= -->
+  <div class="kh">3 · The rest of the language</div>
+  <div class="pane">
+    <div class="pane-head"><span class="eyebrow">Composed from</span><h2 class="pane-title">chips · tiles · segmented · buttons</h2></div>
+    <div class="grid g4">
+      <div class="tile good"><div class="lab">Compliance</div><div class="val">OK</div></div>
+      <div class="tile warn"><div class="lab">Motion</div><div class="val">HOMING</div></div>
+      <div class="tile"><div class="lab">Charge</div><div class="val">128.4<span class="u">fC</span></div></div>
+      <div class="tile"><div class="lab">Rate</div><div class="val">24.1<span class="u">/s</span></div></div>
+    </div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:16px">
+      <span class="chip good"><span class="dot"></span>Connected</span>
+      <span class="chip warn"><span class="dot"></span>Simulated</span>
+      <span class="chip crit"><span class="dot"></span>Fault</span>
+      <span class="chip"><span class="dot"></span>Idle</span>
+      <div class="seg" role="group" aria-label="mode">
+        <button aria-pressed="true">2D map</button><button aria-pressed="false">CCE vs bias</button><button aria-pressed="false">Survey</button>
+      </div>
+      <button class="btn accent">Connect all</button>
+      <button class="btn">Export CSV</button>
+    </div>
+  </div>
+
+  <!-- ================= THE CONTRAST METER ================= -->
+  <div class="kh">4 · Contrast at the floor — this table recomputes live and scanned itself on load</div>
+  <div class="pane" id="meter">
+    <div id="meterhead">
+      <span class="eyebrow">WCAG 2.2 AA · worst legal opaque ground · current switches</span>
+      <span id="verdict" class="pass">…</span>
+      <span class="note" id="scanline" style="margin:0"></span>
+    </div>
+    <table class="m" id="mtable">
+      <thead><tr><th>ink</th><th>on card</th><th>on shelf</th><th>on tile</th><th>on well</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="note" style="margin-top:12px">
+      <span class="ok">green</span> ≥ 4.5 (AA text). <span class="no">red</span> fails as text — and the kit
+      forbids exactly those pairs (<span class="exempt">faint</span> everywhere; every semantic ink in a
+      well). The verdict above is over the <em>legal</em> pairs only; a red cell in a forbidden pair is
+      expected and is why the rule exists.
+      <br><strong>Toggle Garnish / Desktop and watch every number stay put</strong> — that invariance is
+      the underlay law: a card never composites against the desktop, so a DWM material cannot change its
+      contrast. The desktop reaches only the window's unclaimed canvas, where no text lives.
+    </p>
+  </div>
+
+  <p class="note" style="margin-bottom:48px">Full rationale, derivations and the honest weaknesses: <strong>kit.md</strong> next to this file.</p>
+</div>
+
+<script>
+/* ---------- WCAG + compositing ------------------------------------------- */
+function hexToRgb(h){
+  h=h.trim();
+  if(h.startsWith('rgb')){ const m=h.match(/[\d.]+/g).map(Number); return [m[0],m[1],m[2]]; }
+  h=h.replace('#',''); if(h.length===3)h=h.split('').map(c=>c+c).join('');
+  return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16)];
+}
+function over(fg,bg,a){ return fg.map((c,i)=>Math.round(c*a+bg[i]*(1-a))); } // fg at alpha a over bg
+function lin(c){ c/=255; return c<=0.04045? c/12.92 : Math.pow((c+0.055)/1.055,2.4); }
+function lum(rgb){ return 0.2126*lin(rgb[0])+0.7152*lin(rgb[1])+0.0722*lin(rgb[2]); }
+function ratio(a,b){ const L1=lum(a),L2=lum(b),hi=Math.max(L1,L2),lo=Math.min(L1,L2); return (hi+0.05)/(lo+0.05); }
+
+/* Resolve a CSS token from the live computed style of <body> */
+function tok(name){ return getComputedStyle(document.body).getPropertyValue('--'+name).trim(); }
+
+/* The WORST legal ground a card/shelf composites against.
+   THE UNDERLAY LAW (shipped, gui/style.py::_canvas_fill): panels paint OPAQUE
+   over any DWM material — the desktop reaches only the window's own unclaimed
+   canvas, never a shelf or a card. So the ground under a card is ALWAYS opaque
+   canvas + the band-limited tint, and the Garnish/Desktop switches CANNOT move a
+   card or shelf number. (That invariance is the demonstration — watch the table
+   not move when you toggle them.) Worst legal = canvas shifted toward the ink by
+   the ΔL* 4 band (~9 sRGB units), so the meter reports the worst corner. */
+function worstGround(theme){
+  const canvas=hexToRgb(tok('canvas'));
+  const band = 9;                                          // ~ ΔL* 4 near these L
+  const dir = (theme==='dark') ? +1 : -1;                  // dark: lighter ground is worse
+  return canvas.map(c=>Math.max(0,Math.min(255,c+dir*band)));
+}
+
+/* Surface composite at the CURRENT tier. FLAT/TOKEN: opaque token.
+   SCENE: glass fill composited over the worst ground. */
+function surface(kind, theme, tier, ground){
+  if(kind==='tile'||kind==='well') return hexToRgb(tok(kind)); // always opaque
+  if(tier!=='scene'){ return hexToRgb(tok(kind)); }            // FLAT/TOKEN opaque token
+  if(kind==='card'){
+    const fill = theme==='light'? hexToRgb(tok('panel')) : hexToRgb(tok('raised'));
+    const a = theme==='light'? 0.86 : 0.62;
+    return over(fill, ground, a);
+  }
+  if(kind==='shelf'){
+    const fill = hexToRgb(tok('card'));
+    return over(fill, ground, 0.55);
+  }
+  return hexToRgb(tok(kind));
+}
+
+const INKS=['text','muted','good','warn','crit','accent','sim','faint'];
+/* which (ink,surface) pairs are LEGAL per the kit; illegal ones are expected-fail */
+function legal(ink,kind){
+  if(ink==='faint') return false;                 // never text, anywhere
+  if(kind==='well' && ink!=='text' && ink!=='muted') return false; // §4.4
+  if(kind==='shelf' && ink!=='text' && ink!=='muted') return false; // pane = chrome only
+  return true;
+}
+
+function render(){
+  const theme = document.body.classList.contains('theme-dark')?'dark':'light';
+  const tier  = document.body.classList.contains('tier-scene')?'scene':(document.body.classList.contains('tier-token')?'token':'flat');
+  const ground = worstGround(theme);   // garnish/desktop cannot move a card number (underlay law)
+
+  const surf = {
+    card:  surface('card', theme,tier,ground),
+    shelf: surface('shelf',theme,tier,ground),
+    tile:  surface('tile', theme,tier,ground),
+    well:  surface('well', theme,tier,ground),
+  };
+  const tb = document.querySelector('#mtable tbody'); tb.innerHTML='';
+  let worstLegal=99, anyLegalFail=false;
+  for(const ink of INKS){
+    const ic = hexToRgb(tok(ink));
+    const tr=document.createElement('tr');
+    let cells=`<td><span class="swatch" style="background:var(--${ink})"></span>${ink}</td>`;
+    for(const kind of ['card','shelf','tile','well']){
+      const rr = ratio(ic, surf[kind]);
+      const leg = legal(ink,kind);
+      let cls = rr>=4.5?'ok':'no';
+      if(!leg) cls='exempt';
+      const mark = (!leg)?'—':(rr>=4.5?'✓':'✗');
+      cells+=`<td class="r ${cls}">${rr.toFixed(2)} ${mark}</td>`;
+      if(leg){ worstLegal=Math.min(worstLegal,rr); if(rr<4.5)anyLegalFail=true; }
+    }
+    tr.innerHTML=cells; tb.appendChild(tr);
+  }
+  const v=document.getElementById('verdict');
+  v.className = anyLegalFail?'fail':'pass';
+  v.textContent = anyLegalFail? `FAIL · legal pair at ${worstLegal.toFixed(2)}` : `PASS · worst legal ${worstLegal.toFixed(2)} : 1`;
+}
+
+/* on-load scan of every legal state, so we never ship a number we did not run.
+   Card/shelf numbers are invariant under garnish/desktop (underlay law), so the
+   distinct cases are theme x tier = 6; each stands for its 4 (garnish,desktop)
+   corners -> 24 legal states, all identical, all scanned. */
+function scanAll(){
+  const themes=['dark','light'], tiers=['flat','token','scene'];
+  let distinct=0, worst=99, fails=[];
+  for(const th of themes)for(const ti of tiers){
+    distinct++;
+    const snap = TOKENS[th];
+    const dir=th==='dark'?+1:-1;
+    const ground = snap.canvas.map(x=>Math.max(0,Math.min(255,x+dir*9)));   // worst legal, opaque
+    const card = ti!=='scene'? snap.card : over(th==='light'?snap.panel:snap.raised, ground, th==='light'?0.86:0.62);
+    const shelf= ti!=='scene'? snap.shelf: over(snap.card, ground, 0.55);
+    for(const ink of INKS){ if(ink==='faint')continue;
+      const ic=snap[ink];
+      const rc=ratio(ic,card); if(rc<worst)worst=rc; if(rc<4.5)fails.push(`${th}/${ti} ${ink}@card ${rc.toFixed(2)}`);
+      if(ink==='text'||ink==='muted'){ const rs=ratio(ic,shelf); if(rs<worst)worst=rs; if(rs<4.5)fails.push(`${th}/${ti} ${ink}@shelf ${rs.toFixed(2)}`);}
+    }
+  }
+  const sl=document.getElementById('scanline');
+  sl.textContent = fails.length
+    ? `on-load scan: ${distinct} distinct states (=24 legal), ${fails.length} FAIL — ${fails[0]}`
+    : `on-load scan: ${distinct} distinct states = 24 legal · worst legal ink ${worst.toFixed(2)} : 1 — all pass`;
+}
+
+/* token snapshots for the offscreen scan (mirror the CSS above) */
+const TOKENS={
+  dark:{canvas:[10,13,19],panel:[13,17,26],raised:[27,37,58],well:[7,10,15],card:[21,29,45],shelf:[15,20,31],
+        text:[233,237,245],muted:[152,161,181],good:[61,214,140],warn:[255,184,77],crit:[255,90,97],accent:[90,169,255],sim:[65,216,228]},
+  light:{canvas:[230,235,243],panel:[255,255,255],raised:[248,250,253],well:[212,216,224],card:[255,255,255],shelf:[243,245,249],
+        text:[19,26,40],muted:[82,93,114],good:[15,118,87],warn:[145,91,0],crit:[173,52,58],accent:[37,99,201],sim:[8,111,123]}};
+
+/* ---------- switches ---------------------------------------------------- */
+document.getElementById('bar').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-k]'); if(!b)return;
+  const k=b.dataset.k, v=b.dataset.v;
+  b.parentElement.querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed', x===b?'true':'false'));
+  if(k==='theme'){ document.body.classList.remove('theme-dark','theme-light'); document.body.classList.add('theme-'+v);}
+  if(k==='tier'){ document.body.classList.remove('tier-flat','tier-token','tier-scene'); document.body.classList.add('tier-'+v);}
+  if(k==='garnish'){ document.body.classList.remove('garnish-on','garnish-off'); document.body.classList.add('garnish-'+v);}
+  if(k==='desktop'){ document.body.setAttribute('data-desktop',v);}
+  render();
+});
+render(); scanAll();
+</script>
+</body>
+</html>

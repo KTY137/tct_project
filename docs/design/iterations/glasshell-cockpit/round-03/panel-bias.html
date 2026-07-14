@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TCT Bias panel — glass around a stone</title>
+<style>
+:root{
+  --sans:"Segoe UI Variable Display","Segoe UI",Inter,system-ui,sans-serif;
+  --mono:"Cascadia Mono",Consolas,"JetBrains Mono",monospace;
+  --sp-xs:4px;--sp-sm:8px;--sp-md:12px;--sp-lg:16px;--sp-xl:24px;
+  --r-sm:8px;--r-md:12px;--r-xl:20px;--r-shelf:24px;
+}
+.theme-dark{--canvas:#0A0D13;--panel:#0D111A;--raised:#1B253A;--well:#070A0F;--card:#151D2D;--shelf:#0F141F;
+  --text:#E9EDF5;--muted:#98A1B5;--faint:#5B657A;--good:#3DD68C;--warn:#FFB84D;--crit:#FF5A61;--accent:#5AA9FF;--sim:#41D8E4;
+  --danger-fill:#c6464b;--on-danger:#fff;--on-armed:#241a08;--hairline:#27344A;--hairline-strong:#334159;
+  --specular:rgba(255,255,255,.14);--edge-shade:rgba(0,0,0,.30);--sh-ink:0,0,0;--sh-a:.20;--sh-b:.24;--sh-c:.30;--desktop-worst:#fff;}
+.theme-light{--canvas:#E6EBF3;--panel:#FFFFFF;--raised:#F8FAFD;--well:#D4D8E0;--card:#FFFFFF;--shelf:#F3F5F9;
+  --text:#131A28;--muted:#525D72;--faint:#949DB0;--good:#0f7657;--warn:#915b00;--crit:#ad343a;--accent:#2563c9;--sim:#086f7b;
+  --danger-fill:#ad343a;--on-danger:#fff;--on-armed:#fff;--hairline:#D9DFEA;--hairline-strong:#BFC9DA;
+  --specular:rgba(255,255,255,.92);--edge-shade:rgba(0,0,0,.16);--sh-ink:16,24,40;--sh-a:.06;--sh-b:.08;--sh-c:.10;--desktop-worst:#000;}
+.theme-dark,.theme-light{--shadow-card:0 1px 2px rgba(var(--sh-ink),var(--sh-a)),0 8px 24px rgba(var(--sh-ink),var(--sh-b));--shadow-pane:0 12px 40px rgba(var(--sh-ink),var(--sh-c));}
+*{box-sizing:border-box}html,body{margin:0;height:100%}
+body{font-family:var(--sans);color:var(--text);font-size:13px;line-height:1.45;position:relative;overflow-x:hidden;min-height:100%}
+#desktop{position:fixed;inset:0;z-index:0;background:var(--desktop-worst)}
+body[data-desktop="photo"] #desktop{background:linear-gradient(115deg,#1a2a3a,#3a2540 40%,#0a1520 70%,#402a1a)}
+#ground{position:fixed;inset:0;z-index:1;background:
+  radial-gradient(60vw 60vw at 12% 8%,color-mix(in srgb,var(--accent) 4.5%,transparent),transparent 60%),
+  radial-gradient(70vw 70vw at 88% 96%,color-mix(in srgb,var(--accent) 2.5%,transparent),transparent 62%),
+  linear-gradient(180deg,var(--specular),transparent 30%),var(--canvas);}
+body.garnish-on #ground{opacity:.82}
+#stage{position:relative;z-index:2;padding:var(--sp-xl);max-width:900px;margin:0 auto}
+/* bar */
+#bar{position:sticky;top:0;z-index:20;margin-bottom:var(--sp-xl);display:flex;gap:var(--sp-md);align-items:center;flex-wrap:wrap;
+  padding:var(--sp-md) var(--sp-lg);border-radius:var(--r-xl);background:var(--shelf);border:1px solid var(--hairline-strong);box-shadow:var(--shadow-pane)}
+body.tier-scene #bar{background:color-mix(in srgb,var(--card) 55%,transparent);backdrop-filter:blur(40px) saturate(1.3);-webkit-backdrop-filter:blur(40px) saturate(1.3)}
+#bar h1{font-size:15px;margin:0 8px 0 0;font-weight:650}
+#bar .grp{display:flex;gap:2px;padding:3px;background:var(--well);border-radius:var(--r-md);border:1px solid var(--hairline)}
+#bar .cap{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);align-self:center;padding:0 4px}
+#bar button{font-family:var(--sans);font-size:12px;color:var(--muted);background:transparent;border:0;border-radius:var(--r-sm);padding:6px 12px;cursor:pointer;min-height:34px}
+#bar button[aria-pressed="true"]{background:var(--raised);color:var(--text);box-shadow:inset 0 1px 0 var(--specular)}
+#bar button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+/* pane */
+.pane{border-radius:var(--r-shelf);border:1px solid var(--hairline-strong);background:var(--shelf);box-shadow:var(--shadow-pane),inset 0 1px 0 var(--specular);padding:var(--sp-lg)}
+body.tier-scene .pane{background:color-mix(in srgb,var(--card) 55%,transparent);backdrop-filter:blur(40px) saturate(1.25);-webkit-backdrop-filter:blur(40px) saturate(1.25)}
+body.tier-flat .pane{box-shadow:none}
+.pane-head{display:flex;align-items:center;gap:var(--sp-sm);margin-bottom:var(--sp-lg);flex-wrap:wrap}
+.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.ptitle{font-size:18px;font-weight:650;margin:0}
+/* card */
+.card{border-radius:var(--r-xl);border:1px solid var(--hairline-strong);background:var(--card);box-shadow:var(--shadow-card),inset 0 1px 0 var(--specular);padding:var(--sp-lg);margin-bottom:var(--sp-md)}
+body.tier-scene .card{background:color-mix(in srgb,var(--raised) 62%,transparent);backdrop-filter:blur(16px) saturate(1.2);-webkit-backdrop-filter:blur(16px) saturate(1.2)}
+body.theme-light.tier-scene .card{background:color-mix(in srgb,var(--panel) 86%,transparent)}
+body.tier-flat .card{box-shadow:none}
+.ctitle{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;margin:0 0 var(--sp-md)}
+/* tile */
+.tile{background:var(--raised);border:1px solid var(--hairline);border-radius:var(--r-md);padding:var(--sp-md);box-shadow:inset 0 1px 0 var(--specular)}
+.tile .lab{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.tile .val{font-family:var(--mono);font-size:26px;font-weight:600;line-height:1.1;margin-top:2px}
+.tile .val .u{font-size:11px;color:var(--muted);font-weight:400;margin-left:4px}
+.tile.crit .val{color:var(--crit)}.tile.good .val{color:var(--good)}
+/* well / form */
+.frow{display:grid;grid-template-columns:130px 1fr;align-items:center;gap:var(--sp-md);margin-bottom:var(--sp-sm)}
+.frow label{color:var(--muted);font-size:12px}
+.well{background:var(--well);border:1px solid var(--hairline);border-top-color:var(--edge-shade);border-radius:var(--r-md);padding:9px 12px;font-family:var(--mono);color:var(--text);display:flex;justify-content:space-between}
+.well .step{color:var(--muted)}
+/* chip */
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;background:color-mix(in srgb,var(--muted) 14%,transparent);border:1px solid var(--hairline);color:var(--muted)}
+.chip.good{color:var(--good);border-color:color-mix(in srgb,var(--good) 40%,transparent)}
+.chip.crit{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 40%,transparent)}
+.chip .dot{width:8px;height:8px;border-radius:2px;background:currentColor}
+/* buttons */
+.actbar{display:flex;gap:var(--sp-md);margin-top:var(--sp-md)}
+.btn{flex:1;font-family:var(--sans);font-size:13px;color:var(--text);background:var(--raised);border:1px solid var(--hairline-strong);border-radius:var(--r-md);padding:12px 16px;min-height:48px;cursor:pointer;box-shadow:inset 0 1px 0 var(--specular)}
+.btn.kill{color:var(--muted)} /* idle: neutral outline, "nothing to kill" */
+.btn.kill.live{background:var(--danger-fill);color:var(--on-danger);border-color:transparent} /* HV live */
+/* HAZARD SURFACE — opaque, every tier */
+.hazard{background:var(--panel)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+  border:1px solid var(--hairline-strong);border-radius:var(--r-xl);padding:var(--sp-lg);position:relative;overflow:hidden;box-shadow:var(--shadow-card);margin-bottom:var(--sp-md)}
+.hazard::before{content:"";position:absolute;left:0;top:0;bottom:0;width:6px;background:repeating-linear-gradient(45deg,var(--crit) 0 3px,color-mix(in srgb,var(--crit) 55%,#000) 3px 6px)}
+.hazard .hh{display:flex;align-items:center;gap:var(--sp-sm);margin:0 0 var(--sp-md) var(--sp-sm);flex-wrap:wrap}
+.hazard .heb{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--crit);font-weight:700}
+.hazard .env{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:var(--sp-md);padding-top:var(--sp-sm);border-top:1px solid var(--hairline)}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:var(--sp-md)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:var(--sp-md)}
+@media(max-width:640px){.grid3,.grid2{grid-template-columns:1fr}}
+.btn-arm{width:100%;background:var(--raised);color:var(--warn);border:1px solid var(--warn);border-radius:var(--r-md);padding:12px;min-height:48px;font-weight:650;font-size:14px;cursor:pointer;box-shadow:inset 0 1px 0 var(--specular)}
+.note{color:var(--muted);font-size:12px}
+.legend{position:relative;z-index:2;max-width:900px;margin:16px auto 48px;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body class="theme-dark tier-scene garnish-off" data-desktop="worst">
+<div id="desktop"></div><div id="ground"></div>
+<div id="stage">
+  <div id="bar">
+    <h1>Bias panel</h1>
+    <span class="cap">Theme</span><div class="grp"><button data-k="theme" data-v="dark" aria-pressed="true">Dark</button><button data-k="theme" data-v="light" aria-pressed="false">Light</button></div>
+    <span class="cap">Tier</span><div class="grp"><button data-k="tier" data-v="flat" aria-pressed="false">FLAT</button><button data-k="tier" data-v="token" aria-pressed="false">TOKEN</button><button data-k="tier" data-v="scene" aria-pressed="true">SCENE</button></div>
+    <span class="cap">Garnish</span><div class="grp"><button data-k="garnish" data-v="off" aria-pressed="true">off</button><button data-k="garnish" data-v="on" aria-pressed="false">DWM on</button></div>
+    <span class="cap">Desktop</span><div class="grp"><button data-k="desktop" data-v="worst" aria-pressed="true">worst</button><button data-k="desktop" data-v="photo" aria-pressed="false">photo</button></div>
+    <span class="cap">HV</span><div class="grp"><button data-k="hv" data-v="off" aria-pressed="true">off</button><button data-k="hv" data-v="live" aria-pressed="false">LIVE</button></div>
+  </div>
+
+  <div class="pane">
+    <div class="pane-head">
+      <span class="eyebrow">TCT CONTROL · HIGH VOLTAGE</span>
+      <h2 class="ptitle">Bias supply — CH0</h2>
+      <span style="flex:1"></span>
+      <span class="chip good"><span class="dot"></span>Connected</span>
+    </div>
+
+    <!-- HERO TRIO = the HAZARD SURFACE (opaque, every tier) -->
+    <div class="hazard" id="haz">
+      <div class="hh">
+        <span aria-hidden="true">▲</span>
+        <span class="heb">HIGH VOLTAGE</span>
+        <span class="chip crit" id="hvchip"><span class="dot"></span><span id="hvword">OUTPUT OFF</span></span>
+      </div>
+      <div class="grid3">
+        <div class="tile" id="tv"><div class="lab">Voltage · measured &nbsp;(set −450.0 V)</div><div class="val" id="vval">0.0<span class="u">V</span></div></div>
+        <div class="tile"><div class="lab">Current &nbsp;(≤ 100 µA)</div><div class="val" id="ival">0.0<span class="u">µA</span></div></div>
+        <div class="tile" id="ts"><div class="lab">HV state</div><div class="val" id="sval" style="font-size:20px">■ OFF</div></div>
+      </div>
+      <button class="btn-arm">Arm — hold 3 s / press twice</button>
+      <div class="env" id="env">next: RAMP 0.0 V → −450.0 V @ 5 V/step · I ≤ 100 µA · auto-disarm 10 s</div>
+    </div>
+
+    <div class="grid2">
+      <!-- compliance card -->
+      <div class="card">
+        <p class="ctitle">Compliance (current limit)</p>
+        <div class="frow"><label>Compliance</label><div class="well"><span>100.000 µA</span><span class="step">▲▼</span></div></div>
+        <div class="frow"><label>Limit state</label><span class="chip"><span class="dot"></span>Limit ok</span></div>
+        <div class="actbar"><button class="btn">✓ Apply compliance</button></div>
+      </div>
+      <!-- polarity card -->
+      <div class="card">
+        <p class="ctitle">Polarity</p>
+        <div class="frow"><label>Current polarity</label><span style="font-weight:700;font-size:16px">NEGATIVE</span></div>
+        <p class="note">Reverse HV polarity throws a relay. Output must be OFF and discharged. Shown only when the supply reports the channel reversible; gated by the same Arm → Execute ceremony.</p>
+      </div>
+    </div>
+
+    <!-- voltage control card -->
+    <div class="card">
+      <p class="ctitle">Bias voltage</p>
+      <div class="grid3">
+        <div class="frow" style="grid-template-columns:1fr;gap:4px"><label>Target voltage</label><div class="well"><span>−450.0 V</span><span class="step">▲▼</span></div></div>
+        <div class="frow" style="grid-template-columns:1fr;gap:4px"><label>Ramp step</label><div class="well"><span>5.0 V/step</span><span class="step">▲▼</span></div></div>
+        <div class="frow" style="grid-template-columns:1fr;gap:4px"><label>Step delay</label><div class="well"><span>0.10 s</span><span class="step">▲▼</span></div></div>
+      </div>
+      <div class="actbar">
+        <button class="btn">▶ Ramp to voltage</button>
+        <button class="btn kill" id="kill">⏻ ■ Output OFF (0 V)</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <p class="ctitle">▸ Standalone sweeps (advanced) — IV curve · CCE vs bias</p>
+      <p class="note" style="margin:0">Collapsed by default; plots build lazily on first expand. Inside: opaque wells for every input, an island for each sweep plot. No glass on the plots.</p>
+    </div>
+  </div>
+</div>
+<p class="legend"><strong>The proof:</strong> switch to <strong>FLAT</strong> — the HV surface does not change one pixel. Switch <strong>HV → LIVE</strong> — the kill switch becomes the opaque <code>danger_fill</code> body (4.80:1 label), the hero voltage goes crit-inked, the state word changes. The room is glass; the danger is a stone.</p>
+<script>
+function set(k,v){
+  const map={theme:['theme-dark','theme-light'],tier:['tier-flat','tier-token','tier-scene'],garnish:['garnish-on','garnish-off']};
+  if(k==='desktop'){document.body.setAttribute('data-desktop',v);return;}
+  if(k==='hv'){hv(v);return;}
+  document.body.classList.remove(...map[k]);
+  document.body.classList.add(k==='theme'?'theme-'+v:(k==='tier'?'tier-'+v:'garnish-'+v));
+}
+function hv(v){
+  const live=v==='live';
+  document.getElementById('kill').classList.toggle('live',live);
+  document.getElementById('vval').innerHTML = live?'−398.7<span class="u">V</span>':'0.0<span class="u">V</span>';
+  document.getElementById('ival').innerHTML = live?'12.4<span class="u">µA</span>':'0.0<span class="u">µA</span>';
+  document.getElementById('tv').classList.toggle('crit',live);
+  document.getElementById('sval').textContent = live?'▲ LIVE':'■ OFF';
+  document.getElementById('sval').style.color = live?'var(--crit)':'';
+  document.getElementById('hvword').textContent = live?'OUTPUT ON':'OUTPUT OFF';
+}
+document.getElementById('bar').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-k]');if(!b)return;
+  b.parentElement.querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b?'true':'false'));
+  set(b.dataset.k,b.dataset.v);
+});
+</script>
+</body>
+</html>

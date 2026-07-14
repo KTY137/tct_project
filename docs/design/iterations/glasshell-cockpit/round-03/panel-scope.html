@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TCT Scope panel — glass beside an island</title>
+<style>
+:root{--sans:"Segoe UI Variable Display","Segoe UI",Inter,system-ui,sans-serif;--mono:"Cascadia Mono",Consolas,monospace;
+  --sp-sm:8px;--sp-md:12px;--sp-lg:16px;--sp-xl:24px;--r-sm:8px;--r-md:12px;--r-xl:20px;--r-shelf:24px;}
+.theme-dark{--canvas:#0A0D13;--panel:#0D111A;--raised:#1B253A;--well:#070A0F;--card:#151D2D;--shelf:#0F141F;
+  --text:#E9EDF5;--muted:#98A1B5;--faint:#5B657A;--good:#3DD68C;--warn:#FFB84D;--crit:#FF5A61;--accent:#5AA9FF;--sim:#41D8E4;
+  --hairline:#27344A;--hairline-strong:#334159;--specular:rgba(255,255,255,.14);--edge-shade:rgba(0,0,0,.30);
+  --plot-bg:#0a0b0d;--plot-fg:#c7cfda;--plot-grid:#242a33;--sh-ink:0,0,0;--sh-a:.20;--sh-b:.24;--sh-c:.30;--desktop-worst:#fff;--refc:#E8A33D;--dutc:#36B7C9;}
+.theme-light{--canvas:#E6EBF3;--panel:#FFFFFF;--raised:#F8FAFD;--well:#D4D8E0;--card:#FFFFFF;--shelf:#F3F5F9;
+  --text:#131A28;--muted:#525D72;--faint:#949DB0;--good:#0f7657;--warn:#915b00;--crit:#ad343a;--accent:#2563c9;--sim:#086f7b;
+  --hairline:#D9DFEA;--hairline-strong:#BFC9DA;--specular:rgba(255,255,255,.92);--edge-shade:rgba(0,0,0,.16);
+  --plot-bg:#0a0b0d;--plot-fg:#c7cfda;--plot-grid:#242a33;--sh-ink:16,24,40;--sh-a:.06;--sh-b:.08;--sh-c:.10;--desktop-worst:#000;--refc:#C67F14;--dutc:#1690A2;}
+.theme-dark,.theme-light{--shadow-card:0 1px 2px rgba(var(--sh-ink),var(--sh-a)),0 8px 24px rgba(var(--sh-ink),var(--sh-b));--shadow-pane:0 12px 40px rgba(var(--sh-ink),var(--sh-c));}
+*{box-sizing:border-box}html,body{margin:0;height:100%}
+body{font-family:var(--sans);color:var(--text);font-size:13px;line-height:1.4;position:relative;overflow-x:hidden;min-height:100%}
+#desktop{position:fixed;inset:0;z-index:0;background:var(--desktop-worst)}
+body[data-desktop="photo"] #desktop{background:linear-gradient(115deg,#1a2a3a,#3a2540 40%,#0a1520 70%,#402a1a)}
+#ground{position:fixed;inset:0;z-index:1;background:radial-gradient(60vw 60vw at 12% 8%,color-mix(in srgb,var(--accent) 4.5%,transparent),transparent 60%),radial-gradient(70vw 70vw at 88% 96%,color-mix(in srgb,var(--accent) 2.5%,transparent),transparent 62%),linear-gradient(180deg,var(--specular),transparent 30%),var(--canvas)}
+body.garnish-on #ground{opacity:.82}
+#stage{position:relative;z-index:2;padding:var(--sp-xl);max-width:1100px;margin:0 auto}
+#bar{position:sticky;top:0;z-index:20;margin-bottom:var(--sp-xl);display:flex;gap:var(--sp-md);align-items:center;flex-wrap:wrap;padding:var(--sp-md) var(--sp-lg);border-radius:var(--r-xl);background:var(--shelf);border:1px solid var(--hairline-strong);box-shadow:var(--shadow-pane)}
+body.tier-scene #bar{background:color-mix(in srgb,var(--card) 55%,transparent);backdrop-filter:blur(40px) saturate(1.3);-webkit-backdrop-filter:blur(40px) saturate(1.3)}
+#bar h1{font-size:15px;margin:0 8px 0 0;font-weight:650}
+#bar .grp{display:flex;gap:2px;padding:3px;background:var(--well);border-radius:var(--r-md);border:1px solid var(--hairline)}
+#bar .cap{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);align-self:center;padding:0 4px}
+#bar button{font-family:var(--sans);font-size:12px;color:var(--muted);background:transparent;border:0;border-radius:var(--r-sm);padding:6px 12px;cursor:pointer;min-height:34px}
+#bar button[aria-pressed="true"]{background:var(--raised);color:var(--text);box-shadow:inset 0 1px 0 var(--specular)}
+#bar button[disabled]{opacity:.5;cursor:not-allowed;text-decoration:line-through}
+#bar button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.pane{border-radius:var(--r-shelf);border:1px solid var(--hairline-strong);background:var(--shelf);box-shadow:var(--shadow-pane),inset 0 1px 0 var(--specular);padding:var(--sp-lg)}
+body.tier-scene .pane{background:color-mix(in srgb,var(--card) 55%,transparent);backdrop-filter:blur(40px) saturate(1.25);-webkit-backdrop-filter:blur(40px) saturate(1.25)}
+body.tier-flat .pane{box-shadow:none}
+.pane-head{display:flex;align-items:center;gap:var(--sp-sm);margin-bottom:var(--sp-lg);flex-wrap:wrap}
+.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.ptitle{font-size:18px;font-weight:650;margin:0}
+.split{display:grid;grid-template-columns:1.7fr 1fr;gap:var(--sp-md)} /* the GUTTER is the grid gap */
+@media(max-width:820px){.split{grid-template-columns:1fr}}
+/* ISLAND — opaque, every tier */
+.island{background:var(--plot-bg);border:1px solid var(--hairline-strong);border-top-color:var(--edge-shade);border-radius:var(--r-md);position:relative;overflow:hidden;color:var(--plot-fg);min-height:340px}
+.island .glabel{position:absolute;top:8px;left:12px;font-family:var(--mono);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+.island .axl{position:absolute;left:12px;bottom:8px;font-family:var(--mono);font-size:10px;color:var(--muted)}
+.island svg{display:block;width:100%;height:340px}
+.rail{display:flex;flex-direction:column;gap:var(--sp-md)}
+.card{border-radius:var(--r-xl);border:1px solid var(--hairline-strong);background:var(--card);box-shadow:var(--shadow-card),inset 0 1px 0 var(--specular);padding:var(--sp-md)}
+body.tier-scene .card{background:color-mix(in srgb,var(--raised) 62%,transparent);backdrop-filter:blur(16px) saturate(1.2);-webkit-backdrop-filter:blur(16px) saturate(1.2)}
+body.theme-light.tier-scene .card{background:color-mix(in srgb,var(--panel) 86%,transparent)}
+body.tier-flat .card{box-shadow:none}
+.chcard{position:relative;padding-left:calc(var(--sp-md) + 6px)}
+.chcard::before{content:"";position:absolute;left:0;top:8px;bottom:8px;width:4px;border-radius:2px;background:var(--rail,var(--accent))}
+.chcard.ref{--rail:var(--refc)}.chcard.dut{--rail:var(--dutc)}
+.ctitle{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;margin:0 0 8px;display:flex;justify-content:space-between;align-items:center}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:6px;vertical-align:middle}
+.seg{display:inline-flex;padding:3px;gap:2px;background:var(--well);border:1px solid var(--hairline);border-radius:var(--r-md)}
+.seg button{font-family:var(--sans);font-size:11px;color:var(--muted);background:transparent;border:0;border-radius:var(--r-sm);padding:5px 10px;cursor:pointer;min-height:30px}
+.seg button[aria-pressed="true"]{background:var(--raised);color:var(--text);box-shadow:inset 0 1px 0 var(--specular)}
+.well{background:var(--well);border:1px solid var(--hairline);border-top-color:var(--edge-shade);border-radius:var(--r-md);padding:8px 10px;font-family:var(--mono);color:var(--text);margin-top:8px}
+.mrow{display:flex;justify-content:space-between;padding:3px 2px;font-family:var(--mono);font-size:12px;border-bottom:1px solid var(--hairline)}
+.mrow .k{color:var(--muted)}
+.actbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:var(--sp-md)}
+.btn{font-family:var(--sans);font-size:12px;color:var(--text);background:var(--raised);border:1px solid var(--hairline-strong);border-radius:var(--r-md);padding:9px 14px;min-height:40px;cursor:pointer;box-shadow:inset 0 1px 0 var(--specular)}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;background:color-mix(in srgb,var(--muted) 14%,transparent);border:1px solid var(--hairline);color:var(--muted)}
+.legend{position:relative;z-index:2;max-width:1100px;margin:16px auto 48px;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body class="theme-dark tier-scene garnish-off" data-desktop="worst">
+<div id="desktop"></div><div id="ground"></div>
+<div id="stage">
+  <div id="bar">
+    <h1>Scope</h1>
+    <span class="cap">Theme</span><div class="grp"><button data-k="theme" data-v="dark" aria-pressed="true">Dark</button><button data-k="theme" data-v="light" aria-pressed="false">Light</button></div>
+    <span class="cap">Tier</span><div class="grp"><button data-k="tier" data-v="flat" aria-pressed="false">FLAT</button><button data-k="tier" data-v="token" aria-pressed="false">TOKEN</button><button data-k="tier" data-v="scene" aria-pressed="true">SCENE</button></div>
+    <span class="cap">Garnish</span><div class="grp"><button data-k="garnish" data-v="off" aria-pressed="true">off</button><button data-k="garnish" data-v="on" aria-pressed="false">DWM on</button></div>
+    <span class="cap">Desktop</span><div class="grp"><button data-k="desktop" data-v="worst" aria-pressed="true">worst</button><button data-k="desktop" data-v="photo" aria-pressed="false">photo</button></div>
+    <div class="grp"><button disabled title="Forbidden: a pane over the trace measures 3.02:1 and costs +13pp CPU while a beam is on.">glass the trace</button></div>
+  </div>
+
+  <div class="pane">
+    <div class="pane-head"><span class="eyebrow">TCT CONTROL · INSTRUMENT</span><h2 class="ptitle">Oscilloscope</h2><span style="flex:1"></span><span class="chip"><span class="dot" style="background:var(--muted)"></span>2 / 2 channels</span></div>
+    <div class="split">
+      <!-- THE ISLAND -->
+      <div class="island">
+        <span class="glabel">Live trace — amplitude (mV) vs time (ns)</span>
+        <svg viewBox="0 0 600 340" preserveAspectRatio="none">
+          <g stroke="#242a33" stroke-width="1">
+            <line x1="0" y1="85" x2="600" y2="85"/><line x1="0" y1="170" x2="600" y2="170"/><line x1="0" y1="255" x2="600" y2="255"/>
+            <line x1="150" y1="0" x2="150" y2="340"/><line x1="300" y1="0" x2="300" y2="340"/><line x1="450" y1="0" x2="450" y2="340"/>
+          </g>
+          <polyline fill="none" stroke="#E8A33D" stroke-width="1.5" opacity=".8" points="0,172 200,170 260,168 300,120 340,240 380,150 430,175 600,171"/>
+          <polyline fill="none" stroke="#36B7C9" stroke-width="2" points="0,170 190,169 250,166 300,60 350,270 400,140 450,178 600,170"/>
+        </svg>
+        <span class="axl">TRIG: CH1 ↓ 1 V &nbsp;·&nbsp; opaque PLOT_BG, every tier — never glass</span>
+      </div>
+      <!-- THE GLASS RAIL (beside, never over) -->
+      <div class="rail">
+        <div class="card chcard ref">
+          <p class="ctitle"><span><span class="dot" style="background:var(--refc)"></span>CH1</span><span style="color:var(--refc)">REFERENCE</span></p>
+          <div class="seg"><button aria-pressed="true">Reference</button><button aria-pressed="false">DUT</button></div>
+          <div class="well">live: −2.1 mV</div>
+        </div>
+        <div class="card chcard dut">
+          <p class="ctitle"><span><span class="dot" style="background:var(--dutc)"></span>CH2</span><span style="color:var(--dutc)">DUT</span></p>
+          <div class="seg"><button aria-pressed="false">Reference</button><button aria-pressed="true">DUT</button></div>
+          <div class="well">live: 128.4 mV</div>
+        </div>
+        <div class="card">
+          <p class="ctitle">DUT analysis</p>
+          <div class="seg"><button aria-pressed="true">Amplitude</button><button aria-pressed="false">Charge</button><button aria-pressed="false">Timing</button></div>
+          <div style="margin-top:8px">
+            <div class="mrow"><span class="k">Amplitude</span><span>128.4 mV</span></div>
+            <div class="mrow"><span class="k">Charge</span><span>+142.7 fC</span></div>
+            <div class="mrow"><span class="k">Rise time</span><span>1.83 ns</span></div>
+            <div class="mrow" style="border:0"><span class="k">Baseline RMS</span><span>0.42 mV</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="actbar">
+      <button class="btn">◉ Single</button><button class="btn">▶ Live</button><button class="btn">Avg off</button>
+      <button class="btn">Cursor off</button><button class="btn">⤓ Export CSV</button><button class="btn">Test</button>
+    </div>
+  </div>
+</div>
+<p class="legend"><strong>The proof:</strong> the trace is an opaque instrument screen in a lit frame. The disabled <strong>"glass the trace"</strong> switch is the law made visible. Switch FLAT ↔ SCENE — the island never changes; only the rail's glass does. A 12 px gutter (the grid gap) is the measured moat.</p>
+<script>
+document.getElementById('bar').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-k]');if(!b)return;
+  b.parentElement.querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b?'true':'false'));
+  const k=b.dataset.k,v=b.dataset.v;const map={theme:['theme-dark','theme-light'],tier:['tier-flat','tier-token','tier-scene'],garnish:['garnish-on','garnish-off']};
+  if(k==='desktop'){document.body.setAttribute('data-desktop',v);return;}
+  document.body.classList.remove(...map[k]);document.body.classList.add(k==='theme'?'theme-'+v:(k==='tier'?'tier-'+v:'garnish-'+v));
+});
+</script>
+</body>
+</html>
