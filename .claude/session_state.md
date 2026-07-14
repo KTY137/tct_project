@@ -13,90 +13,80 @@ refreshing it — HEAD was stale by 7 commits. Reconstructed from `git log`
 
 ## HEAD / TRUTH
 
-- Local `design/cockpit-v5 @ 081da40` (G-B1 event spine).
-- The night's landed chain (all on design/cockpit-v5):
-  `76c2370` QML shell = default · `2525285` GLASS SYNTHESIS + 11-doc council
-  · `7df2537` panel glass rollout · `b7f88a3` 3D GL stage view dropped
-  (RTT-free classic) · `586bf41` doc-drift sweep · `11a93f7` Linux
-  compositor research · `353072f` GL-island spike (MEASURED) · `081da40`
-  G-B1 event spine.
-- **origin/main @ `a7dca3f` = THE TRUNK** (unchanged tonight).
-- Nothing pushed tonight yet. Not yet re-benched (see gates below).
+- Local `design/cockpit-v5 @ 8299381`. NOT pushed, NOT benched yet.
+- **The night's chain (2026-07-14):** `58df585` Odin crew ported (Brokkr/Loki/
+  Baldr, adapted; Nordlys landmine defused) + path-D doc drift killed ·
+  `b702a85` Brokkr round-01 (3 candidates, openable HTML) · `801f2ab` **G-B2a
+  the glass contract** (GlassTier FLAT<TOKEN<WINDOW<SCENE<COMPOSED, pure
+  decide_tier, 6912-env matrix, 149 tests) · `636ce78` **G-B1b — the reason
+  Kaya never saw glass** (the QSS was never rebuilt on a live backdrop change;
+  windows were born without an alpha surface) · `beddc37` round-01 verdict +
+  2 ratifications + 6 live defects · `8299381` **the alarm with no home**
+  (slow-control ALARM was invisible outside the Monitor tab).
+- **origin/main @ `a7dca3f` = THE TRUNK** (unchanged).
 
-## 🚨 KAYA'S NEW ORDER (2026-07-14, ~01:00) — THE PIVOT
+## 🚨 KAYA'S ORDERS (2026-07-14, all NEW tonight)
 
-> "our goal was to migrate fully to QML with GlassShell utilizing the Odin
-> Crew from Projekt NorthStar, they have a smith dedicated for iterative
-> design, he should iterate our design, our panel layout, everything to
-> better user accessibility and match the design_assets like VisionOS more."
+1. **Full QML migration to the GlassShell.** GlassOS is the TARGET, not a
+   garnish. FLAT is the fallback for machines that cannot do glass.
+2. **The ShaderEffect/MultiEffect ban is LIFTED as policy** ("ja heb das verbot
+   auf"). Adam holds ONE gate until the spike reports: the crash rate. A
+   segfaulting effect kills a run, and that is data loss, not taste.
+   `scripts/spikes/qml_multieffect_glass_spike.py` is measuring it now.
+3. **RATIFIED — danger topology:** a dangerous action belongs to the PANEL that
+   owns the hardware, NEVER to the shell. The shell may DISPLAY hazard state; it
+   may never TRIGGER it. No presentation-layer mediator will be built.
+4. **RATIFIED — detachable panels are permanent.** `detachable_tabs.py` stays
+   the ENGINE; QML is a VIEW over it. Every detached panel is its own top-level
+   ⇒ its own DWM material and its own tier.
+5. **Every panel gets redesigned individually**, plus a **cross-panel META
+   REVIEW at every wave boundary** (his ask: "ob die panels auch miteinander
+   harmonieren"). Mechanism: the kit makes drift structurally impossible
+   (token-parity + object-tree-walk gates); the CONTACT SHEET (all panels, both
+   themes, every tier) makes the residue visible. Not a meeting — a picture.
 
-Consequences, decided by Adam:
-- **Target = full QML migration to the GlassShell** (a real translucent
-  `QQuickWindow` top-level), not just the trunk-hardening beats. The
-  U-track and Track G merge into one program.
-- **Three Odin seats ported (COPIED, adapted — NorthStar untouched, its
-  tree verified clean at `4f132c3`):** `.claude/agents/brokkr.md` (Design
-  Forge, Opus), `loki.md` (design adversary on paper — NOT a Mary
-  duplicate; Mary attacks code), `baldr.md` (IA + accessibility).
-  The other 15 were deliberately NOT ported: Huginn/Muninn/Nótt/Vörðr are
-  our Shiori/Kiroku/Mamoru, and Thor/Ymir/Heimdall are NorthStar-kernel
-  seats with no mandate here. (2026-07-08 all-hands: no new seats — three
-  with a real mandate is in that spirit; eighteen would not be.)
-- **LANDMINE DEFUSED:** NorthStar's Brokkr is instructed to build against
-  the **Nordlys** design system. Nordlys must NEVER be a TCT reference
-  (standing rule). The ported Brokkr/Baldr are pinned to TCT tokens
-  (`gui/style.py` → `gui/qml_theme.py`) + `design_assets/` (visionOS) instead.
-- **Agent registry DOES hot-load** (verified 2026-07-14): `brokkr`, `loki`,
-  `baldr` became dispatchable agent types a few minutes after the files were
-  written — no session restart needed. (An earlier note here claimed the
-  opposite; it was wrong. Brokkr's round-01 run was launched via
-  `general-purpose` with the persona inlined before the registry caught up —
-  same laws, same file, no re-run needed.)
+## 🔥 IN FLIGHT
 
-## ⚡ MEASURED CORRECTIONS — the plan was wrong twice (booked, 2026-07-14)
-
-The GL-island spike (`353072f`) overturned two things four sources agreed on.
-Both are now booked into `SYNTHESIS.md` (correction banner + 8 inline
-supersede markers, Kiroku) and into `TECH_DEBT.md`:
-
-1. **PATH-D IS REFUTED.** A live `QOpenGLWidget` child does NOT kill the
-   window's DWM material on Qt 6.11.1 (acrylic 84/84/84, mica 32/32/32,
-   identical to the GL-free control). The real killer was **attribute
-   order**: `WA_TranslucentBackground` set after the HWND exists ⇒ no alpha
-   surface, forever ⇒ DWM returns S_OK and nothing composites. Fixed and
-   pinned headlessly by G-B1. **The main window CAN frost.**
-2. **THE RHI VERDICT IS INVERTED.** A QQuickWindow-root shell shows real
-   glass on the **OpenGL** RHI and **flat white on D3D11**. `main.py`'s
-   OpenGL pin is LOAD-BEARING. → **This is the green light for GlassShell**,
-   and it means SYNTHESIS §7.3's G0 criterion P1 (which names D3D) tests the
-   configuration known to FAIL. **Adam must rewrite P1 before G0 runs.**
-3. Spike ran on ONE host (Intel UHD iGPU). Booked as a bench item: re-run on
-   a second GPU before treating the path-D refutation as universal.
-
-## 🔥 IN FLIGHT (2026-07-14 ~01:00)
-
-| Beat | Agent | Locks / notes |
+| Beat | Agent | Locks |
 |---|---|---|
-| Mary review of G-B1 (`081da40`) — concurrency/lifecycle class, immediate per ratified cadence | Mary (Opus) | read-only; reviewing `gui/backdrop.py`, `gui/style.py`, the event spine, deferred-theme-reassert lifetime, underlay-law loss paths |
-| **G-B2a — the glass contract** (`GlassTier`, `GlassEnvironment`, pure `decide_tier`, transition policy, `material_contract` marker, ~2000-case matrix test) | Noah (**Opus — Fable quota exhausted**) | `gui/glass_env.py` (NEW), `tests/test_glass_env.py` (NEW), `pytest.ini` (marker only). Deliberately does NOT touch style.py/backdrop.py — Mary holds them |
-| **Brokkr round 01 — GlassShell cockpit** (2–3 materially different candidates, openable HTML, FLAT-first, WCAG AA, visionOS language) | Brokkr (Opus, via general-purpose) | `docs/design/iterations/glasshell-cockpit/round-01/` (NEW dir) |
+| **A11Y palette fix** — light mode fails AA systemically (sim/warn/crit/faint/good); white-on-crit fails in DARK too; `faint` on glass = 2.0:1; the laser SAFETY BANNER = 3.0:1; ribbon clips MOTION; jog icons bypass the token system | Noah (Opus) | `gui/style.py`, `gui/motor_panel.py`, `gui/laser_panel.py`, `tct_gui.py`, tests |
+| **MultiEffect spike** — is the shader ban earned? Can we blur BEHIND the window? Crash rate over N≥20 | Noah (Opus) | `scripts/spikes/qml_multieffect_glass_spike.py` (NEW) |
 
 ## NEXT (Adam's queue)
 
-1. Mary's G-B1 verdict → fix riders if any.
-2. G-B2a lands → **G-B2b wiring beat** (style.py/backdrop.py consume
-   `decide_tier`) once Mary releases those files.
-3. **Loki attack pass** on Brokkr's round-01 candidates + **Baldr** a11y
-   audit (contrast numbers at every tier) → Adam's verdict → round 02.
-4. Rewrite SYNTHESIS §7.3 **G0 P1 around the OpenGL RHI** (it currently
-   names D3D = the known-failing config), then G0 spike.
-5. G-B3 harness upgrade (`scripts/capture_onscreen.py`: the spike found a
-   REAL BUG — the probe grabs a hard-coded (60,1000) rect, off-screen on
-   Kaya's 1536×864-DIP desktop, which is why it reported "INCONCLUSIVE";
-   needs a 1px move-nudge + warm-up grab or the same command yields
-   different pixels run to run). Plus verdict.json + lifecycle frames.
-6. Full suite on the bench (sophonone is UP, verified) at the wave
-   boundary — NOT per-beat (test economy).
+1. **3 lines at the composition root** for the sticky alarm chip
+   (`STATUS.alarm` is emitted but unrendered — the exact lines are in the
+   alarm beat's report). BLOCKED until the palette beat releases `tct_gui.py`.
+2. **Mary re-review** of G-B1b (she asked for it: the QSS rebuild + the fan-out
+   now routing through `reassert_window_backdrop` — check for a double-pin or an
+   `apply_theme` re-entrancy path) and of the alarm beat's asymmetric hold.
+3. **The glass_env WIRING beat** — the contract has ZERO consumers today.
+   `GlassEnvironment.high_contrast` / `.remote_session` are populated by NOTHING
+   outside the tests, so every "it degrades safely on RDP" claim currently rests
+   on a detector that does not exist. Handoff is written in `801f2ab`.
+4. **Round 02** (Brokkr): revised A = spine + phase rail + vitals strip (display
+   only, NO armed rail), inheriting C's three-tone FLAT ladder. MANDATE: raise
+   the glass alphas to the repo's own 0.50 floor — A's `.42`/`.06` put muted
+   text at **1.04:1** at worst case, i.e. the across-the-room readout that IS
+   candidate A washes out in exactly the environment its own switch was built to
+   probe.
+5. **The kit BEFORE the panel wave** (else 12 panels = 12 dialects), then ONE
+   pilot panel with Kaya's eyes on it. Pilot candidate: **Bias** (hazard surface
+   + detached + live readouts).
+6. Bench: full suite at the wave boundary (sophonone is UP, verified).
+
+## 📋 THE PANEL CENSUS (Shiori, 2026-07-14) — the wave's foundation
+
+- **Programs wearing a panel costume** (own beat each): `planner` 2524 ·
+  `analysis` 2203 · `scope` 1655 · `motor` 1212 · `camera` 958.
+- **Simple compositions** (one wave): intensity 224 · device 348 · sequencer 456
+  · calibration 578 · scan_map_view 615 · laser 703 · stage_view 255.
+- **Hazard surfaces (opaque at EVERY tier, keep their own gate):** bias,
+  multi_bias, motor, calibration, planner, sequencer.
+- **Three panels own EXTRA top-level windows** ⇒ three more glass surfaces:
+  `device_panel` IS a QMainWindow · `scope` has a floating `_TriggerDialog` ·
+  `camera` has a modal `_ROIDialog`.
+- `multi_bias` is tabbed per HV channel — you cannot see two channels at once.
 
 ## 🧑‍🔬 NEEDS KAYA (at 10:00)
 
