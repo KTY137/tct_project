@@ -752,6 +752,72 @@ post-ROI distortion pass).
 
 ---
 
+---
+
+## 14. On-Screen Rendering (Post-4ca8331 Theme Commit)
+
+**Last updated:** 2026-07-14  
+**Requires Kaya at the real display.**
+
+### 14a. Wrapped Ribbon at Real DPI
+
+**What to check:**
+- Launch TCT app (classic mode, no QML shell).
+- Verify the status ribbon (top strip of status chips: Devices, Settings, Log, Debug, Motion/Scan/etc.) on the running app at real display DPI.
+- The ribbon **no longer scrolls**; it now wraps (new `gui/flow_layout.py` layout).
+- The app ships at 1280 px default width; with the new wrap, it grows a second row (41 px → 104 px ribbon height).
+- Verify:
+  - No safety chip is clipped at the screen edge.
+  - The second row does not fight the status bar (no visual overlap or awkward spacing).
+  - All chips remain legible and clickable after wrapping.
+
+**Expected result:**
+- Wrapped ribbon renders cleanly at real DPI; no clipping, no layout jank.
+
+**Closes:**
+- `docs/TECH_DEBT.md` BENCH row (post-4ca8331 ribbon rendering).
+
+---
+
+### 14b. Re-Tinted Icons at Real DPI (Both Themes)
+
+**What to check:**
+- In the launched app: toggle the theme (Settings → Theme → Dark/Light).
+- Verify all icon buttons (motor jog, bias ramp, scope configure, capture, etc.) re-color correctly in both dark and light modes.
+- **Special case:** perform a **light→dark→light** toggle (rapidly clicking the theme selector) and confirm icons refresh each time.
+  - (The bug was that the icon pixmap was frozen at construction; 4ca8331 fixed it.)
+- No icons should remain the old color after a theme switch.
+
+**Expected result:**
+- Icons follow theme color dynamically; no stale pixmaps.
+- Light→dark→light cycles show live re-tinting.
+
+**Closes:**
+- `docs/TECH_DEBT.md` BENCH row (icon re-tinting on theme toggle).
+
+---
+
+### 14c. New Chip Look — Neutral Ink, Hue in Fill/Border (Both Themes)
+
+**What to check:**
+- Examine the status chips in both dark and light themes (Devices, Settings, Log, Debug, Motion, Scan, etc.).
+- Verify:
+  - Each chip's **label text is now neutral** (no saturated hue in the ink).
+  - The **fill color and 1 px border carry the hue** (good/warn/crit state is visible in fill + border, not ink).
+  - The visual distinction between states is still clear (good/warn/crit are distinguishable).
+- **Kaya's eye decides:** does the classic ribbon need a **saturated state dot** added (the QML island's default) to restore glanceability?
+  - If yes: add a small 6–8 px saturated colored dot to the QWidget `StatusChip` (TECH_DEBT row 4 design call).
+  - If no: accept the current look as-is.
+
+**Expected result:**
+- Chip ink is neutral across the board; hue lives in fill/border.
+- Kaya makes the call on whether the saturated dot is needed for usability.
+
+**Closes:**
+- Design validation of Mary's 4ca8331 review (APPROVE-WITH-NITS) and Kaya's pending design call (TECH_DEBT row 4).
+
+---
+
 ## Next Steps
 
 Once all checklist items are complete:

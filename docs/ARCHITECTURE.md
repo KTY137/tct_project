@@ -632,6 +632,8 @@ Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 ## Changelog
 
+- 2026-07-14 — **fix(gui): ribbon wrap + theme icons + status-chip ink retune (4ca8331).** NEW `gui/flow_layout.py` wrapping QLayout (heightForWidth, replaces silent QScrollArea clipping). Icon buttons now re-tint live on theme toggle (frozen pixmap bug fixed). NEW palette tokens: `danger_fill`, `on_danger`, `on_armed`, `plot_accent`; `SAFETY_TOKENS` widened (locked danger/armed/sim/error + aliases). Every hazard chip label now uses neutral `text` ink; hue lives in fill+border. NEW `_ShellBridge` property pairs: `hvCurrentText`/`hvCurrentState`, `hvComplianceText`/`hvComplianceState` (leakage + compliance restored to QML island). Mary: APPROVE-WITH-NITS (shippable to bench). Bench-gate: 14a ribbon wrap / 14b icon retinting / 14c chip look verification at real DPI (Kaya's eye on saturated-dot callback).
+
 - 2026-07-13 (night) — **feat(glass): run.ps1 defaults to QML shell (76c2370).**
 
 - 2026-07-13 (night) — **docs(glass): glass council findings + synthesis (2525285).**
