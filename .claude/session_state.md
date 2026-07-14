@@ -82,9 +82,18 @@ ROADMAP_MASTERPLAN.md U1.5 per his ask). Artifact deploy service 503ing
   now sources from _draft_window_opacity, not the display-forced
   slider; 85%→Acrylic→Apply→preference intact. 199 targeted green.
 
-**NO code beats in flight. Gate #4 on `729841f` = THE merge evidence.**
-Then everything remaining is Kaya's: merge → polish-freeze tag →
-laser-gate decision → SCENE appetite → roadmap entry (P0' first).
+**🟢🟢 GATE #4 GREEN ON THE FINAL HEAD `df81d62`: 2856 passed, 0
+failed, 2 skipped, 1 xfailed, 10:03. THE BRANCH IS MERGE-READY WITH
+EVIDENCE.** No code beats in flight anywhere. Roadmap artifact
+published + current:
+https://claude.ai/code/artifact/fa02f118-9ade-44dc-b58c-6bbd59bcd3f1
+
+Everything remaining is Kaya's: merge design/glass-wave-1 → main
+(evidence: this gate) → polish-freeze tag → laser-gate decision →
+SCENE appetite → roadmap entry (P0' first). NOTE for Kaya's live app:
+restart required to pick up the theme-editor fixes (eaa2425+729841f);
+if glass STILL breaks after a fresh start, capture the minimal repro +
+"glass: resolve" log lines — that would be a NEW init-path sibling.
 
 **KAYA LIVE FEEDBACK (2026-07-14 night):** he saw the QML preview's
 in-scene blur ("kit panel") and calls it "the most awesome" — the SCENE
