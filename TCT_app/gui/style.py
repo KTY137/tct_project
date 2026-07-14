@@ -2720,7 +2720,7 @@ def _apply_window_backdrop_to_impl(window, resolved: str, reason: str) -> str:
     # gui.backdrop._BackdropGuard. Installed even for kind == "none" so that
     # switching a material on later needs no second wiring pass.
     backdrop.install_backdrop_guard(
-        window, _guard_reassert, _schedule_post_toggle_reassert)
+        window, _guard_reassert, _schedule_post_toggle_reassert, _guard_activation)
     # Assert the DWM material's immersive-dark tint from the live theme mode so
     # Mica/Acrylic composes dark under the dark cockpit theme instead of DWM's
     # light default ("komplett weiss"). backdrop.py stays theme-blind; this is
@@ -2853,6 +2853,34 @@ def _guard_reassert(window, reason: str) -> None:
     module theme-blind (it never imports style.py; the dependency runs one way
     only)."""
     reassert_window_backdrop(window, reason=reason)
+
+
+def _guard_activation(window, active: bool) -> None:
+    """Underlay law, activation clause — with the run-state gate style.py owns.
+
+    An INACTIVE window has no live material: DWM paints a fallback solid behind a
+    system backdrop on a non-active window (measured, 82ddd2f — a live, never
+    minimized window reproduces it simply by losing focus). So "inactive" is a
+    loss path like any other, and the alpha hole must close or we paint a
+    translucent gap over a material that is not being composited.
+
+    ASYMMETRIC, by the glass contract's own transition law
+    (``glass_env.plan_transition``): the CLOSE is a downgrade and is NEVER queued,
+    mid-scan or not — gating it would leave open the exact hole this repairs. Only
+    the REOPEN is a cosmetic upgrade (it costs a repolish) and waits for scan-idle,
+    like ``nudge_repaint``. Holding an improvement is always safe; holding a hazard
+    never is.
+
+    A gated skip is self-healing: the window keeps the opaque TOKEN canvas until
+    the next activation event or re-assert.
+    """
+    if active and scan_is_active():
+        logger.debug(
+            "glass: deferring the activation canvas repair on %s — a scan is running",
+            type(window).__name__,
+        )
+        return
+    backdrop.set_canvas_for_activation(window, active)
 
 
 def _repaint_central_widget(window) -> None:
