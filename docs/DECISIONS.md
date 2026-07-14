@@ -288,3 +288,21 @@ Phase-0.5 merge authorized on next bench-green evidence; stale worktrees
 platform BASE only — LabControl construction is explicitly out of scope
 here. Kaya: "ja darfste alles machen hast mein GO." Affects: phase gates,
 branch hygiene, merge readiness. Status: APPROVED — blockers cleared.
+
+## 2026-07-14 — Danger topology RATIFIED
+
+**A dangerous action belongs to the PANEL that owns the hardware, NOT to the shell.**
+The shell may *display* hazard state (HV live, voltage, leakage, motion, scan) permanently and prominently, but it must **never trigger** a dangerous action. No presentation-layer mediator holding the bias supply / motor / scan controller is to be built.
+Rationale: moving danger into the shell forces a mediator, makes muscle memory a safety mechanism, and produces candidates like A's HV-on-double-click defect; it is also the single cost driver (25–34 beats vs ~10 for a panel-owned design).
+Consequence: `bias_panel.py` keeps gating its own ramps through the injected `QtDangerGate`; the planner/sequencer keep their own `ArmLatch`. Candidate A's "always-visible armed rail" is **not** adopted; its vitals strip is (display only).
+Affects: `gui/bias_panel.py`, `gui/scan_planner_panel.py`, `controller/scan_controller.py`, `controller/arm_envelope.py`.
+Status: **LOCKED** — safety-first design law, no reimplementation of danger mediators.
+
+## 2026-07-14 — Detachable panels RATIFIED
+
+> "Naja wir wollen ja aufjedenfall unsere panels behalten also das die detachable sind" (Kaya)
+
+**`gui/detachable_tabs.py` stays the detach ENGINE.** QML is a *view* over it (the `_TabShelfAdapter` pattern in `gui/qml_shell.py`) — the detach mechanism is never reimplemented in QML. Any design that removes, degrades, or reimplements panel detachment is rejected on arrival.
+Consequence for the GlassShell: every detached panel is its own top-level window ⇒ its own DWM material and its own per-window tier resolution (already supported: G-B1's `_BackdropGuard` installs on every material-capable top-level; `gui/glass_env.py`'s `decide_tier` is per-environment and `shell` is an env field).
+Affects: `gui/detachable_tabs.py`, `gui/qml_shell.py`, `gui/glass_env.py`, `gui/backdrop.py`.
+Status: **LOCKED** — permanent operator workflow feature, no removal or reimplementation.

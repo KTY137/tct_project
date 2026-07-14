@@ -100,3 +100,15 @@ the muscle memory that makes it safe, even when it encodes nothing.
    That may decide it before any design argument does.
 5. **May I fix the light-mode `crit` token now** (it is a live AA failure), independently of which
    candidate wins?
+
+---
+
+## VERDICT (2026-07-14 — Loki attack pass + Kaya ratification)
+
+- **B · STAGE — KILLED.** Not "unverified" but **refuted by shipped code**: `detachable_tabs.py` (persisted, in use, visible in the committed screenshots) plus the resident status strip (`tct_gui.py:465–481`, six live readouts) prove the operator watches several things at once. B answered that operator with a 15 px stub and had no story for detached windows. Also regressed keyboard operability of the danger gesture (pointer-only hold; `arm_latch.py` already solved keyboard parity).
+
+- **C · BOARD — KILLED as the round winner; its depth ladder is SALVAGED.** 47–64 beats. It made across-the-room glanceability an *operator preference* (a category error for a lab instrument) and is a 1440p design on a 1536×864 screen. **But its FLAT degradation is the best in the round** — three distinct opaque tones (container/card/well) survive the flat tier, where candidate A's four "structural" layers collapse to two. That ladder is inherited by the revised A.
+
+- **A · INSTRUMENT — SURVIVES, REVISED.** Adopted: the spine, the phase rail, the vitals strip (display only). Rejected: the armed rail (ratification 1 — danger belongs to panels, not the shell). Inherited: C's three-tone FLAT ladder. Consequence: 10–15 beat integration (Noah pilot spike, then grid-aligned grid of coherent plumbing beats across Noah/Abel).
+
+**Ratifications locked:** danger topology (panel-owned, no shell mediators) and detachable panels (permanent, never reimplemented in QML). See `docs/DECISIONS.md` 2026-07-14 entries.
