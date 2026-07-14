@@ -4,6 +4,18 @@ The wavegen (the laser TRIGGER — the one device here software actually
 controls) is the hero card; the manual PDL 800 head gets an amber honesty
 banner (law 7: no software emission switch — emission is unknown to
 software) and a demoted, collapsed metadata card.
+
+Round-03 glass kit migration (wave beat, mirrors ``BiasPanel``/
+``IntensityPanel``): the whole panel is now ONE ``GlassPane`` shelf (chrome
+head + status chips + banner + wavegen + PDL cards), with numeric/text
+inputs recessed into an opaque ``Well`` (§4.4).  The shelf's ``register=False``
+is a *content* consequence (like ``IntensityPanel``'s), not a hazard-panel
+blanket exclusion (like ``BiasPanel``'s): its body directly hosts the
+wavegen card's "Output on" ARMED trigger button and the amber manual-laser
+honesty banner, so only the pure-chrome PDL metadata card opts into glass —
+see the register_glass_pane call and its neighbouring comment in
+``_build_ui`` for the exact reasoning, cross-checked by
+``tests/test_panel_glass_rollout.py`` and ``tests/test_wave_laser_render.py``.
 """
 from __future__ import annotations
 
@@ -21,7 +33,9 @@ from devices.laser_manual import LaserManualMetadata
 from devices.waveform_generator import WaveformGenerator, list_visa_resources
 from gui.app_settings import theme_mode
 from gui.motion import set_pulse
-from gui.panel_kit import Card, CheckableCard, panel_header, register_glass_pane
+from gui.panel_kit import (
+    Card, CheckableCard, GlassPane, Well, panel_header, register_glass_pane,
+)
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import SPACE_MD, SPACE_SM, WARN_AMBER, palette
 
@@ -150,10 +164,24 @@ class LaserPanel(QWidget):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
-        root.setSpacing(SPACE_MD)
 
-        root.addWidget(panel_header("TCT Control · Instrument", "Laser & Trigger"))
+        # ── The one shelf (round-03 kit §2.1) ──────────────────────────
+        # register=False is a CONTENT consequence, not a hazard one (the
+        # census classed this whole panel non-hazard — mirrors
+        # ``gui/intensity_panel.py``'s reasoning, not the bias pilot's
+        # blanket "opts nothing in"): the shelf's body directly hosts the
+        # wavegen card's "Output on" ARMED trigger button (Z5) and the amber
+        # manual-laser honesty banner (a hazard-ink surface, Völundr G1), and
+        # the Z-ladder census (tests/test_panel_glass_rollout.py,
+        # ``_glass_disqualifiers``) refuses glass on ANY pane that CONTAINS
+        # such a descendant, not only the immediate surface carrying it.
+        # Only the pure-chrome PDL metadata card (bookkeeping, no armed
+        # control, no hazard ink) registers — see the register_glass_pane
+        # call at the end of this method.
+        shelf = GlassPane(register=False)
+        self._shelf = shelf
+
+        shelf.add_widget(panel_header("TCT Control · Instrument", "Laser & Trigger"))
 
         status_row = QHBoxLayout()
         status_row.setSpacing(6)
@@ -168,7 +196,7 @@ class LaserPanel(QWidget):
                      self._chip_pulse, self._chip_load):
             status_row.addWidget(chip)
         status_row.addStretch(1)
-        root.addLayout(status_row)
+        shelf.add_layout(status_row)
 
         # ── Manual-laser honesty banner (law 7) ───────────────────────
         # The PDL 800 head has NO software emission control — this panel
@@ -183,7 +211,7 @@ class LaserPanel(QWidget):
             "software. Verify at the head.")
         self._lbl_banner.setWordWrap(True)
         banner.add_widget(self._lbl_banner)
-        root.addWidget(banner)
+        shelf.add_widget(banner)
 
         # ── PDL 800 manual metadata (demoted: collapsed by default) ───
         # Metadata bookkeeping, not a control surface — the wavegen below is
@@ -219,11 +247,15 @@ class LaserPanel(QWidget):
                 # makes this panel immortal (tests/test_no_immortal_panels.py).
                 signal.connect(self._mark_metadata_dirty)
 
-        form.addRow("Wavelength:", self._ed_wavelength)
+        # Numeric/text inputs recess into an opaque Well (§4.4: "a value being
+        # typed is never on glass"); the rep-mode combo is a selection, not a
+        # typed value, so it stays a direct form-row widget (same line the
+        # wavegen combos below draw).
+        form.addRow("Wavelength:", self._well(self._ed_wavelength))
         form.addRow("Rep. mode:",  self._ed_rep_mode)
-        form.addRow("Power knob:", self._ed_power)
-        form.addRow("Attenuation:", self._ed_atten)
-        form.addRow("Notes:",       self._ed_notes)
+        form.addRow("Power knob:", self._well(self._ed_power))
+        form.addRow("Attenuation:", self._well(self._ed_atten))
+        form.addRow("Notes:",       self._well(self._ed_notes))
 
         btn_save = QPushButton("Save to metadata")
         set_button_icon(btn_save, "mdi.content-save")
@@ -293,13 +325,17 @@ class LaserPanel(QWidget):
             "amplitude is off by up to 2x.")
         self._load_combo.currentIndexChanged.connect(self._on_load_changed)
 
-        wfg_form.addRow("Frequency:", self._spin_freq)
+        # Numeric inputs recess into an opaque Well (§4.4); the pulse-spec
+        # mode and output-load combos are selections, not typed values, so
+        # they stay direct form-row widgets.  The pulse-hint caption is a
+        # muted label, not an input — no well.
+        wfg_form.addRow("Frequency:", self._well(self._spin_freq))
         wfg_form.addRow("Pulse spec:", self._pulse_mode)
-        wfg_form.addRow("Pulse width:", self._spin_width)
-        wfg_form.addRow("Duty cycle:", self._spin_duty)
+        wfg_form.addRow("Pulse width:", self._well(self._spin_width))
+        wfg_form.addRow("Duty cycle:", self._well(self._spin_duty))
         wfg_form.addRow("", self._pulse_hint)
-        wfg_form.addRow("Amplitude:", self._spin_ampl)
-        wfg_form.addRow("Offset:", self._spin_offset)
+        wfg_form.addRow("Amplitude:", self._well(self._spin_ampl))
+        wfg_form.addRow("Offset:", self._well(self._spin_offset))
         wfg_form.addRow("Output load:", self._load_combo)
 
         self._pulse_mode.currentTextChanged.connect(self._on_pulse_mode)
@@ -362,15 +398,20 @@ class LaserPanel(QWidget):
         diag_row.addWidget(btn_visa)
         wfg_form.addRow(diag_row)
         self._card_wfg.add_layout(wfg_form)
-        root.addWidget(self._card_wfg)
-        root.addWidget(self._card_pdl)
-        root.addStretch(1)
+        shelf.add_widget(self._card_wfg)
+        shelf.add_widget(self._card_pdl)
+        shelf.body.addStretch(1)
+        # The one shelf now holds the whole panel (head + status + banner +
+        # wavegen + PDL metadata).
+        root.addWidget(shelf)
         # Panel glass (opt-in, Baldr Z-ladder): ONLY the PDL metadata card is
         # eligible — it is pure bookkeeping chrome (knob settings recorded in
         # run metadata), no live readout, no armed control. The wavegen hero
         # card is DENIED (it hosts the "Output on" armed trigger button —
         # Baldr §5.2, no glass may sit under an armed control) and so is the
         # amber manual-laser honesty banner (Völundr G1, a hazard-ink surface).
+        # The shelf itself is denied for the same reason, one level up (see
+        # the register=False comment where it is constructed, above).
         register_glass_pane(self._card_pdl)
         self._restyle_theme_tokens()
 
@@ -696,6 +737,18 @@ class LaserPanel(QWidget):
         """Return a snapshot of the current laser metadata."""
         self._save_metadata()
         return self._laser
+
+    @staticmethod
+    def _well(widget: QWidget) -> Well:
+        """Wrap an input widget in an opaque Well (round-03 kit §4.4 — "a value
+        being typed is never on glass").  The widget keeps its identity
+        (callers still reference ``self._spin_*``/``self._ed_*`` directly, so
+        every enable/disable and value assertion is untouched); only its
+        container changed.  Copied verbatim from ``bias_panel.py:911`` (the
+        pilot)."""
+        well = Well()
+        well.add_widget(widget)
+        return well
 
     # ------------------------------------------------------------------ #
     # Teardown                                                            #
