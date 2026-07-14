@@ -102,8 +102,14 @@ Against the OWNED ambient ground (kit §1.1: dark L* ∈ [0, 7.61], light
   pane/shelf/chrome/card under the `{text, muted}` ink law. The opaque
   suppression Kaya dislikes can drop almost entirely. **Light is the binding
   theme** (4.97:1 worst — ~10% margin; dark has 44%): do not ship literal α=0.
-- **One real floor: semantic ink on LIGHT card = α ≥ 0.23** (binding pair:
-  `good` at α=0, 4.20:1 FAILS). Kit ships 0.86 — 3.5× margin. No kit bugs found.
+- **One real floor: semantic ink on LIGHT glass = α ≥ 0.24** (binding pair:
+  `good` at α=0 = 4.21 FAILS; `crit` needs no floor; warn/accent/sim 0.18–0.21).
+  Kit ships 0.55/0.86 — 2–3× margin. No kit bugs found.
+  **CORRECTION (machine-arbitrated, `28e6dec`):** Adam's earlier check claimed
+  this floor dissolves (5.19 at α=0). That was WRONG — he tested only the bright
+  edge of the ground band; the dark edge binds for dark inks. Baldr's hand
+  arithmetic was right. The arbitration script is
+  `TCT_app/scripts/kit_contrast_check.py` — run it, don't re-argue it.
 - `MIN_BACKDROP_CANVAS_ALPHA = 0.80` untouched (protects the DWM-garnish edge,
   still facing an unknown desktop). Garnish-on does NOT change interior floors
   IF the "garnish strip never carries text" invariant holds — verify with
