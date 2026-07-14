@@ -644,3 +644,47 @@ valid verdict if you name what you checked.
 - Confirm clean - the slow-control permanence trap I initially suspected is handled in current v0.2: section 5.1.1 defines a static alias table for shipped names and requires `config_validator` errors for future invalid/colliding names.
 - Runtime lane check: the rebuilt venv now works in this sandbox. `TCT_app\.venv\Scripts\python.exe -c "import sys; print(sys.version)"` reports CPython 3.10.11 64-bit; `TCT_app\.venv\Scripts\python.exe -m pytest --version` reports pytest 9.1.1; a simulated smoke run from `TCT_app` with `QT_QPA_PLATFORM=offscreen` passed `tests/test_bias_api_guard.py` (`21 passed in 0.43s`).
 - Risk: advisory review only; no HDF5 writer migration, Qt generated UI, Linux stack, or real hardware behavior was executed. `docs/CAPABILITY_MODEL.md` remains dirty from another lane's v0.2 edit and was intentionally not changed here.
+
+## C12 - U1 prep survey: viewmodel-portability of the four U1 test suites (advisory, read-only)
+
+**Status: QUEUED** - Effort: M - Source: Adam, 2026-07-15 (Kaya: bring the Codex lane into the QML-migration session)
+
+The QML-migration epoch opened today on branch `ui-qml-migration`. Stage U1
+of `docs/ROADMAP_MASTERPLAN.md` (Part II, "UI" section) is the
+**viewmodel-first test reclaim**: the big C-bucket GUI test suites get
+rewritten against new viewmodels per the run_state_facade boundary — a
+viewmodel holds NO controller reference and NO start/stop callables.
+Before the crew stages U1, we want an independent map of the terrain.
+
+Survey these four files (do not modify them — the report you append here IS
+the deliverable):
+
+- `TCT_app/tests/test_planner_panel.py`
+- `TCT_app/tests/test_scan_map_view.py`
+- `TCT_app/tests/test_scan_viewer_panel.py`
+- `TCT_app/tests/test_sequencer_panel.py`
+
+For EACH test function, classify:
+
+1. **(a) portable-to-viewmodel** — asserts state/logic that a VM could expose
+   with no widget instantiated;
+2. **(b) GUI-half** — genuinely tests widget behavior (paint, focus, Qt
+   interaction); stays as a thin rehosted GUI test;
+3. **(c) safety-normative** — danger-gate / abort / manual-pause / STOP
+   denial semantics; flag these and do NOT propose changes (they follow the
+   S2 manifest `SAFETY_NORMATIVE_TESTS.md` path, not U1);
+4. **(d) obsolete/duplicate** — superseded or redundant coverage.
+
+Per file, also name the concrete couplings that block porting: direct
+controller references, start/stop callables passed into the panel, QTest
+key/mouse interaction, widget-tree introspection.
+
+Planner note: `planner_panel.py` hard-codes `Axis` enum members (~15 places)
+and its U1 slice waits for trunk-P2 `AxisSpec` — survey it anyway and mark
+Axis-coupled tests explicitly.
+
+Deliverable: markdown tables (test -> class -> blocking coupling) + a totals
+summary per file, appended below this brief. Ranked observations welcome
+(e.g. "this suite is 80% (a) once X is injectable"). Do NOT modify any repo
+file other than appending here. Running the four suites is allowed
+(offscreen, venv `TCT_app\.venv\Scripts\python.exe`) but not required.
