@@ -125,11 +125,12 @@ is DONE.
   worker START in _run_reference (mirror laser _output_on; fail-safe
   refuse without gate) + tests + the tct_gui construction-order assert
   (her nit). LOCKS: gui/calibration_panel.py, tct_gui.py, calibration
-  test file. **If this session died mid-fix: the tree may carry the
-  partial edit — check git status; the fix spec above is complete;
-  finish + fresh Mary confirm + THEN push (22d2201..HEAD are
-  local-only until this clears).** Old session's agents are DEAD —
-  do not SendMessage them.
+  test file. **RESOLVED: fix landed `978c7d1`, Mary CONFIRMED
+  ("EMISSION-SAFETY HOLD RELEASED — both ungated PDL 800 trigger paths
+  are now gated"); everything pushed, origin/main == main == 978c7d1.**
+  Her final nit (tct_gui assert trivially true, keep as documentation)
+  needs no action. Old session's agents are DEAD — do not SendMessage
+  them. NOTHING is in flight. The new session starts clean at U0.
 - **THE NEW EPOCH: U-track (QML migration) is the priority.** Entry
   point **U0**: cut `ui-qml-migration` at tag `polish-freeze`
   (= main@45781fa, verified) + RHI/GL pin probe on the bench GPU
