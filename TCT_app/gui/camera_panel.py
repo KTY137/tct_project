@@ -8,6 +8,28 @@ Right column : acquisition controls (exposure, gain, gamma, format, binning,
                FPS, trigger)
 Bottom row   : histogram (pyqtgraph), beam statistics, frame metadata,
                action buttons (save, background, ROI dialog)
+
+Round-03 glass kit migration (wave beat 8/12, mirrors ``IntensityPanel``/
+``DeviceManagerWindow``): the whole panel is now ONE ``GlassPane`` shelf
+(chrome head + left/right columns), ``register=False`` because it is a
+CONTENT consequence, not a hazard stance — this is a census NON-hazard
+panel, but its shelf hosts the live view card, the histogram
+``pg.PlotWidget`` (Z3), the beam-statistics ``MetricGrid`` (Z4) and the
+frame-metadata ``ReadoutCell``\\ s (Z4) directly, all of which the
+live-registry census in ``tests/test_panel_glass_rollout.py`` refuses on any
+registered ancestor. The pure-chrome cards (view & capture actions,
+acquisition / image-processing / trigger controls, static camera-info
+bookkeeping) register instead — "register the specific chrome sub-card, not
+the content-hosting shell" (see ``gui/device_panel.py``'s docstring for the
+same call spelled out for a table instead of a plot/camera view).
+
+The live-view canvas and the histogram plot stay on the pre-existing
+fixed-dark ``PLOT_BG`` instrument-screen colour in both themes (unchanged by
+this migration; see ``refresh_theme`` below) — pyqtgraph/camera-view
+canvases never migrate onto the glass tint (ratified). The modal
+``_ROIDialog`` is its own satellite top-level and goes through the same
+``gui.style.prepare_window_surface``/``reassert_window_backdrop`` single
+entry point every other material-capable window uses.
 """
 from __future__ import annotations
 
@@ -43,10 +65,11 @@ from PySide6.QtWidgets import (
 )
 
 from devices.camera_blackfly import BlackflyCamera, FrameMeta
+from gui import style
 from gui.app_settings import theme_mode
 from gui.panel_kit import (
-    ActionBar, Card, EmptyState, MetricGrid, MetricTile, panel_header,
-    readout_cell,
+    ActionBar, Card, EmptyState, GlassPane, MetricGrid, MetricTile,
+    panel_header, readout_cell, register_glass_pane,
 )
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
 from gui.style import DARK, LIGHT, PLOT_BG, SPACE_MD, SPACE_SM, WARN_AMBER, WARN_RED
@@ -59,10 +82,23 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────────────
 
 class _ROIDialog(QDialog):
-    """Simple modal dialog to enter ROI offsets and dimensions."""
+    """Simple modal dialog to enter ROI offsets and dimensions.
+
+    A modal top-level is its own satellite window surface (round-03 glass
+    kit): same single entry point every other material-capable top-level uses
+    (``gui.style.prepare_window_surface`` / ``gui.style.reassert_window_backdrop``
+    — see ``DeviceManagerWindow``/``ThemeEditorDialog``), so a live "Panel
+    glass"/backdrop preference reaches this dialog too instead of it popping
+    up as a plain, un-prepped surface. ``prepare_window_surface`` runs as the
+    very first line (before any child widget can realize the native window
+    and lock out per-pixel alpha — see its docstring); ``reassert_window_backdrop``
+    applies the current material + opacity once the form is built. A true
+    no-op headless / with the shipped "none" backdrop default.
+    """
 
     def __init__(self, ox: int, oy: int, w: int, h: int, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        style.prepare_window_surface(self)
         self.setWindowTitle("Set Region of Interest")
         form = QFormLayout(self)
 
@@ -82,6 +118,8 @@ class _ROIDialog(QDialog):
         btns.accepted.connect(self.accept)
         btns.rejected.connect(self.reject)
         form.addRow(btns)
+
+        style.reassert_window_backdrop(self)
 
     def values(self) -> tuple[int, int, int, int]:
         return (
@@ -279,11 +317,27 @@ class CameraPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
         outer.setSpacing(SPACE_MD)
-        outer.addWidget(panel_header("TCT Control · Instrument", "Camera"))
+
+        # ── The one shelf (round-03 kit §2.1) ──────────────────────────
+        # register=False is a CONTENT consequence, not a hazard stance (this
+        # panel is a census NON-hazard panel): the shelf hosts the live view
+        # card (a QStackedWidget/QLabel "instrument screen"), the histogram
+        # FigureCard-equivalent pg.PlotWidget (Z3), the beam-statistics
+        # MetricGrid (Z4 MetricTile/ReadoutCell) and the frame-metadata
+        # readouts (Z4 ReadoutCell) directly — the live-registry census in
+        # tests/test_panel_glass_rollout.py refuses glass on ANY pane that
+        # contains a plot/readout descendant, hazard or not. The pure-chrome
+        # cards below (view & capture buttons, acquisition/image-processing/
+        # trigger controls, static camera-info bookkeeping) register instead —
+        # the same "register the specific chrome sub-card, not the content-
+        # hosting shell" pattern as the intensity/laser/device-manager waves.
+        shelf = GlassPane(register=False)
+        self._shelf = shelf
+        shelf.add_widget(panel_header("TCT Control · Instrument", "Camera"))
 
         content = QHBoxLayout()
         content.setSpacing(SPACE_MD)
-        outer.addLayout(content, 1)
+        shelf.body.addLayout(content, 1)
 
         # ── Left: image + histogram + stats ───────────────────────────
         left = QVBoxLayout()
@@ -320,6 +374,10 @@ class CameraPanel(QWidget):
         # uses the neutral EmptyState variant, never the crit "error" one
         # (which would paint "Camera not connected" red — an off-as-danger lie).
         view_card = Card()
+        # Never registered for glass — the live "instrument screen" (a
+        # QStackedWidget hosting the fixed-dark PLOT_BG canvas / EmptyStates)
+        # is content, never chrome; see the module docstring.
+        self._view_card = view_card
         view_card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
         self._img_label = QLabel("")
         self._img_label.setAlignment(Qt.AlignCenter)
@@ -370,6 +428,9 @@ class CameraPanel(QWidget):
         # Histogram — hot-path plot: dark canvas via the PLOT_BG token only,
         # no drop-shadow/glow effects.
         hist_card = Card("Histogram")
+        # Never registered — hosts a pg.PlotWidget (Z3 instrument screen);
+        # pyqtgraph islands never migrate onto the glass tint (ratified).
+        self._hist_card = hist_card
         self._hist_plot = pg.PlotWidget(background=PLOT_BG)
         self._hist_plot.setMinimumHeight(90)
         self._hist_plot.setMaximumHeight(130)
@@ -389,6 +450,9 @@ class CameraPanel(QWidget):
         # px units on the values); stale-with-caption until the first frame
         # (law 4: never an unexplained bare dash).
         stats_card = Card("Beam statistics")
+        # Never registered — hosts MetricTile (a ReadoutCell subclass, Z4)
+        # descendants directly.
+        self._stats_card = stats_card
         stats_grid = MetricGrid(columns=7)
         self._ro_cx    = stats_grid.add_tile(MetricTile("Cx", "—", min_width=72))
         self._ro_cy    = stats_grid.add_tile(MetricTile("Cy", "—", min_width=72))
@@ -407,6 +471,9 @@ class CameraPanel(QWidget):
         # look-alike so its tri-state good/warn/crit colour swap has a hook
         # ReadoutCell itself doesn't expose (see _build_temp_readout()).
         meta_card = Card("Frame info")
+        # Never registered — hosts readout_cell() ReadoutCell instances (Z4)
+        # directly.
+        self._meta_card = meta_card
         meta_lay = QHBoxLayout()
         self._ro_frame_id = readout_cell("Frame", min_width=64)
         self._ro_ts       = readout_cell("T (ms)", min_width=64)
@@ -462,6 +529,11 @@ class CameraPanel(QWidget):
 
         actions_card.add_layout(btn_row)
         left.addWidget(actions_card)
+        # Pure chrome (checkboxes + action buttons — no readout/plot/hazard
+        # control inside): eligible for glass, the kit default for a
+        # non-hazard panel's chrome sub-card.
+        self._actions_card = actions_card
+        register_glass_pane(actions_card)
 
         # ── Right: acquisition controls ───────────────────────────────
         right = QVBoxLayout()
@@ -532,6 +604,10 @@ class CameraPanel(QWidget):
 
         acq_card.add_layout(acq_form)
         right.addWidget(acq_card)
+        # Pure parameter chrome (spinboxes/checkboxes/combos, no readout) —
+        # eligible for glass.
+        self._acq_card = acq_card
+        register_glass_pane(acq_card)
 
         # ── Image processing ──────────────────────────────────────────
         img_card = Card("Image processing")
@@ -552,6 +628,9 @@ class CameraPanel(QWidget):
 
         img_card.add_layout(img_form)
         right.addWidget(img_card)
+        # Pure parameter chrome — eligible for glass.
+        self._img_card = img_card
+        register_glass_pane(img_card)
 
         # ── Trigger ───────────────────────────────────────────────────
         trig_card = Card("Trigger")
@@ -561,6 +640,9 @@ class CameraPanel(QWidget):
         trig_form.addRow(self._chk_trigger)
         trig_card.add_layout(trig_form)
         right.addWidget(trig_card)
+        # Pure parameter chrome — eligible for glass.
+        self._trig_card = trig_card
+        register_glass_pane(trig_card)
 
         # ── Camera info ───────────────────────────────────────────────
         # objectName "cardSubtitle" reuses the shared muted/monospace QSS
@@ -574,10 +656,23 @@ class CameraPanel(QWidget):
         info_card.add_widget(self._lbl_info)
         right.addWidget(info_card)
         right.addStretch()
+        # Static device bookkeeping (model/serial/firmware/sensor/pixel size)
+        # — a plain QLabel, no ReadoutCell/live-value semantics; the same
+        # "pure bookkeeping metadata card" precedent as LaserPanel's PDL
+        # metadata card (test_wired_panels_register_their_chrome_panes).
+        self._info_card = info_card
+        register_glass_pane(info_card)
 
         self._restyle_theme_tokens()
         # Camera info is fetched off-thread by _CameraWorker and delivered to
         # _on_camera_info() once the camera is connected (no GUI-thread I/O).
+
+        # The one shelf now holds the whole panel (head + left/right
+        # columns); it grows with the window so the live view + waveform can
+        # too — outer's own stretch factor mirrors the previous `content`
+        # placement (stretch=1 on the HBox, now nested one level under the
+        # shelf's body).
+        outer.addWidget(shelf, 1)
 
     @staticmethod
     def _build_temp_readout() -> tuple[QFrame, QLabel]:
@@ -634,7 +729,15 @@ class CameraPanel(QWidget):
         Structural chrome (``cardPane``/``cardHeader``/``statusChip``/...)
         already repaints via the app-wide stylesheet
         ``gui.style.apply_theme()`` reapplies; only the histogram brush baked
-        by ``_restyle_theme_tokens`` needs this explicit refresh."""
+        by ``_restyle_theme_tokens`` needs this explicit refresh.
+
+        Round-03 glass kit migration: the new ``GlassPane`` shelf and its
+        registered chrome ``Card``\\ s (``glassPane``/``glassCard`` dynamic
+        properties) resolve purely through that same app-wide QSS — nothing
+        new to cache here, same as the ``IntensityPanel``/device-manager
+        waves. The live view's ``PLOT_BG`` canvas and the histogram plot stay
+        deliberately fixed-dark in both themes (unaffected by this method, by
+        design — the pre-existing note above still holds)."""
         if mode:
             self._theme_mode = str(mode)
         self._restyle_theme_tokens()
