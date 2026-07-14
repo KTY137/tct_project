@@ -353,7 +353,12 @@ def test_os_theme_events_reassert_the_tint(monkeypatch, event_type):
 def test_theme_event_reassert_is_coalesced(monkeypatch):
     """A burst of theme events (a live theme-editor preview fires them by the
     dozen) must collapse into ONE deferred pass — not one queued app-wide
-    fan-out per event."""
+    fan-out per event.
+
+    ``== 1``, not ``<= 1`` (Mary, G-B1 review, RISK 3): the old assertion passed
+    VACUOUSLY at zero passes, so the suite structurally could not see the
+    coalescing latch getting stuck True and suppressing the re-assert forever.
+    Exactly one pass, no more and no fewer."""
     _force_supported(monkeypatch)
     _recording_dwm(monkeypatch)
     app = _app()
@@ -370,7 +375,43 @@ def test_theme_event_reassert_is_coalesced(monkeypatch):
             app.sendEvent(win, QEvent(QEvent.Type.ThemeChange))
         app.processEvents()
 
-        assert len(passes) <= 1
+        assert len(passes) == 1
+    finally:
+        win.deleteLater()
+
+
+def test_the_coalescing_latch_never_stays_stuck(monkeypatch):
+    """RISK 3, the mechanism itself. ``_post_toggle_pending`` is set BEFORE the
+    QTimer that clears it. If that timer never fires — process shutdown, or a
+    caller/test that never drains the event loop — the flag latches True and
+    EVERY future post-toggle re-assert is silently suppressed for the life of the
+    process (and, in the suite, leaks into every later test). The module's
+    back-to-a-known-state function must clear it."""
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    win = QMainWindow()
+    try:
+        style.set_window_backdrop("mica")
+        style.reassert_window_backdrop(win)
+
+        # Schedule a pass and DO NOT drain the event loop — the latch is armed.
+        style._schedule_post_toggle_reassert()
+        assert style._post_toggle_pending is True
+
+        style.reset_theme_customization()
+        assert style._post_toggle_pending is False
+
+        # ...and the spine still works afterwards.
+        passes: list[int] = []
+        real = style._reassert_all_top_levels
+        monkeypatch.setattr(style, "_reassert_all_top_levels",
+                            lambda: (passes.append(1), real())[1])
+        style.set_window_backdrop("acrylic")
+        style._schedule_post_toggle_reassert()
+        app.processEvents()
+        assert len(passes) >= 1, (
+            "the post-toggle re-assert was suppressed by a stale latch")
     finally:
         win.deleteLater()
 
@@ -442,6 +483,40 @@ def test_spine_is_a_true_noop_in_the_shipped_default(monkeypatch):
         assert repolished == []
     finally:
         win.deleteLater()
+
+
+def test_os_colour_scheme_flip_is_a_noop_in_the_shipped_default(monkeypatch):
+    """NIT 7 — the OTHER path into the app-wide fan-out, which
+    test_spine_is_a_true_noop_in_the_shipped_default did not cover.
+
+    ``TCTMainWindow._on_os_color_scheme_changed`` (wired to Qt's
+    ``colorSchemeChanged``) used to run the full fan-out unconditionally, handing
+    every top-level a palette reset + repolish whenever Windows flipped its app
+    mode — even with the shipped "none" backdrop, where there is no material tint
+    to re-assert. The app's own dark/light choice is deliberately independent of
+    the OS one, so in the default configuration this signal has nothing to do.
+    "Zero cost until Kaya opts in" has to hold for every entry point, not just
+    the guard's."""
+    import tct_gui
+
+    calls: list[str] = []
+    monkeypatch.setattr(tct_gui, "apply_window_backdrop",
+                        lambda app: calls.append("backdrop"))
+    monkeypatch.setattr(tct_gui, "apply_window_opacity",
+                        lambda app: calls.append("opacity"))
+    _app()
+
+    # Unbound call with a throwaway self: the handler reads no instance state —
+    # that is the whole point of it being a pure "is a material active?" gate.
+    assert style.get_window_backdrop() == "none"
+    tct_gui.TCTMainWindow._on_os_color_scheme_changed(object())
+    assert calls == []
+
+    style.set_window_backdrop("mica")
+    tct_gui.TCTMainWindow._on_os_color_scheme_changed(object())
+    assert calls == ["backdrop", "opacity"], (
+        "with a material active the OS app-mode flip MUST still re-assert the "
+        "immersive-dark tint (Fenrir K5)")
 
 
 def test_guard_is_installed_on_every_top_level_by_the_fan_out(monkeypatch):

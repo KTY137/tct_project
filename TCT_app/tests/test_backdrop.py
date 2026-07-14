@@ -793,7 +793,20 @@ def test_detached_window_without_material_keeps_the_stored_opacity(monkeypatch):
 
 def test_detached_window_construction_skips_backdrop_when_none(monkeypatch):
     """Ship default: a detached window built with the shipped "none" kind
-    never touches DWM at all."""
+    never touches DWM at all — and never claims the glass canvas.
+
+    CHANGED in G-B1b (Mary's BUG 2 fix), and the change IS the fix: on a
+    material-capable host the window now DOES get WA_TranslucentBackground at
+    construction (``style.prepare_window_surface`` no longer gates the SURFACE on
+    the backdrop preference), because Qt grants a top-level per-pixel alpha
+    exactly once — when its native window is created. Gating that on "none" meant
+    every window in the shipped default was born without alpha and could never
+    gain it while visible, so the live "switch glass on" toggle was unreachable
+    by construction. The PIXELS stay gated on DWM success, which is what keeps
+    this window visually identical to before: no DWM call, no glassCanvas
+    property, and the QSS canvas rule paints the opaque token pre-blend. See
+    test_default_backdrop_stays_visually_inert_even_though_the_surface_has_alpha
+    for the full inertness pin."""
     from PySide6.QtWidgets import QLabel
     from gui.detachable_tabs import _DetachedWindow
 
@@ -803,9 +816,113 @@ def test_detached_window_construction_skips_backdrop_when_none(monkeypatch):
 
     win = _DetachedWindow(QLabel("panel"), "Motor Stage")
     try:
+        assert calls == []                       # DWM never touched
+        assert backdrop.window_has_material(win) is False
+        assert not win.property(backdrop.CANVAS_GLASS_PROPERTY)
+        assert not win.centralWidget().property(backdrop.CANVAS_GLASS_PROPERTY)
+    finally:
+        win.deleteLater()
+
+
+# --------------------------------------------------------------------------- #
+# G-B1b / BUG 2 — the surface is negotiated for every material-capable window, #
+# the PIXELS stay gated on DWM. The shipped default must remain visually inert #
+# even though its windows can now carry alpha. If this ever fails, the fix has  #
+# started leaking glass into a build that never asked for it.                  #
+# --------------------------------------------------------------------------- #
+
+def test_default_backdrop_stays_visually_inert_even_though_the_surface_has_alpha(monkeypatch):
+    """THE regression pin for BUG 2. With backdrop == "none" (shipped default),
+    on a fully material-capable host:
+
+    * no DWM call is ever made,
+    * no window carries the ``glassCanvas`` property (the underlay law's carrier),
+    * the QSS contains NO ``[glassCanvas="true"]`` rule at all, and
+    * the canvas rules paint the OPAQUE ``p['bg']`` token pre-blend.
+
+    Only the invisible half changed: the native surface can now carry alpha, and
+    "a translucent-capable surface painted with an opaque fill is simply an
+    opaque window" (gui/backdrop.py's own underlay law)."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    calls = _recording_dwm(monkeypatch)
+    app = _app()
+    win = QMainWindow()
+    central = QWidget()
+    central.setObjectName("mainShell")
+    win.setCentralWidget(central)
+    try:
+        assert style.get_window_backdrop() == "none"
+
+        assert style.prepare_window_surface(win) is True   # surface: prepared...
+        style.apply_theme(app, "dark")
+        style.reassert_window_backdrop(win)
+
+        # ...pixels: nothing. Not one DWM call, not one glass property.
         assert calls == []
+        assert backdrop.window_has_material(win) is False
+        assert not win.property(backdrop.CANVAS_GLASS_PROPERTY)
+        assert not central.property(backdrop.CANVAS_GLASS_PROPERTY)
+
+        # The stylesheet has no glass rule to apply even if something DID set the
+        # property, and the canvas is the opaque token pre-blend.
+        qss = app.styleSheet()
+        assert 'glassCanvas' not in qss
+        p = style.palette("dark")
+        assert f"QMainWindow, QDialog {{ background: {p['bg']}; }}" in qss
+        assert f"QWidget#mainShell {{ background: {p['bg']}; }}" in qss
+        assert style._canvas_fill(p) == p["bg"]            # opaque, not rgba()
+        assert "rgba(" not in style._glass_canvas_qss(p)
+        assert style._glass_canvas_qss(p) == ""
+    finally:
+        win.deleteLater()
+
+
+def test_prepare_window_surface_is_still_a_noop_on_an_unsupported_host(monkeypatch):
+    """The host gate is the one that survived: Linux/macOS/pre-22H2 Windows and
+    the offscreen suite never get an alpha surface, glass or no glass."""
+    from PySide6.QtWidgets import QMainWindow
+
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop, "_version_probe", lambda: 22000)   # too old
+    monkeypatch.setattr(backdrop, "_platform_probe", lambda: "windows")
+    _app()
+    win = QMainWindow()
+    try:
+        assert style.prepare_window_surface(win) is False
         assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
     finally:
+        win.deleteLater()
+
+
+def test_a_window_born_under_none_can_still_gain_glass_live(monkeypatch):
+    """BUG 2's user-visible point: the cockpit is built under the shipped "none"
+    default, is SHOWN, and only then does Kaya pick acrylic. Before the fix that
+    window had no alpha surface (born without the attribute) and, being visible,
+    refused to have its HWND re-created — so it could never composite the
+    material. Now it can."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    _app()
+    win = QMainWindow()
+    win.setCentralWidget(QWidget())
+    try:
+        assert style.get_window_backdrop() == "none"
+        style.prepare_window_surface(win)        # ...as TCTMainWindow.__init__ does
+        win.show()                               # realized + visible: no HWND yanking
+        assert win.windowHandle().format().alphaBufferSize() >= 8
+
+        style.set_window_backdrop("acrylic")     # the live toggle
+        style.reassert_window_backdrop(win)
+
+        assert backdrop.window_has_material(win) is True
+        assert win.property(backdrop.CANVAS_GLASS_PROPERTY) == "true"
+        assert win.centralWidget().property(backdrop.CANVAS_GLASS_PROPERTY) == "true"
+    finally:
+        win.close()
         win.deleteLater()
 
 
@@ -870,3 +987,219 @@ def test_default_surface_format_requests_alpha_for_translucency():
         assert QSurfaceFormat.defaultFormat().alphaBufferSize() >= 8
     finally:
         QSurfaceFormat.setDefaultFormat(before)
+
+
+# --------------------------------------------------------------------------- #
+# G-B1b / BUG 1 — the QSS must be rebuilt on a LIVE backdrop change.           #
+#                                                                             #
+# The glass-canvas rules only exist in the stylesheet while a material is      #
+# preferred (_glass_canvas_qss). The theme editor's backdrop combo went        #
+# set_window_backdrop -> persist -> apply_window_backdrop -> apply_window_     #
+# opacity and rebuilt NOTHING — so gui.backdrop set glassCanvas="true" on      #
+# windows whose material had attached while the installed QSS had no rule      #
+# behind that selector. The alpha hole never opened: Kaya saw no glass, while  #
+# scripts/glass_probe.py (which hand-adds an apply_theme call) measured it.    #
+# --------------------------------------------------------------------------- #
+
+def test_live_backdrop_toggle_rebuilds_the_qss_glass_rule(monkeypatch):
+    """The exact _on_backdrop_changed sequence, replayed: after a live
+    none -> acrylic flip the glass rule MUST be in the installed stylesheet."""
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    style.apply_theme(app, "dark")                     # boot: "none" QSS
+    assert '[glassCanvas="true"]' not in app.styleSheet()
+
+    # ── theme_editor._on_backdrop_changed, verbatim (minus the persistence) ──
+    style.set_window_backdrop("acrylic")
+    style.apply_window_backdrop()
+    style.apply_window_opacity()
+
+    assert '[glassCanvas="true"]' in app.styleSheet(), (
+        "the glass rule is missing from the live stylesheet — a window that "
+        "gets glassCanvas=true has nothing to paint and stays opaque")
+    p = style.palette("dark")
+    assert style._canvas_fill(p).startswith("rgba(")
+    assert style._canvas_fill(p) in app.styleSheet()
+
+
+def test_live_backdrop_toggle_back_to_none_removes_the_glass_rule(monkeypatch):
+    """...and the other direction: switching the material off takes the rule
+    with it, so the QSS returns to the pre-glass build byte-for-byte."""
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    style.apply_theme(app, "dark")
+    baseline = app.styleSheet()
+
+    style.set_window_backdrop("mica")
+    style.apply_window_backdrop()
+    assert '[glassCanvas="true"]' in app.styleSheet()
+
+    style.set_window_backdrop("none")
+    style.apply_window_backdrop()
+
+    assert '[glassCanvas="true"]' not in app.styleSheet()
+    assert app.styleSheet() == baseline
+
+
+def test_backdrop_fan_out_does_not_rebuild_the_qss_when_the_kind_is_unchanged(monkeypatch):
+    """The rebuild is a fix, not a new hot path: a same-kind re-apply (every
+    theme toggle re-runs the fan-out) must not re-install the stylesheet — an
+    app-wide setStyleSheet re-polishes the ENTIRE widget tree (~9 s at 13k
+    widgets, Phase-0)."""
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    style.set_window_backdrop("mica")
+    style.apply_theme(app, "dark")                     # QSS now built WITH mica
+
+    sets: list[str] = []
+    real_set = type(app).setStyleSheet
+    monkeypatch.setattr(type(app), "setStyleSheet",
+                        lambda self, qss: (sets.append(qss), real_set(self, qss))[1])
+
+    style.apply_window_backdrop(app)                   # same kind — no rebuild
+    assert sets == []
+
+
+def test_theme_editor_backdrop_combo_lights_up_the_glass_rule(tmp_path, monkeypatch):
+    """The product path itself, through the real dialog widget: picking a
+    material in the Backdrop combo must leave the app stylesheet carrying the
+    glass rule. This is the test that would have caught the bug Kaya reported as
+    "I see no glass"."""
+    from PySide6.QtCore import QSettings
+    from gui.theme_editor import ThemeEditorDialog
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    style.apply_theme(app, "dark")
+    settings = QSettings(str(tmp_path / "theme_test.ini"),
+                         QSettings.Format.IniFormat)
+    dlg = ThemeEditorDialog(mode="dark", settings=settings)
+    try:
+        assert '[glassCanvas="true"]' not in app.styleSheet()
+
+        idx = dlg._backdrop_combo.findData("acrylic")
+        dlg._backdrop_combo.setCurrentIndex(idx)       # -> _on_backdrop_changed
+
+        assert style.get_window_backdrop() == "acrylic"
+        assert '[glassCanvas="true"]' in app.styleSheet()
+    finally:
+        dlg.deleteLater()
+
+
+# --------------------------------------------------------------------------- #
+# G-B1b / NIT 6 — the reset path is a loss path too.                           #
+# --------------------------------------------------------------------------- #
+
+def test_a_failed_reset_falls_back_to_the_opaque_canvas(monkeypatch):
+    """_reset_backdrop was the ONE path that could return False without failing
+    safe: on a non-zero HRESULT the window kept glassCanvas="true", kept
+    WA_TranslucentBackground and stayed in _backdrop_applied_windows — so
+    window_has_material() went on reporting True for a material whose state we no
+    longer know, and the WS_EX_LAYERED opacity pin keys off exactly that. An
+    unknown material is a lost material (underlay law: every loss path clears
+    it)."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)                  # the attach succeeds...
+    _app()
+    win = QMainWindow()
+    central = QWidget()
+    win.setCentralWidget(central)
+    try:
+        style.set_window_backdrop("mica")
+        style.reassert_window_backdrop(win)
+        assert backdrop.window_has_material(win) is True
+
+        # ...and now DWM refuses the RESET.
+        _recording_dwm(monkeypatch, attr_hr=-1)
+        assert backdrop.apply_backdrop(win, "none") is False
+
+        assert backdrop.window_has_material(win) is False
+        assert not win.property(backdrop.CANVAS_GLASS_PROPERTY)
+        assert not central.property(backdrop.CANVAS_GLASS_PROPERTY)
+        assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+    finally:
+        win.deleteLater()
+
+
+# --------------------------------------------------------------------------- #
+# G-B1b / RISK 5 — a cosmetic repaint must never preempt a run.                #
+#                                                                             #
+# backdrop.nudge_repaint resizes the top-level by 1 px and back on EVERY       #
+# successful re-assert of a live-material window (Show, WinIdChange,           #
+# WindowStateChange, post-toggle, the deferred theme pass). That relayouts the #
+# dock tree, every pyqtgraph plot and the camera view on the GUI thread of an   #
+# app that is already CPU-bound during acquisition.                            #
+# --------------------------------------------------------------------------- #
+
+def test_repaint_nudge_is_skipped_while_a_scan_is_running(monkeypatch):
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    _app()
+    win = QMainWindow()
+    nudges: list = []
+    monkeypatch.setattr(backdrop, "nudge_repaint", lambda w: nudges.append(w))
+    try:
+        style.set_window_backdrop("mica")
+
+        style.set_scan_active_provider(lambda: True)        # a run is in flight
+        style.reassert_window_backdrop(win, reason="windowstate")
+        assert nudges == [], "a 1-px relayout of the cockpit during a scan"
+
+        style.set_scan_active_provider(lambda: False)       # run over
+        style.reassert_window_backdrop(win, reason="windowstate")
+        assert nudges == [win], "the heal must resume once the run is done"
+    finally:
+        style.set_scan_active_provider(None)
+        win.deleteLater()
+
+
+def test_scan_gate_defaults_to_not_scanning_and_fails_safe(monkeypatch):
+    """Unwired (every test, every script, any embedding without a scan) means
+    "not scanning" — and a provider that RAISES must not suppress the repaint
+    heal forever either: the gate fails towards the cosmetic repair, never
+    towards a permanently stale surface."""
+    assert style.scan_is_active() is False           # unwired
+
+    def boom() -> bool:
+        raise RuntimeError("run-state source is gone")
+
+    style.set_scan_active_provider(boom)
+    try:
+        assert style.scan_is_active() is False
+    finally:
+        style.set_scan_active_provider(None)
+
+
+def test_style_never_imports_the_controller():
+    """The decoupling that makes the scan gate legal: presentation may ask "is a
+    scan running" only through an INJECTED predicate — gui/style.py must not
+    import controller/ (composition-root rule,
+    docs/design/gui_architecture_plan.md).
+
+    Parsed, not grepped: every import STATEMENT in the module (including the
+    function-local ones — style.py imports QApplication that way), so a comment
+    that merely mentions the word cannot pass or fail this."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(style))
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+
+    offenders = [m for m in imported
+                 if m == "controller" or m.startswith("controller.")]
+    assert offenders == [], (
+        f"gui/style.py imports the controller: {offenders} — the run-state "
+        "source must be INJECTED (set_scan_active_provider), not imported")

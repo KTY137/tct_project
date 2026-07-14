@@ -752,7 +752,16 @@ class ThemeEditorDialog(QDialog):
         material and a layered (<100%) window are mutually exclusive, so while a
         material is active the opacity slider is pinned to 100% and disabled
         (Task 1c). The apply-order contract (backdrop before opacity) is
-        preserved — apply_window_backdrop fires before apply_window_opacity."""
+        preserved — apply_window_backdrop fires before apply_window_opacity.
+
+        The QSS rebuild the glass rules need on a LIVE flip is owned by
+        ``style.apply_window_backdrop`` itself (beat G-B1b, Mary's BUG 1): the
+        ``[glassCanvas="true"]`` rules only exist in the stylesheet while a
+        material is preferred, and this handler used to change the preference
+        without anything regenerating the sheet — so windows got the glass
+        PROPERTY with no rule behind it and stayed opaque ("I see no glass").
+        Do NOT re-add an apply_theme call here; the fan-out does it exactly
+        once, before it touches any window."""
         kind = self._backdrop_combo.currentData()
         self._draft_backdrop = style.set_window_backdrop(kind)
         self._persist_window_backdrop()

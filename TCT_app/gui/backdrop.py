@@ -725,12 +725,15 @@ def prepare_surface(window: QWidget) -> bool:
     carrying alpha, and then the material attaches with S_OK and composites
     nothing. Setting the attribute up front makes that unreachable.
 
-    Only touches the window when a material is actually the active preference
-    (the caller decides — ``gui.style.prepare_window_surface`` relays it) and the
-    host can do materials at all, so the shipped default ("none") is
-    byte-identical. Opening the alpha hole is still gated on the DWM calls
-    succeeding (underlay law) — this only negotiates the surface, it does not
-    make a single pixel translucent."""
+    Gated on the HOST (:func:`is_backdrop_supported`), NOT on the user's current
+    backdrop preference — see ``gui.style.prepare_window_surface`` for why that
+    preference gate had to go (it made the live "turn glass on now" toggle
+    unreachable: a window realized under the shipped "none" default can never
+    gain alpha afterwards, and a VISIBLE window's HWND must not be yanked to fix
+    that). Opening the alpha hole is still gated on the DWM calls succeeding
+    (underlay law) — this only negotiates the SURFACE, it does not make a single
+    pixel translucent, and a translucent-capable surface painted with an opaque
+    fill is simply an opaque window."""
     if not is_backdrop_supported():
         return False
     _prepare_window_surface(window)
@@ -766,7 +769,16 @@ def _reset_backdrop(window: QWidget) -> bool:
         logger.exception("backdrop: _dwm_set_window_attribute raised while resetting")
         hr = -1
     if hr != 0:
+        # Underlay law, every-loss-path clause (Mary, G-B1 review, NIT 6). This
+        # used to be the ONE path that returned False without failing safe: the
+        # window kept its glassCanvas property, kept WA_TranslucentBackground,
+        # and stayed in _backdrop_applied_windows — so window_has_material() went
+        # on reporting True for a material whose state we no longer know, and it
+        # is exactly that function the WS_EX_LAYERED opacity pin keys off. An
+        # unknown material is a LOST material: drop to the opaque token canvas.
         logger.warning("backdrop: failed to reset backdrop to DWMSBT_NONE (hr=%s)", hr)
+        _fail_safe_opaque(window)
+        _window_hwnds.pop(window, None)
         return False
 
     _clear_window_canvas(window)
@@ -893,7 +905,12 @@ def nudge_repaint(window: QWidget) -> None:
     Deliberately inert unless a real compositor is in play
     (:func:`is_backdrop_supported`) and the window is actually on screen — so
     the headless test suite and every non-Windows host never resize anything.
-    Never raises (the window may be gone by the time the timer fires)."""
+    Never raises (the window may be gone by the time the timer fires).
+
+    A resize is NOT free: it relayouts the dock tree, every pyqtgraph plot and
+    the camera view on the GUI thread. The caller therefore skips this while a
+    scan is running (``gui.style.scan_is_active`` — a cosmetic repair must never
+    preempt a run); this module stays run-state-blind, as it stays theme-blind."""
     if not is_backdrop_supported():
         return
     try:

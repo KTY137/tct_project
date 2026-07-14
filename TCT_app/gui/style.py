@@ -39,13 +39,17 @@ should reach for instead of a generic ``FONT["xs".."display"]`` step.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import weakref
+from typing import Callable
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QPalette
 
 from gui import backdrop
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Scales — reference these instead of magic numbers so spacing/rounding/type
@@ -2096,6 +2100,20 @@ _window_backdrop: str = "none"
 # active theme (gui.backdrop.DWMWA_USE_IMMERSIVE_DARK_MODE) — the cockpit is
 # dark-first, so "dark" is the safe pre-first-apply fallback.
 _active_mode: str = "dark"
+# The backdrop kind the CURRENTLY INSTALLED app stylesheet was built with (None
+# before the first apply_theme). The glass-canvas rules (_glass_canvas_qss) exist
+# in the QSS only while a material is preferred, so flipping the preference
+# LIVE changes the stylesheet — and nothing on the theme editor's backdrop path
+# (set_window_backdrop → apply_window_backdrop → apply_window_opacity) used to
+# rebuild it. Result (Mary, G-B1 review, BUG 1): after a live none → acrylic
+# toggle, gui.backdrop dutifully set glassCanvas="true" on the windows whose
+# material attached, but the QSS carried NO rule behind that selector, so the
+# window kept painting the opaque p['bg'] — the alpha hole never opened and Kaya
+# saw no glass. apply_window_backdrop() now compares this against the resolved
+# kind and rebuilds the QSS first. NOT part of the user's customization (it
+# describes the installed stylesheet, not a preference), so
+# reset_theme_customization does not touch it — apply_theme is its only writer.
+_qss_backdrop: str | None = None
 # Windows currently inside a backdrop re-assert — the re-entrancy guard for
 # _apply_window_backdrop_to (see its docstring: our own palette write delivers
 # PaletteChange back into the event filter that called us). WeakSet so a closed
@@ -2104,6 +2122,10 @@ _reasserting_windows: "weakref.WeakSet" = weakref.WeakSet()
 # True while a deferred post-toggle re-assert is already queued — see
 # _schedule_post_toggle_reassert (coalesced: at most one pending pass).
 _post_toggle_pending: bool = False
+# Injectable "is a scan running right now?" predicate — see
+# set_scan_active_provider. Presentation must never import controller/, so the
+# run-state source is WIRED IN by the composition root (tct_gui) instead.
+_scan_active_provider: "Callable[[], bool] | None" = None
 _overrides: dict[str, dict[str, str]] = {"light": {}, "dark": {}}
 _typography: dict = {"sans": None, "mono": None, "hinting": None, "base_px": None}
 _radius_scale: str = "m"
@@ -2310,6 +2332,52 @@ def get_window_backdrop() -> str:
     return _window_backdrop
 
 
+def set_scan_active_provider(provider: "Callable[[], bool] | None") -> None:
+    """Wire the presentation layer to the app's run-state source — WITHOUT
+    importing it (Mary, G-B1 review, RISK 5).
+
+    ``gui.backdrop.nudge_repaint`` heals a stale surface with a REAL 1-px resize
+    + restore of the top-level, and the backdrop spine calls it on every
+    successful re-assert of a live-material window (Show, WinIdChange,
+    WindowStateChange, post-toggle, the deferred theme pass). A resize is not
+    cosmetic work: it forces a full relayout of the dock tree, every pyqtgraph
+    plot and the camera view on the GUI thread — of an app that is already
+    CPU-bound during an acquisition. A minimize→restore or an OS theme flip mid
+    scan would therefore stall the run's UI for a purely visual repair. Not data
+    loss (the workers own acquisition + HDF5), but a self-inflicted freeze, and
+    "scan-aware deferral" is a named element of the glass synthesis
+    (docs/design/glass_council/SYNTHESIS.md §136/§179/§610).
+
+    The predicate is INJECTED rather than read, because ``gui/style.py`` must
+    never import ``controller/`` (presentation stays decoupled from the state
+    machine — see docs/design/gui_architecture_plan.md's composition-root rule).
+    The composition root (``tct_gui.TCTMainWindow``) wires it to the existing
+    run-state source; unset (every test, every script, any embedding that has no
+    scan) means "not scanning", so the behaviour is unchanged by default.
+    Pass ``None`` to unwire (teardown / test isolation)."""
+    global _scan_active_provider
+    _scan_active_provider = provider
+
+
+def scan_is_active() -> bool:
+    """True only while the wired-in provider says a run is in flight.
+
+    Fails SAFE for the cosmetic caller: no provider, or a provider that raises,
+    means "no scan" — the repaint nudge is a repair, and suppressing it forever
+    because a predicate broke would resurrect the stale-surface bug it exists to
+    fix. (The reverse failure — one skipped nudge during a run — costs at most a
+    stale frame until the next re-assert.)"""
+    provider = _scan_active_provider
+    if provider is None:
+        return False
+    try:
+        return bool(provider())
+    except Exception:
+        logger.debug("scan-active provider raised; assuming no scan",
+                     exc_info=True)
+        return False
+
+
 def _reassert_window_palette(window) -> None:
     """Re-sync one top-level window after a backdrop reset — the C1 risk
     note fix (see :func:`apply_window_backdrop_to`).
@@ -2454,30 +2522,67 @@ def _apply_window_backdrop_to_impl(window, resolved: str, reason: str) -> str:
         # surface recreation needs a REAL repaint, not just an update() — the
         # window can otherwise keep compositing the old backing store. Inert
         # headless and while the window is not on screen.
-        backdrop.nudge_repaint(window)
+        #
+        # SCAN GATE (Mary, G-B1 review, RISK 5): nudge_repaint resizes the
+        # top-level by 1 px and back, which relayouts the whole dock tree, every
+        # plot and the camera view on the GUI thread. A cosmetic repair must
+        # never preempt a run — during a scan we skip it and let the NEXT
+        # re-assert (the run ends, the user shows/restores a window, the next
+        # theme touch) do the healing. Worst case while gated: one stale frame,
+        # already opaque-by-construction under the underlay law.
+        if scan_is_active():
+            logger.debug(
+                "glass: skipping the repaint nudge on %s — a scan is running "
+                "(a cosmetic relayout must not preempt a run)",
+                type(window).__name__)
+        else:
+            backdrop.nudge_repaint(window)
     return resolved
 
 
 def prepare_window_surface(window) -> bool:
     """Call this as the FIRST line of a material-capable top-level's ``__init__``
     (before it builds children), so the window is guaranteed an alpha-capable
-    native surface if — and only if — a DWM material is the active preference.
+    native surface — on every material-capable HOST, regardless of the current
+    backdrop PREFERENCE.
 
     Qt fixes a top-level's surface alpha when the native window is created. Any
     child that realizes the HWND first (``winId()``, a ``QQuickWidget``, an early
     ``show()``) permanently locks that window out of per-pixel alpha, and from
     then on the material attaches with S_OK and composites NOTHING — the failure
     that made the cockpit look glass-less while the freshly-built theme dialog
-    looked fine (GL-island spike, finding 2). ``gui.backdrop.prepare_surface``
-    does the work; this is the theme-aware gate (no material preferred ⇒ the
-    window is not touched at all, so the shipped default stays byte-identical).
+    looked fine (GL-island spike, finding 2).
+
+    NO PREFERENCE GATE (Mary, G-B1 review, BUG 2 — this is the fix): gating the
+    surface prep on ``_window_backdrop != "none"`` made the LIVE toggle
+    unreachable by construction. With the shipped default ("none") every window
+    was realized without ``WA_TranslucentBackground`` ⇒ ``alphaBufferSize == -1``
+    for the life of that HWND. Picking "acrylic" in the theme editor then hit
+    ``backdrop._renegotiate_alpha_surface``, which correctly REFUSES to destroy
+    and re-create the native handle of a VISIBLE window (that would take the
+    cockpit's native children with it) — so the already-open window could never
+    gain alpha, and the user got nothing but a developer-facing log line. The
+    surface is now negotiated up front for every window that COULD carry a
+    material, and only the PIXELS stay gated on DWM success.
+
+    That is safe by the module's own underlay law
+    (``gui/backdrop.py:_set_glass_canvas``): "a translucent-capable surface
+    painted with an opaque fill is simply an opaque window — harmless". In the
+    shipped "none" default the QSS emits no ``[glassCanvas="true"]`` rule at all,
+    ``gui.backdrop`` sets no ``glassCanvas`` property, and the unqualified canvas
+    rule paints the OPAQUE ``p['bg']`` — so the window looks byte-identical; it
+    merely *could* now show a material if one were ever attached. Pinned by
+    ``tests/test_backdrop.py::
+    test_default_backdrop_stays_visually_inert_even_though_the_surface_has_alpha``.
+
+    ``gui.backdrop.prepare_surface`` still gates on
+    :func:`gui.backdrop.is_backdrop_supported`, so Linux, macOS, pre-22H2
+    Windows and the whole offscreen test suite are untouched.
 
     :func:`reassert_window_backdrop` runs the same prep, so a window that is
     still unrealized when it calls that is already safe; this exists for the ones
     that build a heavy child tree first (the cockpit, the device manager, a
     torn-off panel)."""
-    if _window_backdrop == "none":
-        return False
     return backdrop.prepare_surface(window)
 
 
@@ -2562,6 +2667,31 @@ def apply_window_backdrop(app=None) -> str:
     Windows created *later* pick up the current kind at construction — see
     :func:`apply_window_backdrop_to`. Safe to call with no QApplication
     (no-op).
+
+    TWO fixes from Mary's G-B1 review live here:
+
+    * **BUG 1 — the QSS rebuild.** The glass-canvas rules
+      (:func:`_glass_canvas_qss`) are emitted only while a material is preferred,
+      so a LIVE ``none → acrylic`` flip genuinely changes the stylesheet. Nothing
+      on the theme editor's backdrop path rebuilt it, so ``gui.backdrop`` set
+      ``glassCanvas="true"`` on windows whose material had attached while the
+      installed QSS had no rule behind that selector — the alpha hole never
+      opened and the window kept painting the opaque ``p['bg']``. Glass only
+      appeared if something *else* happened to rebuild the QSS (a dark/light
+      toggle, a preset, a slider) or after a restart; ``scripts/glass_probe.py``
+      hand-added an ``apply_theme`` call and so measured glass the product path
+      could not show. The rebuild below runs BEFORE the per-window fan-out, so
+      the rule exists by the time any window claims the property. It is skipped
+      when the installed QSS was already built with this kind, and
+      :func:`apply_theme`'s identical-QSS guard makes a redundant call
+      (mica → acrylic: same rules) cost only a string build + compare.
+    * **the opacity pin folded in.** The fan-out now goes through
+      :func:`reassert_window_backdrop` — the SAME single entry point every
+      construction site uses — so it applies the ``WS_EX_LAYERED`` pin itself
+      instead of relying on every caller to remember a separate
+      :func:`apply_window_opacity`. Callers still call it (harmless: the same
+      effective value, and it also covers windows this fan-out skipped), but the
+      invariant no longer rests on caller discipline.
     """
     from PySide6.QtWidgets import QApplication
 
@@ -2569,9 +2699,13 @@ def apply_window_backdrop(app=None) -> str:
     app = app if app is not None else QApplication.instance()
     if app is None:
         return kind
+    if _qss_backdrop != kind:
+        # The glass rule appears/disappears with the kind — rebuild first (see
+        # BUG 1 above). Same mode: this is a backdrop change, not a theme change.
+        apply_theme(app, _active_mode)
     for w in app.topLevelWidgets():
         if w.isWindow() and not _is_transient_window(w):
-            apply_window_backdrop_to(w, kind)
+            reassert_window_backdrop(w)
     _schedule_post_toggle_reassert()
     return kind
 
@@ -2773,7 +2907,7 @@ def reset_theme_customization() -> None:
     ``_window_opacity``) — callers that need the reset visible re-apply it
     (``apply_window_backdrop`` / ``apply_window_opacity``)."""
     global _glass_amount, _window_opacity, _window_backdrop
-    global _canvas_alpha, _panel_glass_alpha
+    global _canvas_alpha, _panel_glass_alpha, _post_toggle_pending
     _overrides["light"] = {}
     _overrides["dark"] = {}
     _glass_amount = DEFAULT_GLASS_AMOUNT
@@ -2781,6 +2915,14 @@ def reset_theme_customization() -> None:
     _window_backdrop = "none"
     _canvas_alpha = BACKDROP_CANVAS_ALPHA
     _panel_glass_alpha = PANEL_GLASS_ALPHA
+    # The coalescing latch (Mary, G-B1 review, RISK 3). It is set BEFORE the
+    # QTimer.singleShot that clears it, so if that timer never fires — shutdown,
+    # or a caller/test that never drains the event loop — the flag latches True
+    # and every future post-toggle re-assert is suppressed for the life of the
+    # process. It is not a user preference, but this IS the "put the module back
+    # to a known state" function (and the suite's autouse fixture), so a leaked
+    # latch dies here instead of silently disarming the spine for later tests.
+    _post_toggle_pending = False
     apply_typography(sans=None, mono=None, hinting=None, base_px=None)
     apply_radius_scale("m")
     _recompute_palettes()
@@ -2943,7 +3085,7 @@ def apply_theme(app, mode: str = "light") -> str:
     so no panel loses its styling. This turns the repeated-soft-reload path from
     O(cumulative-tree) per cycle into O(new-subtree), the root fix for the
     QML-shell repeated-reload regression (bench PHASE 0)."""
-    global _active_mode
+    global _active_mode, _qss_backdrop
     palette = DARK if str(mode).lower() == "dark" else LIGHT
     _active_mode = "dark" if palette is DARK else "light"
     _apply_app_font(app)
@@ -2951,5 +3093,11 @@ def apply_theme(app, mode: str = "light") -> str:
     qss = build_qss(palette)
     if app.styleSheet() != qss:
         app.setStyleSheet(qss)
+    # Remember which backdrop kind THIS stylesheet carries the glass rules for —
+    # apply_window_backdrop compares against it and rebuilds when a live toggle
+    # makes them appear/disappear (Mary, G-B1 review, BUG 1). Recorded even when
+    # the identical-QSS guard skipped the set: the installed sheet still matches
+    # this kind (that is exactly why it was identical).
+    _qss_backdrop = _window_backdrop
     _apply_pyqtgraph(palette)
     return _active_mode

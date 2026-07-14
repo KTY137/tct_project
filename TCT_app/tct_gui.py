@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import weakref
 
 from PySide6.QtCore import Qt, Slot, Signal, QObject, QThread, QTimer, QUrl
 from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from gui import app_settings
+from gui import style
 from gui.style import (
     apply_theme, apply_window_backdrop, apply_window_opacity,
     load_theme_customization, prepare_window_surface, reassert_window_backdrop,
@@ -195,16 +197,40 @@ class TCTMainWindow(QMainWindow):
 
     def __init__(self, config_path: str = "configs/devices.yaml") -> None:
         super().__init__()
-        # FIRST, before a single child exists: if a DWM material is the persisted
-        # preference, claim an alpha-capable native surface now. Qt fixes a
-        # top-level's surface alpha when its native window is created, and this
-        # window builds a large child tree (including a QQuickWidget chrome
-        # island) that can realize the HWND long before the backdrop chain runs
-        # below — after which the material attaches with S_OK and composites
-        # NOTHING (GL-island spike, finding 2: the cockpit looked glass-less
-        # while a freshly-built dialog looked fine). A no-op when the shipped
-        # "none" backdrop is active. Opening the alpha hole still happens only
-        # after DWM confirms the material (underlay law).
+        # ORDER LAW (Mary, G-B1 review, RISK 4): the persisted theme is loaded
+        # FIRST, before anything in this constructor reads it. It used to be
+        # loaded 39 lines *below* the prepare_window_surface() call that consults
+        # gui.style's backdrop state, and only worked because main.py happens to
+        # pre-load the theme for an unrelated reason — while
+        # scripts/capture_onscreen.py (the harness used to verify glass!) calls
+        # style.reset_theme_customization() right before constructing this
+        # window, so the very check meant to prove glass built the cockpit with
+        # the surface prep disabled. Loading here makes the constructor
+        # self-sufficient; it is a pure reorder (these three lines used to run
+        # below, and re-loading is what they always did).
+        self._settings = app_settings.settings()
+        self._theme_mode = app_settings.theme_mode(self._settings)
+        # Theme-editor customization (gui/theme_editor.py): palette overrides,
+        # glass amount, typography, radius — loaded from theme/* right where
+        # the saved dark/light choice is, so the apply_theme() re-assert in
+        # _build_central styles with the user's theme from the first paint.
+        # (main.py additionally pre-loads before its early apply_theme so a
+        # normal launch never flashes the un-customized look.)
+        load_theme_customization(self._settings)
+        # THEN, before a single child exists: on a material-capable host, claim an
+        # alpha-capable native surface now. Qt fixes a top-level's surface alpha
+        # when its native window is created, and this window builds a large child
+        # tree (including a QQuickWidget chrome island) that can realize the HWND
+        # long before the backdrop chain runs below — after which the material
+        # attaches with S_OK and composites NOTHING (GL-island spike, finding 2:
+        # the cockpit looked glass-less while a freshly-built dialog looked fine).
+        # Deliberately NOT gated on the current backdrop preference (see
+        # gui.style.prepare_window_surface): a window realized without alpha can
+        # never gain it while it is visible, so gating this on "none" made the
+        # live "switch glass on now" toggle impossible for the already-open
+        # cockpit. The window stays visually identical in the shipped default —
+        # opening the alpha hole still happens only after DWM confirms the
+        # material (underlay law).
         prepare_window_surface(self)
         self.setWindowTitle("TCT Setup Control")
         self.resize(1400, 900)
@@ -234,18 +260,12 @@ class TCTMainWindow(QMainWindow):
         self._bg_task: _BgTask | None = None
 
         # Aux windows (created lazily) + one-time wiring
+        # (self._settings / self._theme_mode / load_theme_customization now run
+        # at the TOP of this constructor — see the order law there.)
         self._device_manager_window: DeviceManagerWindow | None = None
         self._settings_window: SettingsWindow | None = None
-        self._settings = app_settings.settings()
-        self._theme_mode = app_settings.theme_mode(self._settings)
-        # Theme-editor customization (gui/theme_editor.py): palette overrides,
-        # glass amount, typography, radius — loaded from theme/* right where
-        # the saved dark/light choice is, so the apply_theme() re-assert in
-        # _build_central styles with the user's theme from the first paint.
-        # (main.py additionally pre-loads before its early apply_theme so a
-        # normal launch never flashes the un-customized look.)
-        load_theme_customization(self._settings)
         self._theme_editor = None
+        self._wire_scan_active_provider()
         self._state_changed_sig.connect(self._on_state_change)
         self._sm.add_callback(
             lambda old, new: self._state_changed_sig.emit(old, new))
@@ -268,6 +288,37 @@ class TCTMainWindow(QMainWindow):
         # App-wide status/notification bus → status bar (one-time connect).
         from gui.status_bus import STATUS
         STATUS.message.connect(self._on_status_message)
+
+    def _wire_scan_active_provider(self) -> None:
+        """Let the presentation layer ask "is a run in flight?" WITHOUT importing
+        the controller (Mary, G-B1 review, RISK 5).
+
+        ``gui/style.py`` heals a stale glass surface with a real 1-px resize of
+        the top-level (``gui.backdrop.nudge_repaint``), which relayouts the dock
+        tree, every plot and the camera view on the GUI thread. That must never
+        fire during a scan — a minimize/restore or an OS theme flip would stall
+        an already CPU-bound run's UI for a purely cosmetic repair. style.py owns
+        presentation and may not know about ``controller/`` (composition-root
+        rule), so the composition root — this window — injects the predicate.
+
+        The closure holds a WEAK reference: a module-level global in style.py
+        must not keep the main window alive past its own destruction. Once the
+        window is gone the predicate reports "no scan", which is the safe answer
+        for a cosmetic repaint (see ``style.scan_is_active``). The state machine's
+        ``state`` property is lock-guarded, so this is safe to call from any
+        thread that a re-assert might run on."""
+        ref = weakref.ref(self)
+
+        def _scan_active() -> bool:
+            win = ref()
+            if win is None:
+                return False
+            # PAUSED counts: the run is still in flight (devices armed, writer
+            # open), it is merely not stepping — a relayout stall there is just
+            # as unwelcome.
+            return win._sm.state in (AppState.RUNNING, AppState.PAUSED)
+
+        style.set_scan_active_provider(_scan_active)
 
     def _connect_os_theme_signal(self) -> None:
         """Re-assert every window's DWM material when the OS flips its app mode
@@ -292,6 +343,14 @@ class TCTMainWindow(QMainWindow):
             logger.debug("os colour-scheme signal unavailable", exc_info=True)
 
     def _on_os_color_scheme_changed(self, *_args) -> None:
+        # Zero cost until Kaya opts in (Mary, G-B1 review, NIT 7): with the
+        # shipped "none" backdrop there is no material whose immersive-dark tint
+        # could need re-asserting, so an OS app-mode flip must NOT run an app-wide
+        # fan-out that hands every top-level a palette reset + repolish. The app's
+        # own dark/light choice is deliberately independent of the OS one — this
+        # handler exists only to keep a live DWM material's tint in step.
+        if style.get_window_backdrop() == "none":
+            return
         app = QApplication.instance()
         if app is None:
             return
