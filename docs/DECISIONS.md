@@ -306,3 +306,34 @@ Status: **LOCKED** — safety-first design law, no reimplementation of danger me
 Consequence for the GlassShell: every detached panel is its own top-level window ⇒ its own DWM material and its own per-window tier resolution (already supported: G-B1's `_BackdropGuard` installs on every material-capable top-level; `gui/glass_env.py`'s `decide_tier` is per-environment and `shell` is an env field).
 Affects: `gui/detachable_tabs.py`, `gui/qml_shell.py`, `gui/glass_env.py`, `gui/backdrop.py`.
 Status: **LOCKED** — permanent operator workflow feature, no removal or reimplementation.
+
+## 2026-07-14 — Owned glass is the foundation; the OS is the garnish (Kaya)
+
+Verbatim: *"das windows glass sollte immer nur ein fallback bleiben wenn überhaupt — unser eigenes Glass wäre robuster für mehrere Systeme und könnte man schöner machen, so dass es näher an den Designs ist die vorgeschlagen wurden von unserem Schmied"*
+
+**We render the glass ourselves** (in-scene, over an app-owned ambient ground). The DWM window material is a garnish and a fallback, not the foundation.
+
+Rationale, and why it OVERTURNS round 02's premise: Round 02 killed glass for a *derived* reason — "an in-scene pane has nothing to blur, because the workspace is a QWidget tree in a different scene graph, and DWM only frosts the desktop". Logically correct; aesthetically dead. **The mockups Kaya liked never used DWM glass.** CSS `backdrop-filter` blurs what is beneath the pane *in the page* — i.e. **the app's own content**. The look was always app-owned glass over an app-owned ground. Measured and available (`bbe3b10`): in-scene `MultiEffect` frosts app content **live, 59–60 fps, 8× edge reduction, 0 crashes in 80 launches**. What it cannot do is blur the desktop — and we no longer need it to.
+
+Consequences: **identical on Windows, Linux and RDP** (no compositor contract), **deterministic and CI-testable** (golden pixels), and **ours to make beautiful**. This RESTORES the Glass Council's original convergent verdict — *"self-composited baked-blur glass as foundation (identical on RDP/Linux, CI-testable), DWM material as garnish"* — which the spikes had appeared to overturn but in fact support. The night's DWM work is NOT wasted: it is the WINDOW rung of the `GlassTier` contract and the garnish tier.
+
+Affects: `docs/design/glass_council/SYNTHESIS.md` (§2.2 ratification), `gui/glass_env.py`, `gui/qml_shell.py`, glass-system shell selection.
+Status: **RATIFIED** — foundation-tier decision, part of the GlassShell path.
+
+## 2026-07-14 — Candidate C's spirit, not C's mechanic (Kaya)
+
+Verbatim: *"Kandidat C ist bis jetzt am besten von round 1, round 2 verschluckt zu viel glass feeling mit den ganzen opaquen panels"* · *"lass den Schmied jedes Panel nach Kandidat Cs philosophy designen"* · *"alles, dass Kandidat Cs spirit umgesetzt wird, auch wenn wir Regeln biegen und brechen müssen"*
+
+**Adopted: candidate C's visual LANGUAGE** — glass cards, real translucency, structural depth, and the three-tone ladder (the only one in round 01 that survived the tier it promised to survive).
+**NOT adopted: candidate C's board MECHANIC** — the freely-composable board, "situations" instead of tabs, three densities per panel. That is what cost **47–64 beats** and created C's one real safety hole (a draggable Safety card makes HV legibility an operator *preference*).
+
+Tabs + detachable panels stay (ratified). Round 03 is briefed on exactly this split. If Brokkr believes the board mechanic is essential to the spirit, he must argue and price it, not smuggle it.
+
+Adam's standing rule (from Kaya: *"too many rules restrict your thinking"*):
+> **A rule that encodes a BELIEF gets attacked. A rule that encodes a CONSEQUENCE does not.**
+> "Glass cannot do X" is a belief — measure it and overturn it (four such rules died on 2026-07-14). "HV requires confirmation" is a consequence — a human is standing at a probe station.
+
+Note for the record: **candidate C never violated a consequence rule.** Loki verified C honoured the hazard-opacity law byte-for-byte. C was never unsafe; C was expensive.
+
+Affects: `docs/design/cockpit_design_system.md`, panel-kit specs, round-03 design briefs.
+Status: **RATIFIED** — design-system guiding principle, encoded for future panel work.
