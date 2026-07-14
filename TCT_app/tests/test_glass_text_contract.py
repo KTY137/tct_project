@@ -20,6 +20,19 @@ The compositing stack under a glass pane, worst case:
 
     desktop  ->  window canvas fill  rgba(bg,    canvas_alpha)
              ->  pane fill           rgba(panel, panel_glass_alpha)
+
+OWNED-GLASS EXTENSION (Kaya, 2026-07-14: "ja drop die regel wir sind designer
+und designen geile Sachen"). The unknown-desktop premise above died with the
+owned-glass ratification (23aea87): the ground beneath every in-scene pane is
+now the app's own band-clamped ambient wash (ΔL* <= 4.0, kit §1.1, pinned by
+tests/test_ambient_ground.py), NOT a wallpaper. Machine-measured against THAT
+ground (scripts/kit_contrast_check.py, arbitrated 28e6dec), every semantic
+state ink clears WCAG AA at the shipped glass alphas — so the whitelist now
+carries them, certified below against the same owned-glass ground the material
+contract pins, with a DERIVED alpha floor so the whitelist can never outrun the
+alphas that keep it legible. The pure-white/black desktop check is kept only as
+a belt-and-suspenders floor for the neutral inks (text/muted), which stay legal
+over ANY conceivable ground.
 """
 from __future__ import annotations
 
@@ -31,19 +44,49 @@ import pytest
 
 from gui.style import (
     DARK,
+    GLASS_CARD_ALPHA_DARK,
+    GLASS_CARD_ALPHA_LIGHT,
     LIGHT,
     MIN_BACKDROP_CANVAS_ALPHA,
     MIN_PANEL_GLASS_ALPHA,
+    PANEL_GLASS_ALPHA,
     _blend,
 )
+from tests.test_material_contract import worst_legal_ground
 from tests.test_palette_contrast import AA_TEXT, contrast
 
-# The ONLY inks a registered glass pane may render text in. `text` is the body
-# ink; `muted` is the quiet-caption ink and is the one Baldr actually certified.
-# Nothing else clears the worst corner — see test_no_other_ink_is_glass_safe.
-GLASS_SAFE_TEXT_TOKENS = ("text", "muted")
+# ── THE GLASS INK WHITELIST ────────────────────────────────────────────────
+# Which ink tokens a registered glass surface may render TEXT in. Two tiers,
+# because they are certified against two different grounds.
+#
+# NEUTRAL inks (`text`/`muted`) are legal over ANY conceivable ground — even
+# the now-retired unknown-desktop premise this file was born under. `text` is
+# the body ink; `muted` is the quiet-caption ink Baldr certified. They are the
+# belt-and-suspenders floor, still measured against a pure-white AND pure-black
+# desktop below.
+GLASS_NEUTRAL_TEXT_TOKENS = ("text", "muted")
 
-# Every desktop wallpaper is somewhere between these two.
+# SEMANTIC state inks are legal on OWN-ground glass (Kaya, 2026-07-14, ratified:
+# "ja drop die regel wir sind designer und designen geile Sachen"). The
+# owned-glass ratification (23aea87) retired the unknown desktop; the ground is
+# now the app's band-clamped ambient wash (ΔL* <= 4.0), against which every
+# semantic ink was machine-measured to clear WCAG AA at the shipped alphas
+# (scripts/kit_contrast_check.py, arbitrated 28e6dec). These are the kit's §6
+# canonical five; `danger`/`armed` are byte-aliases of `crit`/`warn` and are
+# legal by the same measurement.
+GLASS_SEMANTIC_TEXT_TOKENS = ("good", "warn", "crit", "accent", "sim")
+
+# The full whitelist a registered glass pane may render text in.
+GLASS_SAFE_TEXT_TOKENS = GLASS_NEUTRAL_TEXT_TOKENS + GLASS_SEMANTIC_TEXT_TOKENS
+
+# Tokens that STAY off glass: the hazard FILL + its label ink (they belong on an
+# OPAQUE hazard surface, never composited against any ground) and `faint`
+# (retired for text everywhere — it fails AA on every surface). See
+# test_hazard_fill_and_faint_stay_off_glass.
+GLASS_FORBIDDEN_TEXT_TOKENS = ("danger_fill", "on_danger", "on_armed", "faint")
+
+# Every desktop wallpaper is somewhere between these two (the retired premise;
+# still the ground for the neutral belt-and-suspenders check below).
 WORST_CASE_DESKTOPS = ("#FFFFFF", "#000000")
 
 
@@ -62,10 +105,13 @@ def glass_backdrop(palette: dict, desktop: str,
 
 @pytest.mark.parametrize("mode", ["light", "dark"])
 @pytest.mark.parametrize("desktop", WORST_CASE_DESKTOPS)
-@pytest.mark.parametrize("token", GLASS_SAFE_TEXT_TOKENS)
+@pytest.mark.parametrize("token", GLASS_NEUTRAL_TEXT_TOKENS)
 def test_glass_safe_ink_clears_aa_at_the_legal_alpha_floors(mode, desktop, token):
-    """At the FLOORS, not at the shipped alphas: a user can drag the sliders
-    there, and a hand-edited settings file is clamped to exactly this."""
+    """The NEUTRAL belt-and-suspenders: text/muted clear AA even under the
+    retired unknown-desktop premise, at the FLOORS (not the shipped alphas) —
+    a user can drag the sliders there, and a hand-edited settings file is
+    clamped to exactly this. Semantic inks are certified separately, against
+    the owned-glass ground (see the OWNED-GLASS section below)."""
     p = LIGHT if mode == "light" else DARK
     bg = glass_backdrop(p, desktop)
     got = contrast(p[token], bg)
@@ -76,23 +122,147 @@ def test_glass_safe_ink_clears_aa_at_the_legal_alpha_floors(mode, desktop, token
         f"the floor or drop the token from GLASS_SAFE_TEXT_TOKENS.")
 
 
-def test_semantic_ink_is_excluded_by_LAW_not_by_arithmetic():
-    """Two different reasons keep a token out of the whitelist, and it matters
-    which is which.
+def test_semantic_ink_is_now_legal_on_own_ground_glass():
+    """The law change (Kaya, 2026-07-14): semantic STATE words may live on a
+    registered glass surface. This INVERTS the pre-owned-glass rule that kept
+    them off glass however good their contrast was — that rule encoded the
+    unknown-desktop belief, and the belief died (23aea87). The whitelist now
+    carries the kit's §6 canonical five; the certification is the owned-glass
+    floor section below, not this membership check."""
+    for token in GLASS_SEMANTIC_TEXT_TOKENS:
+        assert token in GLASS_SAFE_TEXT_TOKENS, token
+    # danger/armed are byte-aliases of crit/warn — legal by the same measurement.
+    assert LIGHT["danger"] == LIGHT["crit"] and DARK["danger"] == DARK["crit"]
+    assert LIGHT["armed"] == LIGHT["warn"] and DARK["armed"] == DARK["warn"]
 
-    ``faint`` is excluded because it FAILS (see the test below). The semantic
-    inks are excluded because of a ratified law — "hazard surfaces stay opaque
-    at every glass tier; glass never carries hazard information" — and that
-    holds even where the arithmetic would allow it (light ``crit``, once
-    darkened, actually measures 4.68:1 on worst-case glass; it is still not
-    cleared, because a danger state may not be composited against an unknown
-    desktop at ALL). Encoding that distinction here stops a future reader from
-    "fixing" the whitelist with a contrast measurement."""
-    for token in ("good", "warn", "crit", "sim", "armed", "danger",
-                  "danger_fill", "on_danger", "on_armed"):
-        assert token not in GLASS_SAFE_TEXT_TOKENS, (
-            f"`{token}` is a hazard/state ink — it may not render on glass "
-            f"however good its contrast is (ratified law).")
+
+def test_hazard_fill_and_faint_stay_off_glass():
+    """What did NOT move. The hazard FILL and its label ink belong on an OPAQUE
+    hazard surface (they are never composited against a ground); `faint` is
+    retired for text everywhere. None may enter the glass whitelist — the
+    extension is semantic STATE ink, not "anything goes"."""
+    for token in GLASS_FORBIDDEN_TEXT_TOKENS:
+        assert token not in GLASS_SAFE_TEXT_TOKENS, token
+
+
+# --------------------------------------------------------------------------- #
+# OWNED-GLASS SEMANTIC INK — certified against the band-clamped ambient ground #
+# --------------------------------------------------------------------------- #
+# The compositing model here is the SAME one scripts/kit_contrast_check.py runs
+# and tests/test_material_contract.py pins: a glass surface paints "one rung up
+# at its rung's alpha" over the WORST LEGAL GROUND — the canvas L* shifted by
+# the full ΔL* 4.0 band edge (kit §1.1). ``worst_legal_ground`` is imported from
+# the material contract so both files measure against byte-identical ground.
+
+# The shipped alphas a registered glass surface can paint at:
+#   card — the SCENE glass-card fill (fixed, kit §2.1): raised@0.62 dark /
+#          panel@0.86 light.
+#   pane — the glass-pane tint: `card` at the tunable pane alpha; the LOWEST it
+#          can legally reach is MIN_PANEL_GLASS_ALPHA (0.50 clamp floor, below).
+_GLASS_SURFACE_ALPHAS = {
+    ("card", "dark"): GLASS_CARD_ALPHA_DARK,
+    ("card", "light"): GLASS_CARD_ALPHA_LIGHT,
+    ("pane", "dark"): PANEL_GLASS_ALPHA,
+    ("pane", "light"): PANEL_GLASS_ALPHA,
+}
+
+# Stated engineering margin above the DERIVED semantic floor.
+SEMANTIC_FLOOR_BUFFER = 0.10
+
+
+def _glass_fill(mode: str, surface: str) -> str:
+    """The opaque fill a glass surface paints "one rung up" before its alpha."""
+    p = LIGHT if mode == "light" else DARK
+    if surface == "card":
+        return p["raised"] if mode == "dark" else p["panel"]
+    return p["card"]                          # the pane tint washes `card`
+
+
+def _min_alpha_clearing_aa(mode: str, surface: str, token: str,
+                            step: float = 0.005) -> float | None:
+    """The smallest surface alpha at which *token* clears AA on *surface* over
+    the worst legal ground — found by an explicit scan (never assumed
+    monotonic), the same method kit_contrast_check.alpha_floor_scan uses."""
+    p = LIGHT if mode == "light" else DARK
+    ground = worst_legal_ground(mode)
+    fill = _glass_fill(mode, surface)
+    n = round(1.0 / step)
+    for i in range(n + 1):
+        a = i / n
+        if contrast(p[token], _blend(fill, ground, a)) >= AA_TEXT:
+            return a
+    return None
+
+
+def _semantic_glass_floor() -> tuple[float, str, str, str]:
+    """DERIVE (never hardcode) the binding semantic floor: the HIGHEST minimum
+    alpha any semantic ink needs to clear AA on any glass surface, over the
+    worst legal ground. Returns (alpha, mode, token, surface) — the binding
+    pair, so a failure can name it. Recomputes from the live palette, so it can
+    never rot to a stale magic number."""
+    binding = (0.0, "-", "-", "-")
+    for mode in ("dark", "light"):
+        for surface in ("card", "pane"):
+            for token in GLASS_SEMANTIC_TEXT_TOKENS:
+                a = _min_alpha_clearing_aa(mode, surface, token)
+                assert a is not None, (
+                    f"[{mode}] `{token}` never clears AA on the glass {surface} "
+                    f"even at full opacity — it cannot be on the whitelist")
+                if a > binding[0]:
+                    binding = (a, mode, token, surface)
+    return binding
+
+
+@pytest.mark.parametrize("mode", ["dark", "light"])
+@pytest.mark.parametrize("token", GLASS_SEMANTIC_TEXT_TOKENS)
+def test_semantic_ink_clears_aa_on_the_shipped_glass(mode, token):
+    """Every whitelisted semantic ink clears AA on the ACTUAL shipped glass
+    composites (card AND pane), over the worst legal ground — the honest
+    certification that each whitelist entry is legible at what ships, not only
+    at some floor."""
+    p = LIGHT if mode == "light" else DARK
+    ground = worst_legal_ground(mode)
+    for surface in ("card", "pane"):
+        alpha = _GLASS_SURFACE_ALPHAS[(surface, mode)]
+        bg = _blend(_glass_fill(mode, surface), ground, alpha)
+        got = contrast(p[token], bg)
+        assert got >= AA_TEXT, (
+            f"[{mode}] `{token}` on the shipped glass {surface} (alpha {alpha}) "
+            f"= {got:.2f}:1 — below AA")
+
+
+def test_shipped_glass_alphas_stay_above_the_semantic_floor():
+    """THE floor pin. Every alpha a registered glass surface can legally paint
+    at must stay >= the DERIVED semantic floor + buffer. A future alpha tweak
+    below it fails here, naming the binding token pair — so the whitelist can
+    never quietly outrun the alphas that make it legible.
+
+    The worst legal SHIPPED alpha is MIN_PANEL_GLASS_ALPHA: a slider / hand-
+    edited settings file can drag the pane tint down to exactly the clamp
+    floor, so it is measured alongside the fixed card/pane defaults."""
+    floor_a, mode, token, surface = _semantic_glass_floor()
+    required = floor_a + SEMANTIC_FLOOR_BUFFER
+    shipped = dict(_GLASS_SURFACE_ALPHAS)
+    shipped[("pane", "clamp-floor")] = MIN_PANEL_GLASS_ALPHA
+    offenders = {k: a for k, a in shipped.items() if a < required}
+    assert not offenders, (
+        f"semantic ink binds on glass at alpha >= {floor_a:.3f} (the binding "
+        f"pair is {mode} `{token}` on the glass {surface}); with the "
+        f"{SEMANTIC_FLOOR_BUFFER:.2f} buffer every legal glass alpha must be "
+        f">= {required:.3f}. Below the floor: {offenders}. Raise the alpha, or "
+        f"drop the token(s) from GLASS_SEMANTIC_TEXT_TOKENS.")
+
+
+def test_semantic_floor_reproduces_the_arbitrated_measurement():
+    """Anchors the DERIVATION (not the guard) to the arbitrated number: the
+    machine ruled the light-glass floor at alpha >= 0.24, `good` binding
+    (28e6dec — "semantic ink on light glass needs alpha >= 0.24; `good`
+    binds"). If the derivation ever wanders far from that, the MODEL changed
+    and this fails deliberately, instead of the guard silently trusting a
+    broken model. dark clears at every alpha, so the binding is always light."""
+    floor_a, mode, token, _surface = _semantic_glass_floor()
+    assert mode == "light" and token == "good", (floor_a, mode, token)
+    assert 0.22 <= floor_a <= 0.26, floor_a
 
 
 def test_faint_is_the_hole_baldr_never_measured():

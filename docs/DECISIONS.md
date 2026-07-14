@@ -337,3 +337,18 @@ Note for the record: **candidate C never violated a consequence rule.** Loki ver
 
 Affects: `docs/design/cockpit_design_system.md`, panel-kit specs, round-03 design briefs.
 Status: **RATIFIED** — design-system guiding principle, encoded for future panel work.
+
+## 2026-07-14 — Semantic state ink may live on OWN-ground glass (Kaya)
+
+Verbatim: *"ja drop die regel wir sind designer und designen geile Sachen"*
+
+**Extends the glass INK law.** The old rule pinned only neutral ink (`text`/`muted`) as legal TEXT on a registered glass surface (`tests/test_glass_text_contract.GLASS_SAFE_TEXT_TOKENS`). That rule encoded the **unknown-desktop belief** — a glass pane could be composited over any wallpaper, so a coloured state word could not be guaranteed legible. That belief **died with the owned-glass ratification** (`23aea87`, above): the ground beneath every in-scene pane is now the app's own **band-clamped ambient wash** (ΔL* ≤ 4.0, kit §1.1, measured 3.58 and pinned by `tests/test_ambient_ground.py`), not a wallpaper. Per the standing rule directly above — *a rule that encodes a belief gets attacked* — the belief was measured and overturned.
+
+**Measured basis.** `scripts/kit_contrast_check.py` (arbitrated `28e6dec`) walks the exact shipped compositing model — the glass fill one rung up, at the surface's alpha, over the **worst legal ground** (the ΔL* 4.0 band edge). Result: every semantic ink (`good`/`warn`/`crit`/`accent`/`sim`) clears WCAG AA on DARK glass at **every** alpha; on LIGHT glass the binding pair is `good`, which needs **α ≥ 0.24** (`crit` needs no floor; `warn`/`accent`/`sim` 0.18–0.21). The kit ships 0.55 (pane) / 0.86 (light card) / 0.62 (dark card) — 2–3× the floor. `tests/test_glass_text_contract.py` now (a) carries the semantic tokens in the whitelist and (b) **derives** that floor live and asserts every shipped/clamp glass alpha stays ≥ floor + a 0.10 buffer, naming the binding token pair on failure — so a future alpha tweak below the floor fails the suite rather than silently shipping unreadable state text. Render proof (dark + light, ratios printed): `artifacts_claude/semantic_ink_on_glass/`.
+
+**What did NOT change.** Hazard surfaces stay **opaque at every tier** with their existing ink rules (the laser banner idiom; `danger_fill`/`on_danger`/`on_armed` stay off glass); **wells still refuse semantic ink** (kit §4.4 — measured failure on the light well, `tests/test_material_contract.py`); **hot-path islands** (camera view, pyqtgraph plots) are untouched. The decoupling on OPAQUE chips (`4ca8331` — ink-on-a-wash-of-itself) stays; that was a different bug and its guard remains.
+
+**PROTECTED-region note:** the glass ink law is PROTECTED. This change was made with Kaya's **explicit per-change approval** (verbatim above), not autonomously.
+
+Affects: `tests/test_glass_text_contract.py`, `docs/DECISIONS.md`, `artifacts_claude/semantic_ink_on_glass/`. (No QSS gate existed — the law lived only in the test; `gui/style.py` untouched.)
+Status: **RATIFIED** — glass ink law extended; enforced by the derived-floor test.

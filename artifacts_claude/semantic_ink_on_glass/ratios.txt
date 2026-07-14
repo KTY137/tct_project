@@ -1,0 +1,35 @@
+========================================================================
+Semantic ink on OWNED-GLASS card — render proof (Kaya 2026-07-14)
+model: glass card fill (one rung up @ card alpha) over the worst
+legal ambient ground (kit 1.1 dL* 4.0 band edge). AA floor = 4.5:1
+NOTE: under offscreen QPA the system font DB is empty, so the PNG
+glyphs render as .notdef boxes — the INK COLOUR of each box is exact
+(it is the semantic token on the real glass composite), and the
+printed ratios are the authoritative certification.
+========================================================================
+=== DARK theme ===
+  canvas                 = #0A0D13  (L* 3.61)
+  worst legal ground     = #171717  (canvas L* +4.0 dL band edge)
+  glass card fill        = raised @ 0.62  -> token #1B253A
+  composite (rgba/ground)= #19202d   sampled render px = #1a202d  (OK match (<=1 LSB))
+  semantic ink on the glass card:
+    good    #3DD68C  'LOCKED   '   8.71:1  PASS
+    warn    #FFB84D  'ARMED    '   9.50:1  PASS
+    crit    #FF5A61  'FAULT    '   5.36:1  PASS
+    accent  #5AA9FF  'LIVE     '   6.65:1  PASS
+    sim     #41D8E4  'SIMULATED'   9.46:1  PASS
+  saved: semantic_ink_on_glass_dark.png
+
+=== LIGHT theme ===
+  canvas                 = #E6EBF3  (L* 92.89)
+  worst legal ground     = #dfdfdf  (canvas L* -4.0 dL band edge)
+  glass card fill        = panel @ 0.86  -> token #FFFFFF
+  composite (rgba/ground)= #fbfbfb   sampled render px = #fafafa  (OK match (<=1 LSB))
+  semantic ink on the glass card:
+    good    #0f7655  'LOCKED   '   5.42:1  PASS
+    warn    #915b00  'ARMED    '   5.48:1  PASS
+    crit    #ad343a  'FAULT    '   6.10:1  PASS
+    accent  #2563c9  'LIVE     '   5.47:1  PASS
+    sim     #08727e  'SIMULATED'   5.46:1  PASS
+  saved: semantic_ink_on_glass_light.png
+
