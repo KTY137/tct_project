@@ -1,36 +1,44 @@
-"""LASER panel migrated onto the round-03 glass kit (panel wave beat).
+"""LASER panel migrated onto the round-03 glass kit (panel wave beat), plus the
+2026-07-15 HAZARD reclassification (lab-safety beat, Kaya-approved).
 
 Mirrors ``tests/test_pilot_bias_render.py`` (the pilot) and
-``tests/test_wave_stage_view_render.py`` minimally, adapted to what this
-panel actually is: the census classed it **non-hazard** — the wavegen is the
-real (software-controlled) trigger control, the PDL 800 head is a
-metadata-only honesty banner (law 7, no software emission switch).
+``tests/test_wave_calibration_render.py`` (the hazard precedent). The panel is
+a HAZARD panel: the wavegen's "Output on" button (``armedBtn``) is the REAL
+PDL 800 trigger path (wavegen output → laser trigger input = emission), so the
+emission-arming cluster sits on an opaque ``HazardSurface`` and arming
+confirms through the injected ``DangerGate`` (see the gate tests in
+``tests/test_laser_panel_output_state.py``).
 
 What it proves, headless and hardware-free (QT_QPA_PLATFORM=offscreen,
 simulated ``WaveformGenerator`` only — never connected):
 
-  * the panel is now one ``GlassPane`` shelf (``#shelfPane``) carrying a
+  * the panel is one ``GlassPane`` shelf (``#shelfPane``) carrying a
     ``panel_header`` chrome head, the status-chip row, the manual-laser
     honesty banner, the wavegen hero card and the PDL metadata card;
   * register decision: ONLY the PDL metadata card opts into glass (pure
-    bookkeeping chrome).  The shelf itself, the wavegen card (hosts the
-    "Output on" ARMED trigger button, objectName ``armedBtn``) and the
-    manual-laser banner (hazard-ink amber, Völundr G1) are all excluded —
+    bookkeeping chrome — the reclassification ruling KEEPS it, its content is
+    metadata, nothing emission-related).  The shelf itself, the wavegen card
+    (hosts the "Output on" ARMED trigger button, objectName ``armedBtn``) and
+    the manual-laser banner (hazard-ink amber, Völundr G1) are all excluded —
     same shape ``tests/test_panel_glass_rollout.py`` already pins for this
     panel, cross-checked here as the wave's own render test;
+  * the emission-arming cluster (Output on/off) is a PURE PARENT-FRAME WRAP
+    inside an opaque ``HazardSurface`` carrying the ``armed`` stripe — opaque
+    at every tier, including with the panel-glass switch flipped ON, and never
+    registered;
   * numeric/text inputs (the wavegen spins, the PDL wavelength/power/
     attenuation/notes fields) recess into an opaque ``Well`` (§4.4); the
     selection combos (rep. mode, pulse spec, output load) are NOT wells —
     they stay direct form-row widgets;
   * a live light -> dark -> light switch re-resolves the panel's cached
     theme tokens (``_restyle_theme_tokens``: axis rails + the banner's amber
-    ink) without a crash and renders a non-null frame in both themes.
+    ink + the hazard surface's stripe/fill) without a crash and renders a
+    non-null frame in both themes.
 
-``tests/test_laser_panel_output_state.py`` and
-``tests/test_laser_panel_worker.py`` are READ-ONLY and stay green untouched —
-they are the authority on the output-chip/worker-thread behaviour; this file
-only proves the glass re-skin did not disturb the structure/behaviour they
-walk through.
+``tests/test_laser_panel_output_state.py`` (now also the gate-behaviour
+authority) and ``tests/test_laser_panel_worker.py`` cover the
+output-chip/worker-thread/gate behaviour; this file proves the structure the
+glass re-skin + hazard wrap produced.
 """
 from __future__ import annotations
 
@@ -46,8 +54,8 @@ from devices.laser_manual import LaserManualMetadata
 from devices.waveform_generator import WaveformGenerator
 from gui import panel_kit
 from gui.laser_panel import LaserPanel
-from gui.panel_kit import GlassPane, Well
-from gui.style import apply_theme
+from gui.panel_kit import GlassPane, HazardSurface, Well
+from gui.style import apply_theme, palette
 
 _ARTIFACT_DIR = (
     Path(__file__).resolve().parent.parent.parent / "artifacts_claude" / "wave_laser"
@@ -88,10 +96,11 @@ def test_panel_is_one_glass_pane_shelf():
 
 
 def test_only_the_pdl_card_registers_for_glass():
-    """The register decision: non-hazard census, but the shelf's body directly
-    hosts an ARMED control (the wavegen's "Output on") and a hazard-ink
-    honesty banner, so the shelf and both of those cards are excluded — only
-    the pure-chrome PDL metadata card opts in.  Mirrors
+    """The register decision on a HAZARD panel: the shelf's body directly hosts
+    an ARMED control (the wavegen's "Output on") and a hazard-ink honesty
+    banner, so the shelf and both of those cards are excluded — only the
+    pure-chrome PDL metadata card opts in (the reclassification ruling KEEPS
+    it).  Mirrors
     ``test_panel_glass_rollout.test_hazard_and_data_panes_are_never_registered``
     / ``test_wired_panels_register_their_chrome_panes`` for this same panel."""
     _app()
@@ -115,6 +124,55 @@ def test_only_the_pdl_card_registers_for_glass():
         ):
             assert denied not in ours, f"{denied} must not register: {why}"
             assert not denied.property("glassPane"), f"{denied} must not go glass: {why}"
+    finally:
+        panel_kit.set_panel_glass(False)
+        _dispose(panel)
+
+
+def test_emission_cluster_wrapped_in_a_hazard_surface_with_armed_stripe():
+    """HAZARD reclassification: the Output on/off cluster is a PURE PARENT-FRAME
+    WRAP inside exactly one ``HazardSurface`` carrying the ``armed`` stripe —
+    the buttons keep their identity, only the container changed."""
+    _app()
+    panel = _panel()
+    try:
+        hazards = panel.findChildren(HazardSurface)
+        assert len(hazards) == 1
+        haz = hazards[0]
+        assert haz is panel._hazard
+        assert haz.objectName() == "hazardSurface"
+        assert haz.stripe_kind() == "armed"
+        # Both output buttons live under the hazard surface.
+        assert haz.isAncestorOf(panel._btn_on)
+        assert haz.isAncestorOf(panel._btn_off)
+        assert panel._btn_on.objectName() == "armedBtn"
+        # The hazard surface itself is nested inside the wavegen hero card.
+        assert panel._card_wfg.isAncestorOf(haz)
+    finally:
+        _dispose(panel)
+
+
+def test_hazard_surface_never_registers_and_stays_opaque_through_the_glass_switch():
+    """Consequence rule (kit §4.6): a HazardSurface is opaque at EVERY tier —
+    never in the registry, and flipping the panel-glass switch must never touch
+    its pinned instance fill or add a glass property."""
+    _app()
+    panel = _panel()
+    try:
+        panel_kit.set_panel_glass(True)
+        registered = {id(p) for p in panel_kit.registered_glass_panes()}
+        assert id(panel._hazard) not in registered
+
+        p = palette(panel._theme_mode)
+        before = panel._hazard.styleSheet()
+        assert f"background: {p['panel']}" in before
+        assert not panel._hazard.property("glassPane")
+
+        # Toggling the switch OFF then ON must not disturb the pinned fill.
+        panel_kit.set_panel_glass(False)
+        panel_kit.set_panel_glass(True)
+        assert panel._hazard.styleSheet() == before
+        assert not panel._hazard.property("glassPane")
     finally:
         panel_kit.set_panel_glass(False)
         _dispose(panel)

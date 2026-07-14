@@ -131,3 +131,99 @@ def test_apply_when_connected_reports_configured(qapp) -> None:
     panel._apply_wfg()
     assert _pump_until(qapp, lambda: panel._pending == 0), "apply job never drained"
     assert "configured" in panel._chip_wfg.text().lower()
+
+
+# --------------------------------------------------------------------------- #
+# Danger gate (2026-07-15 hazard reclassification) — arming the wavegen output #
+# is arming the PDL 800 laser trigger, so Output ON confirms through the       #
+# injected DangerGate before ANY VISA submission; Output OFF never does.       #
+# --------------------------------------------------------------------------- #
+
+class _RecordingGate:
+    """DangerGate stub: records every confirm() and answers a fixed bool."""
+
+    def __init__(self, answer: bool) -> None:
+        self.answer = answer
+        self.actions: list = []
+
+    def confirm(self, action) -> bool:
+        self.actions.append(action)
+        return self.answer
+
+
+def _gate_panel(gate):
+    from devices.waveform_generator import WaveformGenerator
+    from devices.laser_manual import LaserManualMetadata
+    from gui.laser_panel import LaserPanel
+    wfg = WaveformGenerator(simulation=True)
+    wfg.connect()
+    p = LaserPanel(LaserManualMetadata(), wfg, gate=gate)
+    _PANELS.append(p)
+    return p
+
+
+def _spy_submissions(panel) -> list:
+    """Replace the panel's off-thread submit with a recorder, so a gate
+    decision's effect on the VISA queue is observable synchronously (no worker
+    thread involved) — the spy IS the queue for these tests."""
+    submits: list = []
+    panel._submit = lambda fn, on_done: submits.append(fn)
+    return submits
+
+
+def test_output_on_gate_declines_submits_nothing(qapp) -> None:
+    gate = _RecordingGate(False)
+    panel = _gate_panel(gate)
+    submits = _spy_submissions(panel)
+    panel._output_on()
+    # The gate WAS consulted, with the emission action…
+    assert len(gate.actions) == 1
+    assert gate.actions[0].kind == "laser_arm"
+    # …and a decline queued NOTHING to the wavegen.
+    assert submits == []
+
+
+def test_output_on_no_gate_refuses_with_message_and_submits_nothing(qapp, monkeypatch) -> None:
+    from gui import laser_panel
+
+    class _FakeMB:
+        calls: list = []
+
+        @staticmethod
+        def warning(parent, title, text, *a, **k):
+            _FakeMB.calls.append((title, text))
+            return None
+
+    monkeypatch.setattr(laser_panel, "QMessageBox", _FakeMB)
+    panel = _gate_panel(None)          # fail-safe: no gate wired
+    submits = _spy_submissions(panel)
+    panel._output_on()
+    assert submits == [], "no gate must submit NOTHING (fail-safe)"
+    assert len(_FakeMB.calls) == 1
+    title, text = _FakeMB.calls[0]
+    assert title == "Confirmation unavailable"
+    assert "not wired" in text.lower()
+
+
+def test_output_on_gate_accepts_submits_exactly_once(qapp) -> None:
+    gate = _RecordingGate(True)
+    panel = _gate_panel(gate)
+    submits = _spy_submissions(panel)
+    panel._output_on()
+    assert len(gate.actions) == 1
+    assert len(submits) == 1
+    # Exactly the driver's output_on was queued (rule 4: the write is unchanged;
+    # only a confirmation was wrapped around it).
+    assert submits[0] == panel._wfg.output_on
+
+
+def test_output_off_never_consults_the_gate(qapp) -> None:
+    # A gate that WOULD deny — Output OFF must never even ask it (kill-direction
+    # actions are never gated, house law 5) and must always submit.
+    gate = _RecordingGate(False)
+    panel = _gate_panel(gate)
+    submits = _spy_submissions(panel)
+    panel._output_off()
+    assert gate.actions == [], "Output OFF must never consult the gate"
+    assert len(submits) == 1
+    assert submits[0] == panel._wfg.output_off

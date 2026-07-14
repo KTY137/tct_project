@@ -5,16 +5,27 @@ controls) is the hero card; the manual PDL 800 head gets an amber honesty
 banner (law 7: no software emission switch — emission is unknown to
 software) and a demoted, collapsed metadata card.
 
+HAZARD PANEL (reclassified 2026-07-15, lab-safety beat, Kaya-approved). The
+wavegen's "Output on" button (``objectName == "armedBtn"``) is the REAL PDL
+800 trigger path: wavegen output → laser trigger input = EMISSION whenever the
+manual head is armed. So arming the output is a rule-2 dangerous action and
+now rides the SAME ``controller.danger_gate.DangerGate`` every HV ramp / stage
+move confirms through — injected by ``tct_gui`` exactly like ``BiasPanel``'s
+and ``MotorPanel``'s gate (see ``_output_on`` / ``_confirm_emission``). With no
+gate wired the arm REFUSES (fail-safe, the ``CalibrationPanel`` precedent).
+Output-OFF is a kill-direction action and stays ONE TAP, never gated (house
+law 5) — it can only make the setup safer.
+
 Round-03 glass kit migration (wave beat, mirrors ``BiasPanel``/
-``IntensityPanel``): the whole panel is now ONE ``GlassPane`` shelf (chrome
-head + status chips + banner + wavegen + PDL cards), with numeric/text
-inputs recessed into an opaque ``Well`` (§4.4).  The shelf's ``register=False``
-is a *content* consequence (like ``IntensityPanel``'s), not a hazard-panel
-blanket exclusion (like ``BiasPanel``'s): its body directly hosts the
-wavegen card's "Output on" ARMED trigger button and the amber manual-laser
-honesty banner, so only the pure-chrome PDL metadata card opts into glass —
-see the register_glass_pane call and its neighbouring comment in
-``_build_ui`` for the exact reasoning, cross-checked by
+``IntensityPanel``): the whole panel is ONE ``GlassPane`` shelf (chrome head +
+status chips + banner + wavegen + PDL cards), with numeric/text inputs
+recessed into an opaque ``Well`` (§4.4).  The shelf's ``register=False`` is
+both a *content* consequence (the shelf body directly hosts the banner + the
+emission cluster) AND, since the reclassification, a hazard-panel stance: the
+emission-arming controls (the "Output on"/"Output off" cluster) now sit on an
+opaque never-registered ``HazardSurface`` (§4.6), and only the pure-chrome PDL
+metadata card opts into glass — see the register_glass_pane call and its
+neighbouring comment in ``_build_ui`` for the exact reasoning, cross-checked by
 ``tests/test_panel_glass_rollout.py`` and ``tests/test_wave_laser_render.py``.
 """
 from __future__ import annotations
@@ -29,12 +40,14 @@ from PySide6.QtWidgets import (
     QPushButton, QComboBox, QApplication, QMessageBox,
 )
 
+from controller.danger_gate import DangerAction, DangerGate
 from devices.laser_manual import LaserManualMetadata
 from devices.waveform_generator import WaveformGenerator, list_visa_resources
 from gui.app_settings import theme_mode
 from gui.motion import set_pulse
 from gui.panel_kit import (
-    Card, CheckableCard, GlassPane, Well, panel_header, register_glass_pane,
+    Card, CheckableCard, GlassPane, HazardSurface, Well, panel_header,
+    register_glass_pane,
 )
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import SPACE_MD, SPACE_SM, WARN_AMBER, palette
@@ -108,10 +121,20 @@ class LaserPanel(QWidget):
         laser: LaserManualMetadata,
         wfg: WaveformGenerator,
         parent: QWidget | None = None,
+        *,
+        gate: DangerGate | None = None,
     ) -> None:
         super().__init__(parent)
         self._laser = laser
         self._wfg = wfg
+        # Confirmation gate for arming the wavegen output — the PDL 800 laser
+        # trigger path (rule 2).  ``tct_gui`` injects the SAME ``QtDangerGate``
+        # the plan executor and the HV/motion panels use, so there is one
+        # confirmation mechanism app-wide.  With NO gate wired every arm path
+        # REFUSES (fail-safe) and says so — the stance ``CalibrationPanel`` /
+        # ``BiasPanel`` take for gate-less danger actions.  Output-OFF is a
+        # kill-direction action and is never gated (law 5).
+        self._gate = gate
         # Theme mode for the axis-rail accents (gui.style.axis_color): the
         # PDL 800 card reads "laser" (purple), the Waveform Generator card
         # reads "delay" (green) — it drives the laser's trigger/pulse timing,
@@ -166,18 +189,15 @@ class LaserPanel(QWidget):
         root = QVBoxLayout(self)
 
         # ── The one shelf (round-03 kit §2.1) ──────────────────────────
-        # register=False is a CONTENT consequence, not a hazard one (the
-        # census classed this whole panel non-hazard — mirrors
-        # ``gui/intensity_panel.py``'s reasoning, not the bias pilot's
-        # blanket "opts nothing in"): the shelf's body directly hosts the
-        # wavegen card's "Output on" ARMED trigger button (Z5) and the amber
-        # manual-laser honesty banner (a hazard-ink surface, Völundr G1), and
-        # the Z-ladder census (tests/test_panel_glass_rollout.py,
-        # ``_glass_disqualifiers``) refuses glass on ANY pane that CONTAINS
-        # such a descendant, not only the immediate surface carrying it.
-        # Only the pure-chrome PDL metadata card (bookkeeping, no armed
-        # control, no hazard ink) registers — see the register_glass_pane
-        # call at the end of this method.
+        # register=False on a HAZARD panel (reclassified 2026-07-15): the
+        # shelf's body directly hosts the emission cluster's "Output on" ARMED
+        # trigger button (Z5, ``armedBtn``) and the amber manual-laser honesty
+        # banner (a hazard-ink surface, Völundr G1), and the Z-ladder census
+        # (tests/test_panel_glass_rollout.py, ``_glass_disqualifiers``) refuses
+        # glass on ANY pane that CONTAINS such a descendant, not only the
+        # immediate surface carrying it.  Only the pure-chrome PDL metadata card
+        # (bookkeeping, no armed control, no hazard ink) registers — see the
+        # register_glass_pane call at the end of this method.
         shelf = GlassPane(register=False)
         self._shelf = shelf
 
@@ -365,6 +385,23 @@ class LaserPanel(QWidget):
         self._chip_load.set_status(f"Load {_load_label}",
                                    "good" if _load_label == "50 Ω" else "warn")
 
+        # ── Emission-arming hot zone, on the HazardSurface (kit §4.6) ──
+        # "The stone in the glass room": the Output ON/OFF cluster arms (and
+        # disarms) the wavegen output, which IS the PDL 800 laser trigger —
+        # arming it is emission.  It sits on ONE opaque ``HazardSurface``
+        # carrying the ``armed`` stripe + 45° hatch (the same channel the
+        # round-03 census gives an arming trigger; it matches the ``armedBtn``
+        # objectName and the "Output ARMED" chip state).  Opaque at every tier,
+        # never registered (``register_glass_pane`` refuses the class outright).
+        # PURE PARENT-FRAME WRAP: the button identities, wiring and the
+        # DangerGate/_confirm_emission path are unchanged — only the container.
+        # The eyebrow WORD is the redundant hazard channel (survives greyscale /
+        # a dead projector).  Output-OFF lives here too but is never gated (law
+        # 5) — a disarm can only make the setup safer.
+        hazard = HazardSurface(
+            "Laser trigger", "wavegen output → PDL 800 trigger in",
+            stripe="armed", theme_mode=self._theme_mode)
+        self._hazard = hazard
         btn_row = QHBoxLayout()
         self._btn_on  = QPushButton("Output on")
         self._btn_on.setObjectName("armedBtn")
@@ -375,7 +412,8 @@ class LaserPanel(QWidget):
         self._btn_off.clicked.connect(self._output_off)
         btn_row.addWidget(self._btn_on)
         btn_row.addWidget(self._btn_off)
-        wfg_form.addRow(btn_row)
+        hazard.add_layout(btn_row)
+        wfg_form.addRow(hazard)
 
         btn_apply = QPushButton("Apply settings")
         self._btn_apply = btn_apply
@@ -406,12 +444,17 @@ class LaserPanel(QWidget):
         root.addWidget(shelf)
         # Panel glass (opt-in, Baldr Z-ladder): ONLY the PDL metadata card is
         # eligible — it is pure bookkeeping chrome (knob settings recorded in
-        # run metadata), no live readout, no armed control. The wavegen hero
-        # card is DENIED (it hosts the "Output on" armed trigger button —
-        # Baldr §5.2, no glass may sit under an armed control) and so is the
-        # amber manual-laser honesty banner (Völundr G1, a hazard-ink surface).
-        # The shelf itself is denied for the same reason, one level up (see
-        # the register=False comment where it is constructed, above).
+        # run metadata), no live readout, no armed control, no emission path.
+        # RULING (2026-07-15 hazard reclassification): the PDL card registration
+        # STAYS — its content is purely metadata, nothing emission-related, so
+        # ``test_wired_panels_register_their_chrome_panes`` still pins it. The
+        # wavegen hero card is DENIED (it hosts the emission cluster's "Output
+        # on" armed trigger button — Baldr §5.2, no glass may sit under an armed
+        # control); the emission cluster itself now lives on an opaque
+        # never-registered ``HazardSurface`` (§4.6, refused by
+        # ``register_glass_pane`` outright); the amber manual-laser honesty
+        # banner is denied (Völundr G1, a hazard-ink surface); and the shelf is
+        # denied one level up (see the register=False comment above).
         register_glass_pane(self._card_pdl)
         self._restyle_theme_tokens()
 
@@ -643,7 +686,44 @@ class LaserPanel(QWidget):
             return
         self._chip_load.set_status(f"Load {label}", "good" if label == "50 Ω" else "warn")
 
+    def _confirm_emission(self, action: DangerAction) -> bool:
+        """Ask the injected gate to confirm arming the wavegen output.
+
+        Called on the GUI thread, BEFORE the write is queued to the VISA
+        worker: a refusal must leave the wavegen untouched and nothing
+        submitted.  ``confirm`` returning ``False`` is a normal user decline,
+        not an error.
+
+        With **no gate injected** the arm is REFUSED and surfaced — the same
+        fail-safe fallback ``BiasPanel._confirm_hv`` / ``CalibrationPanel``
+        use: an un-wired confirmation path must never degrade into "no
+        confirmation needed".
+        """
+        if self._gate is None:
+            QMessageBox.warning(
+                self, "Confirmation unavailable",
+                f"{action.summary}\n\n"
+                "This arms the laser trigger (wavegen output → PDL 800 trigger "
+                "input) and needs a confirmation gate, which is not wired. "
+                "Cannot proceed.")
+            return False
+        return bool(self._gate.confirm(action))
+
     def _output_on(self) -> None:
+        # Rule 2: arming the wavegen output IS arming the PDL 800 laser trigger
+        # (wavegen output → laser trigger input = emission if the head is
+        # armed), so confirm through the injected gate — with the REAL trigger
+        # numbers in the payload — BEFORE the write is queued to the VISA
+        # worker.  A refusal (or no gate) submits nothing.
+        freq = self._spin_freq.value()
+        ampl = self._spin_ampl.value()
+        if not self._confirm_emission(DangerAction(
+            kind="laser_arm",
+            summary=f"Arm laser trigger — wavegen output ON "
+                    f"({freq:g} Hz, {ampl:g} Vpp)",
+            detail={"frequency_Hz": freq, "amplitude_Vpp": ampl},
+        )):
+            return
         # Off-thread like every wavegen write.  The OFF path (below) stays just
         # as responsive, so the trigger can always be disarmed even while a slow
         # write is still draining on a dead peer.
@@ -808,6 +888,13 @@ class LaserPanel(QWidget):
         p = palette(self._theme_mode)
         self._card_pdl.set_rail("laser", self._theme_mode)
         self._card_wfg.set_rail("delay", self._theme_mode)
+        # The emission-cluster HazardSurface caches its stripe/hatch colours and
+        # pins an opaque instance fill per theme at construction, so a live
+        # light/dark switch must re-resolve them (mirrors the motor/calibration
+        # hazard panels).
+        hazard = getattr(self, "_hazard", None)
+        if hazard is not None:
+            hazard.refresh_theme(self._theme_mode)
         self._pulse_hint.setStyleSheet(
             f"color: {p['muted']}; font-size: 11px;")
         # Amber state banner (law 7): warn-token rail + warn ink, scoped to

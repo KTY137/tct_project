@@ -389,7 +389,13 @@ class TCTMainWindow(QMainWindow):
         self._camera_panel    = CameraPanel(self._devices.camera)
         self._scope_panel     = ScopePanel(self._devices.scope, config_path=self._config_path,
                                            analysis_kwargs=self._devices.analysis_kwargs)
-        self._laser_panel     = LaserPanel(self._devices.laser, self._devices.waveform_generator)
+        # The gate is injected exactly like the motor/bias/calibration panels:
+        # arming the wavegen output IS arming the PDL 800 laser trigger
+        # (emission), so it confirms through the same QtDangerGate (rule 2).
+        # Output OFF stays one-tap (law 5).
+        self._laser_panel     = LaserPanel(self._devices.laser,
+                                           self._devices.waveform_generator,
+                                           gate=self._danger_gate)
         self._scan_viewer     = ScanViewerPanel()
         # One tab per HV channel.  Starts as [primary] and is rebuilt from the
         # driver's real channel count once connect_all() runs refresh_bias_channels().
