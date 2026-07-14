@@ -212,9 +212,19 @@
         <td class="num"><span class="was">tot</span> <span class="arrow">→</span> <span class="ist">live</span></td>
       </tr>
       <tr class="s-crit">
-        <td class="sev"><strong>Der Default-Shell übermalt sein eigenes Glas</strong><br><span class="cap">noch offen — läuft gerade</span></td>
-        <td>Mit <code>TCT_QML_SHELL=1</code> (Default seit <code>76c2370</code>) folgen <strong>0,05 %</strong> der Pixel dem Hintergrund. Beim klassischen Shell: <strong>9,9 %</strong>. Das Fenster ist kerngesund — Alpha 8, Material attached, <code>attr38=3</code>. <strong>Das Glas geht nicht verloren, es wird übermalt.</strong></td>
-        <td class="num"><span class="was">0.05 %</span> <span class="arrow">→</span> <span class="ist">9.9 %</span></td>
+        <td class="sev"><strong>Der Default-Shell übermalte sein eigenes Glas</strong><br><span class="cap">zwei Übermaler, keiner allein sichtbar</span></td>
+        <td>Eine <strong>opake Clear-Farbe</strong> im <code>QQuickWidget</code> (einmal gesetzt, nie neu bewertet) <em>plus</em> ein Root-<code>Rectangle</code> mit drei opaken Kindern, die die Insel zu 100 % kacheln. <strong>Hätte man nur eins repariert, wäre nichts passiert</strong> — so versteckt sich ein Bug vor einer Bisect.</td>
+        <td class="num"><span class="was">0.00 %</span> <span class="arrow">→</span> <span class="ist">96.01 %</span></td>
+      </tr>
+      <tr class="s-crit">
+        <td class="sev"><strong>Der RDP-Deckel hatte nie gefeuert</strong><br><span class="cap">fünf Sonden = TODO-Stubs</span></td>
+        <td>Der Tier wurde allein aus Build-Nummer, RHI und Shell entschieden. Die <strong>High-Contrast-Regel feuerte nie</strong>, der RDP-Deckel war wirkungslos — jede Behauptung „degradiert sauber auf RDP" war eine Aussage über <em>ungeschriebenen Code</em>.</td>
+        <td class="num"><span class="was">remote=?</span> <span class="arrow">→</span> <span class="ist">remote=0</span></td>
+      </tr>
+      <tr class="s-crit">
+        <td class="sev"><strong>Fünfzig schwarze Icons</strong><br><span class="cap">der Fix war in 1 von 15 Panels</span></td>
+        <td>Mary fand, dass der Icon-Fix nur <code>motor_panel</code> traf — und der neue Wächter-Test <strong>genau eine Datei las</strong>. qtawesome zieht seine Default-Farbe aus der Qt-Palette; diese App themt per QSS. Ergebnis: schwarz.</td>
+        <td class="num"><span class="was">1.11:1</span> <span class="arrow">→</span> <span class="ist">16.09:1</span></td>
       </tr>
       <tr class="s-warn">
         <td class="sev"><strong>Die Tiefen-Leiter existiert nicht</strong><br><span class="cap">verifiziert, schlimmer als behauptet</span></td>
