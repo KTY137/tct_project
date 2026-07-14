@@ -418,6 +418,34 @@ class TCTMainWindow(QMainWindow):
         outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(10)
 
+        # ── Layer 0: the app-owned ambient ground (round-03 kit §1) ─────
+        # A child of #mainShell, kept lowered behind every sibling panel and
+        # transparent to input; at paint time it does one cached-pixmap blit of
+        # a bounded (ΔL* ≤ 4.0) wash over the canvas token, showing through every
+        # gutter the opaque panels do not cover.  It self-lowers on ChildAdded,
+        # so the ribbon / tabs / QML chrome added below always paint on top of
+        # it.  Held as a window attribute so the theme fan-out auto-discovers
+        # its refresh_theme (tests/test_theme_fanout_completeness).  The tier is
+        # the ONE glass ladder's real decision (gui/glass_env): today it lands
+        # on TOKEN (offscreen, and the classic shell's own ceiling) — which
+        # paints the wash — and drops to FLAT only under high-contrast / an
+        # operator override, where the ground correctly paints nothing.
+        #
+        # DETACHED WINDOWS (this wave): a torn-off tab (gui/detachable_tabs.py,
+        # not in this beat's scope) deliberately gets the FLAT-canvas ground —
+        # i.e. the plain opaque token canvas, which IS the ground's FLAT form and
+        # is AA-safe by construction.  No AmbientGround is installed into the
+        # _DetachedWindow: wiring the painter there WITHOUT hooking its own
+        # theme-refresh fan-out would leave a stale wash on a theme toggle while
+        # detached.  A docked vs detached panel therefore differs only in the
+        # (subtle, information-free) wash of the room around it; every hazard
+        # surface is opaque either way, so nothing unsafe follows.
+        from gui import glass_env, panel_kit
+        self._ambient_ground = panel_kit.AmbientGround(
+            central, theme_mode=self._theme_mode)
+        self._ambient_ground.set_tier(
+            glass_env.decide_tier(glass_env.probe_environment()))
+
         # (Connect/Disconnect/Settings/Log live on the menu bar + toolbar, built
         #  once in __init__ so they survive a soft-reload.)
 
@@ -1030,7 +1058,8 @@ class TCTMainWindow(QMainWindow):
         # apply_theme() repaints every QSS hook globally, but axis_color()-based
         # instance styles (motor axis rails, bias amber, plot pens) are baked at
         # construction — panels expose refresh_theme() to re-resolve them live.
-        for panel in (getattr(self, "_motor_panel", None),
+        for panel in (getattr(self, "_ambient_ground", None),
+                      getattr(self, "_motor_panel", None),
                       getattr(self, "_bias_panel", None),
                       getattr(self, "_planner_panel", None),
                       getattr(self, "_seq_panel", None),

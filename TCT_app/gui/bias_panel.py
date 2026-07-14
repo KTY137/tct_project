@@ -45,7 +45,10 @@ from controller.danger_gate import DangerAction, DangerGate
 from controller.scan_controller import VoltageScanConfig
 from gui.app_settings import theme_mode
 from gui.motion_kit import cancel_roll, roll_number
-from gui.panel_kit import Card, CheckableCard, MetricGrid, MetricTile, section_header
+from gui.panel_kit import (
+    Card, CheckableCard, GlassPane, HazardSurface, MetricGrid, MetricTile,
+    Well, panel_header, section_header,
+)
 from gui.status_bus import notify
 from gui.style import PLOT_BG, WARN_RED, axis_color, palette, repolish
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
@@ -286,21 +289,38 @@ class BiasPanel(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
-        # ── Status strip ───────────────────────────────────────────────
-        # Connection chip only — output/compliance state moved into the hero
-        # trio tiles below (design system §6: the bias panel is a safety
-        # dashboard, its primary display is Voltage · Current · HV STATE).
-        status_row = QHBoxLayout()
-        status_row.setSpacing(8)
-        self._chip_conn = StatusChip("Disconnected", "disconnected")
-        status_row.addWidget(self._chip_conn)
-        status_row.addStretch(1)
-        root.addLayout(status_row)
+        # ── The one shelf (round-03 kit §2.1) ──────────────────────────
+        # The whole panel is a single opaque "container slab": the shelf token,
+        # hairline_strong outline, specular top edge.  register=False is the
+        # LOAD-BEARING safety choice — this is the HV safety dashboard, so it
+        # opts NOTHING into the panel-glass switch: every one of its surfaces
+        # stays opaque at every tier, and the glass "room" lives in the ambient
+        # ground + the app shell AROUND it, never on it.  Pinned by
+        # tests/test_panel_glass_rollout.test_bias_panel_opts_nothing_in.
+        shelf = GlassPane(register=False)
+        self._shelf = shelf
 
-        # ── Hero trio: Voltage · measured / Current / HV STATE ─────────
-        # (design system §6, Paul's hardware-truth map).  Polarity sign comes
-        # from the READBACK; the setpoint lives in the caption, labelled
-        # apart (law 7 "measured vs setpoint labeled apart").
+        # ── Pane head: eyebrow + title + connection chip (chrome only) ──
+        # §2.1: the shelf carries the panel eyebrow, the title and the
+        # connection chip — chrome and labels, nothing else.  (Output/compliance
+        # state lives in the hero tiles below; design system §6.)
+        self._chip_conn = StatusChip("Disconnected", "disconnected")
+        ch0 = getattr(self._supply, "channel", "?")
+        shelf.add_widget(panel_header(
+            "TCT Control · High voltage", f"Bias supply — CH{ch0}",
+            trailing=[self._chip_conn], theme_mode=self._theme_mode))
+
+        # ── Hero trio, on the HazardSurface (round-03 kit §4.6) ────────
+        # "The stone in the glass room": a live HV voltage may never float on
+        # glass, so the Voltage · Current · HV-state trio sits on an OPAQUE
+        # HazardSurface (opaque `panel` at every tier) carrying a 4 px danger
+        # stripe + 45° hatch down its left edge.  The trio itself is the SAME
+        # MetricGrid(columns=3) — a pure parent-frame wrap (Loki rider 5): the
+        # tiles, their ink and every bit of HV-state logic are byte-identical,
+        # only the container changed.  Polarity sign comes from the READBACK;
+        # the setpoint lives in the caption, labelled apart (law 7).  The
+        # surface title supplies the redundant hazard WORD channel (stripe
+        # colour + hatch texture + word survive greyscale / a dead projector).
         hero = MetricGrid(columns=3)
         self._tile_v: MetricTile = hero.add_tile(
             MetricTile("Voltage · measured", "—", min_width=130))
@@ -310,7 +330,10 @@ class BiasPanel(QWidget):
             MetricTile("HV state", "—", min_width=130))
         for tile in (self._tile_v, self._tile_i, self._tile_hv):
             tile.set_stale(True, "not connected")
-        root.addWidget(hero)
+        self._hazard = HazardSurface(
+            "High voltage", stripe="danger", theme_mode=self._theme_mode)
+        self._hazard.add_widget(hero)
+        shelf.add_widget(self._hazard)
 
         # ── Safety / compliance ────────────────────────────────────────
         safe_box = Card("Compliance (current limit)")
@@ -335,7 +358,10 @@ class BiasPanel(QWidget):
         # shouts.  A real compliance TRIP is a crit alarm on the hero tiles.
         self._chip_comp_limit = StatusChip("Limit ok", "neutral")
 
-        safe_form.addRow("Compliance:", self._spin_comp)
+        # The numeric input sits in an opaque Well (§4.4: "a value being typed
+        # is never on glass").  The semantic-inked warn label + limit chip stay
+        # on the CARD, never in a well (§4.4 law: no semantic ink in a well).
+        safe_form.addRow("Compliance:", self._well(self._spin_comp))
         safe_form.addRow("Limit state:", self._chip_comp_limit)
         safe_form.addRow(self._lbl_comp_warn)
 
@@ -344,7 +370,7 @@ class BiasPanel(QWidget):
         self._btn_set_comp.clicked.connect(self._apply_compliance)
         safe_form.addRow(self._btn_set_comp)
         safe_box.add_layout(safe_form)
-        root.addWidget(safe_box)
+        shelf.add_widget(safe_box)
 
         # ── Voltage control ────────────────────────────────────────────
         # Bias-axis rail (gui.style.axis_color("bias", ...)) marks this as
@@ -364,21 +390,21 @@ class BiasPanel(QWidget):
         self._spin_volt.setSingleStep(10.0)
         self._spin_volt.setValue(float(getattr(self._supply, "setpoint_V", 0.0)))
         self._spin_volt.setSuffix(" V")
-        volt_form.addRow("Target voltage:", self._spin_volt)
+        volt_form.addRow("Target voltage:", self._well(self._spin_volt))
 
         self._spin_step = QDoubleSpinBox()
         self._spin_step.setRange(0.1, 100.0)
         self._spin_step.setDecimals(1)
         self._spin_step.setValue(5.0)
         self._spin_step.setSuffix(" V/step")
-        volt_form.addRow("Ramp step:", self._spin_step)
+        volt_form.addRow("Ramp step:", self._well(self._spin_step))
 
         self._spin_delay = QDoubleSpinBox()
         self._spin_delay.setRange(0.01, 10.0)
         self._spin_delay.setDecimals(2)
         self._spin_delay.setValue(0.1)
         self._spin_delay.setSuffix(" s")
-        volt_form.addRow("Step delay:", self._spin_delay)
+        volt_form.addRow("Step delay:", self._well(self._spin_delay))
 
         btn_row = QHBoxLayout()
         self._btn_apply = QPushButton("▶ Ramp to voltage")
@@ -406,7 +432,7 @@ class BiasPanel(QWidget):
         self._update_kill_switch_style()   # initial ghost/neutral, pre-first-reading
         volt_form.addRow(btn_row)
         volt_box.add_layout(volt_form)
-        root.addWidget(volt_box)
+        shelf.add_widget(volt_box)
 
         # ── Polarity ───────────────────────────────────────────────────
         # Read-only indicator (polled off-thread) + a DANGEROUS switch button
@@ -428,7 +454,7 @@ class BiasPanel(QWidget):
         self._btn_polarity.setVisible(False)   # shown only when reversible
         pol_form.addRow(self._btn_polarity)
         pol_box.add_layout(pol_form)
-        root.addWidget(pol_box)
+        shelf.add_widget(pol_box)
 
         # ── Standalone sweeps (advanced) ───────────────────────────────
         # IV scan + CCE-vs-V fold into ONE collapsed card (design system §7):
@@ -468,10 +494,10 @@ class BiasPanel(QWidget):
         self._spin_iv_delay.setValue(1.0)
         self._spin_iv_delay.setSuffix(" s")
 
-        iv_form.addRow("Start:", self._spin_iv_start)
-        iv_form.addRow("Stop:",  self._spin_iv_stop)
-        iv_form.addRow("Step:",  self._spin_iv_step)
-        iv_form.addRow("Delay:", self._spin_iv_delay)
+        iv_form.addRow("Start:", self._well(self._spin_iv_start))
+        iv_form.addRow("Stop:",  self._well(self._spin_iv_stop))
+        iv_form.addRow("Step:",  self._well(self._spin_iv_step))
+        iv_form.addRow("Delay:", self._well(self._spin_iv_delay))
 
         self._iv_progress = QProgressBar()
         self._iv_progress.setValue(0)
@@ -496,18 +522,20 @@ class BiasPanel(QWidget):
         self._spin_vs_nav.setRange(1, 100)
         self._spin_vs_nav.setValue(3)
 
-        vscan_form.addRow("V start:",   self._spin_vs_start)
-        vscan_form.addRow("V stop:",    self._spin_vs_stop)
-        vscan_form.addRow("V step:",    self._spin_vs_step)
-        vscan_form.addRow("Hold (s):",  self._spin_vs_hold)
-        vscan_form.addRow("Averages:",  self._spin_vs_nav)
+        vscan_form.addRow("V start:",   self._well(self._spin_vs_start))
+        vscan_form.addRow("V stop:",    self._well(self._spin_vs_stop))
+        vscan_form.addRow("V step:",    self._well(self._spin_vs_step))
+        vscan_form.addRow("Hold (s):",  self._well(self._spin_vs_hold))
+        vscan_form.addRow("Averages:",  self._well(self._spin_vs_nav))
 
         self._btn_vscan = QPushButton("▶ Start bias + waveform scan")
         self._btn_vscan.clicked.connect(self._emit_vscan)
         vscan_form.addRow(self._btn_vscan)
 
         sweeps_card.add_layout(vscan_form)
-        root.addWidget(sweeps_card)
+        shelf.add_widget(sweeps_card)
+        # The one shelf now holds the whole panel (head + hazard + cards).
+        root.addWidget(shelf)
 
         # The two sweep plots are built LAZILY on first expand: a pyqtgraph
         # PlotWidget constructed inside an explicitly-hidden body and then
@@ -596,6 +624,10 @@ class BiasPanel(QWidget):
             self._theme_mode = str(mode)
         self._restyle_bias_axis()
         self._update_kill_switch_style()   # re-resolve the icon ink token
+        # The HazardSurface caches its stripe/hatch colours + pins an opaque
+        # instance fill per theme at construction, so a live light/dark switch
+        # must re-resolve them (same idiom as the bias axis rail above).
+        self._hazard.refresh_theme(self._theme_mode)
 
     # ------------------------------------------------------------------ #
     # Slots                                                               #
@@ -874,6 +906,16 @@ class BiasPanel(QWidget):
         # to the inferred readback state a few seconds after the last point.
         self._vscan_last_point_t = time.monotonic()
         self._set_hv_tile("RAMPING", "armed", "bias + waveform scan stepping the bias")
+
+    @staticmethod
+    def _well(widget: QWidget) -> Well:
+        """Wrap an input widget in an opaque Well (round-03 kit §4.4 — "a value
+        being typed is never on glass").  The widget keeps its identity (callers
+        still reference ``self._spin_*`` directly, so every enable/disable and
+        value assertion is untouched); only its container changed."""
+        well = Well()
+        well.add_widget(widget)
+        return well
 
     @staticmethod
     def _make_dspin(lo: float, hi: float, val: float, suffix: str = "") -> QDoubleSpinBox:
