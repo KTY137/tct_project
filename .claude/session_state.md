@@ -5,30 +5,11 @@ context. A fresh session reads this file and is as informed as the old one.
 Updated on every dispatch and every landing. Run `.claude/beat_status.ps1`
 before every commit; stage explicit paths; never `-am`.
 
-**Updated: 2026-07-14, session ending (Kaya loses internet). HEAD `23aea87`.
-TWO BEATS WERE STILL WRITING when the session closed — read this first:**
-
-1. **Lambda-leak fix (Noah)** — the working tree has 11 gui modules DIRTY
-   (analysis/calibration/camera/detachable_tabs/device/laser/motor/panel_kit/
-   sequencer/theme_editor/tct_gui). That is his half-finished work converting 31
-   self-capturing lambda `.connect()` sites to bound methods. **DO NOT COMMIT
-   BLINDLY and DO NOT DISCARD.** When resuming: check if his report file exists,
-   run `tests/test_no_immortal_panels.py` (he was to create it) + the leak probe
-   (construct+drop AnalysisPanel, assert delta 0), then commit with explicit
-   paths if green. Acceptance: leak probe delta 0 · AST guard 31→0 · hazard
-   connections verified.
-2. **Brokkr round 03** — writing `docs/design/iterations/glasshell-cockpit/
-   round-03/` (kit.md/html first, then Bias/Scope/Analysis panels in C's
-   language on OWNED glass). Whatever landed on disk is append-only lineage;
-   commit it as-is when resuming, then Loki attack pass.
-3. **After both land: bench gate re-run** (`bench_run.ps1 -Branch
-   design/cockpit-v5` via the POWERSHELL tool, NOT bash — bash eats the
-   backslashes and PS still exits 0). Bench is RED until proven otherwise.
-   Last known green: `54baf62` (1995 passed).
+**Updated: 2026-07-14 evening — THE GATE IS GREEN at `f7a1a3e` (2685 passed, 0 failed). The branch waits on Kaya: card-token veto, pilot PNGs, merge decision. Both interrupted beats from the morning landed and are committed.**
 
 ## HEAD / TRUTH
 
-- Local `design/cockpit-v5 @ 11ec433`. **NOT pushed, NOT merged, BENCH IS RED.**
+- Local `design/cockpit-v5 @ c9615c1`. **NOT pushed, NOT merged — GATE GREEN, Kaya's call.**
   Nothing touched real hardware. The branch is Kaya's to review.
 - **origin/main @ `a7dca3f` = THE TRUNK** (unchanged).
 - **Night briefing (open this first):**
@@ -126,7 +107,7 @@ Against the OWNED ambient ground (kit §1.1: dark L* ∈ [0, 7.61], light
 ## ✅ THE GATE IS GREEN — `f7a1a3e`, 2685 passed, 0 failed, 8:48
 
 **The branch is gate-clean for the first time since the wave began.** Detached
-Task-Scheduler run on the bench (the only reliable path — use `C:ench\gate.bat`
+Task-Scheduler run on the bench (the only reliable path — use `C:/bench\gate.bat`
 via `schtasks /run /tn tct_gate` + the poller; never a live SSH stream).
 
 The road there, kept for the record: run 1-2 died of a REAL native crash (the
