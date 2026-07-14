@@ -112,7 +112,30 @@ auto-calm · `e875571` Codex C12 · `2a5e67e` U0 probe script ·
   `docs/CODEX_QUEUE.md`. (Protocol note kept: codex lane = queue-file
   briefs only; bridge watcher was DEAD 85865 s, restarted this session.)
 
-## 🔴 U0b BENCH RUN — BLOCKED, NEEDS KAYA (one command or one rule)
+## 🔴 U0b BENCH RUN — RUN 2 FINDING (disconnected session ⇒ software GL)
+
+- Kaya created+ran the interactive task himself (schtasks output
+  ERFOLGREICH ×2). **Run 2 result: frame RENDERED (progress vs ssh) but
+  renderer = llvmpipe again — this time via Qt's bundled software
+  fallback `opengl32sw.dll` (fingerprint: Gallium 0.4 llvmpipe,
+  Mesa 11.2.2, LLVM 3.6). RC=2, probe FAILED correctly.**
+- Root cause CONFIRMED by paired checks: session 3 is DISCONNECTED
+  (quser: "Getr.", 12 h idle) while the GPU is healthy (nvidia-smi:
+  RTX 5080, driver 610.47). A disconnected session gets no hardware GL
+  context from the NVIDIA ICD; Qt silently swaps in opengl32sw.
+- **U-track consequence (a REAL U0 find, exactly what the gate is
+  for): every per-stage bench QML gate silently tests SOFTWARE
+  rendering unless the bench session is CONNECTED** (RDP attached or
+  physical console). Booked for the masterplan's per-stage [Bench]
+  threshold note. If even a connected RDP session caps GL (classic RDP
+  driver behavior; modern NVIDIA may allow it), the fallback options
+  are physical-console gates or a re-ratified D3D11 criterion — decide
+  on evidence when Kaya connects.
+- NEXT: Kaya RDPs into sophonone (or logs in at the console) → re-run
+  `tct_rhi_probe` → poll logs. Expected PASS only with a connected
+  session.
+
+## (superseded) U0b first block — schtasks permission (RESOLVED by Kaya running it himself)
 
 - Branch synced to bench @ `2a5e67e` (`bench_run.ps1 -SyncOnly`;
   TreeMap extended: main + ui-qml-migration → C:\bench\project_tct).
