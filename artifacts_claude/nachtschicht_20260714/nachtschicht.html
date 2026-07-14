@@ -1,0 +1,279 @@
+<title>Nachtschicht 14.07. — Glas, Kontrast, und eine Entscheidung</title>
+<style>
+  :root{
+    --ground:#0A0D13; --card:#151D2D; --raised:#1B253A;
+    --ink:#E9EDF5; --muted:#8B96AC; --hair:#26304a; --hair-2:#38445f;
+    --accent:#5B9BFF; --crit:#E4646A; --warn:#D9A036; --good:#3EC08A; --sim:#3FB5C6;
+    --mono: ui-monospace,"Cascadia Mono","JetBrains Mono",Consolas,"Liberation Mono",monospace;
+    --sans: "Segoe UI",system-ui,-apple-system,"Helvetica Neue",sans-serif;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --ground:#E6EBF3; --card:#FFFFFF; --raised:#F3F6FB;
+      --ink:#0F1622; --muted:#5C687C; --hair:#D3DAE6; --hair-2:#B9C3D4;
+      --accent:#2563c9; --crit:#ad343a; --warn:#915b00; --good:#0f7655; --sim:#08727e;
+    }
+  }
+  :root[data-theme="light"]{
+    --ground:#E6EBF3; --card:#FFFFFF; --raised:#F3F6FB;
+    --ink:#0F1622; --muted:#5C687C; --hair:#D3DAE6; --hair-2:#B9C3D4;
+    --accent:#2563c9; --crit:#ad343a; --warn:#915b00; --good:#0f7655; --sim:#08727e;
+  }
+  :root[data-theme="dark"]{
+    --ground:#0A0D13; --card:#151D2D; --raised:#1B253A;
+    --ink:#E9EDF5; --muted:#8B96AC; --hair:#26304a; --hair-2:#38445f;
+    --accent:#5B9BFF; --crit:#E4646A; --warn:#D9A036; --good:#3EC08A; --sim:#3FB5C6;
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--ground); color:var(--ink);
+    font-family:var(--sans); line-height:1.62;
+    font-size:16px; -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:900px; margin:0 auto; padding:56px 24px 96px;}
+
+  /* ---- masthead ---- */
+  header{border-bottom:1px solid var(--hair-2); padding-bottom:28px; margin-bottom:40px;}
+  .eyebrow{
+    font-family:var(--mono); font-size:11px; letter-spacing:.16em; text-transform:uppercase;
+    color:var(--muted); margin:0 0 14px;
+  }
+  h1{
+    font-size:clamp(30px,4.6vw,44px); line-height:1.12; margin:0 0 18px;
+    letter-spacing:-.02em; font-weight:650; text-wrap:balance;
+  }
+  .standfirst{font-size:18px; color:var(--muted); margin:0; max-width:62ch;}
+  .standfirst strong{color:var(--ink); font-weight:600;}
+
+  /* ---- sections ---- */
+  section{margin-top:52px;}
+  h2{
+    font-size:13px; font-family:var(--mono); letter-spacing:.14em; text-transform:uppercase;
+    color:var(--muted); font-weight:600; margin:0 0 20px;
+    padding-bottom:10px; border-bottom:1px solid var(--hair);
+  }
+  h3{font-size:19px; margin:0 0 8px; letter-spacing:-.01em; font-weight:620;}
+  p{margin:0 0 14px; max-width:68ch;}
+  a{color:var(--accent);}
+
+  /* ---- the decision ---- */
+  .decision{
+    background:var(--card); border:1px solid var(--hair-2);
+    border-left:3px solid var(--warn);
+    padding:26px 28px; border-radius:4px;
+  }
+  .decision h3{font-size:22px;}
+  .decision .q{
+    font-size:20px; line-height:1.45; margin:16px 0 18px; font-weight:600;
+    color:var(--ink); border-left:2px solid var(--hair-2); padding-left:16px;
+  }
+
+  /* ---- measured chip ---- */
+  .m{
+    font-family:var(--mono); font-size:12.5px; font-variant-numeric:tabular-nums;
+    background:var(--raised); border:1px solid var(--hair);
+    padding:1px 7px; border-radius:3px; white-space:nowrap;
+  }
+
+  /* ---- findings table ---- */
+  .tw{overflow-x:auto; border:1px solid var(--hair); border-radius:4px; background:var(--card);}
+  table{border-collapse:collapse; width:100%; min-width:640px;}
+  th{
+    text-align:left; font-family:var(--mono); font-size:10.5px; letter-spacing:.11em;
+    text-transform:uppercase; color:var(--muted); font-weight:600;
+    padding:12px 16px; border-bottom:1px solid var(--hair-2); white-space:nowrap;
+  }
+  td{padding:14px 16px; border-bottom:1px solid var(--hair); vertical-align:top; font-size:14.5px;}
+  tbody tr:last-child td{border-bottom:none;}
+  td.num{font-family:var(--mono); font-variant-numeric:tabular-nums; white-space:nowrap; font-size:13px;}
+  .was{color:var(--crit); font-weight:600;}
+  .ist{color:var(--good); font-weight:600;}
+  .arrow{color:var(--muted); padding:0 4px;}
+
+  /* severity stripe */
+  td.sev{padding-left:16px; border-left:3px solid transparent;}
+  tr.s-crit td.sev{border-left-color:var(--crit);}
+  tr.s-warn td.sev{border-left-color:var(--warn);}
+
+  /* ---- code ---- */
+  pre{
+    font-family:var(--mono); font-size:13px; background:var(--card);
+    border:1px solid var(--hair); border-radius:4px;
+    padding:16px 18px; overflow-x:auto; margin:0 0 14px; line-height:1.6;
+  }
+  code{font-family:var(--mono); font-size:.92em;}
+
+  /* ---- swatch A/B (the measured glass) ---- */
+  .ab{display:flex; gap:2px; margin:18px 0 8px; border:1px solid var(--hair); border-radius:4px; overflow:hidden;}
+  .ab div{flex:1; padding:14px 16px; font-family:var(--mono); font-size:12px;}
+  .ab .on{background:rgb(84,84,84); color:#fff;}
+  .ab .off{background:rgb(36,34,41); color:#c9cfdb;}
+  .cap{font-size:13px; color:var(--muted); margin:0;}
+
+  /* ---- ledger ---- */
+  ol.log{list-style:none; margin:0; padding:0;}
+  ol.log li{
+    display:grid; grid-template-columns:96px 1fr; gap:18px;
+    padding:12px 0; border-bottom:1px solid var(--hair); align-items:baseline;
+  }
+  ol.log li:last-child{border-bottom:none;}
+  ol.log .sha{
+    font-family:var(--mono); font-size:12.5px; color:var(--accent);
+  }
+  ol.log .what strong{font-weight:620;}
+  ol.log .what span{color:var(--muted);}
+
+  ul.q{margin:0; padding-left:20px;}
+  ul.q li{margin-bottom:10px;}
+  ul.q b{font-weight:620;}
+
+  footer{
+    margin-top:64px; padding-top:20px; border-top:1px solid var(--hair);
+    font-family:var(--mono); font-size:12px; color:var(--muted);
+  }
+</style>
+
+<div class="wrap">
+
+<header>
+  <p class="eyebrow">TCT · design/cockpit-v5 · Nachtschicht 13.–14. Juli 2026</p>
+  <h1>Das Glas funktioniert. Der In-Scene-Blur hat nichts zu blurren. Und dein Backdrop stand auf <code>none</code>.</h1>
+  <p class="standfirst">Zehn Beats, neun Commits, vier Spikes. <strong>Jeder echte Fund dieser Nacht kam daher, dass jemand die Behauptung eines anderen nachgemessen hat</strong> — und dreimal war der Nachmesser derjenige, der den Fehler des Vorgängers fand.</p>
+</header>
+
+<section>
+  <h2>Die Entscheidung, die nur du treffen kannst</h2>
+  <div class="decision">
+    <h3>Verdient SCENE seinen Unterhalt?</h3>
+    <p>Der Spike hat gemessen: <span class="m">MultiEffect</span> frostet App-Inhalt live, 60 fps, 0 Abstürze in 80 Läufen. Das Verbot war unverdient. <strong>Aber Loki hat danach gefragt, was es in dieser App überhaupt zu frosten gäbe — und die Antwort ist: nichts.</strong></p>
+    <p>Dein Cockpit ist ein QWidget-Baum mit <em>einer</em> QML-Chrome-Insel. Ein Frost-Pane dort kann kein Workspace-Pixel abtasten — anderer Szenengraph. Und die neun pyqtgraph/GL-Inseln <strong>migrieren laut ratifizierter Roadmap nie</strong>; sie bleiben native Kindfenster und malen per Airspace <em>über</em> die QML-Szene, nicht darunter. Was ein legaler Pane dann noch frosten dürfte, sind <code>canvas</code>, <code>card</code>, <code>well</code> — flache Farbflächen. Der Gauß-Blur einer flachen Farbfläche ist dieselbe Farbe.</p>
+    <p class="q">Das DWM-Fenstermaterial ist der gesamte Ertrag des Glas-Programms. Es ist kostenlos, sichtbar, ausgeliefert. Schiffen wir AMBIENT — und hören auf, für Sprosse 3 und 4 zu bezahlen?</p>
+    <p class="cap">Preis der Gegenrichtung, von Loki gegen den echten Baum gerechnet: STRUCTURAL verlangt <strong>drei ratifizierte Beschlüsse umzustoßen</strong> und die neun Plots auf eine Scene-Graph-API neu zu bauen, die unser eigener Spike in ~50 % der Läufe hat segfaulten sehen. <span class="m">≥10× Beats, unbegrenztes Risiko</span> — im Tausch gegen weichgezeichnete Kartenränder.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Was jetzt läuft — starte es</h2>
+  <p>Ein <strong>echtes translucentes QQuickWindow</strong> mit echtem DWM-Material, einem echten <code>BiasPanel</code> an simulierter Quelle darin, echtem Detach. Alles Unverdrahtete trägt ein sichtbares <strong>STUB</strong>-Abzeichen — was echt ist, ist echt.</p>
+  <pre>cd TCT_app
+.venv/Scripts/python.exe scripts/glass_shell_preview.py --dark</pre>
+  <p>Nicht begutachtet, <strong>gemessen</strong>: <code>--probe</code> schaltet <em>nur</em> das DWM-Attribut um, alles andere bleibt fix.</p>
+  <div class="ab">
+    <div class="on">acrylic AN &nbsp;→&nbsp; Rand = [84.0, 84.0, 84.0]</div>
+    <div class="off">acrylic AUS &nbsp;→&nbsp; Rand = [36.2, 34.1, 41.4]</div>
+  </div>
+  <p class="cap">Delta 140.3 · <span class="m">tier = SCENE</span> (erstmals in diesem Codebase) · <span class="m">surface_alpha = 8</span>. Die 84/84/84 sind exakt der Wert, den der GL-Spike unabhängig auf derselben Maschine notierte. Zwei Werkzeuge, eine Zahl.</p>
+  <p><strong>Und der Grund, warum du bis heute kein Glas gesehen hast:</strong> dein <code>theme/window_backdrop</code> steht auf <code>none</code> — und bis heute Nacht hätte das Einschalten ohnehin nichts bewirkt (die Glas-QSS-Regel wurde nie neu gebaut). Du hast vermutlich einmal „acrylic“ gewählt, nichts gesehen, und es zurückgestellt. <strong>Theme-Editor → Material → Acrylic. Es schaltet jetzt wirklich, live, ohne Neustart.</strong></p>
+</section>
+
+<section>
+  <h2>Live-Defekte, gefunden und behoben</h2>
+  <p>Keiner davon war eine Designmeinung. Alle waren in der ausgelieferten App.</p>
+  <div class="tw">
+  <table>
+    <thead>
+      <tr><th>Defekt</th><th>Wo es weh tut</th><th>Vorher → Nachher</th></tr>
+    </thead>
+    <tbody>
+      <tr class="s-crit">
+        <td class="sev"><strong>Der Alarm, den niemand sah</strong><br><span class="cap">monitor_panel rief nie <code>notify()</code></span></td>
+        <td>Ein Slow-Control-ALARM war nur <em>im Monitor-Tab</em> sichtbar. Bei einer <strong>manuellen HV-Rampe an der Bank</strong> — wo nichts überwacht — sieht ein Operator auf jedem anderen Tab nichts.</td>
+        <td class="num"><span class="was">unsichtbar</span> <span class="arrow">→</span> <span class="ist">app-weit</span></td>
+      </tr>
+      <tr class="s-crit">
+        <td class="sev"><strong>Zwei Gefahren-Anzeigen weg</strong><br><span class="cap">Leckstrom + Compliance</span></td>
+        <td>Der QML-Shell ist seit <code>76c2370</code> <strong>Default</strong> und versteckt die klassische Leiste. Die QML-Leiste hatte vier Kacheln — Leckstrom und Compliance waren nicht dabei.</td>
+        <td class="num"><span class="was">fehlten</span> <span class="arrow">→</span> <span class="ist">zurück</span></td>
+      </tr>
+      <tr class="s-crit">
+        <td class="sev"><strong>Der Abort-Knopf im Dunkeln</strong><br><span class="cap">weiße Schrift auf Rot</span></td>
+        <td>Die Beschriftung des Knopfes, der einen <strong>Scan abbricht</strong>. Alle hatten Light geprüft; das Dark-Paar hat nie jemand angesehen.</td>
+        <td class="num"><span class="was">3.05:1</span> <span class="arrow">→</span> <span class="ist">4.80:1</span></td>
+      </tr>
+      <tr class="s-crit">
+        <td class="sev"><strong>Zehn schwarze Icons</strong><br><span class="cap">motor_panel</span></td>
+        <td>qtawesome rendert ohne <code>color=</code> schwarz, in ein Pixmap gebacken, nie neu eingefärbt. Im Hellen 20:1 — <strong>deshalb fiel es nie auf</strong>. Dunkel ist der Auslieferungszustand.</td>
+        <td class="num"><span class="was">1.37:1</span> <span class="arrow">→</span> <span class="ist">token</span></td>
+      </tr>
+      <tr class="s-warn">
+        <td class="sev"><strong>Der Light-Mode</strong><br><span class="cap">systemisch, nicht ein Token</span></td>
+        <td>Ursache war <em>strukturell</em>: 19 QSS-Blöcke malten Tinte auf eine <code>rgba()</code>-Waschung <strong>ihrer selbst</strong>. <code>sim</code> — die Farbe, die „Fake-Daten“ sagt — war die schlechteste.</td>
+        <td class="num"><span class="was">71 Paare</span> <span class="arrow">→</span> <span class="ist">0</span></td>
+      </tr>
+      <tr class="s-warn">
+        <td class="sev"><strong>Die Statusleiste schnitt ab</strong></td>
+        <td><code>MOTION</code> lief über die rechte Kante — ohne jede Scroll-Andeutung. Inhalt braucht &gt;1256 px; die App startet mit 1280.</td>
+        <td class="num"><span class="was">clip</span> <span class="arrow">→</span> <span class="ist">wrap</span></td>
+      </tr>
+      <tr class="s-warn">
+        <td class="sev"><strong>Der Materialregler</strong><br><span class="cap">Marys Bug 1</span></td>
+        <td>Die Glas-QSS-Regel wird nur von <code>apply_theme()</code> erzeugt — der Regler rief das nie. Das Fenster bekam die Glas-<em>Eigenschaft</em> ohne Regel dahinter. <strong>Die Sonde umging das von Hand — deshalb maß sie Glas und du sahst keins.</strong></td>
+        <td class="num"><span class="was">tot</span> <span class="arrow">→</span> <span class="ist">live</span></td>
+      </tr>
+      <tr class="s-crit">
+        <td class="sev"><strong>Der Default-Shell übermalt sein eigenes Glas</strong><br><span class="cap">noch offen — läuft gerade</span></td>
+        <td>Mit <code>TCT_QML_SHELL=1</code> (Default seit <code>76c2370</code>) folgen <strong>0,05 %</strong> der Pixel dem Hintergrund. Beim klassischen Shell: <strong>9,9 %</strong>. Das Fenster ist kerngesund — Alpha 8, Material attached, <code>attr38=3</code>. <strong>Das Glas geht nicht verloren, es wird übermalt.</strong></td>
+        <td class="num"><span class="was">0.05 %</span> <span class="arrow">→</span> <span class="ist">9.9 %</span></td>
+      </tr>
+      <tr class="s-warn">
+        <td class="sev"><strong>Die Tiefen-Leiter existiert nicht</strong><br><span class="cap">verifiziert, schlimmer als behauptet</span></td>
+        <td>Dark: <code>canvas→panel</code> = ΔL* 1.46 (unsichtbar), <code>panel→raised</code> = 9.68. Light: <strong>genau umgekehrt</strong> (7.11 / 1.80). <strong>Keiner der Modi hat eine durchgehende Drei-Ton-Leiter</strong> — und Runde 01 wollte genau darauf bauen.</td>
+        <td class="num"><span class="was">1.03:1</span> <span class="arrow">→</span> <span class="ist">offen</span></td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</section>
+
+<section>
+  <h2>Der Blocker, den es nicht gab</h2>
+  <p>Ein Spike meldete einen harten Blocker: <em>Minimieren → Wiederherstellen tötet das Material dauerhaft, in jeder Konfiguration, immun gegen jeden Reassert.</em> Das hätte den QQuickWindow-GlassShell als Auslieferungsziel erledigt. Der zweite Spike hat es nachgemessen:</p>
+  <p class="q" style="font-size:19px;font-weight:600;border-left:2px solid var(--good);padding-left:16px;margin:16px 0;"><code>[84,84,84]</code> ist DWMs Fallback-Farbe für ein Fenster <em>ohne Fokus</em>.</p>
+  <p>Nichts stirbt. Alpha bleibt 8. Das HWND bleibt dasselbe. <code>DwmGetWindowAttribute(38)</code> liest <code>3</code> zurück, <em>während</em> das Fenster angeblich tot ist, und die Szene rendert mit 62 fps weiter. Ein Fenster, das <strong>nie minimiert wurde</strong>, zeigt denselben Effekt, sobald man ihm den Fokus klaut — und bekommt sein Glas beim Reaktivieren exakt zurück. Ein Klick in der Taskleiste heilt es.</p>
+  <p>Der Hinweis lag die ganze Zeit in den Daten: <strong>drei verschiedene Konfigurationen lieferten byte-identisch <code>[84,84,84]</code></strong>. Das ist keine Physik. Das ist eine Konstante. <strong>Dein GlassOS hat keinen Unterbau-Blocker.</strong></p>
+</section>
+
+<section>
+  <h2>Was noch dich braucht</h2>
+  <ul class="q">
+    <li><b>Chip-Beschriftungen sind jetzt neutral.</b> Füllung und Rand behalten die Farbe, das Label wird weiß/schwarz. Das war der <em>einzige</em> AA-saubere Weg auf einer gleichfarbigen Pille — die Alternative hätte Bernstein in Braun und <code>sim</code>s Cyan Richtung Grün gezogen. Willst du die Farbe zurück <em>im Text</em>, kostet das acht weitere Tokens. <b>Deine Augen entscheiden.</b></li>
+    <li><b>Der <code>card</code>-Token.</b> Um die Leiter im Dunkeln zu reparieren, muss der v6-Durchgang („Karten treten Richtung Canvas zurück“) teilweise zurückgenommen werden — <b>und den hast du vor zwei Tagen ratifiziert.</b></li>
+    <li><b>Ist das Labor lokal oder auf RDP?</b> RDP deckelt bei TOKEN. Diese eine Tatsache entscheidet, ob Glas dort überhaupt je rendert — und das Repo weiß es nicht.</li>
+    <li><b>Fable ist aufgebraucht.</b> Judgment-Beats laufen ersatzweise auf Opus.</li>
+    <li><b>Niemand ist vier Meter zurückgetreten.</b> Jede „quer durch den Raum lesbar“-Behauptung dieser Nacht ist ein <em>Modell</em>, keine Beobachtung. Zehn Minuten mit vier Farbfeldern auf dem echten Laborschirm beenden das.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Der Verlauf</h2>
+  <ol class="log">
+    <li><span class="sha">58df585</span><span class="what"><strong>Odin-Crew portiert</strong> — Brokkr, Loki, Baldr. <span>Nordlys-Mine entschärft; Path-D-Doc-Drift getötet.</span></span></li>
+    <li><span class="sha">801f2ab</span><span class="what"><strong>Der Glas-Kontrakt</strong> — FLAT&lt;TOKEN&lt;WINDOW&lt;SCENE&lt;COMPOSED. <span>6912 Umgebungen, 149 Tests.</span></span></li>
+    <li><span class="sha">b702a85</span><span class="what"><strong>Runde 01</strong> — drei Kandidaten. <span>Alle drei angegriffen; zwei tot.</span></span></li>
+    <li><span class="sha">636ce78</span><span class="what"><strong>Marys zwei Bugs</strong> — der Regler schaltet endlich Glas ein.</span></li>
+    <li><span class="sha">8299381</span><span class="what"><strong>Der blinde Alarm sieht wieder</strong> <span>— asymmetrisches Halten: Eskalation sofort, Entwarnung nach zwei Polls.</span></span></li>
+    <li><span class="sha">bbe3b10</span><span class="what"><strong>Der Shader-Spike</strong> — Verbot unverdient, <span>aber Qt kann grundsätzlich nicht hinter das Fenster blurren.</span></span></li>
+    <li><span class="sha">c071f28</span><span class="what"><strong>QML-Live-Preview</strong> — deine Gemini-Schleife, <span>in der Sprache, die nicht lügt.</span></span></li>
+    <li><span class="sha">f9a73bc</span><span class="what"><strong>Runde 02</strong> — STRUCTURAL vs. AMBIENT.</span></li>
+    <li><span class="sha">1d9eee1</span><span class="what"><strong>Das GlassShell-Skelett</strong> — es läuft, und es misst sein eigenes Glas.</span></li>
+    <li><span class="sha">4ca8331</span><span class="what"><strong>71 Kontrastfehler</strong> — und die Ursache waren nicht die Farben.</span></li>
+  </ol>
+</section>
+
+<footer>
+  Nichts gepusht, nichts gemerged, nichts an echter Hardware. Branch bleibt lokal.<br>
+  Ledger: <code>.claude/session_state.md</code> · Kandidaten: <code>docs/design/iterations/glasshell-cockpit/</code>
+</footer>
+
+</div>
+
+<script>
+  (function(){
+    var r = document.documentElement;
+    if(!r.getAttribute('data-theme')){
+      var m = window.matchMedia('(prefers-color-scheme: light)');
+      r.setAttribute('data-theme', m.matches ? 'light' : 'dark');
+    }
+  })();
+</script>
