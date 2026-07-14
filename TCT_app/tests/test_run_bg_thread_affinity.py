@@ -152,12 +152,19 @@ def _main_stub():
     class _MainStub(QObject):
         _run_bg = TCTMainWindow._run_bg
         _bg_finished = TCTMainWindow._bg_finished
+        # The real teardown choke-point closeEvent uses.  Every device/panel/QML
+        # attribute it touches is read via getattr/hasattr, so a bare QObject
+        # exercises only the branch under test: the in-flight ``_bg_thread`` join.
+        # (``_device_manager_window`` is the one attribute read directly, and
+        # ``_scanner.abort()`` is try/except-guarded — both harmless when None.)
+        _teardown_panels = TCTMainWindow._teardown_panels
 
         def __init__(self) -> None:
             super().__init__()
             self._bg_thread = None
             self._bg_task = None
             self._bg_on_done = None
+            self._device_manager_window = None
 
     return _MainStub()
 
@@ -198,5 +205,77 @@ def test_main_window_worker_error_reaches_on_done_on_gui_thread(qapp):
         assert cap["result"] is None
         assert "kaboom" in cap["err"]
     finally:
+        stub.deleteLater()
+        _pump(qapp)
+
+
+# --------------------------------------------------------------------------- #
+# Teardown while a _run_bg is in-flight — the "QThread: Destroyed while thread #
+# is still running" hard crash (Mary's RISK rider, e0a9d91).                   #
+#                                                                              #
+# The window's [X] stays live even while _act_connect is disabled, so a user   #
+# can close during an in-flight connect.  _teardown_panels() must join the     #
+# in-flight worker (bounded quit()+wait()) BEFORE the window is destroyed, and #
+# must NOT invoke the stashed on_done afterwards (panel rebuilds / dialogs off  #
+# a dying window).                                                             #
+# --------------------------------------------------------------------------- #
+
+def test_teardown_joins_in_flight_bg_thread_and_drops_on_done(qapp):
+    stub = _main_stub()
+    try:
+        worker: dict = {}
+        gate = threading.Event()              # holds the worker in-flight
+        teardown_started = threading.Event()  # main -> releaser handshake
+        on_done_calls: list = []
+
+        def on_done(result, err):
+            on_done_calls.append((result, err))
+
+        def fn():
+            worker["tid"] = threading.get_ident()
+            worker["blocked"] = True
+            # Deterministic gate + bounded fallback (never a bare sleep / hang).
+            gate.wait(5.0)
+            return "payload"
+
+        # Release the gate the instant teardown begins, from a SEPARATE thread:
+        # _teardown_panels()'s wait() blocks the GUI thread, so the worker can
+        # only complete (letting that wait() return) via an off-thread release.
+        def releaser():
+            teardown_started.wait(5.0)
+            gate.set()
+
+        rel = threading.Thread(target=releaser, daemon=True)
+        rel.start()
+
+        assert stub._run_bg(fn, on_done) is True
+        # Confirm the worker genuinely reached the blocking point in-flight.
+        deadline = time.monotonic() + 5.0
+        while not worker.get("blocked") and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.005)
+        assert worker.get("blocked") is True, "worker never entered its blocking wait"
+        assert stub._bg_thread is not None and stub._bg_thread.isRunning()
+
+        # Close/teardown the window while the worker is in-flight; the releaser
+        # sets the gate so the bounded wait() joins the thread rather than hanging.
+        teardown_started.set()
+        stub._teardown_panels()   # must not crash
+
+        # The single-slot state is cleared and the thread is fully joined.
+        assert stub._bg_thread is None
+        assert stub._bg_task is None
+        assert stub._bg_on_done is None
+        rel.join(5.0)
+        assert not rel.is_alive()
+
+        # A `done` may have been queued to the GUI thread before run() returned;
+        # pump the loop so it is delivered.  _bg_finished must find the nulled
+        # refs and DROP the callback — on_done never runs after teardown.
+        _pump(qapp, 0.2)
+        assert on_done_calls == [], \
+            "on_done was invoked after teardown (panel rebuild off a dying window)"
+    finally:
+        gate.set()
         stub.deleteLater()
         _pump(qapp)

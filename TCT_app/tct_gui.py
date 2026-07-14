@@ -1482,6 +1482,27 @@ class TCTMainWindow(QMainWindow):
         if t is not None:
             t.stop()
             t.deleteLater()
+        # Join any in-flight single-slot background worker (a connect/disconnect
+        # launched via ``_run_bg``) BEFORE the device-touching teardown below.
+        # Its QThread is parented to this window (``QThread(self)``); destroying
+        # the window while that thread still runs makes Qt6 abort with "QThread:
+        # Destroyed while thread is still running" — the bench crash from closing
+        # a window that looks frozen mid-connect (the [X] stays live while
+        # ``_act_connect`` is disabled).  Mirror ``DeviceManagerWindow.shutdown``:
+        # a BOUNDED ``quit()``+``wait()`` (the connect is capped by
+        # ``open_timeout`` — never wait unbounded), then null the single-slot
+        # refs.  Nulling ``_bg_on_done`` is deliberate: a ``done`` already queued
+        # to the GUI thread still reaches ``_bg_finished``, which now finds the
+        # refs cleared and drops the callback — correct, the window is dying, and
+        # ``on_done`` (panel rebuilds / dialogs) must not run post-teardown.
+        bg_thread = getattr(self, "_bg_thread", None)
+        if bg_thread is not None:
+            if bg_thread.isRunning():
+                bg_thread.quit()
+                bg_thread.wait(5000)
+            self._bg_thread = None
+            self._bg_task = None
+            self._bg_on_done = None
         # Stop the bias poller thread (it holds a reference into the old
         # DeviceManager via its getter closure).
         if getattr(self, "_bias_poll_thread", None) is not None:
