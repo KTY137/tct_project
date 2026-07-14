@@ -5,7 +5,52 @@ context. A fresh session reads this file and is as informed as the old one.
 Updated on every dispatch and every landing. Run `.claude/beat_status.ps1`
 before every commit; stage explicit paths; never `-am`.
 
-**Updated: 2026-07-14, MERGED. `main @ 98a66b1` is the trunk (gate 2685 green at f7a1a3e; delta to merge head docs+tests only). design/cockpit-v5 is RETIRED — cut a fresh branch for the 12-panel wave. The wave handoff lives in the pilot commit `074943f`; bench gates run DETACHED only (schtasks + poller; bundle-sync with GIT_LFS_SKIP_SMUDGE=1).**
+**Updated: 2026-07-14 evening, WAVE BRANCH CUT + BUG PIVOT. Branch
+`design/glass-wave-1` (from 7f3d863); first commit `11407b6` lands the orphaned
+`scripts/glass_probe.py`. Mamoru wave-boundary standup GREEN (trunk chain
+verified; the handoff's two "stale prose" items are actually current). KAYA
+REPORTED A BUG mid-boundary: connect to REAL devices → full GUI freeze, then
+intermittent crash, observed on the WAVEFORM GENERATOR (Rigol,
+TCPIP0::192.168.0.10). Paul is on it as a priority beat, parallel to wave
+beat 0. Bench gates stay DETACHED only (schtasks + poller; bundle-sync with
+GIT_LFS_SKIP_SMUDGE=1).**
+
+## ⚠️ TREE / MACHINE STATE (read before staging ANYTHING)
+
+- `TCT_app/configs/devices.yaml` is DIRTY: Kaya flipped ALL `simulation: false`
+  (scope, motor COM4, camera, ISEG bias, wavegen). That is his LOCAL
+  real-hardware config. **NEVER stage it** — repo default stays simulation.
+- ⇒ REAL INSTRUMENTS MAY BE CABLED TO THIS MACHINE. No agent runs the app or
+  full suites locally; targeted headless (offscreen) pytest only; safety rule 6.
+
+## ✅ LANDED THIS SESSION
+
+- `11407b6` orphaned `scripts/glass_probe.py` committed (was never in history).
+- `ab0cbee` **wave beat 0**: panel_kit registry never yields dead C++ widgets
+  (prune-on-read via shiboken6.isValid at the one choke-point). **Mary:
+  APPROVED**, one NIT rider (GUI-thread-only note) applied to the docstring.
+- `7b4ea94` **wavegen bug, driver half (Paul)**: open_timeout bounds viOpen on
+  offline TCPIP instruments; _teardown_session serialized on io_lock against
+  the LivenessMonitor's `*STB?` (the "sometimes" crash = liveness poll landing
+  inside a reconnect); fail-safe teardown on open error. 56 targeted green.
+
+## 🔥 IN-FLIGHT BEATS (locks)
+
+1. **noah-runbg-affinity** (ui-ux-dev, OPUS, PRIORITY — Kaya's bug, GUI half):
+   both `_run_bg` done-signals connect to a bare closure with no receiver
+   QObject ⇒ slot runs on the WORKER thread (widget access + modal QMessageBox
+   off the GUI thread = the hang/crash; Paul proved it with a tid probe). Fix:
+   bound-method receiver + Qt.QueuedConnection. LOCKS: `tct_gui.py`,
+   `gui/device_panel.py`, `tests/test_run_bg_thread_affinity.py` (new).
+   → Mary review IMMEDIATELY after landing (concurrency class).
+2. **mary-wavegen-review** (qa-critic, read-only): reviewing `7b4ea94`
+   (deadlock surface, lock ordering, open_timeout semantics, rule-5 fail-safe).
+3. **noah-wave-intensity** (ui-ux-dev, Sonnet): intensity panel onto the kit.
+   LOCKS: `gui/intensity_panel.py`, `tests/test_wave_intensity_render.py` (new).
+   NOTE: panel has NO refresh_theme BY DESIGN (fixed-dark waveform canvas).
+4. **noah-wave-stageview** (ui-ux-dev, Sonnet): stage_view onto the kit.
+   LOCKS: `gui/stage_view.py`, `tests/test_wave_stage_view_render.py` (new).
+   Frame contract (test_stage_view_frame_contract.py) must stay green.
 
 ## HEAD / TRUTH
 
@@ -158,18 +203,30 @@ to a bench with HV cabled") · monkey wiring-classification `d13af76` · ground 
 
 ## NEXT (queue)
 
-1. **Round 03 / the kit** → then ONE pilot panel (**Bias**: hazard surface +
-   detached + live readouts) → then the wave. **The kit BEFORE the panels**, or
-   13 panels become 13 dialects. Cross-panel META REVIEW at every wave boundary
-   (his ask) = the CONTACT SHEET, not a meeting.
-2. **`panel_kit.registered_glass_panes()` hands out DEAD C++ objects** after a
-   QQuickWidget-heavy teardown. **Confirmed independently by THREE agents.**
-   pytest's alphabetical collection order is the only thing hiding it.
-3. A **ΔL\* surface-separation test** — nothing asserts a card is visible against
+1. **Mary reviews for both in-flight beats** the moment they land (safety +
+   concurrency class — never batched).
+2. **The 7 simple-panel beats** (AFTER beat 0 lands — every panel test imports
+   panel_kit, so no cross-cutting runs while beat 0 holds that lock):
+   intensity 224 · stage_view 255 · device 348 (IS a QMainWindow — extra glass
+   surface) · sequencer 456 (HAZARD) · calibration 578 (HAZARD) ·
+   scan_map_view 615 · laser 703. Copy-handoff verbatim from pilot `074943f`:
+   shelf + panel_header; `_well()` for inputs; HazardSurface as pure
+   parent-frame wrap; kit surfaces into refresh_theme; non-hazard panels
+   REGISTER for glass (bias's register=False is bias-specific); dynamic danger
+   buttons stay out of ActionBar. Hazard beats → immediate Mary review.
+3. **The 5 program beats** (own beat each): planner 2524 · analysis 2203 ·
+   scope 1655 (+_TriggerDialog) · motor 1212 (HAZARD) · camera 958 (+_ROIDialog).
+4. **Contact sheet** (cross-panel META review) at the wave boundary + bench gate
+   (detached schtasks path) before merge.
+5. Micro-chore (Noah, any free slot): `scripts/kit_contrast_check.py:188`
+   hardcodes is_proposed=True for the dark card token, but `_DARK_CARD` shipped
+   (style.py:560, palette :743) — the PROPOSED banner is stale (Mamoru standup
+   find, 2026-07-14).
+6. A **ΔL\* surface-separation test** — nothing asserts a card is visible against
    its canvas. That is how a 1.03:1 dark ladder shipped.
-4. Theme-editor contrast validation on a swatch pick (the preset hatch: hazard
+7. Theme-editor contrast validation on a swatch pick (the preset hatch: hazard
    ink now rides the UNLOCKED `text` token).
-5. `statusLamp[unknown]` renders identically to `[neutral]` — an operator cannot
+8. `statusLamp[unknown]` renders identically to `[neutral]` — an operator cannot
    tell "no information" from "idle" (law 7).
 
 ## 📋 THE PANEL CENSUS (Shiori) — the wave's foundation

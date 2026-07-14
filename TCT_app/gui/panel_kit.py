@@ -1318,7 +1318,10 @@ def registered_glass_panes() -> list[QWidget]:
     wrapper whose C++ side is gone -- valid to Python, yet any attribute access
     raises ``RuntimeError: Internal C++ object already deleted``. Prune on read:
     skip (and eagerly drop) every pane ``shiboken6.isValid`` no longer accepts,
-    so this never yields an invalid widget regardless of teardown order."""
+    so this never yields an invalid widget regardless of teardown order.
+
+    GUI thread only: pruning makes this a *mutating* read (same rule as
+    ``gui.backdrop._backdrop_applied_windows``)."""
     live: list[QWidget] = []
     for w in list(_GLASS_PANE_REGISTRY):
         if _cpp_is_valid(w):
