@@ -15,6 +15,31 @@ Loads an existing HDF5 run file and provides:
 Cockpit v5 layout (design system §7 "Analysis"): the empty state is a
 recent-runs list (newest first, click to load, plus a browse row); loading
 swaps to a compact run-header bar over segmented 2D-map / CCE modes.
+
+Round-03 glass kit migration (wave beat 11/12, mirrors ``ScopePanel``/
+``CameraPanel``): the whole panel is now ONE ``GlassPane`` shelf
+(``register=False`` — a CONTENT consequence, not a hazard stance; this is a
+census NON-hazard panel). The shelf's body hosts, at some descendant depth,
+three pyqtgraph ``FigureCard``\\ s (the line-cut profile, CCE-vs-bias and
+survey-mosaic plots — Z3 instrument screens, refused outright by
+``register_glass_pane``'s own hard exclusion) plus several ``MetricGrid``\\ s
+of ``MetricTile`` readouts (Z4 — CCE fit-quality tiles, survey/pose
+diagnostic tiles). Registering the shelf itself would put those Z3/Z4
+surfaces behind a glass pane, exactly what the live-registry census in
+``tests/test_panel_glass_rollout.py`` refuses.
+
+This panel registers **nothing**: its only two plain ``Card`` instances
+(besides the auto-excluded ``FigureCard``\\ s) are the compact run-header bar
+(hosts the live ``_lbl_file`` filename label plus four live ``StatusChip``\\ s
+— file/dataset/map/export status, all of which repaint on every load) and the
+"Recent runs" empty-state card (hosts a ``QListWidget`` of run entries — a
+data listing, the same Z4-adjacent "live data table" class
+``gui/device_panel.py``'s bulk-actions precedent excludes its own
+``QTableWidget`` card for). Neither is pure parameter/button chrome, so
+neither registers — see ``_build_ui``'s inline comments for the per-card
+reasoning. Matches the "expect to register little" default for a
+plot/readout-heavy analysis panel (cockpit_style_overhaul.md §1 hard rule 3 /
+docs/design/iterations/glasshell-cockpit/round-03/kit.md's Z-ladder).
 """
 from __future__ import annotations
 
@@ -57,8 +82,8 @@ from analysis.mosaic_stitch import canvas_geometry, place_tiles, plan_grid
 from analysis.scan_grid import grid_extent
 from gui.motion_kit import fade_swap
 from gui.panel_kit import (
-    Card, EmptyState, FigureCard, MetricGrid, MetricTile, SegmentedControl,
-    panel_header,
+    Card, EmptyState, FigureCard, GlassPane, MetricGrid, MetricTile,
+    SegmentedControl, panel_header,
 )
 from gui.scan_map_view import QUANTITIES, QUANTITY_UNITS, ScanMapView
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
@@ -250,13 +275,30 @@ class AnalysisPanel(QWidget):
         root.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
         root.setSpacing(SPACE_MD)
 
-        root.addWidget(panel_header("TCT Control · Analysis", "Run Analysis"))
+        # ── The one shelf (round-03 kit §2.1) ──────────────────────────
+        # register=False is a CONTENT consequence, not a hazard stance (this
+        # is a census NON-hazard panel): the shelf's body hosts, at some
+        # descendant depth, three pyqtgraph FigureCards (line-cut profile /
+        # CCE-vs-bias / survey mosaic — Z3 instrument screens) and several
+        # MetricGrid rows of MetricTile readouts (Z4) — the live-registry
+        # census in tests/test_panel_glass_rollout.py refuses glass on any
+        # pane with a plot/readout descendant, hazard or not. See the module
+        # docstring for the two plain Cards' own (both "no") register calls.
+        shelf = GlassPane(register=False)
+        self._shelf = shelf
+        shelf.add_widget(panel_header("TCT Control · Analysis", "Run Analysis"))
 
         # ── Compact run-header bar (always visible) ───────────────────
         # File identity + load/export status chips + Browse in ONE row —
         # the §7 "compact run-header bar" that replaces the old full-height
         # file-loader card.
+        # Never registered for glass: hosts the live _lbl_file filename
+        # label plus four live StatusChips (file/dataset/map/export status),
+        # all of which repaint on every load — live-value content, not pure
+        # button/parameter chrome (the Browse button alone would qualify,
+        # but this card is not just that button).
         header_card = Card(None, margins=(SPACE_SM + 2, SPACE_SM, SPACE_SM + 2, SPACE_SM))
+        self._header_card = header_card
         bar = QHBoxLayout()
         bar.setSpacing(SPACE_SM)
         self._btn_open = QPushButton("Browse…")
@@ -274,13 +316,15 @@ class AnalysisPanel(QWidget):
         for chip in (self._chip_file, self._chip_dataset, self._chip_map, self._chip_export):
             bar.addWidget(chip)
         header_card.add_layout(bar)
-        root.addWidget(header_card)
+        shelf.body.addWidget(header_card)
 
         # ── Empty state (recent runs) <-> loaded analysis stack ──────
         self._stack = QStackedWidget()
         self._stack.addWidget(self._build_recent_runs_page())   # index 0
         self._stack.addWidget(self._build_loaded_page())        # index 1
-        root.addWidget(self._stack, 1)
+        shelf.body.addWidget(self._stack, 1)
+
+        root.addWidget(shelf, 1)
 
     def _build_recent_runs_page(self) -> QWidget:
         """The designed empty state: the last N run files, newest first —
@@ -288,7 +332,13 @@ class AnalysisPanel(QWidget):
         page = QWidget()
         lay = QVBoxLayout(page)
         lay.setContentsMargins(0, 0, 0, 0)
+        # Never registered for glass: hosts a QListWidget of run entries — a
+        # data listing, the same Z4-adjacent "live data table" class
+        # gui/device_panel.py's own table card is excluded for (its own
+        # bulk-actions Card registers instead; this panel has no such
+        # separate pure-chrome sibling to register in its place).
         card = Card("Recent runs", str(self._runs_dir))
+        self._recent_runs_card = card
         self._lbl_recent_hint = QLabel(
             "Click a run to load it, or browse for any HDF5 file.")
         self._lbl_recent_hint.setObjectName("cardSubtitle")
