@@ -1852,7 +1852,13 @@ class PlannerPanel(QWidget):
         off the cheap structural ``total_leaf_visits()`` product:
 
         * small candidate -> full estimate (carries the runtime delta, unchanged
-          behaviour), returned as a :class:`_CandidatePreview`;
+          behaviour), returned as a :class:`_CandidatePreview`.  Note this gate
+          (``_estimate_async_threshold``, 50k) sits far BELOW
+          ``plan_estimate.ESTIMATE_MAX_LEAF_VISITS`` (1M), so ``estimate_plan``
+          below is only ever called on already-small plans and its too-large
+          not-estimated path is unreachable from here — the two thresholds are
+          deliberately separate (drag responsiveness vs. worker-join safety),
+          not a duplicate constant to unify;
         * large candidate -> point-count-only preview (``total_points`` /
           ``total_leaf_visits`` are cheap structural products, no leaf walk),
           with ``est_runtime_s=None`` so the chip drops the runtime delta instead
@@ -1905,7 +1911,8 @@ class PlannerPanel(QWidget):
         # A runtime delta is only shown when BOTH sides have a real runtime — a
         # large candidate carries est_runtime_s=None (point-count-only preview),
         # so we honestly drop the delta rather than invent one.
-        if candidate.est_runtime_s is not None and base is not None:
+        if (candidate.est_runtime_s is not None and base is not None
+                and base.est_runtime_s is not None):
             delta_runtime = candidate.est_runtime_s - base.est_runtime_s
             runtime_suffix = f" · {_fmt_duration_delta(delta_runtime)}"
         else:
@@ -2110,6 +2117,23 @@ class PlannerPanel(QWidget):
                 tile.set_value("—")
                 tile.set_state("normal")
                 tile.set_stale(True, "plan invalid")
+            return
+        # Too-large-to-estimate: the plan is above plan_estimate's structural
+        # ceiling, so runtime/data/travel/HV are None sentinels (NOT zeros).
+        # Show the real structural point count (flagged crit -- it is over every
+        # cap) and surface the too-large warning as each sentinel tile's stale
+        # caption; never format a None sentinel as a real "0 s".
+        if not estimate.estimated:
+            note = (estimate.warnings[0] if estimate.warnings
+                    else "too large to estimate — reduce loop ranges")
+            self._tile_points.set_value(f"{estimate.total_points:,}")
+            self._tile_points.set_state("crit")
+            self._tile_points.set_stale(False, "")
+            for tile in (self._tile_runtime, self._tile_data,
+                         self._tile_travel, self._tile_hv):
+                tile.set_value("—")
+                tile.set_state("crit")
+                tile.set_stale(True, note)
             return
         # law 1 (quiet nominal): an in-budget/nominal reading is "normal"
         # grey, not a persistent "good" green -- green stays reserved for a

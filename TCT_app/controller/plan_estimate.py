@@ -31,6 +31,23 @@ from controller.scan_plan import ActionType, LeafMeta, ScanPlan
 # conservative upper bound, not a per-camera model.
 CAMERA_GRAB_S: float = 0.05
 
+# Structural ceiling above which ``estimate_plan`` refuses to walk the leaf
+# stream and returns a not-estimated result instead.  The leaf walk runs at a
+# measured ~342k leaf visits/s; at 1,000,000 visits that is ~3 s, which is the
+# estimate worker's shutdown-join budget — walking a larger plan would let the
+# worker overrun that join on teardown (the gate-red "estimate explosion").
+# Above this, the cheap structural counts (``total_points`` /
+# ``total_leaf_visits``, O(sum of loop lengths) via ``LoopBlock.materialize``)
+# are still reported, but runtime/data/travel/HV come back as explicit
+# not-estimated sentinels rather than misleading zeros.
+#
+# This is DISTINCT from the validator's ``PlanLimits.max_points`` (250,000),
+# which independently REJECTS oversized plans on Validate / Dry-run.  The two
+# thresholds serve different purposes (this one guards the estimator's worker
+# join; that one is a hard run gate) and must not be unified: a plan between
+# 250k and 1M still estimates fully here while the validator still flags it.
+ESTIMATE_MAX_LEAF_VISITS: int = 1_000_000
+
 
 @dataclass(frozen=True)
 class Timing:
@@ -71,13 +88,25 @@ class Sizing:
 
 @dataclass(frozen=True)
 class PlanEstimate:
+    """Cost estimate for a plan.
+
+    ``estimated`` is the honesty flag: when ``True`` (the normal case) the
+    runtime/data/travel/HV fields carry real numbers.  When ``False`` the plan
+    was above :data:`ESTIMATE_MAX_LEAF_VISITS` and the leaf walk was skipped, so
+    those four fields are ``None`` *sentinels* — "not estimated", NOT zero — and
+    only the cheap structural counts (``total_points`` / ``total_leaf_visits``)
+    plus a too-large ``warnings`` entry are meaningful.  Consumers must branch on
+    ``estimated`` (or equivalently check ``est_runtime_s is None``) before
+    formatting the numeric fields.
+    """
     total_points: int
     total_leaf_visits: int
-    est_runtime_s: float
-    est_data_bytes: int
-    stage_travel_mm: dict[str, float]
-    hv_range_V: tuple[float, float]
+    est_runtime_s: float | None
+    est_data_bytes: int | None
+    stage_travel_mm: dict[str, float] | None
+    hv_range_V: tuple[float, float] | None
     warnings: list[str] = field(default_factory=list)
+    estimated: bool = True
 
 
 def estimate_plan(
@@ -100,6 +129,29 @@ def estimate_plan(
     """
     timing = timing or Timing()
     sizing = sizing or Sizing()
+
+    # Structural short-circuit BEFORE any leaf walk.  ``total_leaf_visits`` is
+    # cheap (O(sum of loop lengths): each LoopBlock materializes its own values
+    # once and counts are multiplied, never the full cartesian product), so this
+    # is instant even for a plan whose walk would take minutes.  Above the
+    # ceiling we return the structural counts with not-estimated sentinels
+    # rather than block the estimate worker's shutdown join (see
+    # ESTIMATE_MAX_LEAF_VISITS).
+    leaf_visits = plan.total_leaf_visits()
+    if leaf_visits > ESTIMATE_MAX_LEAF_VISITS:
+        return PlanEstimate(
+            total_points=plan.total_points(),
+            total_leaf_visits=leaf_visits,
+            est_runtime_s=None,
+            est_data_bytes=None,
+            stage_travel_mm=None,
+            hv_range_V=None,
+            warnings=[
+                f"Plan too large to estimate precisely "
+                f"({leaf_visits:,} leaf visits) — reduce loop ranges."
+            ],
+            estimated=False,
+        )
 
     runtime = 0.0
     travel = {"x": 0.0, "y": 0.0, "z": 0.0}
@@ -193,7 +245,7 @@ def estimate_plan(
 
     return PlanEstimate(
         total_points=plan.total_points(),
-        total_leaf_visits=plan.total_leaf_visits(),
+        total_leaf_visits=leaf_visits,
         est_runtime_s=runtime,
         est_data_bytes=est_data,
         stage_travel_mm=travel,
