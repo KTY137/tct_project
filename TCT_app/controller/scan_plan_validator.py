@@ -139,15 +139,34 @@ def validate_plan(plan: ScanPlan, limits: PlanLimits) -> list[PlanIssue]:
         issues.append(PlanIssue(ERROR, "root", "plan is empty (no blocks to run)"))
 
     state = {"has_bias": False}
+    # (a,c,d,h) block/structural checks.  _walk recurses the block TREE and
+    # materializes each loop's OWN value list once (via _safe_materialize) to
+    # range-check its set points; it NEVER expands the cartesian product, so its
+    # cost is O(#blocks + sum of per-loop value-list lengths) — structural, not
+    # total_points-scale.  Kept unconditionally: these checks don't require the
+    # per-leaf walk and stay useful even on an oversize plan.
     _walk(plan.root, "root", limits, issues, state, acquired_in_scope=False)
 
-    # (e) point cap.  total_leaf_visits() materializes internally, so wrap it —
-    # a bad range is already reported by (a); we just avoid crashing here.
+    # (e) point cap — the STRUCTURAL size gate, and the guard that keeps this
+    # function off the GUI thread's timeout.  total_leaf_visits() is O(sum of
+    # per-loop value-list lengths): each LoopBlock materializes its own values
+    # once and the level counts are MULTIPLIED, so the cartesian product is
+    # never enumerated (a 1000x1000x1000 grid counts from three 1000-element
+    # lists, instant).  A bad range is already reported by (a); we just avoid
+    # crashing here.
     try:
         visits = plan.total_leaf_visits()
     except ValueError:
         visits = None
-    if visits is not None and visits > limits.max_points:
+    # ``max_points`` caps total_leaf_visits() (per PlanLimits' contract), and
+    # total_leaf_visits() is exactly the length of the (i) per-leaf walk below.
+    # So gating that walk on this same counter is the correct, tightest bound:
+    # leaf_visits >= total_points always (each point runs >= 1 action), so this
+    # subsumes a total_points>max_points gate AND additionally catches a
+    # leaf-visit explosion whose distinct-point count is under the cap.  See the
+    # walk guard below.
+    oversize = visits is not None and visits > limits.max_points
+    if oversize:
         issues.append(PlanIssue(
             ERROR, "root",
             f"plan runs {visits} leaf visits, exceeding max_points "
@@ -163,19 +182,27 @@ def validate_plan(plan: ScanPlan, limits: PlanLimits) -> list[PlanIssue]:
 
     # (i) trailing manual pause: legal (the executor promotes the final PAUSED
     # to a clean FINISHED) but almost always a recipe mistake — the pause gates
-    # nothing.  iter_leaf_contexts materializes internally, so wrap it; a bad
-    # range is already reported by (a).
-    try:
-        last_action = None
-        for _ctx, action in plan.iter_leaf_contexts():
-            last_action = action
-        if last_action is not None and last_action.action == ActionType.MANUAL_PAUSE:
-            issues.append(PlanIssue(
-                WARNING, "root",
-                "plan ends on a MANUAL_PAUSE — it gates nothing (the run just "
-                "finishes); move it before the steps it should gate"))
-    except ValueError:
-        pass
+    # nothing.  This is the ONE per-leaf walk in this function: iter_leaf_contexts
+    # yields once per leaf visit (= total_leaf_visits above), so on an oversize
+    # plan it is an unbounded, minutes-long GUI-thread freeze (validate_plan runs
+    # synchronously inside a click handler — the gate-red monkey timeout).  GUARD
+    # IT: an oversize plan is already rejected by (e), and a trailing-pause
+    # warning is noise the user can only act on after shrinking the plan, so skip
+    # the walk entirely.  Past this gate the walk is provably bounded: it runs at
+    # most ``max_points`` leaf visits (the (e) gate guarantees it), so it is
+    # O(max_points) — fast and safe on the GUI thread.
+    if not oversize:
+        try:
+            last_action = None
+            for _ctx, action in plan.iter_leaf_contexts():
+                last_action = action
+            if last_action is not None and last_action.action == ActionType.MANUAL_PAUSE:
+                issues.append(PlanIssue(
+                    WARNING, "root",
+                    "plan ends on a MANUAL_PAUSE — it gates nothing (the run just "
+                    "finishes); move it before the steps it should gate"))
+        except ValueError:
+            pass
 
     return issues
 
