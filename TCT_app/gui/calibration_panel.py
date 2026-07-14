@@ -32,7 +32,7 @@ from analysis.waveform_analysis import analyse_waveform
 from controller.danger_gate import DangerGate
 from controller.repeatability import RepeatabilityTester
 from gui.app_settings import theme_mode
-from gui.panel_kit import panel_header, register_glass_pane
+from gui.panel_kit import GlassPane, HazardSurface, panel_header, register_glass_pane
 from gui.status_widgets import ReadoutCell, StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import FONT_SM, MONO_FAMILIES, palette
 
@@ -132,11 +132,21 @@ class CalibrationPanel(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
 
-        root.addWidget(panel_header("TCT Control · Calibration", "Calibration"))
+        # ── The one shelf (round-03 kit §2.1) ──────────────────────────
+        # HAZARD PANEL — the shelf itself is a content shell and opts NOTHING
+        # into the panel-glass switch (register=False). This panel drives the
+        # motor stage (the repeatability test moves hardware), so its danger
+        # zone lives on an opaque HazardSurface below; the shelf carries only
+        # chrome. The two eligible parameter groups (Method + Electronics gain)
+        # keep their individual opt-ins from the Z-ladder rollout, unchanged.
+        shelf = GlassPane(register=False)
+        self._shelf = shelf
+
+        shelf.add_widget(panel_header("TCT Control · Calibration", "Calibration"))
 
         intro = QLabel("Set charge-conversion parameters, then apply and save them for analysis.")
         intro.setWordWrap(True)
-        root.addWidget(intro)
+        shelf.add_widget(intro)
 
         chip_row = QHBoxLayout()
         self._chip_method = StatusChip("Method --", "neutral")
@@ -146,7 +156,7 @@ class CalibrationPanel(QWidget):
         for chip in (self._chip_method, self._chip_dirty, self._chip_ref, self._chip_repeat):
             chip_row.addWidget(chip)
         chip_row.addStretch(1)
-        root.addLayout(chip_row)
+        shelf.add_layout(chip_row)
 
         # Method selector
         method_box = QGroupBox("Method")
@@ -158,7 +168,7 @@ class CalibrationPanel(QWidget):
         self._units = QComboBox()
         self._units.addItems(["pC", "MIP", "e"])
         mform.addRow("Output units:", self._units)
-        root.addWidget(method_box)
+        shelf.add_widget(method_box)
         # Panel glass (opt-in, Baldr Z-ladder): the Method + Electronics-gain
         # groups are pure parameter chrome (selectors / gain fields), no live
         # readout, no motion/danger control — eligible. The Reference-diode
@@ -177,7 +187,7 @@ class CalibrationPanel(QWidget):
         eform.addRow("Termination (Ω):", self._termination)
         eform.addRow("Amplifier gain (V/V):", self._amp_gain)
         eform.addRow("Transimpedance (V/A):", self._transimpedance)
-        root.addWidget(self._elec_box)
+        shelf.add_widget(self._elec_box)
         register_glass_pane(self._elec_box)
 
         # Reference-diode group
@@ -201,7 +211,7 @@ class CalibrationPanel(QWidget):
         self._lbl_when = ReadoutCell("Calibrated", "never")
         for lbl in (self._lbl_qref, self._lbl_k, self._lbl_when):
             rform.addRow(lbl)
-        root.addWidget(self._ref_box)
+        shelf.add_widget(self._ref_box)
 
         # Buttons + status
         btn_row = QHBoxLayout()
@@ -210,18 +220,19 @@ class CalibrationPanel(QWidget):
         self._btn_save.clicked.connect(self._save)
         btn_row.addStretch()
         btn_row.addWidget(self._btn_save)
-        root.addLayout(btn_row)
+        shelf.add_layout(btn_row)
 
         self._status = QLabel("")
         self._status.setWordWrap(True)
-        root.addWidget(self._status)
+        shelf.add_widget(self._status)
 
         self._current = QLabel("")
-        root.addWidget(self._current)
+        shelf.add_widget(self._current)
 
-        self._build_repeatability(root)
+        self._build_repeatability(shelf)
         self._restyle_theme_tokens()
 
+        root.addWidget(shelf)
         root.addStretch()
         self._wire_dirty_tracking()
 
@@ -266,7 +277,7 @@ class CalibrationPanel(QWidget):
     # Stage repeatability (camera)                                        #
     # ------------------------------------------------------------------ #
 
-    def _build_repeatability(self, root: QVBoxLayout) -> None:
+    def _build_repeatability(self, shelf: GlassPane) -> None:
         box = QGroupBox("Stage Repeatability (camera)")
         form = QFormLayout(box)
         intro = QLabel(
@@ -326,7 +337,19 @@ class CalibrationPanel(QWidget):
         self._rep_result.setTextInteractionFlags(Qt.TextSelectableByMouse)
         form.addRow(self._rep_result)
 
-        root.addWidget(box)
+        # ── Motion hot zone, on the HazardSurface (round-03 kit §4.6) ──
+        # The repeatability test DRIVES THE STAGE: this whole group (the Run
+        # button, the #dangerBtn Stop at ~line 306, the progress/outcome
+        # labels) is a PURE PARENT-FRAME WRAP inside an OPAQUE HazardSurface
+        # carrying the ``armed`` (motion-class) stripe + 45° hatch — opaque at
+        # every tier, never registered (register_glass_pane refuses a
+        # HazardSurface outright). Only the container changed; the box, its
+        # buttons and every bit of run/stop/worker logic are byte-identical.
+        # refresh_theme re-resolves the surface's cached stripe/hatch/fill
+        # (same idiom as BiasPanel/the sequencer wave, git show bf41854).
+        self._hazard = HazardSurface(stripe="armed", theme_mode=self._theme_mode)
+        self._hazard.add_widget(box)
+        shelf.add_widget(self._hazard)
 
     # ------------------------------------------------------------------ #
     # Theme-token styling (gui.style) — re-run by refresh_theme()         #
@@ -339,10 +362,15 @@ class CalibrationPanel(QWidget):
         self._rep_progress.setStyleSheet(f"color: {p['muted']};")
 
     def refresh_theme(self, mode: str | None = None) -> None:
-        """Re-resolve label colours baked into instance-level styles."""
+        """Re-resolve label colours baked into instance-level styles, and
+        forward to the motion HazardSurface — it caches its stripe/hatch/fill
+        per theme at construction, so a live light/dark switch must re-resolve
+        them (same idiom as BiasPanel.refresh_theme; registered in
+        ``tct_gui._toggle_theme``)."""
         if mode:
             self._theme_mode = str(mode)
         self._restyle_theme_tokens()
+        self._hazard.refresh_theme(self._theme_mode)
 
     # ------------------------------------------------------------------ #
     # State <-> widgets                                                   #
