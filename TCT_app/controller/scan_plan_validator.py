@@ -138,20 +138,42 @@ def validate_plan(plan: ScanPlan, limits: PlanLimits) -> list[PlanIssue]:
     if not plan.root:
         issues.append(PlanIssue(ERROR, "root", "plan is empty (no blocks to run)"))
 
-    state = {"has_bias": False}
-    _walk(plan.root, "root", limits, issues, state, acquired_in_scope=False)
-
-    # (e) point cap.  total_leaf_visits() materializes internally, so wrap it —
-    # a bad range is already reported by (a); we just avoid crashing here.
+    # (e) STRUCTURAL SIZE PRE-GATE — runs BEFORE _walk (which materializes each
+    # loop's value list to range-check it) and before any total_leaf_visits() /
+    # iter_leaf_contexts() call.  structural_leaf_visit_bound() is pure O(#blocks)
+    # arithmetic (LoopBlock.value_count(), no allocation), so a loop that is huge
+    # by SHAPE (e.g. -1e6..1e6 step 1e-3 ≈ 2e9 values, all within the planner
+    # spinbox ranges) is sized and REJECTED here without ever allocating its
+    # multi-GB list — the sibling of the deeply-nested explosion, and the same
+    # GUI-thread freeze (validate_plan runs synchronously in a Validate click
+    # handler — the gate-red monkey timeout).
+    #
+    # ``max_points`` caps total_leaf_visits() (PlanLimits' contract), and
+    # structural_leaf_visit_bound() == total_leaf_visits() for any valid plan, so
+    # this is the same, correct cap keyed on the same quantity.  An oversize plan
+    # is rejected regardless; the per-loop / per-leaf checks below are noise the
+    # user can only reach after shrinking it, and reaching them would require the
+    # very allocation we are avoiding — so we return the size error alone.  An
+    # invalid loop range makes the bound raise; we swallow it and fall through to
+    # the normal flow, which reports that range error via _safe_materialize (an
+    # invalid range never allocates — materialize() raises before building it).
     try:
-        visits = plan.total_leaf_visits()
+        bound = plan.structural_leaf_visit_bound()
     except ValueError:
-        visits = None
-    if visits is not None and visits > limits.max_points:
+        bound = None
+    if bound is not None and bound > limits.max_points:
         issues.append(PlanIssue(
             ERROR, "root",
-            f"plan runs {visits} leaf visits, exceeding max_points "
+            f"plan runs {bound} leaf visits, exceeding max_points "
             f"= {limits.max_points}"))
+        return issues
+
+    state = {"has_bias": False}
+    # (a,c,d,h) block/structural checks.  Past the size gate the plan is within
+    # max_points, so _walk materializes only bounded (≤ max_points-scale) value
+    # lists — no allocation blow-up.  It recurses the block TREE and NEVER
+    # expands the cartesian product, so its cost stays structural.
+    _walk(plan.root, "root", limits, issues, state, acquired_in_scope=False)
 
     # (f) fail-closed HV confirmation: any bias-driving plan MUST carry an
     # explicit safety.require_hv_confirmation == True.
@@ -163,8 +185,11 @@ def validate_plan(plan: ScanPlan, limits: PlanLimits) -> list[PlanIssue]:
 
     # (i) trailing manual pause: legal (the executor promotes the final PAUSED
     # to a clean FINISHED) but almost always a recipe mistake — the pause gates
-    # nothing.  iter_leaf_contexts materializes internally, so wrap it; a bad
-    # range is already reported by (a).
+    # nothing.  This is the ONE per-leaf walk in this function: iter_leaf_contexts
+    # yields once per leaf visit.  Past the (e) gate it is provably bounded — at
+    # most ``max_points`` leaf visits — so it is O(max_points), fast and safe on
+    # the GUI thread for BOTH the nesting and the loop-shape explosion.  A bad
+    # range is already reported by (a); we wrap it to avoid crashing here.
     try:
         last_action = None
         for _ctx, action in plan.iter_leaf_contexts():

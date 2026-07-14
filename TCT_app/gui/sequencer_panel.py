@@ -35,6 +35,26 @@ Every colour resolves from ``gui.style`` tokens (zero inline hex — the guard t
 ``tests/test_no_inline_hex_gui.py`` has per-value teeth now); the one cached
 colour (the danger-red HV span in the envelope text, and the muted caption ink)
 is re-resolved in :meth:`refresh_theme` after a light/dark switch.
+
+Round-03 glass kit migration (wave beat, HAZARD PANEL — mirrors ``BiasPanel``'s
+blanket stance, commit 074943f, not the content-consequence reasoning of
+``IntensityPanel``/``LaserPanel``): the whole panel is now ONE ``GlassPane``
+shelf (chrome head + queue table + toolbar + hazard-wrapped run control +
+progress/outcome), and the shelf opts NOTHING into the panel-glass switch —
+``register=False``, no other surface here registers either. The round-03 design
+census (``docs/design/iterations/glasshell-cockpit/round-03/README.md`` §3)
+names this panel's own row: "the Start control is the danger ceremony
+(Arm→Execute), on a ``HazardSurface``" — the reused two-step :class:`ArmLatch`
+(envelope text + Arm + Execute) is wrapped, as a PURE PARENT-FRAME WRAP, in an
+opaque ``HazardSurface`` carrying the ``armed`` (motion-class) stripe — the
+same stripe kind the census gives Motor Stage's homing/jog ceremony, since
+arming here is itself a motion-class gesture; any HV a given routine's combined
+envelope carries is already the inline danger-red span inside the latch text
+(one red channel, the same rule bias's hero trio follows). The always-live
+Abort control stays a plain header trailing widget, outside both the
+HazardSurface and any ``ActionBar`` (a stop control never nests inside the
+danger-state display it can silence — the bias pilot's kill-switch precedent —
+and ``ActionBar``'s danger slot clobbers objectNames/escalation chrome).
 """
 from __future__ import annotations
 
@@ -55,10 +75,10 @@ from controller.sequencer import (
     EntryState, SequenceEntry, load_sequence_yaml, save_sequence_yaml,
 )
 from gui.arm_latch import ArmLatch
-from gui.panel_kit import panel_header
+from gui.panel_kit import GlassPane, HazardSurface, panel_header
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip
-from gui.style import SPACE_MD, SPACE_SM, palette
+from gui.style import SPACE_SM, palette
 
 if TYPE_CHECKING:  # pragma: no cover - typing only; injected at runtime
     from gui.sequence_coordinator import SequenceCoordinator
@@ -138,12 +158,27 @@ class SequencerPanel(QWidget):
     # ------------------------------------------------------------------ #
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
-        root.setSpacing(SPACE_MD)
+
+        # ── The one shelf (round-03 kit §2.1) ──────────────────────────
+        # HAZARD PANEL — the same blanket ``register=False`` stance as the
+        # bias pilot (074943f), not a content consequence like the
+        # intensity/laser panels: this queue arms hardware motion (and, per
+        # routine, HV) to run unattended all night, so nothing in this panel
+        # may ever depend on a translucent tier. The shelf itself, and every
+        # surface inside it, opts NOTHING into the panel-glass switch.
+        shelf = GlassPane(register=False)
+        self._shelf = shelf
 
         # Header: title + live status chip + the two primary actions.  Add is a
         # quiet/ghost action; Abort is the red-OUTLINE danger control (law 5 —
-        # kept always visible, enabled only while a sequence runs).
+        # kept always visible, enabled only while a sequence runs).  Abort
+        # stays a plain header trailing widget: NOT inside an ``ActionBar``
+        # (the bias pilot's kill-switch lesson — ActionBar's danger slot
+        # clobbers objectNames and escalation chrome) and NOT inside the
+        # HazardSurface below (an always-live stop control never nests inside
+        # the danger-state display it can silence — same precedent as the
+        # bias pilot's Output-OFF kill switch, which also sits outside its
+        # panel's HazardSurface).
         self._chip_status = StatusChip("Idle", "neutral", min_width=96)
         self._chip_status.setToolTip("Sequencer run state")
         self._btn_add = QPushButton("＋ Add routine")
@@ -155,7 +190,7 @@ class SequencerPanel(QWidget):
         self._btn_abort.setToolTip(
             "Cancel the running queue, abort the live run, and park hardware safe")
         self._btn_abort.clicked.connect(self._on_abort)
-        root.addWidget(panel_header(
+        shelf.add_widget(panel_header(
             "TCT Control · Sequencer", "Scan Sequencer",
             trailing=[self._chip_status, self._btn_add, self._btn_abort],
             theme_mode=self._theme_mode,
@@ -166,7 +201,7 @@ class SequencerPanel(QWidget):
             "workflow. Between entries the sequencer parks hardware safe; the "
             "first non-clean outcome halts the night (fail-closed).")
         self._desc.setWordWrap(True)
-        root.addWidget(self._desc)
+        shelf.add_widget(self._desc)
 
         # Queue table — one row per routine (index · name / source / state chip).
         self._table = QTableWidget(0, 3)
@@ -180,7 +215,7 @@ class SequencerPanel(QWidget):
         hh.setSectionResizeMode(_COL_SOURCE, QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(_COL_STATE, QHeaderView.ResizeMode.ResizeToContents)
         self._table.itemSelectionChanged.connect(self._refresh_controls)
-        root.addWidget(self._table, 1)
+        shelf.body.addWidget(self._table, 1)
 
         # Secondary toolbar: reorder / remove / persist the queue.
         tool_row = QHBoxLayout()
@@ -203,18 +238,42 @@ class SequencerPanel(QWidget):
         tool_row.addStretch(1)
         tool_row.addWidget(self._btn_save)
         tool_row.addWidget(self._btn_load)
-        root.addLayout(tool_row)
+        shelf.add_layout(tool_row)
 
-        # Combined-envelope block: the ONE ArmedEnvelope summary rendered over the
-        # reused two-step Arm latch (hold-3s).  Execute → arm_and_start.
+        # ── Run-control hot zone, on the HazardSurface (round-03 kit §4.6) ──
+        # "The stone in the glass room": the combined-envelope block — the ONE
+        # ArmedEnvelope summary rendered over the reused two-step Arm latch
+        # (hold-3s), Execute → arm_and_start — sits on an OPAQUE HazardSurface
+        # (opaque `panel` at every tier) carrying a 4px `armed` (motion-class)
+        # stripe + 45° hatch down its left edge — the round-03 design census
+        # names this exact control ("the Start control is the danger ceremony
+        # (Arm→Execute), on a HazardSurface", round-03/README.md §3) and gives
+        # it the `armed` stripe, the same kind Motor Stage's homing/jog
+        # ceremony carries, since arming is itself the motion-class gesture;
+        # any HV a routine's combined envelope carries is already the inline
+        # danger-red span inside the latch text (one red channel — the same
+        # rule the bias hero trio follows). A PURE PARENT-FRAME WRAP (Loki
+        # rider 5): the latch, its envelope text, its Arm/Execute buttons and
+        # every bit of arm/execute logic are byte-identical, only the
+        # container changed. The eyebrow supplies the redundant hazard WORD
+        # channel (stripe colour + hatch texture + word survive greyscale /
+        # a dead projector).
         self._latch = ArmLatch(theme_mode=self._theme_mode, parent=self)
         self._latch.execute_requested.connect(self._on_execute)
-        root.addWidget(self._latch)
+        self._hazard = HazardSurface(
+            "Unattended run", stripe="armed", theme_mode=self._theme_mode)
+        self._hazard.add_widget(self._latch)
+        shelf.add_widget(self._hazard)
 
         self._progress_lbl = QLabel("Progress · 0/0 entries complete")
         self._outcome_lbl = QLabel("Last sequence outcome · —")
-        root.addWidget(self._progress_lbl)
-        root.addWidget(self._outcome_lbl)
+        shelf.add_widget(self._progress_lbl)
+        shelf.add_widget(self._outcome_lbl)
+
+        # The one shelf now holds the whole panel (head + queue + toolbar +
+        # hazard-wrapped run control + progress/outcome); it grows with the
+        # window so the table can too.
+        root.addWidget(shelf, 1)
 
     # ------------------------------------------------------------------ #
     # Queue editing (source list → coordinator.load → envelope re-derive) #
@@ -448,9 +507,9 @@ class SequencerPanel(QWidget):
         )
 
     def refresh_theme(self, mode: str | None = None) -> None:
-        """Re-resolve the cached colours (envelope HV span, muted captions) and
-        forward to the latch after a light/dark switch — registered in
-        ``tct_gui._toggle_theme``."""
+        """Re-resolve the cached colours (envelope HV span, muted captions,
+        hazard surface stripe/hatch/fill) and forward to the latch after a
+        light/dark switch — registered in ``tct_gui._toggle_theme``."""
         if mode:
             self._theme_mode = str(mode)
         p = palette(self._theme_mode)
@@ -460,6 +519,10 @@ class SequencerPanel(QWidget):
         self._latch.refresh_theme(self._theme_mode)
         if self._env is not None:
             self._latch.set_envelope_text(self._envelope_html(self._env))
+        # The HazardSurface caches its stripe/hatch colours + pins an opaque
+        # instance fill per theme at construction, so a live light/dark switch
+        # must re-resolve them (same idiom as BiasPanel.refresh_theme).
+        self._hazard.refresh_theme(self._theme_mode)
 
     def shutdown(self) -> None:
         """Stop the latch's owned timers before teardown (panel ``shutdown()``

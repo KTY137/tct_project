@@ -324,24 +324,61 @@ class WaveformGenerator(BaseDevice):
         except ImportError as exc:
             raise DeviceError("pyvisa is not installed.") from exc
 
-        # Idempotent under a dirty death: if a prior session was never cleanly
-        # closed (silent link loss / powered-off instrument), tear it down before
-        # opening a fresh one — otherwise the old VISA handle and ResourceManager
-        # leak and the reconnect can inherit a wedged session (the silent-death
-        # reconnect bug).  No-op on a clean first connect.
-        self._teardown_session()
-
-        self._rm = pyvisa.ResourceManager()
-        try:
-            self._instr = self._rm.open_resource(self._address)
-            self._instr.timeout = self._timeout_ms
-            # Raw LAN sockets (TCPIP…::SOCKET) need an explicit line terminator;
-            # USB / VXI-11 (::INSTR) do not.
-            if "SOCKET" in self._address.upper():
-                self._instr.read_termination = "\n"
-                self._instr.write_termination = "\n"
-        except Exception as exc:
-            raise DeviceError(f"WaveformGenerator VISA open failed: {exc}") from exc
+        # Open the session under io_lock.  The liveness monitor (gui.liveness)
+        # polls is_alive() from its OWN thread and touches self._instr under this
+        # same lock, so closing the old handle and binding the new one must never
+        # overlap a *STB? probe on it — concurrent use/close of a single VISA
+        # session is a Windows access violation (the intermittent "connect
+        # crashes the app" symptom).  io_lock is re-entrant, so
+        # _teardown_session() and the per-command _send/_query in
+        # _apply_defaults() below re-acquire it harmlessly on this thread.
+        with self.io_lock:
+            # Idempotent under a dirty death: if a prior session was never cleanly
+            # closed (silent link loss / powered-off instrument), tear it down
+            # before opening a fresh one — otherwise the old VISA handle and
+            # ResourceManager leak and the reconnect can inherit a wedged session
+            # (the silent-death reconnect bug).  No-op on a clean first connect.
+            self._teardown_session()
+            try:
+                # ResourceManager construction lives INSIDE the try so a missing
+                # / broken VISA backend surfaces as the same DeviceError as an
+                # open failure (uniform fail-safe surface), not an un-wrapped
+                # raise that skips the teardown below.
+                self._rm = pyvisa.ResourceManager()
+                # open_timeout caps viOpen — the connection-ESTABLISHMENT wait,
+                # which is distinct from self._instr.timeout (the per-operation
+                # I/O timeout set just below, effective only AFTER the link is
+                # open).  Without an open_timeout an unreachable/offline
+                # TCPIP…::INSTR target blocks inside viOpen at the OS/VISA level
+                # for the full socket timeout (tens of seconds to minutes) while
+                # the connect worker is stuck and the Device Manager sits busy /
+                # disabled — the "connect freezes the app completely" report.
+                # pyvisa forwards open_timeout (ms) straight to viOpen.
+                # TODO(bench): confirm on the real DG4162 over the isolated LAN
+                # (TCPIP0::192.168.0.10::INSTR) that open_timeout aborts viOpen
+                # within ~timeout_ms when the instrument is powered off — the
+                # exact honoured window is NI-VISA/VXI-11-stack dependent; adding
+                # the cap can only shorten today's unbounded block, never lengthen
+                # it.
+                self._instr = self._rm.open_resource(
+                    self._address, open_timeout=self._timeout_ms)
+                self._instr.timeout = self._timeout_ms
+                # Raw LAN sockets (TCPIP…::SOCKET) need an explicit line
+                # terminator; USB / VXI-11 (::INSTR) do not.
+                if "SOCKET" in self._address.upper():
+                    self._instr.read_termination = "\n"
+                    self._instr.write_termination = "\n"
+            except Exception as exc:
+                # Fail safe (rule 5): never leave a half-open ResourceManager /
+                # session behind on a failed or timed-out open — tear it down
+                # before raising so a retry starts clean and nothing leaks.  Also
+                # drop _connected: on a RECONNECT a failed viOpen must not leave
+                # the flag True over a dead session (a starting scan would else
+                # silently drop trigger-arm writes for up to one liveness poll).
+                self._teardown_session()
+                self._connected = False
+                raise DeviceError(
+                    f"WaveformGenerator VISA open failed: {exc}") from exc
 
         idn = self._instr.query("*IDN?").strip()
         logger.info("WaveformGenerator connected (%s): %s", self._vendor, idn)
@@ -389,19 +426,27 @@ class WaveformGenerator(BaseDevice):
         later ``connect()`` can never leak a prior session (the previous
         ``disconnect`` closed ``_instr`` but leaked ``_rm``).  Does NOT touch
         ``_connected`` or the armed record — callers own those.
+
+        Held under io_lock: ``is_alive()`` reads and probes ``self._instr`` under
+        the same lock from the liveness thread, so the close must not run
+        concurrently with a ``*STB?`` on the handle it is destroying (concurrent
+        use/close of one VISA session is a Windows access violation — the
+        intermittent disconnect/reconnect crash).  Re-entrant, so ``connect()``
+        and ``disconnect()`` may already hold it.
         """
-        if self._instr is not None:
-            try:
-                self._instr.close()
-            except Exception:
-                pass
-            self._instr = None
-        if self._rm is not None:
-            try:
-                self._rm.close()
-            except Exception:
-                pass
-            self._rm = None
+        with self.io_lock:
+            if self._instr is not None:
+                try:
+                    self._instr.close()
+                except Exception:
+                    pass
+                self._instr = None
+            if self._rm is not None:
+                try:
+                    self._rm.close()
+                except Exception:
+                    pass
+                self._rm = None
 
     def is_alive(self) -> bool:
         """Verify the VISA link with an IEEE 488.2 ``*STB?`` heartbeat.

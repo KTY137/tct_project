@@ -1,5 +1,36 @@
 """Device Manager Window — shows connection status for every device and
-allows individual connect / disconnect without touching the rest of the app."""
+allows individual connect / disconnect without touching the rest of the app.
+
+Round-03 glass kit migration (wave beat 6/12, mirrors ``LaserPanel``/
+``IntensityPanel``): the whole window body is now ONE ``GlassPane`` shelf
+(chrome head + table + bulk-action card). This window is a ``QMainWindow``
+top-level (a satellite, like the theme editor / settings dialog), so its own
+DWM material/opacity already goes through the single entry point every other
+satellite uses (``gui.style.prepare_window_surface`` +
+``gui.style.reassert_window_backdrop``, both called in ``__init__`` below,
+predating this migration) — nothing new invented there, only the CONTENT
+inside the window's central widget changed.
+
+Register decision: the shelf itself does **not** register — its body hosts
+the live device table directly, and ``QTableWidget`` is one of the Z-ladder's
+own disqualifiers (``tests/test_panel_glass_rollout.py``'s
+``_glass_disqualifiers``: "Z4 live data table"). That is a *content*
+consequence, not a hazard-panel blanket stance like ``BiasPanel``'s/
+``SequencerPanel``'s — this window is classed non-hazard by the census, so
+the pure-chrome bulk-action card (Connect All / Disconnect All — no table, no
+danger control) registers instead, the same "register the specific chrome
+sub-card, not the content-hosting shell" pattern ``laser_panel``/
+``intensity_panel`` already use for their own hero content.
+
+No axis-rail/hazard colour is cached anywhere in this window (no bias/motor
+axis accents, no ``HazardSurface``) — every kit surface here resolves purely
+through ``gui.style``'s app-wide QSS, which ``apply_theme()`` regenerates and
+reapplies globally on every switch. ``refresh_theme()`` still exists (a thin
+theme-mode bookkeeping hook) so this window is *wireable* into
+``tct_gui._toggle_theme``'s panel fan-out the same way ``_settings_window``/
+``_theme_editor`` already are — not done in this beat (see the file-scope
+note in the task ledger); flagged as a handoff.
+"""
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer, QThread, QObject, Signal
@@ -12,7 +43,8 @@ from PySide6.QtWidgets import (
 
 from controller.device_manager import DeviceManager
 from gui import style
-from gui.panel_kit import Card
+from gui.app_settings import theme_mode
+from gui.panel_kit import Card, GlassPane, panel_header, register_glass_pane
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import ERROR_ORANGE, OK_GREEN, SIM_PURPLE, WARN_RED
@@ -84,6 +116,11 @@ class DeviceManagerWindow(QMainWindow):
         self._last_errors: dict[str, str] = {}
         self._bg_thread: QThread | None = None
         self._bg_task: _DeviceTask | None = None
+        self._bg_on_done = None
+        # Theme mode for the kit surfaces below (header mark / refresh_theme
+        # bookkeeping) — read once from the same QSettings key main.py/
+        # tct_gui.py use, mirroring BiasPanel/LaserPanel/IntensityPanel.
+        self._theme_mode = theme_mode()
         self._build_ui()
         # Same cockpit material + opacity + event-spine guard as every other
         # satellite window (theme editor, settings, torn-off panels) — through
@@ -106,19 +143,29 @@ class DeviceManagerWindow(QMainWindow):
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
-        box = Card("Hardware Devices")
-        root.addWidget(box)
-        box_layout = box.body
+        # ── The one shelf (round-03 kit §2.1) ──────────────────────────
+        # register=False is a CONTENT consequence (the live device table
+        # below is a Z4 disqualifier — see the module docstring), not a
+        # hazard-panel blanket stance; the bulk-action card further down
+        # registers instead.
+        shelf = GlassPane(register=False)
+        self._shelf = shelf
 
-        status_row = QHBoxLayout()
+        # ── Pane head: eyebrow + title + the two status chips (chrome) ──
         self._chip_summary = StatusChip("Devices idle", "neutral")
         self._chip_busy = StatusChip("Idle", "neutral")
-        status_row.addWidget(self._chip_summary)
-        status_row.addWidget(self._chip_busy)
-        status_row.addStretch(1)
-        box_layout.addLayout(status_row)
+        shelf.add_widget(panel_header(
+            "TCT Control · Devices", "Device Manager",
+            trailing=[self._chip_summary, self._chip_busy],
+            theme_mode=self._theme_mode))
 
-        # Table: Name | Status | Simulation | Connect | Disconnect
+        # ── Table: Name | Status | Simulation | Connect | Disconnect ────
+        # QTableWidget is one of the Z-ladder's own disqualifiers ("Z4 live
+        # data table" — tests/test_panel_glass_rollout.py), so this card
+        # stays an opaque cardPane surface at every tier and is never
+        # registered, independent of the window's non-hazard classification.
+        table_card = Card("Hardware devices")
+        self._table_card = table_card
         self._table = QTableWidget(0, 5)
         self._table.setHorizontalHeaderLabels(
             ["Device", "Status", "Sim Mode", "Connect", "Disconnect"]
@@ -131,9 +178,20 @@ class DeviceManagerWindow(QMainWindow):
         self._table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._table.setSelectionMode(QAbstractItemView.NoSelection)
         self._table.verticalHeader().setVisible(False)
-        box_layout.addWidget(self._table)
+        table_card.add_widget(self._table)
+        # Stretch=1 on the shelf's own body slot (Card.add_widget has no
+        # stretch parameter — same idiom IntensityPanel uses for its own
+        # hero content) so the table grows to fill the window.
+        shelf.body.addWidget(table_card, 1)
 
-        # Bottom row
+        # ── Bulk actions (pure chrome — no table, no danger control) ────
+        # The dynamic per-row Connect/Disconnect buttons stay OUT of this
+        # card (and out of an ActionBar — their gating/enable state is wired
+        # in _populate_rows/_set_busy exactly as before); this card is only
+        # the two "All" buttons, which is why it is the one surface here
+        # that registers for glass.
+        action_card = Card("Bulk actions")
+        self._action_card = action_card
         bottom = QHBoxLayout()
         self._btn_connect_all = QPushButton("Connect All")
         set_button_icon(self._btn_connect_all, "mdi.lan-connect")
@@ -144,10 +202,35 @@ class DeviceManagerWindow(QMainWindow):
         bottom.addWidget(self._btn_connect_all)
         bottom.addWidget(self._btn_disconnect_all)
         bottom.addStretch()
-        root.addLayout(bottom)
+        action_card.add_layout(bottom)
+        register_glass_pane(action_card)
+        shelf.add_widget(action_card)
+
+        # The one shelf now holds the whole window body (head + table +
+        # bulk actions); it grows with the window so the table can too.
+        root.addWidget(shelf, 1)
 
         self._populate_rows()
         self._refresh()
+
+    # ------------------------------------------------------------------ #
+    # Theme                                                               #
+    # ------------------------------------------------------------------ #
+
+    def refresh_theme(self, mode: str | None = None) -> None:
+        """Re-resolve theme-mode bookkeeping after a light/dark switch.
+
+        Nothing in this window caches an axis-rail/hazard colour at
+        construction time (no bias/motor accents, no ``HazardSurface``) — the
+        Card/GlassPane header and every status chip resolve purely through
+        ``gui.style``'s app-wide QSS, which ``apply_theme()`` regenerates and
+        reapplies globally on every switch (the same "nothing to re-resolve"
+        case as ``IntensityPanel``). This hook exists so the window CAN be
+        wired into ``tct_gui._toggle_theme``'s panel fan-out the same way
+        ``_settings_window``/``_theme_editor`` already are.
+        """
+        if mode:
+            self._theme_mode = str(mode)
 
     def _populate_rows(self) -> None:
         """Create one row per device (buttons only created once)."""
@@ -297,22 +380,37 @@ class DeviceManagerWindow(QMainWindow):
         self._set_busy(True)
         self._bg_task = _DeviceTask(fn)
         self._bg_thread = QThread(self)
+        self._bg_on_done = on_done
         self._bg_task.moveToThread(self._bg_thread)
         self._bg_thread.started.connect(self._bg_task.run)
-
-        def _finish(result, err):
-            thread = self._bg_thread
-            self._bg_thread = None
-            self._bg_task = None
-            if thread is not None:
-                thread.quit()
-                thread.wait(2000)
-            self._set_busy(False)
-            on_done(result, err)
-
-        self._bg_task.done.connect(_finish)
+        # Receiver MUST be a bound method of this GUI-thread QObject.  A bare
+        # closure has no receiver QObject, so PySide6 delivers ``done`` on the
+        # *worker* thread (the sender was moveToThread'd) — running _set_busy,
+        # _refresh panel rebuilds and a modal QMessageBox off the GUI thread
+        # (the intermittent crash + hard freeze; Paul's thread-id probe,
+        # 2026-07-14).  A bound method routes queued delivery to this window's
+        # (GUI) thread.
+        self._bg_task.done.connect(self._bg_finished, Qt.QueuedConnection)
         self._bg_thread.start()
         return True
+
+    def _bg_finished(self, result, err) -> None:
+        """Runs on the GUI thread (bound-method receiver + queued delivery).
+
+        The worker has already emitted ``done`` and is unwinding, so quitting/
+        waiting on it here can never deadlock (unlike the old closure, where the
+        worker waited on itself)."""
+        thread = self._bg_thread
+        on_done = self._bg_on_done
+        self._bg_thread = None
+        self._bg_task = None
+        self._bg_on_done = None
+        if thread is not None:
+            thread.quit()
+            thread.wait(2000)
+        self._set_busy(False)
+        if on_done is not None:
+            on_done(result, err)
 
     def _set_busy(self, busy: bool) -> None:
         self._chip_busy.set_status("Working..." if busy else "Idle",

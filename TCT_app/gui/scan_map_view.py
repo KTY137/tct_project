@@ -41,6 +41,28 @@ programmatic/tested use. "Freeze levels" (ratified 2026-07-10, was the
 parked "Map colorbar levels" decision — ``docs/OVERNIGHT_LOG.md``) keeps the
 colorbar min/max fixed at whatever it was when checked, instead of
 ``_redraw``'s default per-call nanmin/nanmax autoscale.
+
+Round-03 glass kit migration (wave beat, mirrors the ``StageView``/
+``IntensityPanel`` beats, commits 3a6d0ea/2e02b8d): the whole widget is now
+ONE ``GlassPane`` shelf (``panel_header`` chrome head + toolbar + map stack +
+cursor readout), root margins left at zero — this is a NESTED widget (both
+``ScanViewerPanel`` and ``AnalysisPanel`` embed it below their own page-level
+``panel_header``), same reasoning ``StageView`` used for its own embedding
+inside ``MotorPanel``. The quantity combo recesses into a ``Well`` (§4.4);
+the point-count status chip moves from the toolbar into the header's
+trailing slot (the same "one status chip up top" idiom every other migrated
+panel uses) — a pure re-parent, its attribute name and ``.text()`` contract
+are untouched.
+
+Register decision (law 8 + Baldr's Z-ladder census,
+``tests/test_panel_glass_rollout.py::_glass_disqualifiers``): the shelf does
+NOT register — its body directly hosts the ``FigureCard`` wrapping the live
+``pyqtgraph.ImageView`` map (a "Z3 instrument screen" disqualifier), the
+same plot-hosting exclusion ``StageView`` hit. Nothing else here is a
+pure-chrome surface worth carving into its own registrable sub-card (unlike
+``IntensityPanel``'s "Instrument controls" card, the toolbar here has no
+independent identity worth a new frame) — asserted in
+``tests/test_wave_scan_map_render.py``, not left as prose.
 """
 from __future__ import annotations
 
@@ -61,7 +83,7 @@ except ImportError:  # pragma: no cover - exercised only without pyqtgraph insta
     _HAS_PG = False
 
 from analysis.scan_grid import ScanGridResult, grid_extent, points_to_grid
-from gui.panel_kit import EmptyState, FigureCard
+from gui.panel_kit import EmptyState, FigureCard, GlassPane, Well, panel_header
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
 from gui.style import PLOT_BG, PLOT_FG, SPACE_SM
 
@@ -161,9 +183,33 @@ class ScanMapView(QWidget):
     # ------------------------------------------------------------------ #
 
     def _build_ui(self) -> None:
+        # StageView's own reasoning applies verbatim: this is a NESTED widget
+        # (ScanViewerPanel/AnalysisPanel embed it below their own page-level
+        # panel_header), so the root layout stays zero-margin; the shelf
+        # below supplies its own kit padding around the header/toolbar/map.
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(SPACE_SM)
+        root.setSpacing(0)
+
+        # ── The one shelf (round-03 kit §2.1) ──────────────────────────
+        # register=False is LOAD-BEARING, for the same reason as StageView
+        # (wave 1): this shelf's body directly hosts the live pyqtgraph
+        # ImageView (via FigureCard), which register_glass_pane's own hard
+        # exclusion refuses (design law 8 / Baldr's Z-ladder census —
+        # "Z3 instrument screen"). Asserted in
+        # tests/test_wave_scan_map_render.py, not left as prose.
+        shelf = GlassPane(register=False)
+        self._shelf = shelf
+
+        # ── Pane head: eyebrow + title + the point-count status chip ────
+        # The chip moves here from the toolbar (pure re-parent — its
+        # attribute name and .text() contract are untouched) so this widget
+        # carries the same "one status chip up top" idiom every other
+        # migrated panel uses.
+        self._chip_points = StatusChip("No data", "neutral")
+        shelf.add_widget(panel_header(
+            "TCT Control · Scan", "Scan map",
+            trailing=[self._chip_points], theme_mode=self._theme_mode))
 
         # Map toolbar — deliberately OUTSIDE the empty/map stack below, so
         # quantity/freeze/export stay visible (if inert) even before the
@@ -174,9 +220,11 @@ class ScanMapView(QWidget):
         self._combo_qty = QComboBox()
         self._combo_qty.addItems(QUANTITIES)
         self._combo_qty.currentTextChanged.connect(self._redraw)
-        toolbar.addWidget(self._combo_qty)
-        self._chip_points = StatusChip("No data", "neutral")
-        toolbar.addWidget(self._chip_points)
+        # The quantity selector recesses into an opaque Well (§4.4: "a value
+        # being typed is never on glass") — wraps WITHOUT touching the
+        # widget's attribute identity, so every enable/disable and value
+        # assertion on self._combo_qty is untouched.
+        toolbar.addWidget(self._well(self._combo_qty))
         toolbar.addStretch(1)
 
         # Compact trailing control cluster — freeze-levels toggle + PNG/CSV
@@ -205,7 +253,7 @@ class ScanMapView(QWidget):
         self._btn_export_csv.clicked.connect(self._on_export_csv_clicked)
         toolbar.addWidget(self._btn_export_csv)
 
-        root.addLayout(toolbar)
+        shelf.add_layout(toolbar)
 
         if _HAS_PG:
             self._plot_item = pg.PlotItem()
@@ -243,21 +291,36 @@ class ScanMapView(QWidget):
             self._stack = QStackedWidget()
             self._stack.addWidget(self._empty_state)   # index 0
             self._stack.addWidget(self._figure_card)   # index 1
-            root.addWidget(self._stack, 1)
+            shelf.body.addWidget(self._stack, 1)
         else:  # pragma: no cover - exercised only without pyqtgraph installed
             self._figure_card = None
             self._empty_state = None
             self._stack = None
-            root.addWidget(QLabel(
+            shelf.add_widget(QLabel(
                 "pyqtgraph not installed — cannot display map.\n"
                 "Run:  pip install pyqtgraph"
             ))
 
         self._lbl_cursor = QLabel("x: -- mm   y: -- mm   value: --")
         self._lbl_cursor.setObjectName("cardSubtitle")
-        root.addWidget(self._lbl_cursor)
+        shelf.add_widget(self._lbl_cursor)
+
+        # The one shelf now holds the whole widget (head + toolbar + map +
+        # cursor readout); it grows with the window so the map hero can too.
+        root.addWidget(shelf, 1)
 
         self.refresh_theme(self._theme_mode)
+
+    @staticmethod
+    def _well(widget: QWidget) -> Well:
+        """Wrap an input widget in an opaque Well (round-03 kit §4.4 — "a
+        value being typed is never on glass").  The widget keeps its identity
+        (callers still reference ``self._combo_qty`` directly, so every
+        enable/disable and value assertion is untouched); only its container
+        changed.  Copied verbatim from ``bias_panel.py:911`` (the pilot)."""
+        well = Well()
+        well.add_widget(widget)
+        return well
 
     # ------------------------------------------------------------------ #
     # Public API                                                          #

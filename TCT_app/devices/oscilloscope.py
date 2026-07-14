@@ -171,9 +171,24 @@ class Oscilloscope(BaseDevice):
         except ImportError as exc:
             raise DeviceError("pyvisa is not installed. Run: pip install pyvisa") from exc
 
-        self._rm = pyvisa.ResourceManager()
         try:
-            self._instr = self._rm.open_resource(self._address)
+            # RM construction inside the try so a missing/broken VISA backend
+            # surfaces as the same DeviceError as an open failure.
+            self._rm = pyvisa.ResourceManager()
+            # open_timeout caps viOpen — the connection-ESTABLISHMENT wait,
+            # distinct from self._instr.timeout (the per-operation I/O timeout
+            # set just below, effective only AFTER the link is open).  Without
+            # it an offline/unreachable TCPIP…::INSTR target blocks inside
+            # viOpen at the OS/VISA level for the full socket window (tens of
+            # seconds to minutes) and freezes the connect worker — the same
+            # unbounded-open freeze fixed for the wavegen in 7b4ea94.  pyvisa
+            # forwards open_timeout (ms) straight to viOpen.
+            # TODO(bench): confirm NI-VISA honors open_timeout on the real
+            # scope's VXI-11 / raw-SOCKET link when the instrument is powered
+            # off — it can only shorten today's unbounded block, never lengthen
+            # it.
+            self._instr = self._rm.open_resource(
+                self._address, open_timeout=self._timeout_ms)
             self._instr.timeout = self._timeout_ms
             # Raw LAN sockets (TCPIP…::SOCKET) have no message framing — queries
             # hang without an explicit terminator.  USB / VXI-11 (::INSTR) don't
@@ -182,6 +197,30 @@ class Oscilloscope(BaseDevice):
                 self._instr.read_termination = "\n"
                 self._instr.write_termination = "\n"
         except Exception as exc:
+            # Fail safe (rule 5): a failed / timed-out open must leave no
+            # half-open session or ResourceManager behind and must not keep a
+            # stale _connected True over a dead link on a reconnect.  Close under
+            # io_lock, exactly as disconnect() does: on a RECONNECT open failure
+            # self._instr still points at the OLD session, and is_alive() probes
+            # that handle with *STB? under this same lock from the liveness
+            # thread — closing it unlocked would race a concurrent probe (the
+            # cross-thread use/close-of-one-VISA-session crash 7b4ea94 fixed for
+            # the wavegen).  io_lock is re-entrant; connect() does not already
+            # hold it, and the liveness probe acquires it non-blocking.
+            with self.io_lock:
+                if self._instr is not None:
+                    try:
+                        self._instr.close()
+                    except Exception:
+                        pass
+                    self._instr = None
+                if self._rm is not None:
+                    try:
+                        self._rm.close()
+                    except Exception:
+                        pass
+                    self._rm = None
+            self._connected = False
             raise DeviceError(f"Oscilloscope VISA open failed: {exc}") from exc
 
         # *CLS (IEEE 488.2) clears stale events/status from earlier sessions so

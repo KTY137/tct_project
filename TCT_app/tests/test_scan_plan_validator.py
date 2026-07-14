@@ -426,3 +426,129 @@ def test_capture_photo_unknown_param_warns():
     issues = validate_plan(_photo_plan(exposure_ms=5),
                            limits(camera_available=True))
     assert any("exposure_ms" in w for w in warnings(issues))
+
+
+# --------------------------------------------------------------------------- #
+# Bounded validation (sibling of the plan_estimate cap): validate_plan must    #
+# NOT run its per-leaf walk on an oversize plan — the gate-red monkey timeout  #
+# was a minutes-long GUI-thread freeze inside a Validate click handler.        #
+# --------------------------------------------------------------------------- #
+
+import time  # noqa: E402 — local to the bounded-validation section
+
+
+def _range_loop(axis, n, children):
+    """A loop of exactly *n* values via start/stop/step. Materializes one
+    *n*-element list; nested, the leaf total is the PRODUCT of levels while each
+    level's materialize stays O(n) — a billion-visit plan from three tiny lists.
+    """
+    return LoopBlock(axis=axis, start=0.0, stop=float(n - 1), step=1.0,
+                     children=children)
+
+
+def _monster_plan():
+    """~1000^3 grid x (acquire+save) = ~2e9 structural leaf visits."""
+    x = _range_loop(Axis.STAGE_X, 1000, [_acq(), _save()])
+    y = _range_loop(Axis.STAGE_Y, 1000, [x])
+    z = _range_loop(Axis.STAGE_Z, 1000, [y])
+    return ScanPlan(name="monster", root=[z])
+
+
+def test_oversize_plan_skips_leaf_walk(monkeypatch):
+    """(i) An oversize plan is rejected structurally in well under a second, and
+    the per-leaf walk (iter_leaf_contexts) is NEVER entered — a real walk of
+    ~2e9 visits would take minutes and freeze the GUI thread."""
+    plan = _monster_plan()
+    assert plan.total_leaf_visits() > 1_000_000
+
+    calls = {"n": 0}
+    orig = ScanPlan.iter_leaf_contexts
+
+    def spy(self):
+        calls["n"] += 1
+        return orig(self)
+
+    monkeypatch.setattr(ScanPlan, "iter_leaf_contexts", spy)
+
+    t0 = time.monotonic()
+    errs = errors(validate_plan(plan, limits(max_points=1_000_000)))
+    elapsed = time.monotonic() - t0
+
+    assert calls["n"] == 0, "validate_plan walked the leaf stream for an oversize plan"
+    assert elapsed < 1.0, f"structural size gate took {elapsed:.3f}s"
+    assert any("max_points" in e for e in errs)
+
+
+def test_legal_plan_still_gets_full_leaf_walk(monkeypatch):
+    """(ii) A plan within the cap is unchanged: the per-leaf walk DOES run, so
+    walk-dependent checks (trailing MANUAL_PAUSE) still fire."""
+    loop = LoopBlock(axis=Axis.STAGE_X, values=[0.0, 1.0],
+                     children=[_acq(), _save()])
+    pause = ActionBlock(action=ActionType.MANUAL_PAUSE,
+                        params={"prompt": "flip sample"})
+    plan = ScanPlan(name="legal", root=[loop, pause])
+
+    calls = {"n": 0}
+    orig = ScanPlan.iter_leaf_contexts
+
+    def spy(self):
+        calls["n"] += 1
+        return orig(self)
+
+    monkeypatch.setattr(ScanPlan, "iter_leaf_contexts", spy)
+
+    issues = validate_plan(plan, limits())
+    assert calls["n"] == 1, "the walk-dependent check must still run under the cap"
+    assert errors(issues) == []
+    assert any("MANUAL_PAUSE" in w and "gates nothing" in w
+               for w in warnings(issues))
+
+
+def test_oversize_by_leaf_visits_with_points_under_gate(monkeypatch):
+    """The gate keys on total_leaf_visits (what bounds the walk AND what
+    max_points caps), not total_points — so a plan whose leaf-visit count
+    exceeds the cap is caught and its walk skipped even when max_points is set
+    to that leaf-visit boundary. Confirms leaf_visits (>= points) is the tighter
+    bound."""
+    plan = _monster_plan()
+    calls = {"n": 0}
+    orig = ScanPlan.iter_leaf_contexts
+
+    def spy(self):
+        calls["n"] += 1
+        return orig(self)
+
+    monkeypatch.setattr(ScanPlan, "iter_leaf_contexts", spy)
+    # Cap set below the monster's leaf-visit count → oversize → walk skipped.
+    errs = errors(validate_plan(plan, limits(max_points=500_000)))
+    assert calls["n"] == 0
+    assert any("max_points" in e for e in errs)
+
+
+def test_ultrawide_loop_shape_never_materializes(monkeypatch):
+    """Loop-SHAPE explosion: ONE loop of ~2e9 values (-1e6..1e6 step 1e-3, all
+    within the planner spinbox ranges).  materialize() would allocate a
+    multi-GB list UPSTREAM of the size check (inside _walk / total_leaf_visits);
+    the structural pre-gate must size it arithmetically and reject it WITHOUT
+    ever calling materialize() — the third member of the estimate/validate bug
+    family."""
+    loop = LoopBlock(axis=Axis.STAGE_X, start=-1e6, stop=1e6, step=1e-3,
+                     children=[_acq(), _save()])
+    plan = ScanPlan(name="ultrawide", root=[loop])
+
+    calls = {"n": 0}
+    orig = LoopBlock.materialize
+
+    def spy(self):
+        calls["n"] += 1
+        return orig(self)
+
+    monkeypatch.setattr(LoopBlock, "materialize", spy)
+
+    t0 = time.monotonic()
+    errs = errors(validate_plan(plan, limits(max_points=1_000_000)))
+    elapsed = time.monotonic() - t0
+
+    assert calls["n"] == 0, "validate_plan materialized an ultra-wide loop"
+    assert elapsed < 1.0, f"structural pre-gate took {elapsed:.3f}s"
+    assert any("max_points" in e for e in errs)

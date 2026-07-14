@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
 
 from gui.status_widgets import StatusPill, StatusChip
 from gui.app_settings import theme_mode
+from gui.panel_kit import GlassPane, panel_header
 from gui.style import palette
 
 try:
@@ -206,23 +207,39 @@ class StageView(QWidget):
         super().__init__(parent)
         self._theme_mode = str(theme_mode) if theme_mode else _theme_from_settings()
         self.setMinimumWidth(320)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(4)
+        # StageView is a NESTED widget (MotorPanel embeds it inside its own
+        # already-padded ``cardPane`` frame — gui/motor_panel.py), so the root
+        # layout stays zero-margin like before the migration; the shelf below
+        # supplies its own kit padding around the header/legend/plot content.
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # ── The one shelf (round-03 kit §2.1) ──────────────────────────
+        # register=False is the LOAD-BEARING choice here, but for a different
+        # reason than BiasPanel's HV dashboard: this shelf's body IS the live
+        # X-Y / X-Z pyqtgraph plot pair (StageView2D below), so it falls under
+        # panel_kit.register_glass_pane's HARD exclusion ("a pane hosting a
+        # pyqtgraph plot ... must NEVER be registered" — cockpit_style_
+        # overhaul.md §1 rule 3 / design law 8). The non-hazard "SHOULD
+        # register" kit default does not apply to a shelf whose entire body is
+        # a hot-path plot.  No numeric-input widgets exist in this panel, so
+        # there is nothing to recess into a Well (§4.4 applies to typed
+        # values; this view is read-only).
+        shelf = GlassPane(register=False)
+        self._shelf = shelf
 
         # Header: title + the live Z readout.  The X-Z side plot already carries
         # Z geometrically; this chip states it as a number, so Z is legible at a
         # glance without reading a pixel off an axis (Kaya: "2d plus z achse
         # reicht voll").  Tokenized via the shared ``statusChip`` QSS hook — no
         # inline colour.
-        row = QHBoxLayout()
-        row.addWidget(QLabel("<b>Setup view</b>"))
-        row.addStretch(1)
         self._z_chip = StatusChip("Z 0.000 mm", "neutral")
         self._z_chip.setToolTip("Live Z position (user frame) — also the "
                                 "vertical axis of the side view below")
-        row.addWidget(self._z_chip)
-        lay.addLayout(row)
+        shelf.add_widget(panel_header(
+            "TCT Control · Motion", "Setup view",
+            trailing=[self._z_chip], theme_mode=self._theme_mode))
 
         legend = QHBoxLayout()
         legend.setSpacing(6)
@@ -233,10 +250,12 @@ class StageView(QWidget):
         ):
             legend.addWidget(chip)
         legend.addStretch(1)
-        lay.addLayout(legend)
+        shelf.add_layout(legend)
 
         self._v2d = StageView2D(limits, theme_mode=self._theme_mode)
-        lay.addWidget(self._v2d, 1)
+        shelf.body.addWidget(self._v2d, 1)
+
+        root.addWidget(shelf, 1)
 
     # Fan-out to the 2D view -----------------------------------------------
     def set_limits(self, limits) -> None:

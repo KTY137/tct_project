@@ -752,6 +752,67 @@ post-ROI distortion pass).
 
 ---
 
+## 13. Open-Timeout Bounds Verification (Wave-1 Fix 2026-07-14)
+
+**Last updated:** 2026-07-14  
+**Requires Kaya at the bench** (every step verifies real powered-off instrument behavior).
+
+### 13a. Wavegen Connect Fail-Fast (5 s expected)
+
+**What to check:**
+- Start the TCT app in simulated mode (no bench connection).
+- Manually shut down the DG4162 waveform generator at the power switch (or unplug the Ethernet cable to 192.168.0.10).
+- In the GUI, click **Connect All** (or manually re-enable the wavegen in Devices panel).
+- Observe the **connection attempt timeout behavior:**
+  - Old behavior: hang for ~90 s (PyVISA default).
+  - New behavior: fail fast within ~5 s (now bounded by `open_timeout=5.0` in config).
+- Check the log for a clean "Timeout opening resource" message (not a hung thread or crash).
+- Power the DG4162 back on and reconnect; verify it connects normally.
+
+**Expected result:**
+- Wavegen connect timeout ~5 s (instead of minutes). Connection state reported cleanly to the GUI. No thread leaks or zombie VISA sessions left behind.
+
+**Closes:**
+- 7b4ea94 + 8e85f2a fix (open_timeout bounds on all VISA devices).
+- Addresses Kaya's bench observation: "reconnect on a powered-off wavegen used to hang the app."
+
+---
+
+### 13b. All-VISA Reconnect Stress (Liveness-Monitored Cycles)
+
+**What to check:**
+- With all instruments powered on (DG4162, TBS1052C scope, iseg HV, Keithley HV, DRS4 if present):
+  - Click **Disconnect All** in the GUI (Devices panel).
+  - Observe liveness monitor (§4b/§5 heartbeat probes) report all devices as DISCONNECTED within 3 s.
+  - Immediately click **Connect All** and observe all devices report CONNECTED.
+  - Repeat the cycle **5 times** without any app crash, thread stall, or GUI freeze.
+- Log the time taken for each Disconnect/Connect cycle (expect ~1–2 s per cycle; hangs >5 s indicate an io_lock deadlock or incomplete teardown).
+
+**Expected result:**
+- Disconnect/Connect stress cycles crash-free. All devices re-connect on subsequent attempts. No accumulation of stale VISA sessions or file descriptors (check Process Monitor or `Get-NetTCPConnection` for TCP/IP port leaks if using physical instruments).
+
+**Closes:**
+- e0a9d91 + 5576378 fixes (io_lock teardown + _run_bg completion + main-window bg-thread join).
+- Verifies the fail-safe open-failure path on all backends (VISA timeout recovery, session cleanup).
+
+---
+
+### 13c. Per-Driver TODO(bench) Items from 7b4ea94/8e85f2a
+
+**What to check (read-only audit):**
+- `TCT_app/devices/waveform_generator.py`: open_timeout set to 5.0 s (VISA DG4162 TCPIP).
+- `TCT_app/devices/oscilloscope.py`: open_timeout set to 5.0 s (VISA TBS1052C or DRS4).
+- `TCT_app/devices/bias_supply_iseg.py`: open_timeout set to 5.0 s (iseg VISA/serial).
+- `TCT_app/devices/bias_supply_keithley.py`: open_timeout set to 5.0 s (Keithley VISA).
+- `TCT_app/devices/oscilloscope_drs4.py`: open_timeout set to 5.0 s (DRS4 USB).
+- All drivers implement `_teardown_session()` (called on disconnect) to close/null VISA instrument + RM.
+
+**Expected result:**
+- Confirm source code matches the list above (grep for `open_timeout` and `_teardown_session`). No TODO(bench) markers remain in those files.
+
+**Closes:**
+- 7b4ea94/8e85f2a implementation audit (no manual instrumentation needed; code review).
+
 ---
 
 ## 14. On-Screen Rendering (Post-4ca8331 Theme Commit)
@@ -828,3 +889,108 @@ Once all checklist items are complete:
 5. Update `TCT_app/devices/bias_supply_iseg.py` if the 0.5 s relay-settle budget needs adjustment.
 
 Report back to Adam with findings and any hardware quirks discovered.
+
+---
+
+## 15. Glass-Kit Wave Panel Checks (Waves 1–12 Visual Acceptance)
+
+**Last updated:** 2026-07-14  
+**Requires Kaya at the real display** (all items are visual verification; app launched in classic or QML mode).
+
+**Scope:** The 12-wave glass-kit rollout (stage_view, intensity, laser, scan_map, sequencer, device_manager, calibration, camera, scope, motor, analysis, planner) is complete. This checklist verifies the PanelKit adoption, HazardSurface opacity, and window-material inheritance across all panels.
+
+---
+
+### 15a. Theme Toggle Re-Resolution (All Panels)
+
+**What to check:**
+- Launch TCT app with QML shell or classic mode.
+- Open all 12 panels (or navigate through them in sequence): Stage View, Intensity, Laser, Scan Map, Sequencer, Device Manager, Calibration, Camera, Scope, Motor, Analysis, Planner.
+- For each panel, perform a **light → dark → light** theme toggle (Settings → Theme, dark/light selector, repeat twice).
+- Observe: do all Kit surfaces (glass pane backgrounds, registered chrome cards) re-resolve their appearance each time?
+
+**Expected result:**
+- Glass pane surfaces, chrome card backgrounds, and any hazard stripes/hatching re-tint cleanly on every theme toggle.
+- No stale surface colors carried over from a prior theme.
+- No visual jank, flicker, or grey flash during transitions.
+
+**Closes:**
+- Glass-kit design assurance: theme toggle correctness across all 12 panels.
+
+---
+
+### 15b. Hazard Surface Opacity (Hazard Panels: Bias, Sequencer, Calibration, Motor, Planner)
+
+**What to check:**
+- In the 5 hazard panels (Bias, Sequencer, Calibration, Motor, Planner), locate the opaque HazardSurface regions (typically overlaid on command buttons, ArmLatch, Abort, or motion-control cards).
+- Verify the surface is **visibly opaque** at every glass tier:
+  - **Tier 1 (no backdrop):** hazard stripe/hatch pattern visible, not transparent.
+  - **Tier 2 (Mica backdrop active):** hazard surface remains opaque *over* the frosted material; no ghosting or transparency showing through to the desktop.
+  - **Tier 3 (Acrylic backdrop active):** same opacity guarantee.
+  - **After enabling window material in Theme editor (Material → Acrylic):** opacity persists.
+
+**Expected result:**
+- All 5 hazard panels show opaque HazardSurface regions at every glass tier and material level.
+- Hazard intent is visually clear; operator cannot mistake a hazard region for a safe content card.
+
+**Closes:**
+- Safety assurance: opaque hazard marking across glass-kit rollout.
+
+---
+
+### 15c. Command Control Liveness During Active Operations
+
+**What to check:**
+- **Motor panel:** while a motor jog or move is in progress, verify the **STOP button is clickable/enabled** (not greyed out). Click it mid-jog and confirm the motor halts.
+- **Calibration panel:** during a live repeatability test, verify the **Stop button is enabled and functional** — click it to abort the calibration run.
+- **Planner panel:** during a live scan run, verify the **Abort button is enabled (red/danger styling) and clickable** — one-tap abort (design law 5: no second confirmation).
+
+**Expected result:**
+- Motor STOP, Calibration Stop, and Planner Abort remain enabled and responsive during their respective active operations.
+- No UI deadlock or delayed response (expected sub-100 ms button latency).
+
+**Closes:**
+- Functional assurance: safety stop controls remain live across glass-kit panels.
+
+---
+
+### 15d. Satellite Window Material Inheritance (Device Manager, Camera ROI Dialog, Scope Trigger Dialog)
+
+**What to check:**
+- In the GUI, open or trigger each satellite window:
+  - **Device Manager:** a QMainWindow satellite with icon/state summary (detachable).
+  - **Camera ROI Dialog:** a floating dialog spawned from the Camera panel (if ROI feature is enabled).
+  - **Scope Trigger Dialog:** a floating dialog spawned from the Scope panel.
+- For each satellite window, enable a window material (Theme editor → Material → Acrylic or Mica).
+- Detach any existing panels to separate floating windows (tab/panel → detach, or dock → undocked).
+- Verify: **each satellite window and detached panel carries its own window material** (not orphaned or revert to None).
+
+**Expected result:**
+- All satellite windows and detached panels inherit the active window material setting.
+- Material persists when resizing, moving, or re-docking the window.
+- No visual regression (no blank/opaque window until material reapplies).
+
+**Closes:**
+- Glass-kit design assurance: material uniformity across main + satellite windows.
+
+---
+
+### 15e. Registered Chrome vs. Content Card Rendering (All Panels)
+
+**What to check:**
+- In each of the 12 panels, identify **registered chrome cards** (typically: toolbar buttons, column headers, configuration headers; register=True) vs. **content cards** (tables, plots, readouts, data grids; register=False).
+- Enable panel glass: Settings → Theme → (panel glass setting, if available; rollout currently theme-editor cards only).
+- Observe:
+  - **Chrome cards (register=True):** should show glass (background tint/frosted effect if glass is on).
+  - **Content cards (register=False):** should remain opaque, hiding desktop detail behind them.
+- Toggle panel glass on/off; verify the distinction remains clear.
+
+**Expected result:**
+- Chrome cards visibly respond to panel-glass toggle (glassy appearance when on; opaque when off).
+- Content cards remain consistently opaque regardless of panel-glass state.
+- No visual confusion between chrome and content regions.
+
+**Closes:**
+- Glass-kit design assurance: registration semantics and visual feedback.
+
+---

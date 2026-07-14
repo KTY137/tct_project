@@ -187,6 +187,46 @@ class LoopBlock(ScanBlock):
         vals[-1] = start + sign * n_intervals * step
         return [float(v) for v in vals]
 
+    def value_count(self) -> int:
+        """``len(self.materialize())`` computed in O(1) — WITHOUT allocating.
+
+        The size counterpart of :meth:`materialize`: an ultra-wide range (e.g.
+        ``start=-1e6, stop=1e6, step=1e-3`` ≈ 2e9 values, all within the planner
+        spinbox ranges) can be SIZED here without ever building the multi-GB
+        list, which is what lets the validator / estimator pre-gate a
+        loop-SHAPE explosion (the sibling of a deeply-nested one).
+
+        It mirrors :meth:`materialize`'s rules EXACTLY, so
+        ``value_count() == len(materialize())`` for every input (pinned by a
+        property test):
+
+        * explicit ``values`` → ``len(values)``;
+        * a range → ``n_intervals + 1`` with
+          ``n_intervals = int(round(|stop - start| / |step|))`` — the identical
+          float arithmetic and banker's-rounding ``round`` materialize uses,
+          including the zero-span case (``n_intervals == 0`` → materialize
+          returns ``[start]``, length 1 = 0 + 1);
+        * the SAME :class:`ValueError` as materialize for missing fields / a
+          zero step, so an invalid loop is reported by the normal flow and never
+          silently counted (an invalid range never allocates — materialize
+          raises before building its list).
+        """
+        if self.values is not None:
+            return len(self.values)
+        if self.start is None or self.stop is None or self.step is None:
+            raise ValueError(
+                f"LoopBlock[{_axis_name(self.axis)}] needs either 'values' or "
+                "all of start/stop/step."
+            )
+        step = abs(float(self.step))
+        if step == 0.0:
+            raise ValueError(
+                f"LoopBlock[{_axis_name(self.axis)}] step must be non-zero."
+            )
+        span = abs(float(self.stop) - float(self.start))
+        n_intervals = int(round(span / step))
+        return n_intervals + 1
+
     # -- serialization -----------------------------------------------------
     def to_dict(self) -> dict:
         d: dict = {"type": "loop", "axis": self.axis.value}
@@ -338,6 +378,29 @@ class ScanPlan:
         coordinate count once)."""
         return _count_points(self.root)
 
+    def structural_leaf_visit_bound(self) -> int:
+        """``total_leaf_visits()`` computed in O(#blocks) WITHOUT allocating.
+
+        Identical value to :meth:`total_leaf_visits` for any valid plan, but it
+        uses :meth:`LoopBlock.value_count` (pure arithmetic) in place of
+        ``len(materialize())``, so an ultra-wide range loop is SIZED without
+        allocating its value list.  This is the pre-gate the validator and the
+        estimator call FIRST, so a loop-shape (or nesting) explosion is rejected
+        before any ``materialize()`` / walk allocation.  Raises
+        :class:`ValueError` (like ``materialize``) if a loop range is invalid —
+        callers fall back to their normal flow, which reports that range error.
+        """
+        return _count_leaf_bound(self.root)
+
+    def structural_point_bound(self) -> int:
+        """``total_points()`` computed in O(#blocks) WITHOUT allocating.
+
+        The point-count analogue of :meth:`structural_leaf_visit_bound` (uses
+        :meth:`LoopBlock.value_count`), so the estimator can report an honest
+        structural point count on a too-large plan without materializing the
+        very loop it is refusing to size."""
+        return _count_point_bound(self.root)
+
     def iter_leaf_contexts(self) -> Iterator[tuple[dict, ActionBlock]]:
         """Yield ``(loop_values, action)`` for every action, in execution order.
 
@@ -385,6 +448,29 @@ def _count_points(blocks: list[ScanBlock]) -> int:
     for b in blocks:
         if isinstance(b, LoopBlock):
             total += len(b.materialize()) * _count_points(b.children)
+    return total
+
+
+# Allocation-free twins of the two counters above: identical arithmetic, but
+# LoopBlock.value_count() (O(1)) replaces len(b.materialize()) (O(n) + a full
+# list), so a plan is SIZED without ever building a loop's value list.  Python
+# ints are unbounded, so the multiplication never overflows (never float).
+def _count_leaf_bound(blocks: list[ScanBlock]) -> int:
+    total = 0
+    for b in blocks:
+        if isinstance(b, LoopBlock):
+            total += b.value_count() * _count_leaf_bound(b.children)
+        elif isinstance(b, ActionBlock):
+            total += 1
+    return total
+
+
+def _count_point_bound(blocks: list[ScanBlock]) -> int:
+    has_action = any(isinstance(b, ActionBlock) for b in blocks)
+    total = 1 if has_action else 0
+    for b in blocks:
+        if isinstance(b, LoopBlock):
+            total += b.value_count() * _count_point_bound(b.children)
     return total
 
 

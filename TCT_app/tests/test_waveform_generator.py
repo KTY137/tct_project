@@ -578,13 +578,26 @@ def test_list_visa_resources_enumerates_via_prime(reset_prime, monkeypatch) -> N
 # --------------------------------------------------------------------------- #
 
 class _FakeRM:
-    """pyvisa.ResourceManager stand-in: open_resource() hands back the fake."""
+    """pyvisa.ResourceManager stand-in: open_resource() hands back the fake.
+
+    Records the address and ``open_timeout`` it was called with, so tests can
+    assert the connection-establishment cap is forwarded to viOpen; exposes a
+    ``closed`` flag so teardown / no-leak assertions can see the RM was closed.
+    """
 
     def __init__(self, instr) -> None:
         self._instr = instr
+        self.open_addr: str | None = None
+        self.open_timeout: object = "unset"   # sentinel: connect() never passed it
+        self.closed = False
 
-    def open_resource(self, addr):
+    def open_resource(self, addr, open_timeout=None, **kw):
+        self.open_addr = addr
+        self.open_timeout = open_timeout
         return self._instr
+
+    def close(self) -> None:
+        self.closed = True
 
 
 def _connect_real_with_fake(monkeypatch, fake: FakeWfgInstr, **kw) -> WaveformGenerator:
@@ -649,3 +662,53 @@ def test_simulation_connect_keeps_output_state_false() -> None:
     assert wfg.output_is_on is None
     wfg.connect()
     assert wfg.output_is_on is False
+
+
+# --------------------------------------------------------------------------- #
+# connect() caps the connection-establishment wait (open_timeout) and fails    #
+# safe: an unreachable TCPIP…::INSTR must not block viOpen for the OS socket    #
+# timeout (the "connect freezes the app completely" report), and a failed open #
+# must leak no half-open ResourceManager / session (rule 5).                    #
+# --------------------------------------------------------------------------- #
+
+def test_connect_forwards_open_timeout_to_open_resource(monkeypatch) -> None:
+    """connect() must pass open_timeout (= timeout_ms) to open_resource so
+    viOpen is bounded — without it an offline LAN target blocks for minutes."""
+    pyvisa = pytest.importorskip("pyvisa")
+    rm = _FakeRM(FakeWfgInstr(output_state="OFF"))
+    monkeypatch.setattr(pyvisa, "ResourceManager", lambda *a, **k: rm)
+    wfg = WaveformGenerator(simulation=False, vendor="rigol",
+                            visa_address="TCPIP0::192.168.0.10::INSTR",
+                            timeout_ms=4000)
+    wfg.connect()
+    assert rm.open_timeout == 4000, rm.open_timeout   # not the "unset" sentinel
+    assert rm.open_addr == "TCPIP0::192.168.0.10::INSTR"
+    assert wfg._instr.timeout == 4000                 # per-op I/O timeout too
+
+
+def test_connect_open_failure_tears_down_and_no_leak(monkeypatch) -> None:
+    """A failed / timed-out viOpen must raise DeviceError AND leave no half-open
+    ResourceManager or session behind — a retry must start clean (fail-safe)."""
+    from devices.base import DeviceError
+    pyvisa = pytest.importorskip("pyvisa")
+
+    class _BoomRM:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def open_resource(self, addr, open_timeout=None, **kw):
+            raise OSError("simulated viOpen timeout — instrument offline")
+
+        def close(self) -> None:
+            self.closed = True
+
+    boom = _BoomRM()
+    monkeypatch.setattr(pyvisa, "ResourceManager", lambda *a, **k: boom)
+    wfg = WaveformGenerator(simulation=False, vendor="rigol",
+                            visa_address="TCPIP0::192.168.0.10::INSTR")
+    with pytest.raises(DeviceError):
+        wfg.connect()
+    assert wfg._instr is None
+    assert wfg._rm is None          # torn down on the failure path, not leaked
+    assert boom.closed              # the half-open RM was closed
+    assert wfg.connected is False

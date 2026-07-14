@@ -259,6 +259,7 @@ class TCTMainWindow(QMainWindow):
         self._scanner = ScanController(self._devices, self._sm)
         self._bg_thread: QThread | None = None
         self._bg_task: _BgTask | None = None
+        self._bg_on_done = None
 
         # Aux windows (created lazily) + one-time wiring
         # (self._settings / self._theme_mode / load_theme_customization now run
@@ -1071,7 +1072,8 @@ class TCTMainWindow(QMainWindow):
                       getattr(self, "_calib_panel", None),
                       getattr(self, "_analysis_panel", None),
                       getattr(self, "_settings_window", None),
-                      getattr(self, "_theme_editor", None)):
+                      getattr(self, "_theme_editor", None),
+                      getattr(self, "_device_manager_window", None)):
             if panel is not None and hasattr(panel, "refresh_theme"):
                 try:
                     panel.refresh_theme(self._theme_mode)
@@ -1481,6 +1483,27 @@ class TCTMainWindow(QMainWindow):
         if t is not None:
             t.stop()
             t.deleteLater()
+        # Join any in-flight single-slot background worker (a connect/disconnect
+        # launched via ``_run_bg``) BEFORE the device-touching teardown below.
+        # Its QThread is parented to this window (``QThread(self)``); destroying
+        # the window while that thread still runs makes Qt6 abort with "QThread:
+        # Destroyed while thread is still running" — the bench crash from closing
+        # a window that looks frozen mid-connect (the [X] stays live while
+        # ``_act_connect`` is disabled).  Mirror ``DeviceManagerWindow.shutdown``:
+        # a BOUNDED ``quit()``+``wait()`` (the connect is capped by
+        # ``open_timeout`` — never wait unbounded), then null the single-slot
+        # refs.  Nulling ``_bg_on_done`` is deliberate: a ``done`` already queued
+        # to the GUI thread still reaches ``_bg_finished``, which now finds the
+        # refs cleared and drops the callback — correct, the window is dying, and
+        # ``on_done`` (panel rebuilds / dialogs) must not run post-teardown.
+        bg_thread = getattr(self, "_bg_thread", None)
+        if bg_thread is not None:
+            if bg_thread.isRunning():
+                bg_thread.quit()
+                bg_thread.wait(5000)
+            self._bg_thread = None
+            self._bg_task = None
+            self._bg_on_done = None
         # Stop the bias poller thread (it holds a reference into the old
         # DeviceManager via its getter closure).
         if getattr(self, "_bias_poll_thread", None) is not None:
@@ -1579,21 +1602,36 @@ class TCTMainWindow(QMainWindow):
             return False
         self._bg_task = _BgTask(fn)
         self._bg_thread = QThread(self)
+        self._bg_on_done = on_done
         self._bg_task.moveToThread(self._bg_thread)
         self._bg_thread.started.connect(self._bg_task.run)
-
-        def _finish(result, err):
-            thread = self._bg_thread
-            self._bg_thread = None
-            self._bg_task = None
-            if thread is not None:
-                thread.quit()
-                thread.wait(2000)
-            on_done(result, err)
-
-        self._bg_task.done.connect(_finish)
+        # Receiver MUST be a bound method of this GUI-thread QObject.  A bare
+        # closure has no receiver QObject, so PySide6 delivers ``done`` on the
+        # *worker* thread (the sender was moveToThread'd) — running widget
+        # access, panel rebuilds, state-machine transitions and a modal
+        # QMessageBox off the GUI thread (the intermittent crash + hard freeze;
+        # Paul's thread-id probe, 2026-07-14).  A bound method routes queued
+        # delivery to this window's (GUI) thread.
+        self._bg_task.done.connect(self._bg_finished, Qt.QueuedConnection)
         self._bg_thread.start()
         return True
+
+    def _bg_finished(self, result, err) -> None:
+        """Runs on the GUI thread (bound-method receiver + queued delivery).
+
+        The worker has already emitted ``done`` and is unwinding, so the GUI
+        thread quitting/waiting on it here can never deadlock (unlike the old
+        closure, where the worker waited on itself)."""
+        thread = self._bg_thread
+        on_done = self._bg_on_done
+        self._bg_thread = None
+        self._bg_task = None
+        self._bg_on_done = None
+        if thread is not None:
+            thread.quit()
+            thread.wait(2000)
+        if on_done is not None:
+            on_done(result, err)
 
     @Slot()
     def _connect_all(self) -> None:

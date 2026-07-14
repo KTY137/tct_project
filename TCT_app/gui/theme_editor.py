@@ -254,6 +254,13 @@ class ThemeEditorDialog(QDialog):
         self._draft_canvas_alpha: float = style.get_backdrop_canvas_alpha()
         self._draft_panel_glass_alpha: float = style.get_panel_glass_alpha()
 
+        # Re-entrancy guard for the Material-mode macro (see
+        # _apply_material_mode / _resync_material_tier_from_state below): True
+        # only while the macro itself is driving the Backdrop combo / Panel-glass
+        # switch, so their own change handlers don't re-derive (and persist) a
+        # tier while the macro's own tier write is still in flight.
+        self._material_macro_active = False
+
         self._swatches: dict[str, QPushButton] = {}
         self._locked_swatches: dict[str, QLabel] = {}
 
@@ -793,6 +800,23 @@ class ThemeEditorDialog(QDialog):
         style.apply_window_backdrop()
         self._sync_opacity_enabled_for_backdrop()
         style.apply_window_opacity()
+        # BUG FIX (Kaya, live-reported): a DIRECT pick on this combo (as
+        # opposed to going through the Material-mode macro below) never told
+        # the Material-mode combo its choice no longer matches reality — that
+        # combo kept showing a stale "Auto"/other option. ``activated`` fires
+        # on ANY user selection *including re-picking the item already shown*
+        # (by design — see _on_material_mode_changed), so simply touching that
+        # STALE combo again (thinking it is an unrelated "other setting")
+        # replayed its old, now-wrong mapping and silently downgraded/removed
+        # the material the user had just picked here — glass "died" on the
+        # very next unrelated-looking click. Resyncing the persisted tier +
+        # combo display to the ACTUAL state on every direct change makes a
+        # later re-pick idempotent instead of a silent clobber. Skipped while
+        # the macro itself is driving this combo (_material_macro_active) so
+        # an explicit "auto"/"token"/"flat" pick keeps its own tier rather
+        # than being immediately overwritten back to "real".
+        if not self._material_macro_active:
+            self._resync_material_tier_from_state()
 
     def _persist_window_backdrop(self) -> None:
         """Write the backdrop kind straight to the store (auto-persist)."""
@@ -858,6 +882,12 @@ class ThemeEditorDialog(QDialog):
         panel_kit.set_panel_glass(checked)
         app_settings.set_theme_panel_glass_enabled(checked, self._settings)
         self._settings.sync()
+        # See _on_backdrop_changed's matching comment: keep the Material-mode
+        # macro's displayed tier truthful so a later re-pick is idempotent,
+        # never a silent clobber. Skipped while the macro itself is driving
+        # this checkbox.
+        if not self._material_macro_active:
+            self._resync_material_tier_from_state()
 
     def _init_panel_glass(self) -> None:
         """Apply the persisted panel-glass switch to this dialog's now-registered
@@ -914,11 +944,22 @@ class ThemeEditorDialog(QDialog):
 
         # Drive the existing controls; their own handlers persist + live-apply.
         # setCurrentIndex/setChecked are no-ops (no signal) when already there,
-        # so an unchanged sub-knob costs no restyle.
-        idx = self._backdrop_combo.findData(want_backdrop)
-        if idx >= 0:
-            self._backdrop_combo.setCurrentIndex(idx)
-        self._panel_glass_check.setChecked(want_glass)
+        # so an unchanged sub-knob costs no restyle. Guarded so THEIR handlers
+        # do not immediately re-derive (and overwrite) the tier we just picked
+        # — see _resync_material_tier_from_state / the BUG FIX note on
+        # _on_backdrop_changed. Without this guard, picking e.g. "auto" here
+        # would have its own _on_backdrop_changed call turn right back around
+        # and persist tier="real" (or "flat"/"token", from the resulting
+        # backdrop kind) a moment later, losing the "auto"/"token"/"flat"
+        # distinction the user just asked for.
+        self._material_macro_active = True
+        try:
+            idx = self._backdrop_combo.findData(want_backdrop)
+            if idx >= 0:
+                self._backdrop_combo.setCurrentIndex(idx)
+            self._panel_glass_check.setChecked(want_glass)
+        finally:
+            self._material_macro_active = False
         self._settings.sync()
 
     def _sync_material_mode_control(self) -> None:
@@ -936,6 +977,47 @@ class ThemeEditorDialog(QDialog):
         self._material_mode_combo.blockSignals(True)
         self._material_mode_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self._material_mode_combo.blockSignals(False)
+
+    def _resync_material_tier_from_state(self) -> None:
+        """Re-derive the Ymir tier from what the Backdrop combo / Panel-glass
+        switch ACTUALLY are right now, persist it, and push the result onto
+        the Material-mode combo's display (:func:`_sync_material_mode_control`).
+
+        Root-cause fix for the live-reported "changing any other setting
+        kills the glass" bug: a DIRECT pick on the Backdrop combo (bypassing
+        this macro) never told the Material-mode combo its own displayed
+        option ("Auto" by default) no longer matched reality. ``activated``
+        fires on ANY user selection *including re-picking the item already
+        shown* (:func:`_on_material_mode_changed`'s docstring explains why),
+        so simply touching that now-STALE combo again — which looks like an
+        unrelated "other setting" to the operator, since it still displayed
+        its old value — replayed the stale mapping through
+        :func:`_apply_material_mode` and silently downgraded or removed the
+        material the operator had just picked directly. Calling this after
+        every direct Backdrop/Panel-glass change makes a later re-pick of the
+        Material-mode combo idempotent (it now shows the true current state)
+        instead of a silent clobber. See ``tests/test_theme_editor.py``'s
+        material-mode desync regression tests.
+
+        The tier IS persisted here (``app_settings.set_theme_glass_tier``),
+        not display-only — but it is a READ-ONLY MIRROR of the actual
+        Backdrop/Panel-glass state, never the other way around: nothing reads
+        this write back to DRIVE the backdrop or the panel-glass switch (that
+        direction only ever runs through :func:`_apply_material_mode`, gated
+        off here by ``_material_macro_active``). So a future edit must not
+        drop this write for looking "cosmetic" — it keeps ``theme/glass_tier``
+        truthful across a restart too — nor fear it as a hidden feedback loop
+        (Mary's gate-4 review verified there is none)."""
+        bk = self._backdrop_combo.currentData()
+        if bk in ("mica", "acrylic"):
+            tier = "real"
+        elif self._panel_glass_check.isChecked():
+            tier = "token"
+        else:
+            tier = "flat"
+        app_settings.set_theme_glass_tier(tier, self._settings)
+        self._settings.sync()
+        self._sync_material_mode_control()
 
     def _on_canvas_alpha_changed(self, value: int) -> None:
         """Live + AUTO-PERSISTED (window material state, not a draft token —
@@ -1108,10 +1190,20 @@ class ThemeEditorDialog(QDialog):
         self._draft_backdrop = style.set_window_backdrop(
             self._backdrop_combo.currentData())
         style.apply_window_backdrop()
-        # Window opacity: the slider is the source of truth (its range already
-        # enforces the safety floor); set_window_opacity clamps regardless.
+        # Window opacity: source from self._draft_window_opacity, NOT the
+        # slider's displayed value. While a backdrop material is active the
+        # slider DISPLAY is force-pinned to 100% (_force_opacity_to_full,
+        # display-only by contract), but _draft_window_opacity keeps tracking
+        # the user's real stored preference the whole time (_on_opacity_changed
+        # keeps it current; _sync_opacity_enabled_for_backdrop/
+        # _force_opacity_to_full deliberately never touch it). Reading the
+        # slider here used to silently discard that preference on every Apply
+        # made while a backdrop was on (set 85% -> enable Acrylic -> Apply ->
+        # the 85% was gone, resurfacing as 100% only once the backdrop was
+        # later disabled) — Mary's gate-4 fix. set_window_opacity clamps
+        # regardless.
         self._draft_window_opacity = style.set_window_opacity(
-            self._opacity_slider.value() / 100.0)
+            self._draft_window_opacity)
         style.apply_window_opacity()
         style.apply_typography(
             sans=self._sans_combo.currentData(),
