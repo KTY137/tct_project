@@ -93,6 +93,30 @@ inactive-window fallback) · `9e525f5` Mary's review booked · `f934e65` **G-B2b
 the contract wired to reality** (the RDP ceiling had NEVER fired) · `cf18550`
 **50 black icons** killed at the root · `37cead3` the activation scan gate.
 
+## 📐 BALDR'S FLOOR RE-DERIVATION (2026-07-14, report-only — landed in transcript)
+
+Against the OWNED ambient ground (kit §1.1: dark L* ∈ [0, 7.61], light
+[88.89, 96.89]), validated against 4 of the kit's own published numbers (≤0.5%):
+
+- **Old `MIN_PANEL_GLASS_ALPHA = 0.50` → new accessibility floor 0.0** for
+  pane/shelf/chrome/card under the `{text, muted}` ink law. The opaque
+  suppression Kaya dislikes can drop almost entirely. **Light is the binding
+  theme** (4.97:1 worst — ~10% margin; dark has 44%): do not ship literal α=0.
+- **One real floor: semantic ink on LIGHT card = α ≥ 0.23** (binding pair:
+  `good` at α=0, 4.20:1 FAILS). Kit ships 0.86 — 3.5× margin. No kit bugs found.
+- `MIN_BACKDROP_CANVAS_ALPHA = 0.80` untouched (protects the DWM-garnish edge,
+  still facing an unknown desktop). Garnish-on does NOT change interior floors
+  IF the "garnish strip never carries text" invariant holds — verify with
+  `scripts/glass_probe.py`, currently confirmed only from code comments.
+- **NEEDS KAYA:** `GLASS_SAFE_TEXT_TOKENS=(text,muted)` is a ratified/PROTECTED
+  law written against the unknown-desktop premise, which has moved. Extending it
+  would allow coloured semantic words on own-ground glass cards (dark: any α;
+  light: α ≥ 0.23). His call, not ours.
+- Wanted CI tests (after the bisection releases the tree): render the real
+  procedural ground and measure its ΔL* range (does `GROUND_TINT_ALPHA_MAX=0.07`
+  really produce ΔL*4.0 in BOTH themes?); kit §2.1 is missing the light-shelf
+  SCENE row (inference `panel`@0.55 reproduces kit's own 5.86 within 0.2%).
+
 ## 🔴 THE BENCH IS STILL RED — and DO NOT PUSH OR MERGE
 
 Two full-suite runs on sophonone, both `exit -1073741819` (`0xC0000005`).

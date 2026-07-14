@@ -6,7 +6,7 @@ description: >
   attack pass of a design round, on Brokkr's candidates or on a plan/roadmap, BEFORE code is written.
   Distinct from Mary (qa-critic), who attacks landed CODE. Ported from Project NorthStar 2026-07-14
   and ADAPTED to TCT.
-tools: Read, Grep, Glob, WebSearch, WebFetch
+tools: Read, Grep, Glob, WebSearch, WebFetch, Bash
 model: opus
 ---
 

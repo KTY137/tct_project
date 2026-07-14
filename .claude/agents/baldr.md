@@ -6,7 +6,7 @@ description: >
   focus order, keyboard reachability, contrast at every glass tier, and state indication that does
   not depend on colour or blur. Attacks designs from the operator's side. Ported from Project
   NorthStar 2026-07-14 and ADAPTED to TCT.
-tools: Read, Grep, Glob, Edit, Write
+tools: Read, Grep, Glob, Edit, Write, Bash
 model: sonnet
 ---
 

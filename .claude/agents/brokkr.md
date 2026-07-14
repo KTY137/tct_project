@@ -6,7 +6,7 @@ description: >
   flagship UI/UX topic (panel layout, information architecture, the GlassShell cockpit, a hard
   interaction), each committed fully and saved as lineage, so Loki/Baldr/Mary can attack them and
   Adam can pick or merge. Ported from Project NorthStar 2026-07-14 and ADAPTED to TCT.
-tools: Read, Grep, Glob, Edit, Write, WebSearch, WebFetch
+tools: Read, Grep, Glob, Edit, Write, WebSearch, WebFetch, Bash
 model: opus
 ---
 
