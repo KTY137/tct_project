@@ -74,45 +74,43 @@ inactive-window fallback) · `9e525f5` Mary's review booked · `f934e65` **G-B2b
 the contract wired to reality** (the RDP ceiling had NEVER fired) · `cf18550`
 **50 black icons** killed at the root · `37cead3` the activation scan gate.
 
-## 🔴 THE BENCH IS RED — a NATIVE CRASH, and the gate caught it
+## 🔴 THE BENCH IS STILL RED — and DO NOT PUSH OR MERGE
 
-Full suite at `37cead3` on sophonone: **exit `-1073741819` = `0xC0000005` =
-ACCESS VIOLATION.** Not a failed assertion — the process died.
+Two full-suite runs on sophonone, both `exit -1073741819` (`0xC0000005`).
+
+**Run 1 @ `37cead3`** — the crash was `_IconThemeWatcher` (`cf18550`) running Python
+inside Qt's stylesheet repolish walk. **FIXED** (`dc1f543`): the frame is gone.
+Root cause was neither of Adam's two hypotheses (both refuted by measurement — Qt
+guards both sides of an event filter). The corpse was a THIRD widget Qt itself held
+a raw pointer to: `setStyleSheet` repolishes over a RAW-POINTER SNAPSHOT, our 3690
+Python callbacks triggered CPython's gc mid-walk, gc freed a Python-owned QWidget,
+shiboken deleted its C++ object, Qt dereferenced it. **New house rule: never run
+Python inside Qt's stylesheet repolish walk.**
+
+**Run 2 @ `dc1f543`** — SAME exit code, DIFFERENT stack:
 
 ```
-gui/status_widgets.py:457   eventFilter      <- _IconThemeWatcher, NEW in cf18550
-gui/style.py:3350           apply_theme
-tct_gui.py:992              _toggle_theme    <- a REAL user action
-tests/test_qml_shell.py:1028
+tests/test_qml_shell.py:1028   test_island_renders_from_tokens_in_both_themes...
+tct_gui.py:992                 _toggle_theme
+gui/style.py:3350              apply_theme -> app.setStyleSheet(qss)
+pyqtgraph/HistogramLUTWidget.py:33  sizeHint     <- PYTHON, in the repolish walk
++++ Timeout +++                                   <- pytest-timeout (60 s) fired FIRST
+Windows fatal exception: access violation
+Thread 0x18a0 (LIVE): gui/camera_panel.py:142 _poll   <- a camera thread still running
 ```
 
-`cf18550` (the icon fix) passed **110 targeted tests** and crashes the process on
-a **theme toggle** once enough windows have been torn down. Root cause is written
-in its own docstring **as a false claim**: *"Filters die with the widget they
-watch, so nothing here can touch a half-destroyed QWidget."* `_icon_watcher` is a
-module-level singleton with **no parent** — it dies with nothing, and it outlives
-the `QApplication` that created it. The sentence that justifies the safety is the
-sentence that is not true.
+**pyqtgraph violates the very rule we just derived** — its `sizeHint` is Python and
+Qt calls it during repolish. But the AV may be a SYMPTOM, not the disease:
+pytest-timeout fired at 60 s and `os._exit`'d the process **while the repolish walk
+and a live camera thread were mid-flight**. `apply_theme` is measured at ~9 s per
+`setStyleSheet` at ~13k accumulated widgets (`style.py`'s own docstring), and
+tonight added several tests that build a full `TCTMainWindow` — if they leak, every
+later `apply_theme` walks a bigger pile.
 
-**This is exactly what the wave-boundary bench gate exists for**, and it is the
-fourth appearance tonight of the same widget-corpse class (`panel_kit`'s pane
-registry, caught independently by three agents).
-
-**DO NOT PUSH OR MERGE `37cead3`.** Fix in flight.
-
-## 🔥 IN FLIGHT
-
-| Beat | Agent | Locks |
-|---|---|---|
-| **Fix the `_IconThemeWatcher` use-after-free** | Noah (Opus) | `gui/status_widgets.py`, icon tests |
-
-## ⚠️ ADAM'S OWN ERROR, ON THE RECORD
-
-The first bench dispatch **silently did nothing**: Bash ate the backslashes
-(`C:UsersnukeiDesktopagent_envbench_run.ps1`) and PowerShell **still returned
-exit code 0**. Had I trusted the exit code I would have reported a green full
-suite that never ran. Re-dispatched through the PowerShell tool. Session-hygiene
-rule 4 earned its keep: *never claim what you have not seen.*
+**Last KNOWN-green bench: `54baf62` (1995 passed).** Everything since — including
+G-B1 and all 22 of tonight's commits — is unbenched. **The red could predate
+tonight.** A beat is measuring exactly that (timeout-vs-use-after-free;
+widget-pile count; which tests leak windows) rather than guessing.
 
 ## 🧑‍🔬 NEEDS KAYA (at 10:00)
 
