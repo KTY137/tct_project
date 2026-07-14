@@ -41,6 +41,17 @@ def _app() -> QApplication:
     return QApplication.instance() or QApplication([])
 
 
+@pytest.fixture(autouse=True)
+def _qapp_for_every_test():
+    """QPixmap.fromImage (inside style.ground_pixmap) hard-crashes on Windows
+    (0xC0000409 fail-fast, not a Python exception) when no QApplication exists.
+    Locally some earlier suite always created one; on the bench's alphabetical
+    full run NOTHING before this file does — the first full gate at 0fde84c
+    died at test 17, right here. Every test in this module therefore
+    self-provisions the app instead of borrowing one by luck."""
+    _app()
+
+
 # --------------------------------------------------------------------------- #
 # Independent, vectorised L* measurement                                      #
 # --------------------------------------------------------------------------- #
