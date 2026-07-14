@@ -48,12 +48,15 @@ from controller.scan_plan import (
 from controller.scan_plan_validator import PlanIssue, PlanLimits, validate_plan
 from gui.arm_latch import ArmLatch
 from gui.app_settings import planner_arm_latch_enabled, theme_mode
-from gui.panel_kit import EmptyState, MetricGrid, MetricTile, register_glass_pane
+from gui.panel_kit import (
+    EmptyState, GlassPane, HazardSurface, MetricGrid, MetricTile,
+    panel_header, register_glass_pane,
+)
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
 from gui.style import (
-    DARK, FONT_BODY_PX, FONT_PANEL_TITLE_PX, LIGHT, WEIGHT_BODY,
-    WEIGHT_PANEL_TITLE, axis_color, palette, repolish,
+    DARK, FONT_BODY_PX, LIGHT, WEIGHT_BODY,
+    axis_color, palette, repolish,
 )
 
 # --------------------------------------------------------------------------- #
@@ -594,35 +597,41 @@ class PlannerPanel(QWidget):
     # ------------------------------------------------------------------ #
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        # ── The one shelf (round-03 kit §2.1) ─────────────────────────
+        # HAZARD PANEL — panel wave beat 12/12 (mirrors the bias pilot
+        # 074943f and the sequencer/calibration/motor hazard panels,
+        # bf41854/18469ca/f86675d). The whole panel is now ONE ``GlassPane``
+        # shelf that opts NOTHING into the panel-glass switch
+        # (``register=False``): pressing Start ramps HV and moves the stage, so
+        # its danger zone (the ArmLatch + Abort) lives on an opaque
+        # HazardSurface in the aside below. The ONE rollout-vetted opt-in — the
+        # "Add blocks" palette (pure draggable chrome) — keeps its individual
+        # registration, pinned byte-identical by
+        # tests/test_panel_glass_rollout.py:252.
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        shelf = GlassPane(register=False)
+        self._shelf = shelf
+        outer.addWidget(shelf)
+        root = shelf.body
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(10)
 
         # ---- top bar ----------------------------------------------------
-        top = QHBoxLayout()
-        title_col = QVBoxLayout()
-        title_col.setSpacing(0)
-        eyebrow = QLabel("TCT CONTROL · RECIPE")
-        eyebrow.setObjectName("eyebrow")
-        title = QLabel("Scan Routine Planner")
-        title.setStyleSheet(
-            f"font-size: {FONT_PANEL_TITLE_PX}px; font-weight: {WEIGHT_PANEL_TITLE};"
-        )
-        title_col.addWidget(eyebrow)
-        title_col.addWidget(title)
-        top.addLayout(title_col)
-        top.addStretch(1)
         # Save/Load are ghost-class (law 2): plain routine I/O, never a
-        # command-class colour.
+        # command-class colour. They ride the kit ``panel_header`` as trailing
+        # widgets — the SAME buttons, objectNames and wiring (below); only the
+        # header container changed (the wave chrome swap).
         self._btn_save_routine = QPushButton("Save routine…")
         self._btn_save_routine.setProperty("state", "ghost")
         set_button_icon(self._btn_save_routine, "mdi.content-save")
         self._btn_load_routine = QPushButton("Load routine…")
         self._btn_load_routine.setProperty("state", "ghost")
         set_button_icon(self._btn_load_routine, "mdi.folder-open")
-        top.addWidget(self._btn_save_routine)
-        top.addWidget(self._btn_load_routine)
-        root.addLayout(top)
+        root.addWidget(panel_header(
+            "TCT Control · Recipe", "Scan Routine Planner",
+            trailing=[self._btn_save_routine, self._btn_load_routine]))
 
         body = QHBoxLayout()
         body.setSpacing(10)
@@ -806,6 +815,26 @@ class PlannerPanel(QWidget):
         btn_grid.addWidget(self._btn_start, 2, 0, 1, 2)
         aside_lay.addLayout(btn_grid)
 
+        # ── Danger hot zone, on the HazardSurface (round-03 kit §4.6) ──
+        # "The stone in the glass room": the ArmLatch danger well AND the
+        # #dangerBtn Abort — the two controls that arm/trigger/stop a live scan
+        # (Start ramps HV and moves the stage) — sit on ONE opaque
+        # HazardSurface carrying a 4px ``armed`` (motion-class) stripe + 45°
+        # hatch. Opaque at every tier, never registered (register_glass_pane
+        # refuses a HazardSurface outright). A PURE PARENT-FRAME WRAP: their
+        # relative placement (latch above, Abort below), the ArmLatch
+        # semantics, the per-action DangerGate confirmation path, the abort
+        # wiring and every enable/disable rule are byte-identical — only the
+        # parent frame changed. The estimate tiles, delta preview, issue rows,
+        # HV chip and the Validate/Dry-run/Arm/Start grid (display +
+        # non-latched controls) stay OUTSIDE, above (danger topology =
+        # arm/trigger/stop vs everything else). Abort is enabled ONLY by
+        # set_running() via its own ``self._btn_abort`` reference; it is in no
+        # bulk enable/disable set and the wrap's parent frame is never disabled,
+        # so its enabled-state discipline is unchanged (motor STOP-inside
+        # precedent, f86675d).
+        self._hazard = HazardSurface(stripe="armed", theme_mode=self._theme_mode)
+
         # Two-step arm latch (design law 5) — the danger well that renders the
         # ArmedEnvelope and gates Execute behind a hold-3s / press-twice arm.
         # Shown instead of the legacy Arm-HV/Start buttons when enabled; those
@@ -815,7 +844,7 @@ class PlannerPanel(QWidget):
         self._latch.armed.connect(self._on_latch_armed)
         self._latch.disarmed.connect(self._on_latch_disarmed)
         self._latch.execute_requested.connect(self._on_latch_execute)
-        aside_lay.addWidget(self._latch)
+        self._hazard.add_widget(self._latch)
         if self._latch_enabled:
             self._btn_arm.setVisible(False)
             self._btn_start.setVisible(False)
@@ -828,8 +857,9 @@ class PlannerPanel(QWidget):
         self._btn_abort = QPushButton("⏹ Abort")
         self._btn_abort.setObjectName("dangerBtn")
         self._btn_abort.setEnabled(False)
-        aside_lay.addWidget(self._btn_abort)
+        self._hazard.add_widget(self._btn_abort)
 
+        aside_lay.addWidget(self._hazard)
         aside_lay.addStretch(1)
         body.addWidget(aside, 0)
 
@@ -2496,6 +2526,13 @@ class PlannerPanel(QWidget):
         self._latch.refresh_theme(self._theme_mode)
         if self._latch_enabled and self._armed_env is not None:
             self._latch.set_envelope_text(self._envelope_rich_text(self._armed_env))
+        # The HazardSurface caches its stripe/hatch colours + pins an opaque
+        # instance fill per theme at construction, so a live light/dark switch
+        # must re-resolve them (same idiom as the motor/calibration hazard
+        # panels, f86675d/18469ca; registered in ``tct_gui._toggle_theme``).
+        hazard = getattr(self, "_hazard", None)
+        if hazard is not None:
+            hazard.refresh_theme(self._theme_mode)
 
     def shutdown(self) -> None:
         """Stop the debounce timers and the estimate worker before the panel is
