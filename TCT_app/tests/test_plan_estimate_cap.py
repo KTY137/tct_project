@@ -193,3 +193,14 @@ def test_render_too_large_estimate_is_honest():
         assert panel._tile_runtime.is_stale()
     finally:
         panel.shutdown()
+
+
+def test_ceiling_constant_is_pinned():
+    """ESTIMATE_MAX_LEAF_VISITS is a safety-tied knob: it bounds the estimate
+    walk to (approximately) the estimate worker's 3 s shutdown-join budget.
+    A silent bump would widen the QThread-teardown window with a green suite
+    (Mary rider on 44e17d4) — raising it must be a deliberate, test-touching
+    act that revisits the join-budget math in the constant's docstring."""
+    from controller.plan_estimate import ESTIMATE_MAX_LEAF_VISITS
+
+    assert ESTIMATE_MAX_LEAF_VISITS <= 1_000_000

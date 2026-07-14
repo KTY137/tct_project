@@ -46,6 +46,15 @@ CAMERA_GRAB_S: float = 0.05
 # thresholds serve different purposes (this one guards the estimator's worker
 # join; that one is a hard run gate) and must not be unified: a plan between
 # 250k and 1M still estimates fully here while the validator still flags it.
+#
+# ACCEPTED RESIDUAL (Mary review 44e17d4, Adam ruling 2026-07-14): the 1M
+# ceiling is calibrated to the bench rate (~342k visits/s ⇒ ~3 s, the estimate
+# worker's shutdown join budget).  On a slower machine a plan in the ~300k-1M
+# band can still out-walk the 3 s join at full-app teardown.  The ceiling is
+# NOT lowered because a validator-legal plan (≤250k points) can carry more
+# leaf VISITS than points and must still estimate fully.  The real mitigation
+# is a cooperative abort check inside the walk ("option c", queued follow-up);
+# until it lands this narrow, human-only window is the documented trade-off.
 ESTIMATE_MAX_LEAF_VISITS: int = 1_000_000
 
 
@@ -107,6 +116,15 @@ class PlanEstimate:
     hv_range_V: tuple[float, float] | None
     warnings: list[str] = field(default_factory=list)
     estimated: bool = True
+
+    def __post_init__(self) -> None:
+        # The honesty flag and the sentinels must agree: estimated=True with a
+        # None runtime (or the reverse) would sail past every consumer's
+        # ``if not estimate.estimated`` guard into a float-format path.
+        if self.estimated != (self.est_runtime_s is not None):
+            raise ValueError(
+                "PlanEstimate invariant violated: estimated="
+                f"{self.estimated} but est_runtime_s={self.est_runtime_s!r}")
 
 
 def estimate_plan(
