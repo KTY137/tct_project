@@ -1058,12 +1058,13 @@ class AmbientGround(QWidget):
 class GlassPane(Card):
     """Kit §4.1 ``Pane`` — the shelf/chrome container slab.
 
-    Ink law: **chrome and labels only** — ``text``/``muted`` are the only
-    legal inks on a pane (the enforced whitelist is
-    ``tests/test_glass_text_contract.GLASS_SAFE_TEXT_TOKENS``; extending it
-    once Kaya relaxes the law is a one-line change there, never a rebuild
-    here). No value ever lives on a pane, and a pane never hosts a plot,
-    camera view or hazard control.
+    Ink law: neutral chrome/label inks (``text``/``muted``) plus the semantic
+    STATE inks (``good``/``warn``/``crit``/``accent``/``sim``) are legal on a
+    pane — the semantic set cleared 2026-07-14 on the app's own band-clamped
+    ambient ground (Kaya, ratified). The enforced whitelist is
+    ``tests/test_glass_text_contract.GLASS_SAFE_TEXT_TOKENS``; the hazard fill,
+    its label ink and ``faint`` stay off glass. No numeric value ever lives on
+    a pane, and a pane never hosts a plot, camera view or hazard control.
 
     FLAT/TOKEN form: the opaque ``shelf`` token (``QFrame#shelfPane`` in
     gui/style.py, with the mandatory ``hairline_strong`` outline + specular
@@ -1221,8 +1222,13 @@ class HazardSurface(Card):
 # lives in the theme editor; panes must OPT IN here to ever go glass.          #
 # --------------------------------------------------------------------------- #
 
-# WeakSet: a closed/destroyed pane drops out automatically and is never kept
-# alive by this module (mirrors gui/backdrop._backdrop_applied_windows).
+# WeakSet so this module never keeps a pane alive (mirrors
+# gui/backdrop._backdrop_applied_windows). CAVEAT that shaped
+# registered_glass_panes(): a WeakSet only forgets an entry when the *Python*
+# wrapper is garbage-collected, NOT when the C++ QObject is destroyed. A
+# QQuickWidget-heavy teardown can delete the C++ side while a wrapper survives,
+# leaving a dead entry here -- so reads prune via shiboken6.isValid (see
+# registered_glass_panes) instead of trusting the WeakSet's liveness alone.
 _GLASS_PANE_REGISTRY: "weakref.WeakSet[QWidget]" = weakref.WeakSet()
 
 # Mirrors the last value passed to set_panel_glass, so a pane registered
@@ -1238,6 +1244,17 @@ _GLASS_ENABLED = False
 # and a dead widget takes its role with it.
 _GLASS_ROLE_PROPERTY = "tctGlassRole"
 _GLASS_ROLE_FLAGS = {"pane": "glassPane", "card": "glassCard"}
+
+# shiboken6.isValid is the PySide6-correct liveness check (NOT sip -- that is
+# PyQt): a registry entry whose C++ object was deleted while a Python wrapper
+# survives still reads as a live Python object, but any attribute access raises
+# "Internal C++ object already deleted". Import once, module-wide, with a
+# permissive fallback so a shiboken-less environment degrades to old behaviour.
+try:
+    from shiboken6 import isValid as _cpp_is_valid
+except Exception:                       # pragma: no cover - shiboken ships with PySide6
+    def _cpp_is_valid(_widget: object) -> bool:  # type: ignore[misc]
+        return True
 
 
 def _apply_glass_flag(widget: QWidget, enabled: bool) -> None:
@@ -1292,26 +1309,34 @@ def register_glass_pane(widget: QWidget, *, role: str = "pane") -> None:
 
 
 def registered_glass_panes() -> list[QWidget]:
-    """Live snapshot of the opted-in safe panes (dead widgets auto-drop)."""
-    return list(_GLASS_PANE_REGISTRY)
+    """Live snapshot of the opted-in safe panes -- guaranteed to yield only
+    valid widgets.
+
+    A ``WeakSet`` forgets a pane only when its *Python* wrapper is garbage-
+    collected, but a QQuickWidget-heavy teardown can delete the C++ object while
+    a wrapper is still referenced elsewhere. The registry would then hand back a
+    wrapper whose C++ side is gone -- valid to Python, yet any attribute access
+    raises ``RuntimeError: Internal C++ object already deleted``. Prune on read:
+    skip (and eagerly drop) every pane ``shiboken6.isValid`` no longer accepts,
+    so this never yields an invalid widget regardless of teardown order."""
+    live: list[QWidget] = []
+    for w in list(_GLASS_PANE_REGISTRY):
+        if _cpp_is_valid(w):
+            live.append(w)
+        else:
+            _GLASS_PANE_REGISTRY.discard(w)
+    return live
 
 
 def set_panel_glass(enabled: bool) -> None:
     """Turn the experimental panel-glass tint ON/OFF for every REGISTERED safe
     pane (and only those), repolishing each so its ``glassPane``/``glassCard``
-    QSS selector (per its registered role) re-evaluates immediately. Defensive
-    against a pane whose C++ object was already destroyed (registered then
-    torn down while the switch toggles). Also records the state module-wide so
-    a pane registered later (see :func:`register_glass_pane`) adopts it
-    immediately."""
+    QSS selector (per its registered role) re-evaluates immediately.
+    :func:`registered_glass_panes` has already dropped any pane whose C++ object
+    was destroyed (registered then torn down while the switch toggles), so this
+    only ever touches live widgets. Also records the state module-wide so a pane
+    registered later (see :func:`register_glass_pane`) adopts it immediately."""
     global _GLASS_ENABLED
     _GLASS_ENABLED = bool(enabled)
-    try:
-        from shiboken6 import isValid
-    except Exception:                       # pragma: no cover - shiboken always present
-        def isValid(_w):  # type: ignore[misc]
-            return True
-    for w in list(_GLASS_PANE_REGISTRY):
-        if not isValid(w):
-            continue
+    for w in registered_glass_panes():
         _apply_glass_flag(w, _GLASS_ENABLED)
