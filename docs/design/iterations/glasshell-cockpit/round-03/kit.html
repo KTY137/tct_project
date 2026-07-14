@@ -45,7 +45,11 @@
   --card:#FFFFFF;   /* NEW  = panel (light already works) */
   --shelf:#F3F5F9;  /* NEW  _blend(panel,canvas,0.50) */
   --text:#131A28; --muted:#525D72; --faint:#949DB0;
-  --good:#0f7657; --warn:#915b00; --crit:#ad343a; --accent:#2563c9; --sim:#086f7b;
+  --good:#0f7655; --warn:#915b00; --crit:#ad343a; --accent:#2563c9; --sim:#08727e;
+  /* good/sim corrected 2026-07-14: the previous #0f7657/#086f7b did not match
+     live gui.style._darken() output for these tokens (a hand-transcription
+     error at forge time, not a token change) — see kit.md's top-of-file
+     correction note. */
   --danger-fill:#ad343a; --on-danger:#ffffff; --on-armed:#ffffff;
   --hairline:#D9DFEA; --hairline-strong:#BFC9DA;
   --specular:rgba(255,255,255,.92); --edge-shade:rgba(0,0,0,.16);
@@ -507,7 +511,8 @@ const TOKENS={
   dark:{canvas:[10,13,19],panel:[13,17,26],raised:[27,37,58],well:[7,10,15],card:[21,29,45],shelf:[15,20,31],
         text:[233,237,245],muted:[152,161,181],good:[61,214,140],warn:[255,184,77],crit:[255,90,97],accent:[90,169,255],sim:[65,216,228]},
   light:{canvas:[230,235,243],panel:[255,255,255],raised:[248,250,253],well:[212,216,224],card:[255,255,255],shelf:[243,245,249],
-        text:[19,26,40],muted:[82,93,114],good:[15,118,87],warn:[145,91,0],crit:[173,52,58],accent:[37,99,201],sim:[8,111,123]}};
+        text:[19,26,40],muted:[82,93,114],good:[15,118,85],warn:[145,91,0],crit:[173,52,58],accent:[37,99,201],sim:[8,114,126]}};
+  // good/sim corrected 2026-07-14 — see the --good/--sim comment in :root above.
 
 /* ---------- switches ---------------------------------------------------- */
 document.getElementById('bar').addEventListener('click',e=>{

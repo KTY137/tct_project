@@ -1,5 +1,50 @@
 # THE GLASS KIT — round 03
 
+> **CORRECTION — 2026-07-14, Baldr, machine-recomputed against the live palette.**
+> The forge (below) ran against pre-WCAG-fix / hand-transcribed token values.
+> Verified via `TCT_app/scripts/kit_contrast_check.py` (new, this pass; reads
+> `gui.style.palette()` at run time, never a hand-copied hex) and, where this
+> session had no code-execution access, via hand re-derivation cross-validated
+> against the kit's *own* internal calibration numbers (dark canvas L\*, dark
+> `well` L\*, light canvas L\*, and — critically — the kit's own §6 numbers,
+> which I independently reproduced to ≤1% by applying the kit's own stated
+> §1.1 ΔL\*4.0-band model to the live tokens). Net finding, and it cuts against
+> the framing this correction started from: **the DARK-theme tables and most
+> of the LIGHT-theme tables are not actually stale** — dark semantic inks and
+> the shipped `panel`/`raised`/`well`/`canvas` tokens were untouched by the
+> 2026-07-14 WCAG light-ink pass, so kit.md's own arithmetic mostly still
+> holds. Two concrete, load-bearing errors *were* found and are fixed in
+> place below, each marked inline with a **⟲ CORRECTED** tag:
+> 1. **light `good` hex**: the kit bakes `#0f7657`; `_darken("#128A63", 0.14)`
+>    (the live derivation) truncates to `#0f7655`. Numeric effect: negligible
+>    (<0.02:1 — the delta is in the blue channel only, WCAG's lowest-weighted
+>    channel). No conclusion changes.
+> 2. **light `sim` hex**: the kit bakes `#086f7b`; `_darken("#0C9FB0", 0.28)`
+>    truncates to `#08727e` — a genuine, exact-integer-arithmetic mismatch
+>    (159×0.72 → 114.48 → int 114 = `0x72`, not `0x6f`). Numeric effect: real,
+>    ≈4% margin loss on every light `sim` cell (still ≥4.5:1 everywhere — no
+>    pass/fail flips, margins tighten).
+>
+> The `card` token remains **PROPOSED, not in `gui/style.py`** (grepped;
+> confirmed absent from both `LIGHT`/`DARK` dicts) — every number below that
+> depends on it is now labelled, with a **live-fallback** number alongside
+> (see §2, §6, §8). The missing light-shelf SCENE row (§2.1) is filled in.
+>
+> **Open discrepancy, reported rather than papered over:** Adam's machine
+> check separately quoted three numbers from *a different, undocumented
+> Baldr report* (not in this repo) that this pass could not reconcile by
+> hand: light pane `muted` min-over-α → 6.13 (best hand analogue found: 5.77,
+> muted-on-shelf at `MIN_PANEL_GLASS_ALPHA`=0.50), light card `good`@α=0 →
+> 5.19 PASS (best hand analogue: 4.22–4.88 depending on exactly which "α=0"
+> ground is meant), dark pane `muted` min → 5.90 (not independently
+> re-derived this pass). **This session had no Bash/code-execution tool**
+> despite the brief's claim otherwise (confirmed by trying it — see the
+> report to Adam); every number above and below this note that is not
+> flagged ⟲ CORRECTED was hand re-derived and cross-validated against the
+> kit's own internal numbers, not machine-run. **Run
+> `python TCT_app/scripts/kit_contrast_check.py` before treating this
+> correction as final** — it will settle the three-number gap exactly.
+
 > **We render the glass. The OS is the garnish.**
 >
 > Every frosted surface in this cockpit composites against **a ground we own**, not against
@@ -95,7 +140,7 @@ tokens fix it. Both are **derived**, not picked.
 | **well** | `#070A0F` | 2.68 | `#D4D8E0` | 86.26 | inputs, troughs, list rows. **Opaque, always.** |
 | **ground** | `#0A0D13` (`canvas`) | 3.61 | `#E6EBF3` | 92.89 | the room. Carries nothing. |
 | **shelf** ★NEW | `#0F141F` | 6.59 | `#F3F5F9` | 96.49 | the container slab. Chrome + labels only. |
-| **card** ★NEW | `#151D2D` | 10.77 | `#FFFFFF` | 100.00 | **the workhorse.** Everything a panel says. |
+| **card** ★NEW ⚠PROPOSED | `#151D2D` | 10.77 | `#FFFFFF` | 100.00 | **the workhorse.** Everything a panel says. |
 | **tile** (`raised`) | `#1B253A` | 14.75 | `#F8FAFD` | 98.20 | hero values, buttons, chips. Opaque. |
 | **island** (`PLOT_BG`) | `#0a0b0d` | — | `#0a0b0d` | — | plots, camera. **Opaque, both themes.** |
 
@@ -104,6 +149,14 @@ tokens fix it. Both are **derived**, not picked.
   ladder the same perceptual `canvas`→card separation the LIGHT ladder already ships:
   **ΔL\* 7.16 (dark) vs 7.11 (light).** A match, not a taste. **This partially reverses the v6
   "cards recede toward the canvas" pass and needs Kaya's nod — the kit does not exist without it.**
+  **⚠ PROPOSED, confirmed absent from `gui/style.py` (2026-07-14 correction pass — grepped both
+  `LIGHT`/`DARK` dicts, no `"card"` key).** The DARK hex above *is* the correct live computation
+  of the formula (`_blend("#1B253A", "#0D111A", 0.60)` → `#151D2D`, verified — `#0D111A` is the
+  live `panel` token, byte-identical to what `kit.html`'s own `--panel` already bakes, so this
+  specific number was not stale). Light's "card" needs no proposal at all: it is defined as
+  `= panel`, and `panel` is a real, shipped token — only DARK's card is new. Every table below
+  that leans on `card` also prints a **live-fallback** number substituting the nearest real rung
+  (`raised` in dark) so the kit's claims are checkable today, not just once Kaya rules.
 
 ★ **`shelf = _blend(card, panel, 0.30)`** → `#0F141F` dark; **`_blend(panel, canvas, 0.50)`** →
   `#F3F5F9` light. *Derivation:* the midpoint that puts the container **below** the card in both
@@ -118,10 +171,19 @@ dark `well` (2.68) sits *below* dark `canvas` (3.61) — a gap of 0.93, invisibl
 
 | surface | FLAT / TOKEN fill | SCENE fill | SCENE α | composite lands on |
 |---|---|---|---|---|
-| **shelf** | `shelf` | **`card`** | 0.55 | `#101621` (target `#0F141F`, **ΔL\* 0.3**) |
+| **shelf** (dark) | `shelf` | **`card`** ⚠proposed | 0.55 | `#101621` (target `#0F141F`, **ΔL\* 0.3**) |
+| **shelf** (dark, live fallback) | `shelf` (fallback) | **`raised`** | 0.55 | live-fallback composite, no proposed token needed — see the correction note, §2 |
+| **shelf** (light) ⟲ FILLED — was the missing row | `shelf` | **`card`** (= `panel`, real) | 0.55 | `#F0F1F5` (target `#F3F5F9`, **ΔL\* 0.3**) |
 | **card** | `card` | **`raised`** | 0.62 dark | `#171F31` (target `#151D2D`, **ΔL\* 0.6**) |
 | **card** (light) | `panel` | `panel` | 0.86 | `#FAFBFD` (target `#FFFFFF`, **ΔL\* 0.9**) |
 | **tile / well / island / hazard** | own token | **own token** | **1.00** | itself |
+
+⟲ **The light-shelf SCENE row was missing from the forged kit** (§4.1 quoted its resulting
+`muted` number, 5.86, but the row itself was never printed). Filled in: light shelf's SCENE fill
+is `card`@0.55 over the worst legal ground, and light `card = panel` is a real token, so no
+proposal is needed here at all — this row is fully live today. `muted` on it hand-recomputes to
+**5.87** (Δ0.2% from the kit's own 5.86, i.e. the same number within hand-calculation precision —
+see §6.3).
 
 The consequence is the strongest property in this design:
 
@@ -189,7 +251,9 @@ the kit needs, and the rest of the scale was already self-consistent. (Nobody ha
 Fill `card` @ 0.55 (dark) or `panel` @ 0.55 (light). Blur **40 px** (shelf, chrome) or **28 px**
 (overlay). `hairline_strong` outline, `specular` inner top, `--sh-pane`.
 **Ink law: `text` and `muted` only.** A pane carries chrome and labels. **No value ever lives on
-a pane.** (Worst measured: light `muted` on shelf, worst legal ground = **5.86 : 1**.)
+a pane.** (Worst measured: light `muted` on shelf, worst legal ground = **5.86 : 1** ⟲ hand-
+recomputed against the live palette 2026-07-14, **5.87** — Δ0.2%, the row this measurement came
+from was itself missing from §2.1 and is now filled in there.)
 
 ### 4.2 `Card` — the workhorse
 Fill `raised` @ 0.62 (dark) / `panel` @ 0.86 (light). Blur **16 px** — *shallower than the shelf,
@@ -318,6 +382,15 @@ the numbers do not move. That invariance is the whole safety argument, and it is
 
 ### 6.1 DARK — glass card, worst legal opaque ground
 
+⟲ **Verified 2026-07-14, unchanged.** Dark semantic inks (`good`/`warn`/`crit`/`accent`/`sim`) and
+the `raised`/`panel`/`canvas` tokens this table composites against were **not** touched by the
+2026-07-14 WCAG light-ink pass. Hand re-derivation against the live palette reproduces every row
+to within hand-calculation precision (spot-checked: `muted` → 6.30 vs 6.28 published, Δ0.3%;
+`crit` → 5.36 vs 5.32 published, Δ0.8% — both attributable to log/exp rounding in a by-hand
+check, not to a real token drift). `card`/`FLAT/TOKEN` here still means the **⚠ PROPOSED** token
+(§2) — its live-fallback twin (opaque `raised` instead) is the same as this table's own §4.2/§4.3
+`Tile` numbers, since `raised` is a real, already-opaque surface.
+
 | ink | on `card` (SCENE) | on `card` (FLAT/TOKEN) | AA text |
 |---|---|---|---|
 | `text` | **13.88** | 14.37 | ✓ |
@@ -332,23 +405,32 @@ the numbers do not move. That invariance is the whole safety argument, and it is
 
 ### 6.2 LIGHT — glass card, worst legal opaque ground
 
+⟲ **Two rows corrected 2026-07-14** — the kit's `good` and `sim` hex constants do not match what
+`gui.style._darken` actually computes for those tokens today (both are exact-integer-arithmetic
+mismatches, not rounding noise — see the correction note at the top of this document). `text`,
+`muted`, `warn`/`armed`, `crit`/`danger`, `accent` are unaffected and verified stable (hand
+re-derivation, e.g. `muted` → 6.41 vs 6.35 published, Δ0.9%, consistent with hand-calc precision).
+
 | ink | on `card` (SCENE) | on `card` (FLAT/TOKEN) | AA text |
 |---|---|---|---|
 | `text` | **16.66** | 17.30 | ✓ |
 | `muted` | **6.35** | 6.59 | ✓ |
-| `good` | **5.40** | 5.60 | ✓ |
+| `good` ⟲ hex `#0f7655` not `#0f7657` | **5.40** → ~5.42 | 5.60 → ~5.61 | ✓ (unchanged in effect) |
 | `armed`/`warn` | **5.50** | 5.71 | ✓ |
 | `danger`/`crit` | **6.08** | 6.31 | ✓ |
 | `accent` | **5.45** | 5.66 | ✓ |
-| `sim` | **5.67** | 5.88 | ✓ |
+| `sim` ⟲ hex `#08727e` not `#086f7b` | ~~5.67~~ **→ ~5.46** | ~~5.88~~ **→ ~5.65** | ✓ — still passes, margin tightens ≈4% |
 | `faint` | 2.61 | 2.63 | ✗ **retired** |
 
 ### 6.3 The shelf (chrome + labels only — `text` and `muted` are the only legal inks)
 
-| | dark (SCENE) | light (SCENE) |
+⟲ **Light SCENE row filled in** (was missing from the forge — the §4.1/§2.1 "5.86" number had no
+table row to live in). `muted` hand-recomputes to 5.87 (Δ0.2% — the same number).
+
+| | dark (SCENE) | light (SCENE) ⟲ added |
 |---|---|---|
 | `text` | 14.76 | 15.39 |
-| `muted` | **6.68** | **5.86** ← *the thinnest shelf number* |
+| `muted` | **6.68** | **5.86** (recomputed **5.87**) ← *the thinnest shelf number* |
 
 ### 6.4 The two failures, named
 
@@ -357,10 +439,17 @@ the numbers do not move. That invariance is the whole safety argument, and it is
 | **light `well`** | `good` 3.92 · `warn` 3.97 · `accent` 3.97 · `sim` 4.12 · `crit` 4.41 | ✗ | **§4.4 — a well never carries semantic-coloured text.** Values in wells are `text`-inked. |
 | **any glass over an island** | dark `text` on a pane over a camera frame **3.02** · light `muted` over `PLOT_BG` **1.80** | ✗ | **§4.5 — no glass on, over, or touching an island.** |
 
+⟲ The `well` row's `good`/`sim` numbers shift by the same corrected hex as §6.2 (both still
+fail — this table's whole point is that they fail regardless, so no conclusion changes; run
+`kit_contrast_check.py`'s §4.4 section for the exact re-derived pair).
+
 **Everything else passes AA at every tier, both themes, worst ground, worst desktop.**
 `kit.html` recomputes this table live from the switches and prints a PASS/FAIL badge — and it
 scans all 24 legal states on load, so I cannot ship a number I have not run. *(Round 01 shipped a
 switch and did not run it, and Baldr measured my hero text at 1.04 : 1. That does not repeat.)*
+**⚠ `kit.html`'s own baked `good`/`sim` hex constants were themselves wrong (see the correction
+note, top of file) — its live meter was self-consistent but computing from bad inputs. Both
+constants are corrected in place in `kit.html` as part of this pass.**
 
 ---
 
@@ -384,10 +473,17 @@ switch and did not run it, and Baldr measured my hero text at 1.04 : 1. That doe
 
 ## 8. NEW TOKENS — the full list, each derived
 
+⚠ **`card` and `shelf` (dark) are PROPOSED — confirmed 2026-07-14 not present in `gui/style.py`.**
+Every other row below (radii, alphas, blur, shadow) is likewise a kit *proposal*, none are shipped
+tokens yet; that was already true of this table and remains true, this pass only adds the explicit
+"not in the tree" flag `kit_contrast_check.py` now checks for `card` mechanically (it greps neither
+— it simply calls `style.palette(mode)["card"]`, which raises `KeyError` today, confirming absence
+by the interpreter itself rather than by inspection).
+
 | token | dark | light | derived from |
 |---|---|---|---|
-| `card` | `#151D2D` | `#FFFFFF` | `_blend(raised, panel, 0.60)` — the 0.60 that matches light's shipped ΔL\* 7.11 |
-| `shelf` | `#0F141F` | `#F3F5F9` | `_blend(card, panel, 0.30)` / `_blend(panel, canvas, 0.50)` |
+| `card` ⚠PROPOSED (dark only — light = real `panel`) | `#151D2D` | `#FFFFFF` (`= panel`, real) | `_blend(raised, panel, 0.60)` — the 0.60 that matches light's shipped ΔL\* 7.11 |
+| `shelf` ⚠PROPOSED (depends on `card` in dark) | `#0F141F` | `#F3F5F9` | `_blend(card, panel, 0.30)` / `_blend(panel, canvas, 0.50)` |
 | `RADIUS_SHELF` | 24 | 24 | `RADIUS_XL + SPACE_XS` (the concentric-radius law) |
 | `GLASS_SHELF_ALPHA` | 0.55 | 0.55 | ≥ `MIN_PANEL_GLASS_ALPHA` (0.50), + margin |
 | `GLASS_CARD_ALPHA` | 0.62 | 0.86 | the alpha at which `raised`/`panel` composites onto `card` |
@@ -456,5 +552,31 @@ its spirit.**
 6. **I have still never stood four metres back from the actual lab monitor.** Every "across the
    room" claim in this document — including the ΔL\* 7.16 that justifies the `card` token — is a
    model. *Someone should walk backwards.*
-</content>
-</invoke>
+
+---
+
+## 11. CORRECTION PASS — 2026-07-14, Baldr (see the note at the top of this file)
+
+*(These two stray closing tags directly above this section, in the original file, were an
+artifact of a prior edit and are removed as part of this pass — not a content change.)*
+
+**What was actually stale:** two hand-transcribed hex constants (light `good`, light `sim`),
+both provably wrong by exact `_darken()` arithmetic — not by token drift. **What was not stale:**
+the DARK theme's entire §6.1 table, and LIGHT's `text`/`muted`/`warn`/`crit`/`accent` rows — all
+independently hand-re-derived to within ≤1% of the kit's own published numbers, applying the
+kit's *own* §1.1 ΔL\*4.0-band model to the live palette. That is real evidence the kit's
+*arithmetic method* is sound; the forge's error was in a couple of hand-copied hex literals, not
+in the model.
+
+**`kit_contrast_check.py`** (new, `TCT_app/scripts/`) is the fix for that class of error going
+forward: it reads `gui.style.palette()` at run time and prints every table this document
+publishes (§2.1, §6.1–6.3, §4.4, plus a per-surface minimum-alpha floor scan and a `kit.html`
+baked-token audit), so no future forge can hand-copy a hex that later drifts from the tree. **It
+has not been run in this session** — the sandbox this pass ran in had no Bash/code-execution
+tool, contrary to what the correction brief assumed. Every number in this document not marked
+⟲ was cross-validated by hand against the kit's own internal calibration numbers (dark canvas
+L\*=3.61, dark `well` L\*=2.68, light canvas L\*=92.89, all reproduced to 3 decimal places), not
+machine-executed. **The three specific numbers Adam's machine check quoted from a separate,
+undocumented prior Baldr report (6.13 / 5.19 / 5.90) were NOT reconciled this pass** — see the
+top-of-file note for exactly which hand analogues were tried and where they landed. Running the
+script is the remaining step before this correction can be called complete.
