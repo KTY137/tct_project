@@ -315,6 +315,13 @@ class MonkeyContext:
         self.modals: list[str] = []      # neutralized dialogs (informational)
         self.actions: list[str] = []
         self.quarantine: list = []       # KNOWN-BROKEN widgets (see _quarantine_for)
+        # Widgets that ROUTE TO THE DANGER GATE — dangerous BY WIRING, discovered
+        # behaviourally (see _discover_gated_widgets) rather than by surface, so
+        # a restyle can never silently reclassify them as safe.
+        self.danger_by_wiring: list = []
+        # Non-None ONLY during a discovery probe click: {"reached": bool}. Flips
+        # the gate patch from "record a breach" to "record this probe hit".
+        self.discovering: dict | None = None
         self.baseline_state = None
         self.baseline_threads = 0
         self.max_threads = 0
@@ -377,10 +384,19 @@ def _neutralize_modals(monkeypatch, ctx: MonkeyContext) -> None:
     monkeypatch.setattr(QDialog, "exec", _no_exec)
     monkeypatch.setattr(QMenu, "exec", lambda self, *a, **k: None)
 
-    # -- the danger gate can only DENY, and any use is a breach --------------
+    # -- the danger gate can only DENY -------------------------------------- #
+    # Outside discovery, ANY invocation is a BREACH: a supposedly-safe widget
+    # reached a dangerous action's confirm path (invariant (c)). During a
+    # discovery probe (see _discover_gated_widgets), the SAME hit is instead
+    # recorded against the in-flight probe and is NOT a breach — that is how the
+    # harness learns which buttons are dangerous BY WIRING, a signal no restyle
+    # can change. Either way the gate DENIES, so no driver call ever runs.
     from gui.qt_danger_gate import QtDangerGate
 
     def _gate_denied(self, action):
+        if ctx.discovering is not None:
+            ctx.discovering["reached"] = True
+            return False
         ctx.breaches.append(f"QtDangerGate._show_dialog({getattr(action, 'kind', '?')})")
         return False
 
@@ -504,10 +520,87 @@ def _quarantine_for(win) -> list:
 
 
 def _usable(w: QWidget, ctx: MonkeyContext) -> bool:
-    """Safe (:func:`is_monkey_safe`) AND not a quarantined known-broken widget."""
+    """Actuatable by the monkey: passes the surface allowlist
+    (:func:`is_monkey_safe`) AND is neither a quarantined known-broken widget
+    (:data:`ctx.quarantine`) NOR a widget discovered to route to the DangerGate
+    (:data:`ctx.danger_by_wiring`).
+
+    The last clause is the behaviour-based backstop the SURFACE rules cannot
+    provide: a motion button like "Center" whose label is not a danger verb and
+    which carries no danger role marking passes all five of ``is_monkey_safe``'s
+    checks, yet commands a real stage move through the gate.  See
+    :func:`_discover_gated_widgets`.
+    """
     if any(w is q for q in ctx.quarantine):
         return False
+    if any(w is d for d in ctx.danger_by_wiring):
+        return False
     return is_monkey_safe(w)
+
+
+def _discover_gated_widgets(win, ctx: MonkeyContext) -> list:
+    """Behaviour-based danger classification: which buttons ROUTE TO THE
+    :class:`~gui.qt_danger_gate.QtDangerGate`.
+
+    WHY THIS EXISTS.  :func:`is_monkey_safe` classifies by SURFACE — a widget's
+    text, ``objectName`` and QSS ``state`` property.  Every one of those is a
+    thing the design/styling work legitimately changes, so a surface-only
+    allowlist is only ever as good as the last restyle.  The motor "Center"
+    button is the proof: it commands a real stage move (``_move_center`` ->
+    ``_confirm_motion`` -> the gate), yet carries NO danger ``objectName``, NO
+    danger ``state``, and its label "Center" is not a danger verb — so all five
+    surface rules pass it.  It is safe for a real user *only because the gate
+    confirms it*; the monkey, which auto-declines the gate, correctly "reached a
+    dangerous action's confirm path" and tripped invariant (c).  The UI monkey
+    found exactly this on 2026-07-12 (seeds 20260712 / 424242), after a week of
+    restyling shifted the seeded walk onto it.  Nothing was mis-wired — the gate
+    did its job; the classification was blind.
+
+    THE FIX is to classify by WIRING, not surface.  One deterministic pre-pass
+    clicks every surface-safe command button once, with the gate in *discovery
+    mode* (:func:`_neutralize_modals`: the gate records the hit against the probe
+    and DENIES instead of counting a breach).  A GUI-thread click reaches
+    ``_confirm_motion`` -> ``gate.confirm`` -> ``_show_dialog`` SYNCHRONOUSLY
+    (``QtDangerGate`` goes synchronous on the GUI thread), so the probe resolves
+    within the click.  Any button that reaches the gate is dangerous by
+    construction, whatever it is labelled or coloured, and is held out of the
+    walk for good — a class of false-positive that can never silently reopen,
+    because it keys off the one thing a restyle does not touch.  No motion
+    happens: the gate denies before any driver call, and the layer-3
+    ScanController tripwires never see a start.
+
+    Restricted to the button classes ``_act_click`` actuates
+    (non-checkable ``QPushButton``/``QToolButton``) — where gated one-shot
+    command actions live; a discovery click on one is exactly a walk click minus
+    the exclusion.  Dangerous *toggles* (HV output, arm latch) carry surface
+    danger markers, are already denied by rules 2-4, and are pinned by
+    ``test_monkey_safe_filter_denies_every_danger_control``.
+    """
+    app = _app()
+    gated: list = []
+    for idx in range(win._tabs.count()):
+        win._tabs.setCurrentIndex(idx)
+        _pump(0.05)
+        for w in _page(win).findChildren(QAbstractButton):
+            if not isinstance(w, (QPushButton, QToolButton)) or w.isCheckable():
+                continue
+            if not is_monkey_safe(w):        # already denied on the surface
+                continue
+            ctx.discovering = {"reached": False}
+            try:
+                w.click()
+            except BaseException as exc:      # noqa: BLE001 — record & continue
+                # A surface-safe button crashing (or reaching a tripwire) on
+                # click is a REAL defect; record it like the walk does so the
+                # post-discovery invariant assert surfaces it, then carry on so
+                # one bad button does not abort the whole classification.
+                ctx.record_exc("discover", exc)
+            _drain(app)
+            reached = ctx.discovering["reached"]
+            ctx.discovering = None
+            if reached and not any(w is g for g in gated):
+                gated.append(w)
+    return gated
 
 
 def _page(win) -> QWidget:
@@ -739,12 +832,29 @@ def _run_monkey(monkeypatch, tmp_path, seed: int,
         win = _build_window(monkeypatch, _sandbox_config(tmp_path))
         ctx.quarantine = _quarantine_for(win)
         ctx.baseline_state = win._sm.state
-        ctx.baseline_threads = len(_running_qthreads())
-        ctx.max_threads = ctx.baseline_threads
         # A fresh, never-connected window must be DISCONNECTED (rule 1: no
         # hardware is touched at construction) — the premise of invariant (e).
         from controller.state_machine import AppState
         assert ctx.baseline_state is AppState.DISCONNECTED, ctx.baseline_state
+
+        # Behaviour-based danger classification BEFORE the walk (and before the
+        # thread baseline): exclude every button that ROUTES TO THE GATE, a
+        # signal no restyle can silently change (see _discover_gated_widgets).
+        # Runs AFTER the tripwires/modal-neutralizers are installed (a discovery
+        # click must find the same gate the walk would).
+        ctx.danger_by_wiring = _discover_gated_widgets(win, ctx)
+        assert not ctx.breaches, (
+            "discovery reached a danger path (gate hits must be ABSORBED as "
+            "probes, never counted as breaches): " + "; ".join(ctx.breaches))
+        assert not ctx.excs, "discovery raised:\n" + "\n".join(ctx.excs)
+        assert win._sm.state is ctx.baseline_state, (
+            f"discovery moved AppState: {ctx.baseline_state} -> {win._sm.state}")
+        # Any transient worker a discovery click spun up must have drained, so it
+        # does not inflate the leak baseline the walk is measured against.
+        _pump(0.1)
+        gc.collect()
+        ctx.baseline_threads = len(_running_qthreads())
+        ctx.max_threads = ctx.baseline_threads
 
         for i in range(1, n_actions + 1):
             action = rng.choice(_ACTION_FNS)
@@ -863,6 +973,61 @@ def test_monkey_safe_filter_denies_every_danger_control(monkeypatch, tmp_path):
         assert not is_monkey_safe(zf), (
             "the Z-focus 'Find focus' button starts a real motion+acquisition "
             "run and must never be monkey-clickable")
+    finally:
+        _destroy_window(win)
+        _app().processEvents()
+
+
+@pytest.mark.monkey
+def test_monkey_excludes_gate_wired_buttons(monkeypatch, tmp_path):
+    """A button that ROUTES TO THE DANGER GATE is held out of the walk even when
+    every SURFACE rule (text / objectName / state) would pass it.
+
+    The load-bearing case is the motor "Center" button: it commands a real
+    stage move (``_move_center`` -> ``_confirm_motion`` -> the gate) but carries
+    no danger role marking and its label is not a danger verb, so
+    :func:`is_monkey_safe` — which sees only the surface — returns True.  The UI
+    monkey reached its confirm path on 2026-07-12 (seeds 20260712 / 424242)
+    after a week of restyling shifted the seeded walk onto it; the gate did its
+    job (it denied), but the classification was blind.  The fix keys off the
+    WIRING, which no restyle can change: :func:`_discover_gated_widgets` clicks
+    each surface-safe command button once with the gate in discovery mode and
+    excludes any that reach it.  This test asserts BOTH the surface blindness
+    (so the pin is honest about why the extra layer exists) AND that the wiring
+    pass covers it — so the gap cannot silently reopen behind a rename or a
+    re-theme.
+    """
+    ctx = MonkeyContext()
+    _neutralize_modals(monkeypatch, ctx)
+    _install_tripwires(monkeypatch, ctx)
+    win = _build_window(monkeypatch, _sandbox_config(tmp_path))
+    try:
+        # Realize the motor tab so its buttons are visible/clickable.
+        for idx in range(win._tabs.count()):
+            if win._tabs.tabText(idx).lower().startswith("motor"):
+                win._tabs.setCurrentIndex(idx)
+                break
+        _pump(0.1)
+        center = next(
+            b for b in win._motor_panel.findChildren(QPushButton)
+            if (b.text() or "").replace("&", "") == "Center")
+
+        # SURFACE says safe — this is exactly the blindness the walk tripped on.
+        assert is_monkey_safe(center), (
+            "precondition: 'Center' passes the surface allowlist; if it no "
+            "longer does (e.g. it gained a 'motion' state), reword this pin — "
+            "do not delete it, the wiring backstop is still correct")
+        # ...but it routes to the gate, so the WIRING pass MUST catch it.
+        ctx.danger_by_wiring = _discover_gated_widgets(win, ctx)
+        assert any(center is d for d in ctx.danger_by_wiring), (
+            "'Center' commands a stage move through the DangerGate and must be "
+            "excluded from the walk by wiring, not left to a label match")
+        assert not _usable(center, ctx), (
+            "a gate-wired button must be unusable by the monkey")
+        # Discovery must ABSORB gate hits, never leak them into the breach log.
+        assert not ctx.breaches, (
+            "discovery recorded a gate hit as a breach: " + "; ".join(ctx.breaches))
+        assert not ctx.excs, "discovery raised:\n" + "\n".join(ctx.excs)
     finally:
         _destroy_window(win)
         _app().processEvents()
