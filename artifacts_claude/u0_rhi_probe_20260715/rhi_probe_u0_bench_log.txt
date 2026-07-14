@@ -1,0 +1,504 @@
+rhi_gl_probe run: 2026-07-14T23:54:35.366193+00:00
+
+========================================================================================
+RHI/GL PIN PROBE VERDICT: PASS   (exit code 0)
+========================================================================================
+  [PASS] qsg_rhi_backend_env      QSG_RHI_BACKEND='opengl'
+  [PASS] frame_rendered           frames_rendered=1
+  [PASS] graphics_api             graphicsApi='OpenGL' (value=3, expected value=3 = OpenGL/OpenGLRhi)
+  [PASS] gl_renderer_captured     GL_RENDERER='NVIDIA GeForce RTX 5080/PCIe/SSE2'
+  [PASS] software_fallback_scan   0 marker hit(s) across 454 line(s)
+  [PASS] gl_expect_match          --expect '5080' FOUND in GL_RENDERER
+----------------------------------------------------------------------------------------
+graphics_api      : OpenGL
+gl_renderer       : NVIDIA GeForce RTX 5080/PCIe/SSE2
+gl_vendor         : NVIDIA Corporation
+gl_version        : 4.6.0 NVIDIA 610.47
+frames_rendered   : 1
+sg_init_count     : 1
+qml_errors        : []
+captured_log_lines: 451
+========================================================================================
+
+----------------------------------------------------------------------------------------
+FULL CAPTURED LOG
+----------------------------------------------------------------------------------------
+[DEBUG] qt.qpa.plugin: init_platform called with pluginNamesWithArguments "windows" platformPluginPath "" platformThemeName ""
+[DEBUG] qt.qpa.plugin: Attempting to load Qt platform plugin "windows" with arguments QList()
+[DEBUG] qt.qpa.window: QWindowsContext::setProcessDpiAwareness QtWindows::DpiAwareness::PerMonitorVersion2
+[DEBUG] qt.qpa.window: DpiAwareness= QtWindows::DpiAwareness::PerMonitorVersion2 effective process DPI awareness= QtWindows::DpiAwareness::PerMonitorVersion2
+[DEBUG] qt.qpa.events: Digitizers: 0x45 Ready: 0x80 Tablet PC: 1 Max touch points: 10 Capabilities: QFlags<QInputDevice::Capability>(Position|Area|NormalizedPosition|MouseEmulation)
+[INFO] qt.qpa.input.devices: Registered QInputDevice(QPointingDevice("" TouchScreen id=277 ptrType=Finger caps=Position|Area|NormalizedPosition|MouseEmulation buttonCount=1 maxPts=10 uniqueId=115)
+[DEBUG] qt.qpa.windowclass: QWindowsWindowClassRegistry::registerWindowClass "Qt6111PowerDummyWindow" "PowerDummyWindow" style=0x0 brush=0x0 hasIcon=false atom=50162
+[DEBUG] qt.qpa.windowclass: QWindowsWindowClassRegistry::registerWindowClass "Qt6111ClipboardView" "ClipboardView" style=0x0 brush=0x0 hasIcon=false atom=50073
+[DEBUG] qt.qpa.mime: QWindowsClipboard::registerViewer m_clipboardViewer: 0x440d4e format listener: true next: 0x0
+[DEBUG] qt.qpa.screen: Initializing screen manager
+[DEBUG] qt.qpa.windowclass: QWindowsWindowClassRegistry::registerWindowClass "Qt6111ScreenChangeObserverWindow" "ScreenChangeObserverWindow" style=0x0 brush=0x0 hasIcon=false atom=50214
+[DEBUG] qt.qpa.screen: Created display change observer 0x270e0a
+[DEBUG] qt.qpa.screen: New Monitor:  Screen "\\.\DISPLAY161" 3840x2160+0+0 avail: 3840x2040+0+0 physical: 344x194 DPI: 240x240 Depth: 32 Format: QImage::Format_RGB32 hMonitor: 0x1b0cfb device name: \\.\DISPLAY161 manufacturer:  model:  serial number:  primary virtual desktop
+[DEBUG] qt.qpa.plugin: Successfully loaded Qt platform plugin "windows"
+[DEBUG] qt.qpa.theme: Adding platform integration's theme names to list of theme names: QList("windows")
+[DEBUG] qt.qpa.theme: Attempting to create platform theme "windows" via QPlatformThemeFactory::create
+[DEBUG] qt.qpa.theme: Attempting to create platform theme "windows" via createPlatformTheme
+[DEBUG] qt.qpa.window: QWindowsTheme::refreshFonts NONCLIENTMETRICS(iMenu=19x19, lfCaptionFont=LOGFONT("Segoe UI", lfWidth=0, lfHeight=-12), lfSmCaptionFont=LOGFONT("Segoe UI", lfWidth=0, lfHeight=-12), lfMenuFont=LOGFONT("Segoe UI", lfWidth=0, lfHeight=-12), lfMessageFont=LOGFONT("Segoe UI", lfWidth=0, lfHeight=-12), lfStatusFont=LOGFONT("Segoe UI", lfWidth=0, lfHeight=-12))
+[DEBUG] qt.qpa.fonts: QWindowsFontDatabaseBase::systemDefaultFont QFont(Segoe UI,9,-1,5,400,0,0,0,0,0,0,0,0,0,0,1,,0,0)
+[DEBUG] qt.qpa.window: QWindowsTheme::refreshIconPixmapSizes QList(QSize(40, 40), QSize(80, 80), QSize(120, 120), QSize(640, 640))
+[DEBUG] qt.qpa.windowclass: QWindowsWindowClassRegistry::registerWindowClass "Qt6111ThemeChangeObserverWindow" "ThemeChangeObserverWindow" style=0x0 brush=0x0 hasIcon=false atom=50194
+[DEBUG] qt.qpa.theme: Successfully created platform theme "windows" via createPlatformTheme
+[DEBUG] qt.qpa.gl: Basic wglCreateContext gives version 4.6
+[DEBUG] qt.qpa.gl: OpenGL 2.0 entry points available
+[DEBUG] qt.qpa.gl: GPU features: QSet()
+[DEBUG] qt.qpa.gl: QWindowsOpenGLTester::supportedRenderers GpuDescription(vendorId=0x10de, deviceId=0x2c02, subSysId=0xf3221569, revision=161, driver: "nvldumdx.dll", version=QVersionNumber(32.0.16.1047), "NVIDIA GeForce RTX 5080""") 0 renderer:  QFlags(0x1|0x20)
+[DEBUG] qt.qpa.gl: Qt: Using WGL and OpenGL from "opengl32"
+[DEBUG] qt.qpa.windowclass: QWindowsWindowClassRegistry::registerWindowClass "Qt6111OpenGLDummyWindow" "OpenGLDummyWindow" style=0x0 brush=0x0 hasIcon=false atom=50011
+[DEBUG] qt.qpa.gl: QOpenGLStaticContext::create OpenGL: "NVIDIA Corporation","NVIDIA GeForce RTX 5080/PCIe/SSE2" default ContextFormat: v4.6 profile: QSurfaceFormat::NoProfile options: QFlags<QSurfaceFormat::FormatOption>(DeprecatedFunctions),SampleBuffers, Extension-API present
+Extensions: 406
+[DEBUG] qt.scenegraph.general: threaded render loop
+[DEBUG] qt.scenegraph.general: Using sg animation driver
+[DEBUG] qt.scenegraph.general: Animation Driver: using vsync: 31.25 ms
+[DEBUG] qt.qpa.fonts: Trying to create IDWriteFactory6
+[DEBUG] qt.qpa.fonts: QWindowsFontDatabase::QWindowsFontDatabase Clear type:  true gamma:  1.2
+[DEBUG] qt.qpa.fonts: Creating DirectWrite database
+[DEBUG] qt.qpa.fonts: QWindowsFontDatabaseBase::systemDefaultFont QFont(Segoe UI,9,-1,5,400,0,0,0,0,0,0,0,0,0,0,1,,0,0)
+[DEBUG] qt.qpa.fonts: QWindowsFontDatabaseBase::systemDefaultFont QFont(Segoe UI,9,-1,5,400,0,0,0,0,0,0,0,0,0,0,1,,0,0)
+[DEBUG] qt.qpa.fonts: Registering font family "Arial"
+[DEBUG] qt.qpa.fonts: Registering font family "Arial Narrow"
+[DEBUG] qt.qpa.fonts: Registering font family "Arial Black"
+[DEBUG] qt.qpa.fonts: Registering font family "Bahnschrift"
+[DEBUG] qt.qpa.fonts: Registering font family "Bahnschrift Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Bahnschrift Light Condensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Bahnschrift Light SemiCondensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Bahnschrift SemiLight"
+[DEBUG] qt.qpa.fonts: Registering font family "Bahnschrift SemiLight Condensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Bahnschrift SemiLight SemiCondensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Bahnschrift Condensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Bahnschrift SemiCondensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Bahnschrift SemiBold"
+[DEBUG] qt.qpa.fonts: Registering font family "Bahnschrift SemiBold Condensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Bahnschrift SemiBold SemiCondensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Calibri"
+[DEBUG] qt.qpa.fonts: Registering font family "Calibri Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Cambria"
+[DEBUG] qt.qpa.fonts: Registering font family "Cambria Math"
+[DEBUG] qt.qpa.fonts: Registering font family "Candara"
+[DEBUG] qt.qpa.fonts: Registering font family "Candara Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Comic Sans MS"
+[DEBUG] qt.qpa.fonts: Registering font family "Consolas"
+[DEBUG] qt.qpa.fonts: Registering font family "Constantia"
+[DEBUG] qt.qpa.fonts: Registering font family "Corbel"
+[DEBUG] qt.qpa.fonts: Registering font family "Corbel Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Courier New"
+[DEBUG] qt.qpa.fonts: Registering font family "Ebrima"
+[DEBUG] qt.qpa.fonts: Registering font family "Franklin Gothic"
+[DEBUG] qt.qpa.fonts: Registering font family "Franklin Gothic Medium"
+[DEBUG] qt.qpa.fonts: Registering font family "Franklin Gothic Medium Cond"
+[DEBUG] qt.qpa.fonts: Registering font family "Franklin Gothic Demi"
+[DEBUG] qt.qpa.fonts: Registering font family "Franklin Gothic Demi Cond"
+[DEBUG] qt.qpa.fonts: Registering font family "Franklin Gothic Heavy"
+[DEBUG] qt.qpa.fonts: Registering font family "Gabriola"
+[DEBUG] qt.qpa.fonts: Registering font family "Gadugi"
+[DEBUG] qt.qpa.fonts: Registering font family "Georgia"
+[DEBUG] qt.qpa.fonts: Registering font family "Impact"
+[DEBUG] qt.qpa.fonts: Registering font family "Ink Free"
+[DEBUG] qt.qpa.fonts: Registering font family "Javanese Text"
+[DEBUG] qt.qpa.fonts: Registering font family "Leelawadee UI"
+[DEBUG] qt.qpa.fonts: Registering font family "Leelawadee UI Semilight"
+[DEBUG] qt.qpa.fonts: Registering font family "Lucida Console"
+[DEBUG] qt.qpa.fonts: Registering font family "Lucida Sans Unicode"
+[DEBUG] qt.qpa.fonts: Registering font family "Malgun Gothic"
+[DEBUG] qt.qpa.fonts: Registering font family "Malgun Gothic Semilight"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft Himalaya"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft JhengHei"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft JhengHei Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft JhengHei UI"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft JhengHei UI Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft New Tai Lue"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft PhagsPa"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft Sans Serif"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft Tai Le"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft YaHei"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft YaHei Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft YaHei UI"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft YaHei UI Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft Yi Baiti"
+[DEBUG] qt.qpa.fonts: Registering font family "MingLiU-ExtB"
+[DEBUG] qt.qpa.fonts: Registering font family "PMingLiU-ExtB"
+[DEBUG] qt.qpa.fonts: Registering font family "MingLiU_HKSCS-ExtB"
+[DEBUG] qt.qpa.fonts: Registering font family "MingLiU_MSCS-ExtB"
+[DEBUG] qt.qpa.fonts: Registering font family "Mongolian Baiti"
+[DEBUG] qt.qpa.fonts: Registering font family "MS Gothic"
+[DEBUG] qt.qpa.fonts: Registering font family "MS UI Gothic"
+[DEBUG] qt.qpa.fonts: Registering font family "MS PGothic"
+[DEBUG] qt.qpa.fonts: Registering font family "MV Boli"
+[DEBUG] qt.qpa.fonts: Registering font family "Myanmar Text"
+[DEBUG] qt.qpa.fonts: Registering font family "Nirmala UI"
+[DEBUG] qt.qpa.fonts: Registering font family "Nirmala UI Semilight"
+[DEBUG] qt.qpa.fonts: Registering font family "Nirmala Text"
+[DEBUG] qt.qpa.fonts: Registering font family "Nirmala Text Semilight"
+[DEBUG] qt.qpa.fonts: Registering font family "Palatino Linotype"
+[DEBUG] qt.qpa.fonts: Registering font family "Sans Serif Collection"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe Fluent Icons"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe MDL2 Assets"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe Print"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe Script"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Semilight"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Semibold"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Black"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Emoji"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Historic"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Symbol"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Variable"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Variable Small Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Variable Text Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Variable Display Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Variable Small Semilight"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Variable Text Semilight"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Variable Display Semilight"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Variable Small"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Variable Text"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Variable Display"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Variable Small Semibold"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Variable Text Semibold"
+[DEBUG] qt.qpa.fonts: Registering font family "Segoe UI Variable Display Semibold"
+[DEBUG] qt.qpa.fonts: Registering font family "SimSun"
+[DEBUG] qt.qpa.fonts: Registering font family "NSimSun"
+[DEBUG] qt.qpa.fonts: Registering font family "SimSun-ExtB"
+[DEBUG] qt.qpa.fonts: Registering font family "Sitka"
+[DEBUG] qt.qpa.fonts: Registering font family "Sitka Small"
+[DEBUG] qt.qpa.fonts: Registering font family "Sitka Text"
+[DEBUG] qt.qpa.fonts: Registering font family "Sitka Subheading"
+[DEBUG] qt.qpa.fonts: Registering font family "Sitka Heading"
+[DEBUG] qt.qpa.fonts: Registering font family "Sitka Display"
+[DEBUG] qt.qpa.fonts: Registering font family "Sitka Banner"
+[DEBUG] qt.qpa.fonts: Registering font family "Sitka Small Semibold"
+[DEBUG] qt.qpa.fonts: Registering font family "Sitka Text Semibold"
+[DEBUG] qt.qpa.fonts: Registering font family "Sitka Subheading Semibold"
+[DEBUG] qt.qpa.fonts: Registering font family "Sitka Heading Semibold"
+[DEBUG] qt.qpa.fonts: Registering font family "Sitka Display Semibold"
+[DEBUG] qt.qpa.fonts: Registering font family "Sitka Banner Semibold"
+[DEBUG] qt.qpa.fonts: Registering font family "Sylfaen"
+[DEBUG] qt.qpa.fonts: Registering font family "Symbol"
+[DEBUG] qt.qpa.fonts: Registering font family "Tahoma"
+[DEBUG] qt.qpa.fonts: Registering font family "Times New Roman"
+[DEBUG] qt.qpa.fonts: Registering font family "Trebuchet MS"
+[DEBUG] qt.qpa.fonts: Registering font family "Verdana"
+[DEBUG] qt.qpa.fonts: Registering font family "Webdings"
+[DEBUG] qt.qpa.fonts: Registering font family "Wingdings"
+[DEBUG] qt.qpa.fonts: Registering font family "Yu Gothic"
+[DEBUG] qt.qpa.fonts: Registering font family "Yu Gothic Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Yu Gothic Medium"
+[DEBUG] qt.qpa.fonts: Registering font family "Yu Gothic UI"
+[DEBUG] qt.qpa.fonts: Registering font family "Yu Gothic UI Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Yu Gothic UI Semilight"
+[DEBUG] qt.qpa.fonts: Registering font family "Yu Gothic UI Semibold"
+[DEBUG] qt.qpa.fonts: Registering font family "SimSun-ExtG"
+[DEBUG] qt.qpa.fonts: Registering font family "ROG Fonts"
+[DEBUG] qt.qpa.fonts: Registering font family "AniMe Vision - MB_EN"
+[DEBUG] qt.qpa.fonts: Registering font family "ZWAdobeF"
+[DEBUG] qt.qpa.fonts: Registering font family "Agency FB"
+[DEBUG] qt.qpa.fonts: Registering font family "Algerian"
+[DEBUG] qt.qpa.fonts: Registering font family "Book Antiqua"
+[DEBUG] qt.qpa.fonts: Registering font family "Arial Rounded MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Arial Rounded MT Bold"
+[DEBUG] qt.qpa.fonts: Registering font family "Baskerville Old Face"
+[DEBUG] qt.qpa.fonts: Registering font family "Bauhaus 93"
+[DEBUG] qt.qpa.fonts: Registering font family "Bell MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Bernard MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Bernard MT Condensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Bodoni MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Bodoni MT Poster Compressed"
+[DEBUG] qt.qpa.fonts: Registering font family "Bodoni MT Condensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Bodoni MT Black"
+[DEBUG] qt.qpa.fonts: Registering font family "Bookman Old Style"
+[DEBUG] qt.qpa.fonts: Registering font family "Bradley Hand ITC"
+[DEBUG] qt.qpa.fonts: Registering font family "Britannic"
+[DEBUG] qt.qpa.fonts: Registering font family "Britannic Bold"
+[DEBUG] qt.qpa.fonts: Registering font family "Berlin Sans FB"
+[DEBUG] qt.qpa.fonts: Registering font family "Berlin Sans FB Demi"
+[DEBUG] qt.qpa.fonts: Registering font family "Broadway"
+[DEBUG] qt.qpa.fonts: Registering font family "Brush Script MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Bookshelf Symbol 7"
+[DEBUG] qt.qpa.fonts: Registering font family "Californian FB"
+[DEBUG] qt.qpa.fonts: Registering font family "Calisto MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Castellar"
+[DEBUG] qt.qpa.fonts: Registering font family "Century Schoolbook"
+[DEBUG] qt.qpa.fonts: Registering font family "Centaur"
+[DEBUG] qt.qpa.fonts: Registering font family "Century"
+[DEBUG] qt.qpa.fonts: Registering font family "Chiller"
+[DEBUG] qt.qpa.fonts: Registering font family "Colonna MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Cooper"
+[DEBUG] qt.qpa.fonts: Registering font family "Cooper Black"
+[DEBUG] qt.qpa.fonts: Registering font family "Copperplate Gothic"
+[DEBUG] qt.qpa.fonts: Registering font family "Copperplate Gothic Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Copperplate Gothic Bold"
+[DEBUG] qt.qpa.fonts: Registering font family "Curlz MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Dubai"
+[DEBUG] qt.qpa.fonts: Registering font family "Dubai Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Dubai Medium"
+[DEBUG] qt.qpa.fonts: Registering font family "Elephant"
+[DEBUG] qt.qpa.fonts: Registering font family "Engravers MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Eras ITC"
+[DEBUG] qt.qpa.fonts: Registering font family "Eras Light ITC"
+[DEBUG] qt.qpa.fonts: Registering font family "Eras Medium ITC"
+[DEBUG] qt.qpa.fonts: Registering font family "Eras Demi ITC"
+[DEBUG] qt.qpa.fonts: Registering font family "Eras Bold ITC"
+[DEBUG] qt.qpa.fonts: Registering font family "Felix Titling"
+[DEBUG] qt.qpa.fonts: Registering font family "Forte"
+[DEBUG] qt.qpa.fonts: Registering font family "Franklin Gothic Book"
+[DEBUG] qt.qpa.fonts: Registering font family "Freestyle Script"
+[DEBUG] qt.qpa.fonts: Registering font family "French Script MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Footlight MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Footlight MT Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Garamond"
+[DEBUG] qt.qpa.fonts: Registering font family "Gigi"
+[DEBUG] qt.qpa.fonts: Registering font family "Gill Sans MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Gill Sans MT Condensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Gill Sans MT Ext Condensed Bold"
+[DEBUG] qt.qpa.fonts: Registering font family "Gill Sans"
+[DEBUG] qt.qpa.fonts: Registering font family "Gill Sans Ultra Bold"
+[DEBUG] qt.qpa.fonts: Registering font family "Gill Sans Ultra Bold Condensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Gloucester MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Gloucester MT Extra Condensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Century Gothic"
+[DEBUG] qt.qpa.fonts: Registering font family "Goudy Old Style"
+[DEBUG] qt.qpa.fonts: Registering font family "Goudy Stout"
+[DEBUG] qt.qpa.fonts: Registering font family "Harlow Solid"
+[DEBUG] qt.qpa.fonts: Registering font family "Harlow Solid Italic"
+[DEBUG] qt.qpa.fonts: Registering font family "Harrington"
+[DEBUG] qt.qpa.fonts: Registering font family "Haettenschweiler"
+[DEBUG] qt.qpa.fonts: Registering font family "High Tower Text"
+[DEBUG] qt.qpa.fonts: Registering font family "Imprint MT Shadow"
+[DEBUG] qt.qpa.fonts: Registering font family "Informal Roman"
+[DEBUG] qt.qpa.fonts: Registering font family "Blackadder ITC"
+[DEBUG] qt.qpa.fonts: Registering font family "Edwardian Script ITC"
+[DEBUG] qt.qpa.fonts: Registering font family "Kristen ITC"
+[DEBUG] qt.qpa.fonts: Registering font family "Jokerman"
+[DEBUG] qt.qpa.fonts: Registering font family "Juice ITC"
+[DEBUG] qt.qpa.fonts: Registering font family "Kunstler Script"
+[DEBUG] qt.qpa.fonts: Registering font family "Wide Latin"
+[DEBUG] qt.qpa.fonts: Registering font family "Lucida Bright"
+[DEBUG] qt.qpa.fonts: Registering font family "Lucida Calligraphy"
+[DEBUG] qt.qpa.fonts: Registering font family "Leelawadee"
+[DEBUG] qt.qpa.fonts: Registering font family "Lucida Fax"
+[DEBUG] qt.qpa.fonts: Registering font family "Lucida Handwriting"
+[DEBUG] qt.qpa.fonts: Registering font family "Lucida Sans"
+[DEBUG] qt.qpa.fonts: Registering font family "Lucida Sans Typewriter"
+[DEBUG] qt.qpa.fonts: Registering font family "Magneto"
+[DEBUG] qt.qpa.fonts: Registering font family "Maiandra GD"
+[DEBUG] qt.qpa.fonts: Registering font family "Matura MT Script Capitals"
+[DEBUG] qt.qpa.fonts: Registering font family "Mistral"
+[DEBUG] qt.qpa.fonts: Registering font family "Modern No. 20"
+[DEBUG] qt.qpa.fonts: Registering font family "Microsoft Uighur"
+[DEBUG] qt.qpa.fonts: Registering font family "Monotype Corsiva"
+[DEBUG] qt.qpa.fonts: Registering font family "MT Extra"
+[DEBUG] qt.qpa.fonts: Registering font family "Niagara Engraved"
+[DEBUG] qt.qpa.fonts: Registering font family "Niagara Solid"
+[DEBUG] qt.qpa.fonts: Registering font family "OCR A"
+[DEBUG] qt.qpa.fonts: Registering font family "OCR A Extended"
+[DEBUG] qt.qpa.fonts: Registering font family "Old English Text MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Onyx"
+[DEBUG] qt.qpa.fonts: Registering font family "MS Outlook"
+[DEBUG] qt.qpa.fonts: Registering font family "Palace Script MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Papyrus"
+[DEBUG] qt.qpa.fonts: Registering font family "Parchment"
+[DEBUG] qt.qpa.fonts: Registering font family "Perpetua"
+[DEBUG] qt.qpa.fonts: Registering font family "Perpetua Titling MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Playbill"
+[DEBUG] qt.qpa.fonts: Registering font family "Poor Richard"
+[DEBUG] qt.qpa.fonts: Registering font family "Pristina"
+[DEBUG] qt.qpa.fonts: Registering font family "Rage"
+[DEBUG] qt.qpa.fonts: Registering font family "Rage Italic"
+[DEBUG] qt.qpa.fonts: Registering font family "Ravie"
+[DEBUG] qt.qpa.fonts: Registering font family "MS Reference Sans Serif"
+[DEBUG] qt.qpa.fonts: Registering font family "MS Reference Specialty"
+[DEBUG] qt.qpa.fonts: Registering font family "Rockwell"
+[DEBUG] qt.qpa.fonts: Registering font family "Rockwell Condensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Rockwell Extra Bold"
+[DEBUG] qt.qpa.fonts: Registering font family "Script MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Script MT Bold"
+[DEBUG] qt.qpa.fonts: Registering font family "Showcard Gothic"
+[DEBUG] qt.qpa.fonts: Registering font family "Snap ITC"
+[DEBUG] qt.qpa.fonts: Registering font family "Stencil"
+[DEBUG] qt.qpa.fonts: Registering font family "Tw Cen MT"
+[DEBUG] qt.qpa.fonts: Registering font family "Tw Cen MT Condensed"
+[DEBUG] qt.qpa.fonts: Registering font family "Tw Cen MT Condensed Extra Bold"
+[DEBUG] qt.qpa.fonts: Registering font family "Tempus Sans ITC"
+[DEBUG] qt.qpa.fonts: Registering font family "Viner Hand ITC"
+[DEBUG] qt.qpa.fonts: Registering font family "Vivaldi"
+[DEBUG] qt.qpa.fonts: Registering font family "Vladimir Script"
+[DEBUG] qt.qpa.fonts: Registering font family "Wingdings 2"
+[DEBUG] qt.qpa.fonts: Registering font family "Wingdings 3"
+[DEBUG] qt.qpa.fonts: Registering font family "Marlett"
+[DEBUG] qt.qpa.fonts: Registering font family "Cascadia Code"
+[DEBUG] qt.qpa.fonts: Registering font family "Cascadia Code ExtraLight"
+[DEBUG] qt.qpa.fonts: Registering font family "Cascadia Code Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Cascadia Code SemiLight"
+[DEBUG] qt.qpa.fonts: Registering font family "Cascadia Code SemiBold"
+[DEBUG] qt.qpa.fonts: Registering font family "Cascadia Mono"
+[DEBUG] qt.qpa.fonts: Registering font family "Cascadia Mono ExtraLight"
+[DEBUG] qt.qpa.fonts: Registering font family "Cascadia Mono Light"
+[DEBUG] qt.qpa.fonts: Registering font family "Cascadia Mono SemiLight"
+[DEBUG] qt.qpa.fonts: Registering font family "Cascadia Mono SemiBold"
+[DEBUG] qt.qpa.fonts: Populate family: "Segoe UI"
+[DEBUG] qt.qpa.fonts: >>> Storing English locale names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI" ,  "Regular" ,  QFont::Unstretched ,  QFont::StyleNormal ,  QFont::Normal ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Hebrew, Arabic, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English locale names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI" ,  "Semilight" ,  QFont::Unstretched ,  QFont::StyleNormal ,  QFont::Weight(350) ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Hebrew, Arabic, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English GDI compatible names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI Semilight" ,  "Regular" ,  QFont::Unstretched ,  QFont::StyleNormal ,  QFont::Weight(350) ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Hebrew, Arabic, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English locale names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI" ,  "Light" ,  QFont::Unstretched ,  QFont::StyleNormal ,  QFont::Light ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Hebrew, Arabic, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English GDI compatible names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI Light" ,  "Regular" ,  QFont::Unstretched ,  QFont::StyleNormal ,  QFont::Light ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Hebrew, Arabic, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English locale names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI" ,  "Semibold" ,  QFont::Unstretched ,  QFont::StyleNormal ,  QFont::DemiBold ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Hebrew, Arabic, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English GDI compatible names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI Semibold" ,  "Regular" ,  QFont::Unstretched ,  QFont::StyleNormal ,  QFont::DemiBold ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Hebrew, Arabic, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English locale names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI" ,  "Italic" ,  QFont::Unstretched ,  QFont::StyleItalic ,  QFont::Normal ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English locale names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI" ,  "Semilight Italic" ,  QFont::Unstretched ,  QFont::StyleItalic ,  QFont::Weight(350) ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English GDI compatible names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI Semilight" ,  "Italic" ,  QFont::Unstretched ,  QFont::StyleItalic ,  QFont::Weight(350) ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English locale names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI" ,  "Light Italic" ,  QFont::Unstretched ,  QFont::StyleItalic ,  QFont::Light ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English GDI compatible names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI Light" ,  "Italic" ,  QFont::Unstretched ,  QFont::StyleItalic ,  QFont::Light ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English locale names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI" ,  "Bold" ,  QFont::Unstretched ,  QFont::StyleNormal ,  QFont::Bold ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Hebrew, Arabic, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English locale names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI" ,  "Semibold Italic" ,  QFont::Unstretched ,  QFont::StyleItalic ,  QFont::DemiBold ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English GDI compatible names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI Semibold" ,  "Italic" ,  QFont::Unstretched ,  QFont::StyleItalic ,  QFont::DemiBold ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English locale names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI" ,  "Bold Italic" ,  QFont::Unstretched ,  QFont::StyleItalic ,  QFont::Bold ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Armenian, Georgian, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English locale names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI" ,  "Black" ,  QFont::Unstretched ,  QFont::StyleNormal ,  QFont::Black ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English GDI compatible names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI Black" ,  "Regular" ,  QFont::Unstretched ,  QFont::StyleNormal ,  QFont::Black ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English locale names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI" ,  "Black Italic" ,  QFont::Unstretched ,  QFont::StyleItalic ,  QFont::Black ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Vietnamese)
+[DEBUG] qt.qpa.fonts: >>> Storing English GDI compatible names
+[DEBUG] qt.qpa.fonts: Family "Segoe UI" has variant "Segoe UI Black" ,  "Italic" ,  QFont::Unstretched ,  QFont::StyleItalic ,  QFont::Black ,  false ,  QSupportedWritingSystems(Latin, Greek, Cyrillic, Vietnamese)
+[DEBUG] qt.qpa.fonts: QWindowsFontEngineDirectWrite::QWindowsFontEngineDirectWrite 12
+[DEBUG] qt.qpa.windowclass: QWindowsWindowClassRegistry::registerWindowClass "Qt6111QWindowOwnDCIcon" "QWindowOwnDCIcon" style=0x28 brush=0x0 hasIcon=true atom=50091
+[DEBUG] qt.qpa.windowclass: QWindowsWindowClassRegistry::registerWindowClass "_q_titlebar" "_q_titlebar" style=0x3 brush=0x0 hasIcon=false atom=50064
+[DEBUG] qt.qpa.window: QWindowsGeometryHint::frameOnPrimaryScreen style=0x86cf0000 exStyle=0x0 RECT(left=-16, top=-72, right=16, bottom=16 (32x88)) QMargins(16, 72, 16, 16)
+[DEBUG] qt.qpa.window: QWindowCreationContext::QWindowCreationContext QQuickView(0x2110bcc4c10) QRect(1520,770 800x500) pos incl. frame=false frame=832x588+1504+698 margins=QMargins(16, 72, 16, 16) custom margins=QMargins(0, 0, 0, 0)
+[DEBUG] qt.qpa.window: CreateWindowEx: QQuickView(0x2110bcc4c10) class="Qt6111QWindowOwnDCIcon" title="rhi_gl_probe (U0 gate)"
+WindowCreationData: QFlags<Qt::WindowType>(Window|WindowTitleHint|WindowSystemMenuHint|WindowMinMaxButtonsHint|WindowCloseButtonHint)
+  topLevel=true popup=false dialog=false embedded=false tool=false
+  style=0x86cf0000 WS_POPUP WS_CLIPSIBLINGS WS_CLIPCHILDREN WS_THICKFRAME WS_DLGFRAME WS_SYSMENU WS_MINIMIZEBOX WS_MAXIMIZEBOX WS_BORDER WS_CAPTION WS_GROUP WS_SIZEBOX WS_TABSTOP
+requested: QRect(1520,770 800x500): 832x588+1504+698 custom margins: QMargins(0, 0, 0, 0) invisible margins: QMargins(0, 0, 0, 0)
+[DEBUG] qt.qpa.window: >QWindowsGeometryHint::applyToMinMaxInfo< min=0,0 max=16777215,16777215 margins=QMargins(16, 72, 16, 16) in MINMAXINFO(maxSize=POINT(x=3872, y=2192), maxpos=POINT(x=-16, y=-16), maxtrack=POINT(x=3876, y=2196), mintrack=POINT(x=324, y=88))
+[DEBUG] qt.qpa.window: <QWindowsGeometryHint::applyToMinMaxInfo out MINMAXINFO(maxSize=POINT(x=3872, y=2192), maxpos=POINT(x=-16, y=-16), maxtrack=POINT(x=3876, y=2196), mintrack=POINT(x=324, y=88))
+[DEBUG] qt.qpa.window: CreateWindowEx: returns QQuickView(0x2110bcc4c10) 0x220eda obtained geometry: QPoint(1520,770)QSize(800, 500) QMargins(16, 72, 16, 16)
+[DEBUG] qt.qpa.window: QWindowsIntegration::createPlatformWindow QQuickView(0x2110bcc4c10)
+    Requested: QRect(0,0 800x500) frame incl.=false QFlags<Qt::WindowType>(Window)
+    Obtained : QRect(1520,770 800x500) margins=QMargins(16, 72, 16, 16) handle=0x220eda QFlags<Qt::WindowType>(Window|WindowTitleHint|WindowSystemMenuHint|WindowMinMaxButtonsHint|WindowCloseButtonHint)
+
+[DEBUG] qt.qpa.mime: QWindowsWindow::setDropSiteEnabled QQuickView(0x2110bcc4c10) true
+[DEBUG] qt.qpa.mime: QWindowsOleDropTarget::QWindowsOleDropTarget 0x2110f019c40 QQuickView(0x2110bcc4c10)
+[DEBUG] qt.qpa.window: qWindowsWndProc WM_NCCALCSIZE for 0x220eda QMargins(16, 72, 16, 16)
+[DEBUG] qt.scenegraph.renderloop: resize() QQuickView(0x2110bcc4c10, visibility=QWindow::Windowed, flags=QFlags<Qt::WindowType>(Window), title="rhi_gl_probe (U0 gate)", geometry=608,308 320x200)
+[DEBUG] qt.qpa.window: QWindowsWindow::setVisible QPlatformSurface(0x2110f097bf0, class=QSurface::Window, type=QSurface::OpenGLSurface, window=QQuickView(0x2110bcc4c10)) QQuickView(0x2110bcc4c10) 0x220eda true
+[DEBUG] qt.scenegraph.renderloop: exposureChanged() QQuickView(0x2110bcc4c10 exposed, visibility=QWindow::Windowed, flags=QFlags<Qt::WindowType>(Window), title="rhi_gl_probe (U0 gate)", geometry=608,308 320x200)
+[DEBUG] qt.scenegraph.renderloop: handleExposure() QQuickView(0x2110bcc4c10 exposed, visibility=QWindow::Windowed, flags=QFlags<Qt::WindowType>(Window), title="rhi_gl_probe (U0 gate)", geometry=608,308 320x200)
+[DEBUG] qt.scenegraph.renderloop: - adding window to list
+[DEBUG] qt.scenegraph.renderloop: - starting render thread
+[DEBUG] qt.qpa.gl: QWindowsIntegration::createPlatformOpenGLContext QSurfaceFormat(version 2.0, options QFlags<QSurfaceFormat::FormatOption>(), depthBufferSize 24, redBufferSize -1, greenBufferSize -1, blueBufferSize -1, alphaBufferSize -1, stencilBufferSize 8, samples -1, swapBehavior QSurfaceFormat::DoubleBuffer, swapInterval 1, colorSpace QColorSpace(), profile  QSurfaceFormat::NoProfile)
+[DEBUG] qt.qpa.gl: QWindowsGLContext::QWindowsGLContext WGL extensions: WGL_ARB_buffer_region WGL_ARB_create_context WGL_ARB_create_context_no_error WGL_ARB_create_context_profile WGL_ARB_create_context_robustness WGL_ARB_context_flush_control WGL_ARB_extensions_string WGL_ARB_make_current_read WGL_ARB_multisample WGL_ARB_pbuffer WGL_ARB_pixel_format WGL_ARB_pixel_format_float WGL_ARB_render_texture WGL_ATI_pixel_format_float WGL_EXT_colorspace WGL_EXT_create_context_es_profile WGL_EXT_create_context_es2_profile WGL_EXT_extensions_string WGL_EXT_framebuffer_sRGB WGL_EXT_pixel_format_packed_float WGL_EXT_swap_control WGL_EXT_swap_control_tear WGL_NVX_DX_interop WGL_NV_DX_interop WGL_NV_DX_interop2 WGL_NV_copy_image WGL_NV_delay_before_swap WGL_NV_float_buffer WGL_NV_multisample_coverage WGL_NV_multigpu_context WGL_NV_render_depth_texture WGL_NV_render_texture_rectangle 
+[DEBUG] qt.qpa.gl: "ARB::choosePixelFormat  Attributes:  0x2003 , 0x2027 , 0x2010 , 0x1 , 0x2001 , 0x1 , 0x2014 , 0x18 , 0x2011 , 0x1 , 0x2022 , 0x18 , 0x2013 , 0x202b , 0x201b , 0x8 , 0x2023 , 0x8 , 0x2041 , 0x0 , \n    obtained px # 12  of  1 \n     PIXELFORMATDESCRIPTOR dwFlags=0x8225 PFD_DRAW_TO_WINDOW PFD_SUPPORT_OPENGL PFD_SUPPORT_COMPOSITION PFD_DOUBLEBUFFER iPixelType=0 cColorBits=32 cRedBits=8 cRedShift=16 cGreenBits=8 cGreenShift=8 cBlueBits=8 cBlueShift=0 cDepthBits=24 cStencilBits=8 cAuxBuffers=4 iLayerType=0 cAlphaBits=8 cAlphaShift=24 cAccumBits=64 cAccumRedBits=16 cAccumGreenBits=16 cAccumBlueBits=16 cAccumAlphaBits=16 "
+[DEBUG] qt.qpa.gl: ARB::createContext Creating context version 2 . 0 3 attributes
+[DEBUG] qt.qpa.gl: QWindowsGLContext::QWindowsGLContext 0x2110f0f63e0 ARB  requested:  QSurfaceFormat(version 2.0, options QFlags<QSurfaceFormat::FormatOption>(), depthBufferSize 24, redBufferSize -1, greenBufferSize -1, blueBufferSize -1, alphaBufferSize -1, stencilBufferSize 8, samples -1, swapBehavior QSurfaceFormat::DoubleBuffer, swapInterval 1, colorSpace QColorSpace(), profile  QSurfaceFormat::NoProfile) 
+    obtained # 12 ARB QSurfaceFormat(version 4.6, options QFlags<QSurfaceFormat::FormatOption>(DeprecatedFunctions), depthBufferSize 24, redBufferSize 8, greenBufferSize 8, blueBufferSize 8, alphaBufferSize 8, stencilBufferSize 8, samples 0, swapBehavior QSurfaceFormat::DoubleBuffer, swapInterval 1, colorSpace QColorSpace(QColorSpace::SRgb, QColorSpace::Primaries::SRgb, QColorSpace::TransferFunction::SRgb), profile  QSurfaceFormat::CompatibilityProfile) 
+     PIXELFORMATDESCRIPTOR dwFlags=0x8225 PFD_DRAW_TO_WINDOW PFD_SUPPORT_OPENGL PFD_SUPPORT_COMPOSITION PFD_DOUBLEBUFFER iPixelType=0 cColorBits=32 cRedBits=8 cRedShift=16 cGreenBits=8 cGreenShift=8 cBlueBits=8 cBlueShift=0 cDepthBits=24 cStencilBits=8 cAuxBuffers=4 iLayerType=0 cAlphaBits=8 cAlphaShift=24 cAccumBits=64 cAccumRedBits=16 cAccumGreenBits=16 cAccumBlueBits=16 cAccumAlphaBits=16  swap interval:  1 
+    default:  ContextFormat: v4.6 profile: QSurfaceFormat::NoProfile options: QFlags<QSurfaceFormat::FormatOption>(DeprecatedFunctions) 
+    HGLRC= 0x30000
+[DEBUG] qt.qpa.window: QWindowCreationContext::QWindowCreationContext QWindow(0x2110f0ca6a0, name="QOffscreenSurface") QRect(0,0 3x3) pos incl. frame=false frame=3x3+0+0 margins=QMargins(0, 0, 0, 0) custom margins=QMargins(0, 0, 0, 0)
+[DEBUG] qt.qpa.window: CreateWindowEx: QWindow(0x2110f0ca6a0, name="QOffscreenSurface") class="Qt6111QWindowOwnDCIcon" title="python"
+WindowCreationData: QFlags<Qt::WindowType>(Window|FramelessWindowHint|CustomizeWindowHint)
+  topLevel=true popup=false dialog=false embedded=false tool=false
+  style=0x86000000 WS_POPUP WS_CLIPSIBLINGS WS_CLIPCHILDREN
+requested: QRect(0,0 3x3): 3x3+0+0 custom margins: QMargins(0, 0, 0, 0) invisible margins: QMargins(0, 0, 0, 0)
+[DEBUG] qt.qpa.window: CreateWindowEx: returns QWindow(0x2110f0ca6a0, name="QOffscreenSurface") 0x3a0e72 obtained geometry: QPoint(0,0)QSize(3, 3) QMargins(0, 0, 0, 0)
+[DEBUG] qt.qpa.window: QWindowsIntegration::createPlatformWindow QWindow(0x2110f0ca6a0, name="QOffscreenSurface")
+    Requested: QRect(0,0 3x3) frame incl.=false QFlags<Qt::WindowType>(Window|FramelessWindowHint|CustomizeWindowHint)
+    Obtained : QRect(0,0 3x3) margins=QMargins(0, 0, 0, 0) handle=0x3a0e72 QFlags<Qt::WindowType>(Window|FramelessWindowHint|CustomizeWindowHint)
+
+[DEBUG] qt.qpa.mime: QWindowsWindow::setDropSiteEnabled QWindow(0x2110f0ca6a0, name="QOffscreenSurface") true
+[DEBUG] qt.qpa.mime: QWindowsOleDropTarget::QWindowsOleDropTarget 0x2110f01eb80 QWindow(0x2110f0ca6a0, name="QOffscreenSurface")
+[DEBUG] qt.qpa.window: qWindowsWndProc WM_NCCALCSIZE for 0x3a0e72 QMargins(0, 0, 0, 0)
+[DEBUG] qt.scenegraph.renderloop: polishAndSync (in expose) QQuickView(0x2110bcc4c10 exposed, visibility=QWindow::Windowed, flags=QFlags<Qt::WindowType>(Window), title="rhi_gl_probe (U0 gate)", geometry=608,308 320x200)
+[DEBUG] qt.qpa.input.devices: no mouse-like devices registered for seat "" The platform plugin should have provided one via QWindowSystemInterface::registerInputDevice(). Creating a default mouse for now.
+[INFO] qt.qpa.input.devices: Registered QInputDevice(QPointingDevice("core pointer" Mouse id=1 buttonCount=3)
+[DEBUG] qt.scenegraph.time.renderloop: [window 0x2110bcc4c10][gui thread] polishAndSync: start, elapsed since last call: 20 ms
+[DEBUG] qt.scenegraph.renderloop: - lock for sync
+[DEBUG] qt.scenegraph.renderloop: - wait for sync
+[DEBUG] qt.scenegraph.renderloop:                     (RT) run()
+[DEBUG] qt.scenegraph.general: Animation Driver: using vsync: 31.25 ms
+[DEBUG] qt.scenegraph.general: Creating QRhi with backend OpenGL for window 0x2110bcc4c10 (wflags 0x1)
+  Graphics API debug/validation layers: 0
+  Debug markers: 0
+  Timestamps: 0
+  Prefer software device: 0
+  Shader/pipeline cache collection: 1
+[DEBUG] qt.qpa.gl: QWindowsIntegration::createPlatformOpenGLContext QSurfaceFormat(version 2.0, options QFlags<QSurfaceFormat::FormatOption>(), depthBufferSize 24, redBufferSize -1, greenBufferSize -1, blueBufferSize -1, alphaBufferSize -1, stencilBufferSize 8, samples -1, swapBehavior QSurfaceFormat::DoubleBuffer, swapInterval 1, colorSpace QColorSpace(), profile  QSurfaceFormat::NoProfile)
+[DEBUG] qt.qpa.gl: QWindowsGLContext::QWindowsGLContext WGL extensions: WGL_ARB_buffer_region WGL_ARB_create_context WGL_ARB_create_context_no_error WGL_ARB_create_context_profile WGL_ARB_create_context_robustness WGL_ARB_context_flush_control WGL_ARB_extensions_string WGL_ARB_make_current_read WGL_ARB_multisample WGL_ARB_pbuffer WGL_ARB_pixel_format WGL_ARB_pixel_format_float WGL_ARB_render_texture WGL_ATI_pixel_format_float WGL_EXT_colorspace WGL_EXT_create_context_es_profile WGL_EXT_create_context_es2_profile WGL_EXT_extensions_string WGL_EXT_framebuffer_sRGB WGL_EXT_pixel_format_packed_float WGL_EXT_swap_control WGL_EXT_swap_control_tear WGL_NVX_DX_interop WGL_NV_DX_interop WGL_NV_DX_interop2 WGL_NV_copy_image WGL_NV_delay_before_swap WGL_NV_float_buffer WGL_NV_multisample_coverage WGL_NV_multigpu_context WGL_NV_render_depth_texture WGL_NV_render_texture_rectangle 
+[DEBUG] qt.qpa.gl: "ARB::choosePixelFormat  Attributes:  0x2003 , 0x2027 , 0x2010 , 0x1 , 0x2001 , 0x1 , 0x2014 , 0x18 , 0x2011 , 0x1 , 0x2022 , 0x18 , 0x2013 , 0x202b , 0x201b , 0x8 , 0x2023 , 0x8 , 0x2041 , 0x0 , \n    obtained px # 12  of  1 \n     PIXELFORMATDESCRIPTOR dwFlags=0x8225 PFD_DRAW_TO_WINDOW PFD_SUPPORT_OPENGL PFD_SUPPORT_COMPOSITION PFD_DOUBLEBUFFER iPixelType=0 cColorBits=32 cRedBits=8 cRedShift=16 cGreenBits=8 cGreenShift=8 cBlueBits=8 cBlueShift=0 cDepthBits=24 cStencilBits=8 cAuxBuffers=4 iLayerType=0 cAlphaBits=8 cAlphaShift=24 cAccumBits=64 cAccumRedBits=16 cAccumGreenBits=16 cAccumBlueBits=16 cAccumAlphaBits=16 "
+[DEBUG] qt.qpa.gl: ARB::createContext Creating context version 2 . 0 3 attributes
+[DEBUG] qt.qpa.gl: QWindowsGLContext::QWindowsGLContext 0x2110f0f4f40 ARB  requested:  QSurfaceFormat(version 2.0, options QFlags<QSurfaceFormat::FormatOption>(), depthBufferSize 24, redBufferSize -1, greenBufferSize -1, blueBufferSize -1, alphaBufferSize -1, stencilBufferSize 8, samples -1, swapBehavior QSurfaceFormat::DoubleBuffer, swapInterval 1, colorSpace QColorSpace(), profile  QSurfaceFormat::NoProfile) 
+    obtained # 12 ARB QSurfaceFormat(version 4.6, options QFlags<QSurfaceFormat::FormatOption>(DeprecatedFunctions), depthBufferSize 24, redBufferSize 8, greenBufferSize 8, blueBufferSize 8, alphaBufferSize 8, stencilBufferSize 8, samples 0, swapBehavior QSurfaceFormat::DoubleBuffer, swapInterval 1, colorSpace QColorSpace(QColorSpace::SRgb, QColorSpace::Primaries::SRgb, QColorSpace::TransferFunction::SRgb), profile  QSurfaceFormat::CompatibilityProfile) 
+     PIXELFORMATDESCRIPTOR dwFlags=0x8225 PFD_DRAW_TO_WINDOW PFD_SUPPORT_OPENGL PFD_SUPPORT_COMPOSITION PFD_DOUBLEBUFFER iPixelType=0 cColorBits=32 cRedBits=8 cRedShift=16 cGreenBits=8 cGreenShift=8 cBlueBits=8 cBlueShift=0 cDepthBits=24 cStencilBits=8 cAuxBuffers=4 iLayerType=0 cAlphaBits=8 cAlphaShift=24 cAccumBits=64 cAccumRedBits=16 cAccumGreenBits=16 cAccumBlueBits=16 cAccumAlphaBits=16  swap interval:  1 
+    default:  ContextFormat: v4.6 profile: QSurfaceFormat::NoProfile options: QFlags<QSurfaceFormat::FormatOption>(DeprecatedFunctions) 
+    HGLRC= 0x40000
+[DEBUG] qt.rhi.general: Created OpenGL context QSurfaceFormat(version 4.6, options QFlags<QSurfaceFormat::FormatOption>(DeprecatedFunctions), depthBufferSize 24, redBufferSize 8, greenBufferSize 8, blueBufferSize 8, alphaBufferSize 8, stencilBufferSize 8, samples 0, swapBehavior QSurfaceFormat::DoubleBuffer, swapInterval 1, colorSpace QColorSpace(QColorSpace::SRgb, QColorSpace::Primaries::SRgb, QColorSpace::TransferFunction::SRgb), profile  QSurfaceFormat::CompatibilityProfile)
+[DEBUG] qt.rhi.general: OpenGL VENDOR: NVIDIA Corporation RENDERER: NVIDIA GeForce RTX 5080/PCIe/SSE2 VERSION: 4.6.0 NVIDIA 610.47
+[DEBUG] qt.scenegraph.general: Created QRhi 0x2110f0b3e50 for window 0x2110bcc4c10
+[DEBUG] qt.scenegraph.general: MSAA sample count for the swapchain is 1. Alpha channel requested = no.
+[DEBUG] qt.scenegraph.renderloop:                     (RT) syncAndRender()
+[DEBUG] qt.scenegraph.time.renderloop: [window 0x2110bcc4c10][render thread 0x2110f045c20] syncAndRender: start, elapsed since last call: 33 ms
+[DEBUG] qt.scenegraph.renderloop:                     (RT) - rendering started
+[DEBUG] qt.scenegraph.renderloop:                     (RT) - window not ready, skipping render
+[DEBUG] qt.scenegraph.renderloop:                     (RT) - rendering done
+[DEBUG] qt.scenegraph.time.renderloop: [window 0x2110bcc4c10][render thread 0x2110f045c20] syncAndRender: frame rendered in 0ms, sync=0, render=0, swap=0
+[DEBUG] qt.scenegraph.renderloop:                     (RT) --- begin processEvents()
+[DEBUG] qt.scenegraph.renderloop:                     (RT) WM_RequestSync
+[DEBUG] qt.scenegraph.renderloop:                     (RT) - triggered from expose
+[DEBUG] qt.scenegraph.renderloop:                     (RT) - repaint regardless
+[DEBUG] qt.scenegraph.renderloop:                     (RT) --- done processEvents()
+[DEBUG] qt.scenegraph.general: rhi texture atlas dimensions: 1024x512
+[DEBUG] qt.scenegraph.renderloop:                     (RT) syncAndRender()
+[DEBUG] qt.scenegraph.time.renderloop: [window 0x2110bcc4c10][render thread 0x2110f045c20] syncAndRender: start, elapsed since last call: 0 ms
+[DEBUG] qt.scenegraph.renderloop: rhi swapchain size QSize(800, 500)
+[DEBUG] qt.rhi.rub: [rub] new frame
+[DEBUG] qt.scenegraph.renderloop:                     (RT) - updatePending, doing sync
+[DEBUG] qt.scenegraph.renderloop:                     (RT) sync()
+[DEBUG] qt.qpa.fonts: Trying to create IDWriteFactory6
+[DEBUG] qt.qpa.fonts: QWindowsFontEngineDirectWrite::QWindowsFontEngineDirectWrite 12
+[DEBUG] qt.qpa.fonts: QWindowsFontEngineDirectWrite::QWindowsFontEngineDirectWrite 54
+[DEBUG] qt.qpa.fonts: QWindowsFontEngineDirectWrite::~QWindowsFontEngineDirectWrite
+[DEBUG] qt.qpa.fonts: QWindowsFontEngineDirectWrite::QWindowsFontEngineDirectWrite 864
+[DEBUG] qt.scenegraph.text.glyphcache: Creating new glyph cache: 0x2110dc29010 fontEngine: 0x2110f100c60 "Segoe UI" "Regular" , key: "" "" "C:\\WINDOWS\\FONTS\\SEGOEUI.TTF"
+[DEBUG] qt.scenegraph.text: inserting 12 glyphs, 10 unique
+[DEBUG] qt.scenegraph.renderloop:                     (RT) - rendering started
+[DEBUG] qt.scenegraph.time.glyph: distancefield: 10 glyphs prepared in 1ms, rendering=0, upload=1
+[DEBUG] qt.scenegraph.text: allocating for 48 vtx (reserved 48 ): 768 bytes; 72 idx: 144 bytes; total bytes so far 912
+[DEBUG] default: [rub] release to pool upd.batch # 0 / bufferOps active 0 of 0 data 0 largeAlloc 0 textureOps active 2 of 2
+[DEBUG] default: [rub] release to pool upd.batch # 1 / bufferOps active 4 of 4 data 1180 largeAlloc 0 textureOps active 2 of 2
+[DEBUG] qt.scenegraph.time.renderer: time in renderer: total=58ms, preprocess=1, updates=0, rendering=56
+[DEBUG] qt.scenegraph.renderloop:                     (RT) - rendering done
+[DEBUG] qt.scenegraph.renderloop:                     (RT) - wake Gui after expose
+[DEBUG] qt.scenegraph.renderloop: - unlock after sync
+[DEBUG] qt.scenegraph.time.renderloop: [window 0x2110bcc4c10][gui thread] Frame prepared, polish=0 ms, lock=0 ms, blockedForSync=95 ms, animations=0 ms
+[DEBUG] qt.scenegraph.renderloop: - done with handleExposure()
+[DEBUG] qt.scenegraph.time.renderloop: [window 0x2110bcc4c10][render thread 0x2110f045c20] syncAndRender: frame rendered in 60ms, sync=1, render=58, swap=0
+[DEBUG] qt.scenegraph.renderloop:                     (RT) --- begin processEvents()
+[DEBUG] qt.scenegraph.renderloop:                     (RT) --- done processEvents()
+[DEBUG] qt.scenegraph.renderloop:                     (RT) done drawing, sleep...
+[DEBUG] qt.scenegraph.renderloop:                     (RT) --- begin processEventsAndWaitForMore()
+[DEBUG] qt.qpa.uiautomation: QWindowsUiaMainProvider::Navigate 0  this:  QWindowsUiaMainProvider(0x2110f01cb40)
+[DEBUG] qt.qpa.uiautomation: QWindowsUiaMainProvider::Navigate 0  this:  QWindowsUiaMainProvider(0x2110f01cb40)
+[DEBUG] qt.qpa.uiautomation: QWindowsUiaMainProvider::GetPropertyValue 30003

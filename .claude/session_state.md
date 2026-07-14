@@ -112,7 +112,28 @@ auto-calm · `e875571` Codex C12 · `2a5e67e` U0 probe script ·
   `docs/CODEX_QUEUE.md`. (Protocol note kept: codex lane = queue-file
   briefs only; bridge watcher was DEAD 85865 s, restarted this session.)
 
-## 🔴 U0b BENCH RUN — RUN 2 FINDING (disconnected session ⇒ software GL)
+## 🟢 U0 COMPLETE — GATE EVIDENCE (masterplan format)
+
+- **gate-id:** U0 (branch cut + RHI/GL pin probe) · **commit reviewed:**
+  probe `2a5e67e` on `ui-qml-migration` (cut at main `cf6dd58`,
+  polish-freeze ancestor verified) · **verdict:** PASS ·
+  **date:** 2026-07-15.
+- **Run 3 (RDP-connected session, task tct_rhi_probe): PASS exit 0 —
+  QSG_RHI_BACKEND='opengl' · graphicsApi='OpenGL' ·
+  GL_RENDERER='NVIDIA GeForce RTX 5080/PCIe/SSE2' · 0 software-fallback
+  markers across 454 lines · --expect 5080 FOUND.**
+- **Artifact:** `artifacts_claude/u0_rhi_probe_20260715/
+  rhi_probe_u0_bench_log.txt` (full 504-line capture, verdict block at
+  top; committed with this ledger).
+- **Standing bench-gate constraints learned by runs 1–3 (re-assert at
+  every per-stage [Bench] per masterplan):** ssh = session 0 = llvmpipe;
+  disconnected session = Qt opengl32sw fallback; **RDP-CONNECTED session
+  = real hardware GL on this driver (610.47)** — so gates need a
+  connected session, physical console NOT required. Run mechanism:
+  task `tct_rhi_probe` (interactive, Kaya-created), bat at
+  `C:\bench\rhi_probe.bat`, logs at `C:\bench\rhi_probe_u0*.log`.
+
+## (superseded) run-2 finding — kept for the record
 
 - Kaya created+ran the interactive task himself (schtasks output
   ERFOLGREICH ×2). **Run 2 result: frame RENDERED (progress vs ssh) but
