@@ -1298,3 +1298,167 @@ def test_panel_glass_qss_uses_rgba_panel_tint():
     assert 0.0 < style.PANEL_GLASS_ALPHA < 1.0
     tint = style._rgba(p["card"], style.PANEL_GLASS_ALPHA)
     assert tint in qss
+
+
+# =========================================================================== #
+# BUG (Kaya, live-reported): "with Acrylic on, changing ANY OTHER setting in   #
+# the theme editor destroys the glass". Root cause verified by direct repro   #
+# rather than assumed: NOT the QSettings-reload suspect, NOT apply_theme's    #
+# QSS-rebuild guard, NOT a preset clobbering theme/window_backdrop wholesale  #
+# (all three checked directly below and shown to leave the backdrop intact). #
+# The actual clobber path is the Material-mode macro combo                   #
+# (_apply_material_mode) drifting out of sync with a DIRECT Backdrop-combo   #
+# pick: it is never resynced after _on_backdrop_changed, so it keeps showing #
+# its old ("Auto") option, and ``activated`` fires on ANY user selection —   #
+# INCLUDING re-picking the item already shown (by design, so a fresh-install #
+# "Auto" click still fires). Touching that stale combo again — indistin-     #
+# guishable from "changing some other setting" to the operator, since it     #
+# never visibly changed — replays the stale auto/token/flat mapping and      #
+# silently overwrites the just-picked material. Fixed by resyncing the       #
+# Material-mode combo's persisted tier + display to the ACTUAL Backdrop/      #
+# Panel-glass state on every DIRECT change to either (_resync_material_tier_  #
+# from_state), guarded so the macro's own writes do not immediately          #
+# re-trigger it (_material_macro_active).                                    #
+# =========================================================================== #
+
+def _toggle_via_apply_pipeline(app, mode: str) -> None:
+    """The exact sequence tct_gui._toggle_theme runs on every theme-editor
+    Apply / live-preview ``applyRequested`` emission — apply_theme,
+    apply_window_backdrop, apply_window_opacity, in that order (the
+    apply-order contract). Used here so the regression is pinned against the
+    real production wiring, not a hand-waved subset of it."""
+    style.apply_theme(app, mode)
+    style.apply_window_backdrop(app)
+    style.apply_window_opacity(app)
+
+
+def _dialog_with_apply_pipeline(tmp_path, monkeypatch, mode="dark"):
+    """A dialog wired exactly like tct_gui._open_theme_editor wires
+    ``applyRequested`` — through the same apply/backdrop/opacity fan-out a
+    live main window runs, so live-preview knobs (Surface tint, the two glass
+    alphas) exercise the real clobber-or-survive path."""
+    _force_backdrop_supported(monkeypatch)
+    _install_recording_dwm(monkeypatch)
+    settings = _tmp_settings(tmp_path)
+    dlg = _dialog_from_settings(mode, settings)
+    app = _app()
+    dlg.applyRequested.connect(lambda m: _toggle_via_apply_pipeline(app, m))
+    return dlg, settings
+
+
+def _dialog_from_settings(mode, settings):
+    from gui.theme_editor import ThemeEditorDialog
+    return ThemeEditorDialog(mode=mode, settings=settings)
+
+
+def _enable_acrylic(dlg) -> None:
+    idx = dlg._backdrop_combo.findData("acrylic")
+    dlg._backdrop_combo.setCurrentIndex(idx)
+
+
+@pytest.mark.parametrize("other_setting", [
+    "accent_color_then_apply",
+    "radius_then_apply",
+    "preset_then_apply",
+    "typography_then_apply",
+    "panel_glass_toggle",
+    "canvas_alpha_slider",
+])
+def test_material_survives_every_other_setting_while_a_backdrop_is_active(
+        tmp_path, monkeypatch, other_setting):
+    """The reported bug's direct regression guard: enable Acrylic, change one
+    unrelated theme-editor setting through its REAL control + code path, and
+    assert the backdrop material and its glass QSS rule are untouched."""
+    dlg, settings = _dialog_with_apply_pipeline(tmp_path, monkeypatch)
+    try:
+        _enable_acrylic(dlg)
+        assert style.get_window_backdrop() == "acrylic"
+        assert settings.value("theme/window_backdrop") == "acrylic"
+
+        if other_setting == "accent_color_then_apply":
+            dlg._set_draft_color("accent", "#ff00ff")
+            dlg._apply()
+        elif other_setting == "radius_then_apply":
+            dlg._radius_seg.set_current("l")
+            dlg._apply()
+        elif other_setting == "preset_then_apply":
+            dlg._preset_list.setCurrentRow(1)   # a built-in preset, not "Cockpit Dark"
+            dlg._apply()
+        elif other_setting == "typography_then_apply":
+            dlg._size_spin.setValue(dlg._size_spin.value() + 1)
+            dlg._apply()
+        elif other_setting == "panel_glass_toggle":
+            dlg._panel_glass_check.setChecked(True)
+        elif other_setting == "canvas_alpha_slider":
+            dlg._canvas_alpha_slider.setValue(90)
+            dlg._preview_material_alphas()
+
+        assert style.get_window_backdrop() == "acrylic", (
+            f"{other_setting} clobbered the live backdrop material")
+        assert settings.value("theme/window_backdrop") == "acrylic", (
+            f"{other_setting} clobbered the persisted backdrop material")
+        qss = _app().styleSheet()
+        assert 'glassCanvas="true"' in qss, (
+            f"{other_setting} dropped the glass QSS rule from the live stylesheet")
+    finally:
+        dlg._panel_glass_check.setChecked(False)
+        import gui.panel_kit as panel_kit
+        panel_kit.set_panel_glass(False)
+        dlg.deleteLater()
+        style.reset_theme_customization()
+
+
+def test_material_mode_combo_resyncs_after_a_direct_backdrop_pick(tmp_path, monkeypatch):
+    """The mechanism behind the fix: a DIRECT Backdrop-combo pick must
+    immediately resync the Material-mode macro's own display (and persisted
+    tier), so it can never replay a stale mapping on a later re-pick."""
+    dlg, settings = _dialog_with_apply_pipeline(tmp_path, monkeypatch)
+    try:
+        assert dlg._material_mode_combo.currentData() == "auto"   # shipped default
+        _enable_acrylic(dlg)
+        assert dlg._material_mode_combo.currentData() == "acrylic"
+        assert app_settings.theme_glass_tier(settings) == "real"
+    finally:
+        dlg.deleteLater()
+        style.reset_theme_customization()
+
+
+def test_material_mode_macro_reselect_does_not_clobber_after_direct_pick(
+        tmp_path, monkeypatch):
+    """Before the fix: re-picking the combo's OWN (now-stale) displayed value
+    replayed the old auto/token/flat mapping and silently downgraded/removed
+    a directly-picked material. After the fix the combo's display already
+    matches reality, so firing ``activated`` on its current index is a true
+    no-op for the backdrop."""
+    dlg, settings = _dialog_with_apply_pipeline(tmp_path, monkeypatch)
+    try:
+        _enable_acrylic(dlg)
+        idx = dlg._material_mode_combo.currentIndex()
+        assert dlg._material_mode_combo.itemData(idx) == "acrylic"
+        # Simulate the operator re-clicking the combo's own current entry —
+        # activated fires unconditionally on any user pick, same value or not.
+        dlg._material_mode_combo.activated.emit(idx)
+        assert style.get_window_backdrop() == "acrylic"
+        assert settings.value("theme/window_backdrop") == "acrylic"
+    finally:
+        dlg.deleteLater()
+        style.reset_theme_customization()
+
+
+def test_material_mode_macro_auto_pick_is_still_a_deliberate_override(
+        tmp_path, monkeypatch):
+    """The fix must not neuter the macro itself: an EXPLICIT pick of a
+    different material-mode option (not a stale reselect) still changes the
+    backdrop exactly as documented."""
+    dlg, settings = _dialog_with_apply_pipeline(tmp_path, monkeypatch)
+    try:
+        _enable_acrylic(dlg)
+        assert style.get_window_backdrop() == "acrylic"
+        flat_idx = dlg._material_mode_combo.findData("flat")
+        dlg._material_mode_combo.setCurrentIndex(flat_idx)
+        dlg._material_mode_combo.activated.emit(flat_idx)
+        assert style.get_window_backdrop() == "none"
+        assert app_settings.theme_glass_tier(settings) == "flat"
+    finally:
+        dlg.deleteLater()
+        style.reset_theme_customization()
