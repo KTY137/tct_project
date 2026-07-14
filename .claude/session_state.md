@@ -123,75 +123,36 @@ Against the OWNED ambient ground (kit §1.1: dark L* ∈ [0, 7.61], light
   really produce ΔL*4.0 in BOTH themes?); kit §2.1 is missing the light-shelf
   SCENE row (inference `panel`@0.55 reproduces kit's own 5.86 within 0.2%).
 
-## 🟡 THE GATE FINISHED (@ `21d2b17` = leak fix + finalizers): 2 failed, 2590 passed, 8:31
+## ✅ THE GATE IS GREEN — `f7a1a3e`, 2685 passed, 0 failed, 8:48
 
-**THE NATIVE-CRASH CLASS IS DEAD.** No 0xC0000005, no 0xc0000374 — the leak fix
-+ thread finalizers hold under the full suite. Suite grew 1995 → 2590.
+**The branch is gate-clean for the first time since the wave began.** Detached
+Task-Scheduler run on the bench (the only reliable path — use `C:ench\gate.bat`
+via `schtasks /run /tn tct_gate` + the poller; never a live SSH stream).
 
-**The 2 failures are the UI MONKEY, both seeds, same assertion:**
-`DANGER PATH REACHED: QtDangerGate._show_dialog(move)` (test_ui_monkey.py:668).
-Systematic (2 seeds), not a race. Two hypotheses under investigation (Noah):
-(A) the lambda conversion mis-wired a jog connect in motor_panel → an ungated
-control routes into the gated move path = PRODUCT BUG; (B) the night's styling
-(neutral chip ink, token icons, ribbon wrap) blinded the monkey's danger
-CLASSIFICATION → it clicked a genuinely dangerous button and the gate correctly
-stopped it = the invariant works, the allowlist is blind. Verdict pending —
-**merge stays blocked until both seeds are green.**
+The road there, kept for the record: run 1-2 died of a REAL native crash (the
+icon watcher, then pyqtgraph-in-the-repolish-walk — both fixed); runs 3-5 died of
+the Tailscale stream freezing (~25 min) while the suite was CLEAN at 23/83/88%;
+the first detached run finished 2590 green + 2 monkey seeds red (the gate WORKED,
+the monkey was blind — classification now keys off WIRING, `d13af76`); the second
+detached run died at test 17 (`test_ambient_ground` needed a QApplication the
+bench's alphabetical order never created — `f7a1a3e`); the third is GREEN.
 
-**HOW THE GATE FINALLY RAN: detached from SSH.** Three runs in a row died at the
-same wall — the Tailscale stream freezes after ~25 min and Windows OpenSSH kills
-the session's children (runs died at 23%, 83%, 88%). The gate now runs under the
-bench's own Task Scheduler (`C:\bench\gate.bat` → `C:\bench\gate_out.txt`,
-`schtasks /run /tn tct_gate`) and a local poller reads the result over
-short-lived connections. **Use this path for all future gates.**
+**Landed on top of the green 21d2b17 base:** kit foundation `88cc542` (card/shelf
+tokens, AmbientGround band-clamped to ΔL* 3.58, GlassPane/Card/Well/HazardSurface)
+· bias pilot `074943f` (hazard boundary byte-identical, Mary: "I would ship this
+to a bench with HV cabled") · monkey wiring-classification `d13af76` · ground perf
+`0fde84c` (stall 330→10 ms, cache 1.7 GB→30 MB) · QApplication fix `f7a1a3e`.
 
-## 🟡 BENCH RUN 3 (@ `cc14db7`, leak fix + thread finalizers): DIED OF NETWORK, NOT OF TESTS
+## ⏳ WAITING ON KAYA — the branch is his now
 
-**83 % clean, zero failures, then `client_loop: send disconnect: Connection
-reset`** (exit 255 = SSH, not pytest). Runs 1 and 2 crashed natively at ~23 %.
-This is the strongest signal yet that the fix holds — but a signal is not a
-verdict. The bench (Kaya's home PC via Tailscale) is currently UNREACHABLE
-(port 22 timeout); a background watcher polls every 90 s for up to an hour and
-re-launches the gate automatically when it returns. **Still: DO NOT PUSH OR
-MERGE until a full run finishes green.**
-
-## 🔴 PRIOR BENCH HISTORY — kept for the record
-
-Two full-suite runs on sophonone, both `exit -1073741819` (`0xC0000005`).
-
-**Run 1 @ `37cead3`** — the crash was `_IconThemeWatcher` (`cf18550`) running Python
-inside Qt's stylesheet repolish walk. **FIXED** (`dc1f543`): the frame is gone.
-Root cause was neither of Adam's two hypotheses (both refuted by measurement — Qt
-guards both sides of an event filter). The corpse was a THIRD widget Qt itself held
-a raw pointer to: `setStyleSheet` repolishes over a RAW-POINTER SNAPSHOT, our 3690
-Python callbacks triggered CPython's gc mid-walk, gc freed a Python-owned QWidget,
-shiboken deleted its C++ object, Qt dereferenced it. **New house rule: never run
-Python inside Qt's stylesheet repolish walk.**
-
-**Run 2 @ `dc1f543`** — SAME exit code, DIFFERENT stack:
-
-```
-tests/test_qml_shell.py:1028   test_island_renders_from_tokens_in_both_themes...
-tct_gui.py:992                 _toggle_theme
-gui/style.py:3350              apply_theme -> app.setStyleSheet(qss)
-pyqtgraph/HistogramLUTWidget.py:33  sizeHint     <- PYTHON, in the repolish walk
-+++ Timeout +++                                   <- pytest-timeout (60 s) fired FIRST
-Windows fatal exception: access violation
-Thread 0x18a0 (LIVE): gui/camera_panel.py:142 _poll   <- a camera thread still running
-```
-
-**pyqtgraph violates the very rule we just derived** — its `sizeHint` is Python and
-Qt calls it during repolish. But the AV may be a SYMPTOM, not the disease:
-pytest-timeout fired at 60 s and `os._exit`'d the process **while the repolish walk
-and a live camera thread were mid-flight**. `apply_theme` is measured at ~9 s per
-`setStyleSheet` at ~13k accumulated widgets (`style.py`'s own docstring), and
-tonight added several tests that build a full `TCTMainWindow` — if they leak, every
-later `apply_theme` walks a bigger pile.
-
-**Last KNOWN-green bench: `54baf62` (1995 passed).** Everything since — including
-G-B1 and all 22 of tonight's commits — is unbenched. **The red could predate
-tonight.** A beat is measuring exactly that (timeout-vs-use-after-free;
-widget-pile count; which tests leak windows) rather than guessing.
+1. **The card-token veto:** `artifacts_claude/card_token_delta/` (dark cards rise
+   L* 5.07 → 10.76 app-wide; partially reverses his ratified v6 recede pass, done
+   on his implement-today order). One look.
+2. **The pilot:** `artifacts_claude/pilot_bias/` (both themes) + run the app.
+3. **Merge decision** for design/cockpit-v5 → main (gate green, Mary approvals on
+   file). Push has NOT happened — nothing has left the machine.
+4. Then: the 12-panel wave (handoff in `074943f`), the shadow-ladder spike, the
+   semantic-ink-on-glass law extension (measured legal at α ≥ 0.24).
 
 ## 🧑‍🔬 NEEDS KAYA (at 10:00)
 
