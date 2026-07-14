@@ -23,11 +23,12 @@ here on. Lesson: verify "missing file" claims with `ls`, not Glob alone.
 
 ## ⚠️ TREE / MACHINE STATE (read before staging ANYTHING)
 
-- `TCT_app/configs/devices.yaml` is DIRTY: Kaya flipped ALL `simulation: false`
-  (scope, motor COM4, camera, ISEG bias, wavegen). That is his LOCAL
-  real-hardware config. **NEVER stage it** — repo default stays simulation.
-- ⇒ REAL INSTRUMENTS MAY BE CABLED TO THIS MACHINE. No agent runs the app or
-  full suites locally; targeted headless (offscreen) pytest only; safety rule 6.
+- `TCT_app/configs/devices.yaml`: CLEAN again as of 2026-07-14 late —
+  Kaya reverted his real-hardware flip himself (back to simulation ×6,
+  tree == HEAD, nothing was ever staged/committed). If it goes dirty
+  again, the old rule stands: NEVER stage it.
+- Instruments may still be physically cabled ⇒ agents still never run
+  the app locally; targeted headless (offscreen) pytest only; rule 6.
 
 ## ✅ LANDED (pre-crash session + recovery session)
 
@@ -70,16 +71,20 @@ option-c worker abort.
 ROADMAP_MASTERPLAN.md U1.5 per his ask). Artifact deploy service 503ing
 — page viewable from the repo file; retry publish later.
 
-**REMAINING before the branch is merge-ready:** Noah's theme-editor
-fix (below) → commit → **gate #4 on final HEAD** (the merge evidence)
-→ Kaya: merge + polish-freeze tag + laser-gate + SCENE decisions.
+**THEME-EDITOR PAIR LANDED, BOTH MARY-APPROVED:**
+- `eaa2425` glass-death fix (Kaya's live bug): root cause was NOT the
+  persisted-settings suspect — the Material macro combo desynced after
+  a direct Backdrop pick and its activated handler replays a stale
+  mapping on same-value reselects. Resync + re-entrancy guard (guard
+  cannot latch: set-in-try/clear-in-finally, Mary-verified); 9
+  regression tests incl. material-survives-every-other-setting ×6.
+- `729841f` opacity clobber (Mary's fix-before-gate-4 ruling): _apply()
+  now sources from _draft_window_opacity, not the display-forced
+  slider; 85%→Acrylic→Apply→preference intact. 199 targeted green.
 
-1. **noah-theme-editor-glass-loss** (ui-ux-dev, Sonnet — LIVE KAYA BUG):
-   with Acrylic enabled, changing ANY other theme-editor setting kills
-   the glass. Prime suspect: non-material re-apply reads PERSISTED
-   backdrop (`none`) instead of live state. LOCKS: `gui/style.py`,
-   theme editor file, `tct_gui.py` (if needed), one theme test file.
-   Escalates to Opus if root cause is threading/lifecycle class.
+**NO code beats in flight. Gate #4 on `729841f` = THE merge evidence.**
+Then everything remaining is Kaya's: merge → polish-freeze tag →
+laser-gate decision → SCENE appetite → roadmap entry (P0' first).
 
 **KAYA LIVE FEEDBACK (2026-07-14 night):** he saw the QML preview's
 in-scene blur ("kit panel") and calls it "the most awesome" — the SCENE
