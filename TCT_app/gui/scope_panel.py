@@ -43,8 +43,9 @@ except ImportError:
 from controller.yaml_persist import update_yaml_file
 from devices.oscilloscope import Oscilloscope
 from analysis.waveform_analysis import analyse_waveform
+from gui import style
 from gui.app_settings import theme_mode
-from gui.panel_kit import Card, CheckableCard, panel_header
+from gui.panel_kit import Card, CheckableCard, GlassPane, panel_header, register_glass_pane
 from gui.scope_measurements import MeasurementPanel
 from gui.status_bus import notify
 from gui.status_widgets import ReadoutCell, StatusChip, StatusLamp, set_button_icon
@@ -127,13 +128,27 @@ class _ChannelState:
 
 
 class _TriggerDialog(QDialog):
-    """Modeless trigger-settings window (source / level / slope)."""
+    """Modeless trigger-settings window (source / level / slope).
+
+    A modeless top-level is its own satellite window surface (round-03 glass
+    kit): same single entry point every other material-capable top-level uses
+    (``gui.style.prepare_window_surface`` / ``gui.style.reassert_window_backdrop``
+    — see ``camera_panel._ROIDialog``/``DeviceManagerWindow``), so a live
+    "Panel glass"/backdrop preference reaches this dialog too instead of it
+    popping up as a plain, un-prepped surface. ``prepare_window_surface`` runs
+    as the very first line (before any child widget can realize the native
+    window and lock out per-pixel alpha — see its docstring);
+    ``reassert_window_backdrop`` applies the current material + opacity once
+    the form is built. A true no-op headless / with the shipped "none"
+    backdrop default.
+    """
 
     def __init__(self, scope: Oscilloscope, config_path: str | None,
                  apply_trigger,
                  parent: QWidget | None = None,
                  theme_mode: str = "light") -> None:
         super().__init__(parent)
+        style.prepare_window_surface(self)
         self.setWindowTitle("Oscilloscope — Trigger Settings")
         self._scope = scope
         self._config_path = config_path
@@ -178,6 +193,8 @@ class _TriggerDialog(QDialog):
         apply_btn.clicked.connect(self._apply)
         bb.rejected.connect(self.close)
         form.addRow(bb)
+
+        style.reassert_window_backdrop(self)
 
     def _apply(self) -> None:
         src = self._source.currentText()
@@ -555,7 +572,21 @@ class ScopePanel(QWidget):
         root.setContentsMargins(SPACE_MD, SPACE_MD, SPACE_MD, SPACE_MD)
         root.setSpacing(SPACE_MD)
 
-        root.addWidget(panel_header("TCT Control · Instrument", "Oscilloscope"))
+        # ── The one shelf (round-03 kit §2.1) ──────────────────────────
+        # register=False is a CONTENT consequence, not a hazard stance (this
+        # is a census NON-hazard panel): the shelf hosts the live-trace
+        # pg.PlotWidget (Z3 instrument screen), the per-channel readout cards
+        # (Z4-equivalent live values), the DUT-analysis ReadoutCell tiles
+        # (Z4) and the Measurements panel's live values directly at some
+        # descendant depth — the live-registry census in
+        # tests/test_panel_glass_rollout.py refuses glass on any pane with a
+        # plot/readout descendant, hazard or not. The pure parameter-chrome
+        # cards below (Display & scale, Channel setup) register instead —
+        # the "register the specific chrome sub-card, not the content-hosting
+        # shell" pattern from the camera/device-manager waves.
+        shelf = GlassPane(register=False)
+        self._shelf = shelf
+        shelf.add_widget(panel_header("TCT Control · Instrument", "Oscilloscope"))
 
         split = QSplitter(Qt.Horizontal)
         split.addWidget(self._build_plot())
@@ -563,14 +594,18 @@ class ScopePanel(QWidget):
         split.setStretchFactor(0, 1)   # plot dominates
         split.setStretchFactor(1, 0)
         split.setSizes([820, 400])
-        root.addWidget(split, 1)
+        shelf.body.addWidget(split, 1)
 
-        root.addLayout(self._build_acquire_row())
+        shelf.body.addLayout(self._build_acquire_row())
+
+        root.addWidget(shelf, 1)
 
     def _build_plot(self) -> QWidget:
         if not _HAS_PG:
             card = Card("Live trace")
             card.add_widget(QLabel("(install pyqtgraph for live waveforms)"))
+            # Never registered for glass (see the _HAS_PG branch below).
+            self._trace_card = card
             return card
         self._plot = pg.PlotWidget()
         self._plot.setLabel("left",   "Amplitude", units="V")
@@ -645,6 +680,10 @@ class ScopePanel(QWidget):
         card = Card("Live trace", "amplitude (V) vs. time (s) · channel cards set colour + role")
         card.body.setContentsMargins(SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM)
         card.add_widget(self._plot)
+        # Never registered for glass — hosts the pg.PlotWidget directly (Z3
+        # instrument screen; pyqtgraph islands never migrate onto the glass
+        # tint, ratified).
+        self._trace_card = card
         return card
 
     def _build_side_column(self) -> QWidget:
@@ -685,7 +724,12 @@ class ScopePanel(QWidget):
 
         # Channel cards.  Keep the layout so rebuild_channels() can add/remove
         # cards when the scope's n_channels is refined (connect) or reconfigured.
+        # Never registered for glass — each _ChannelCard carries a live "peak
+        # X mV" readout (set_readout()) updated on every acquire, the same
+        # live-value content class as a ReadoutCell even though it predates
+        # the kit widget; content, not chrome.
         ch_card = Card("Channels", "enable · role · live readout")
+        self._ch_card = ch_card
         self._ch_layout = ch_card.body
         for n, st in self._channels.items():
             card = _ChannelCard(st)
@@ -695,12 +739,18 @@ class ScopePanel(QWidget):
             self._ch_layout.addWidget(card)
         v.addWidget(ch_card)
 
-        # DUT analysis stats
-        v.addWidget(self._build_stats_box())
+        # DUT analysis stats — never registered (hosts ReadoutCell tiles, Z4;
+        # see _build_stats_box()).
+        self._stats_card = self._build_stats_box()
+        v.addWidget(self._stats_card)
 
         # Automatic measurements (bench-scope "Measure" menu) — collapsed by
         # default (design system §7); the checkbox hides/shows the body
         # (CheckableCard has no built-in collapse — kit gap reported).
+        # Never registered for glass — MeasurementPanel paints live Vpp/rise/
+        # frequency/... values per acquire (the same Z4 live-value content
+        # class as the DUT-analysis tiles above, just pre-kit QLabels rather
+        # than ReadoutCell instances); content, not chrome.
         self._meas_panel = MeasurementPanel()
         meas_card = CheckableCard("Measurements",
                                   "scope-style automatic measurements",
@@ -716,10 +766,16 @@ class ScopePanel(QWidget):
         self._lbl_cursor = QLabel("Cursor: off")
         v.addWidget(self._lbl_cursor)
 
-        # Display / scale controls
+        # Display / scale controls — pure parameter chrome (sliders, edits,
+        # Autoscale/Read-scope buttons, the "Drive scope" checkbox — no
+        # readout/plot/hazard content), so both cards register for glass.
         if _HAS_PG:
-            v.addWidget(self._build_scale_box())
-            v.addWidget(self._build_chan_setup_box())
+            self._scale_card = self._build_scale_box()
+            register_glass_pane(self._scale_card)
+            v.addWidget(self._scale_card)
+            self._chan_setup_card = self._build_chan_setup_box()
+            register_glass_pane(self._chan_setup_card)
+            v.addWidget(self._chan_setup_card)
 
         v.addStretch(1)
         self._restyle_theme_tokens()
@@ -1546,6 +1602,14 @@ class ScopePanel(QWidget):
         already repaints via the app-wide stylesheet
         ``gui.style.apply_theme()`` reapplies; only the per-instance colours
         painted by ``_restyle_theme_tokens`` need this explicit refresh.
+
+        Round-03 glass kit migration: the new ``GlassPane`` shelf and its
+        registered chrome ``Card``\\ s (``glassPane`` dynamic property)
+        resolve purely through that same app-wide QSS — nothing new to cache
+        here, same as the camera/device-manager waves. The live-trace plot
+        has no fixed-dark canvas token baked in this panel (unlike
+        camera/intensity); it was never set here and this migration does not
+        introduce one.
 
         Called live by ``tct_gui._toggle_theme`` (wired alongside the
         motor/bias/planner panels), so a theme switch re-resolves these
