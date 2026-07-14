@@ -997,7 +997,17 @@ class ThemeEditorDialog(QDialog):
         every direct Backdrop/Panel-glass change makes a later re-pick of the
         Material-mode combo idempotent (it now shows the true current state)
         instead of a silent clobber. See ``tests/test_theme_editor.py``'s
-        material-mode desync regression tests."""
+        material-mode desync regression tests.
+
+        The tier IS persisted here (``app_settings.set_theme_glass_tier``),
+        not display-only — but it is a READ-ONLY MIRROR of the actual
+        Backdrop/Panel-glass state, never the other way around: nothing reads
+        this write back to DRIVE the backdrop or the panel-glass switch (that
+        direction only ever runs through :func:`_apply_material_mode`, gated
+        off here by ``_material_macro_active``). So a future edit must not
+        drop this write for looking "cosmetic" — it keeps ``theme/glass_tier``
+        truthful across a restart too — nor fear it as a hidden feedback loop
+        (Mary's gate-4 review verified there is none)."""
         bk = self._backdrop_combo.currentData()
         if bk in ("mica", "acrylic"):
             tier = "real"
@@ -1180,10 +1190,20 @@ class ThemeEditorDialog(QDialog):
         self._draft_backdrop = style.set_window_backdrop(
             self._backdrop_combo.currentData())
         style.apply_window_backdrop()
-        # Window opacity: the slider is the source of truth (its range already
-        # enforces the safety floor); set_window_opacity clamps regardless.
+        # Window opacity: source from self._draft_window_opacity, NOT the
+        # slider's displayed value. While a backdrop material is active the
+        # slider DISPLAY is force-pinned to 100% (_force_opacity_to_full,
+        # display-only by contract), but _draft_window_opacity keeps tracking
+        # the user's real stored preference the whole time (_on_opacity_changed
+        # keeps it current; _sync_opacity_enabled_for_backdrop/
+        # _force_opacity_to_full deliberately never touch it). Reading the
+        # slider here used to silently discard that preference on every Apply
+        # made while a backdrop was on (set 85% -> enable Acrylic -> Apply ->
+        # the 85% was gone, resurfacing as 100% only once the backdrop was
+        # later disabled) — Mary's gate-4 fix. set_window_opacity clamps
+        # regardless.
         self._draft_window_opacity = style.set_window_opacity(
-            self._opacity_slider.value() / 100.0)
+            self._draft_window_opacity)
         style.apply_window_opacity()
         style.apply_typography(
             sans=self._sans_combo.currentData(),

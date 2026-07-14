@@ -1462,3 +1462,52 @@ def test_material_mode_macro_auto_pick_is_still_a_deliberate_override(
     finally:
         dlg.deleteLater()
         style.reset_theme_customization()
+
+
+# =========================================================================== #
+# BUG (Mary, gate-4 review of the material-tier fix above): _apply() sourced  #
+# window opacity from the SLIDER's DISPLAY value, which _force_opacity_to_    #
+# full pins to 100% while a backdrop is active — so clicking Apply while a    #
+# backdrop is on silently discarded the user's real opacity preference (set  #
+# 85% -> enable Acrylic -> Apply -> 85% is gone, resurfacing as 100% only     #
+# once the backdrop is later turned off). Fixed by sourcing _apply()'s        #
+# opacity commit from self._draft_window_opacity (the value _on_opacity_     #
+# changed keeps current and _force_opacity_to_full deliberately never        #
+# touches) instead of the slider's display.                                  #
+# =========================================================================== #
+
+def test_apply_while_backdrop_active_does_not_clobber_the_stored_opacity(
+        tmp_path, monkeypatch):
+    """The reported bug's direct regression guard: set opacity, enable a
+    backdrop (which pins the slider's DISPLAY to 100% and disables it),
+    click Apply, and assert the STORED preference survives untouched — both
+    live (style.get_window_opacity, ignoring the backdrop-active compositor
+    pin) and persisted (QSettings) — and is restored the moment the backdrop
+    is turned back off."""
+    dlg, settings = _dialog_with_apply_pipeline(tmp_path, monkeypatch)
+    try:
+        dlg._opacity_slider.setValue(85)
+        assert dlg._draft_window_opacity == pytest.approx(0.85)
+
+        _enable_acrylic(dlg)
+        # The backdrop-active pin: slider DISPLAY forced to 100%, disabled...
+        assert dlg._opacity_slider.value() == 100
+        assert dlg._opacity_slider.isEnabled() is False
+        # ...but the real stored preference must still read 85%.
+        assert dlg._draft_window_opacity == pytest.approx(0.85)
+
+        dlg._apply()
+
+        assert dlg._draft_window_opacity == pytest.approx(0.85)
+        assert settings.value("theme/window_opacity") == pytest.approx(0.85)
+
+        # Turn the backdrop back off -- the slider display (and the stored
+        # preference) must both come back as 85%, never the clobbered 100%.
+        none_idx = dlg._backdrop_combo.findData("none")
+        dlg._backdrop_combo.setCurrentIndex(none_idx)
+        assert dlg._opacity_slider.value() == 85
+        assert dlg._draft_window_opacity == pytest.approx(0.85)
+        assert settings.value("theme/window_opacity") == pytest.approx(0.85)
+    finally:
+        dlg.deleteLater()
+        style.reset_theme_customization()
