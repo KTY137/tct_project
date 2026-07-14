@@ -385,10 +385,13 @@ class BaseDevice(ABC):
         finally:
             self.transport_lock.release()
 
-    def _escape_exchange(self, fn, *, realtime: bool):
-        """T2: never blocking-acquire, never raise. realtime=True → no
-        acquire at all; False → bounded acquire, send regardless."""
-        ...
+    # T2: DELIBERATELY NO BASE HELPER (decision at G0 landing, supersedes
+    # the earlier _escape_exchange sketch here). A stop path must never be
+    # lured into calling a lock-taking helper; T2 is a LAW the family bases
+    # enforce in their own base-owned stop() (which contains no acquire at
+    # all — see below), with the device-specific primitive supplied by the
+    # driver. Pinned by
+    # tests/test_guarded_exchange_base.py::test_there_is_deliberately_no_t2_escape_helper_on_the_base.
 
     def __init_subclass__(cls, **kw):   # Stage G0: warn; Stage G4: raise
         ...  # detect overrides of base-owned public methods per family
@@ -410,9 +413,12 @@ class MotorStageBase(BaseDevice):
             raise
 
     def stop(self) -> None:                                # base-owned, final
-        # LAW: no lock, no gate, no raise.
-        self._escape_exchange(self._do_stop_realtime,
-                              realtime=self._STOP_IS_REALTIME)
+        # LAW: no lock, no gate, no raise. NOTE: no acquire appears in this
+        # body AT ALL (and no helper exists that could smuggle one in) —
+        # the driver's _do_stop primitive is called bare; T2-B devices do
+        # their bounded try-acquire INSIDE their own primitive, where it
+        # is visible and reviewable, never in shared machinery.
+        self._do_stop()
 
     @abstractmethod                                        # end-state only —
     def _do_issue_move(self, target: Position) -> None: ...  # see §6 staging
@@ -444,10 +450,12 @@ every unconverted concrete driver un-instantiable — a hard break).
 
 **Stages:**
 
-- **G0 — base machinery (S).** `_guarded_exchange` / `_probe_exchange` /
-  `_escape_exchange` in `devices/base.py`; `__init_subclass__` override
-  detector in **WARNING** mode. No driver changes; suite must be green
-  unchanged.
+- **G0 — base machinery (S). [LANDED 2026-07-13]** `_guarded_exchange` /
+  `_guarded_group` / `_probe_exchange` in `devices/base.py` (NO T2 helper —
+  see §5's decision note); `__init_subclass__` override detector in
+  **WARNING** mode + `guarded_exchange_registry()` as the G1-G4 worklist
+  (17 classes catalogued). Zero warnings for current drivers, proven by
+  test. Suite green unchanged.
 - **G1 — motors (the family with real gates and real stakes).** Order:
   `motor_simulated.py` (S — proves the template), `motor_pi.py` (M — already
   per-exchange clean after `4a89647`), `motor_grbl.py` (L — dialect split,

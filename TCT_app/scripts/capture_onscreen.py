@@ -114,11 +114,13 @@ CONFIG_PATH = str(_TCT_APP / "configs" / "devices.yaml")
 WINDOW_POS = (40, 40)
 WINDOW_SIZE = (1480, 920)
 
-# Off to the side of WINDOW_POS/WINDOW_SIZE so the capture-method probe never
-# overlaps the real capture region (it runs before TCTMainWindow exists
-# anyway, but keeping it clear of that rect makes a stray leftover window
-# harmless too).
-_PROBE_POS = (60, 1000)
+# The capture-method probe's window. Its POSITION is computed at runtime from
+# the live screen (:func:`_probe_pos`) — it used to be a hard-coded (60, 1000),
+# which is BELOW a 1536x864-DIP desktop: the probe window was off-screen, both
+# grabs returned a flat nothing, the variance was 0.0, and the harness reported
+# "INCONCLUSIVE — grabWindow may not see the DWM composite". It sees it fine.
+# An off-screen probe is not evidence about a capture method; it is evidence
+# about arithmetic. (GL-island spike, item 4.)
 _PROBE_SIZE = (240, 160)
 _PROBE_DECOY_HEX = "#FF00AA"  # loud, unlikely to occur naturally behind acrylic
 
@@ -490,6 +492,33 @@ def _pixel_variance(image) -> float:
     return sum((s - mean) ** 2 for s in samples) / len(samples)
 
 
+def _probe_pos(app) -> tuple[int, int]:
+    """Where to put the capture-method probe: ON SCREEN, and clear of the
+    capture window's rect.
+
+    Derived from the live ``availableGeometry`` instead of a hard-coded constant,
+    because the constant (60, 1000) was below the bottom edge of Kaya's
+    1536x864-DIP desktop — an invisible probe measures nothing and then reports
+    that the capture method is broken."""
+    screen = app.primaryScreen()
+    if screen is None:
+        return (60, 60)
+    avail = screen.availableGeometry()
+    w, h = _PROBE_SIZE
+    # Bottom-right corner of the available area, one margin in.
+    x = avail.x() + max(0, avail.width() - w - 24)
+    y = avail.y() + max(0, avail.height() - h - 24)
+    win_x, win_y = WINDOW_POS
+    win_w, win_h = WINDOW_SIZE
+    overlaps = (x < win_x + win_w and x + w > win_x
+                and y < win_y + win_h and y + h > win_y)
+    if overlaps:
+        # The capture window covers even the corner (a small desktop): tuck the
+        # probe into the top-left instead — still on screen, which is the point.
+        x, y = avail.x() + 8, avail.y() + 8
+    return (int(x), int(y))
+
+
 def _probe_capture_method(app) -> tuple[str, str]:
     """Empirically decide grabWindow vs. BitBlt for THIS host, before the
     real matrix runs.
@@ -515,15 +544,21 @@ def _probe_capture_method(app) -> tuple[str, str]:
                 "Win11 22H2+ run to confirm either capture method.")
 
     decoy = QWidget()
+    probe_pos = _probe_pos(app)
     decoy.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
     decoy.setStyleSheet(f"background-color: {_PROBE_DECOY_HEX};")
-    decoy.move(*_PROBE_POS)
+    decoy.move(*probe_pos)
     decoy.resize(*_PROBE_SIZE)
     decoy.show()
 
     probe = QWidget()
     probe.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
-    probe.move(*_PROBE_POS)
+    # Alpha-capable surface BEFORE show() realizes the native window: Qt fixes a
+    # top-level's surface alpha at creation, so a probe that is shown first can
+    # never composite the material it is trying to detect (it would measure a
+    # flat colour and blame the capture method). GL-island spike, finding 2.
+    backdrop.prepare_surface(probe)
+    probe.move(*probe_pos)
     probe.resize(*_PROBE_SIZE)
     probe.show()
     _settle(200)
@@ -536,6 +571,20 @@ def _probe_capture_method(app) -> tuple[str, str]:
                     "UNVERIFIED, needs a live run to confirm either capture method.")
         _settle(250)
         rect = probe.frameGeometry()
+        # Warm-up: the first grab after a material attach can return the STALE
+        # composite (the same command otherwise yields different pixels run to
+        # run). Nudge the window by 1 px, put it back, settle, and throw the
+        # first grab away.
+        probe.move(rect.x() + 1, rect.y())
+        _settle(60)
+        probe.move(rect.x(), rect.y())
+        _settle(120)
+        try:
+            _grabwindow_grab(probe.screen(), rect.x(), rect.y(),
+                             rect.width(), rect.height())
+        except Exception:
+            pass
+        _settle(60)
         results: dict[str, object] = {}
         for name, fn in (("grabwindow", _grabwindow_grab), ("bitblt", _bitblt_grab)):
             try:

@@ -8,8 +8,13 @@ PySide6>=6.5
 pyqtgraph>=0.13
 qtawesome>=1.3        # vector icons (Material Design Icons) for toolbars/buttons
 superqt>=0.6         # nicer widgets: toggle switches, labeled/range sliders
-PyOpenGL>=3.1        # 3D stage/setup view (pyqtgraph.opengl GLViewWidget)
 PySide6-QtAds>=4.1   # dockable/floating panels (multi-monitor cockpit layout)
+# PyOpenGL: REMOVED 2026-07-13 with the 3D stage view (gui/stage_view.py's
+# GLViewWidget). Nothing imports pyqtgraph.opengl / OpenGL any more, and
+# pyqtgraph's 2D raster path never needs it (we never set useOpenGL=True).
+# Do not re-add it casually: an RTT/QOpenGLWidget child kills DWM window
+# material for the whole top-level that hosts it — GL must live in its own
+# native window (see tests/test_no_render_to_texture_children_in_gui.py).
 
 # Numerics + data
 # Upper-bounded to <2 on purpose: the vendored FLIR PySpin 3.2 wheel is built

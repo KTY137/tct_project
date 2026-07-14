@@ -19,23 +19,39 @@ class _DetachedWindow(QMainWindow):
 
     def __init__(self, content: QWidget, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        # Alpha-capable surface FIRST — before the torn-off page (which may host a
+        # GL view or any widget that realizes the native window) is installed. Qt
+        # fixes a top-level's surface alpha at creation; miss that and the
+        # material attaches with S_OK and composites nothing. No-op unless a
+        # material is the active preference. See gui.style.prepare_window_surface.
+        style.prepare_window_surface(self)
         self.setWindowFlag(Qt.WindowType.Window, True)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         self.setWindowTitle(title)
-        # Inherit the cockpit's window backdrop material (theme/window_backdrop)
-        # BEFORE opacity, per the apply-order contract (see
-        # gui.style.apply_window_backdrop's docstring) — a torn-off panel is
-        # part of the same cockpit, so it should carry the same Mica/Acrylic
-        # material. A true no-op pre-Win11 22H2 / non-Windows / headless, and
-        # ships "none" by default.
-        style.apply_window_backdrop_to(self)
-        # Inherit the cockpit's window opacity (theme/window_opacity, clamped to
-        # the 0.80 safety floor): a torn-off panel is part of the same cockpit,
-        # so it must not float as an opaque slab over a translucent shell.
-        self.setWindowOpacity(style.get_window_opacity())
+        # The central widget goes in FIRST, before the backdrop. This ORDER is
+        # the whole reason a detached panel showed no glass (2026-07-13, beat
+        # G-B1): gui.backdrop._canvas_widgets() must make the QMainWindow's
+        # CENTRAL widget translucent too — a QMainWindow's client area is
+        # painted by that child, not by the window, so a translucent top-level
+        # with an opaque child carries no alpha down to DWM and the material
+        # never composites. This constructor used to apply the backdrop while
+        # centralWidget() was still None, so the canvas prep silently skipped
+        # the one widget that mattered, and the torn-off panel came up opaque
+        # while the theme editor (a flat QDialog, which IS its own canvas)
+        # showed glass. Never re-order these two.
         self.setCentralWidget(content)
         # Reparenting hides a widget in Qt — show it again or the window is blank.
         content.show()
+        # Inherit the cockpit's material + opacity through the ONE entry point
+        # (gui.style.reassert_window_backdrop): DWM chain first, then the
+        # WS_EX_LAYERED opacity pin — a torn-off panel is part of the same
+        # cockpit, and a layered window suppresses the material outright, so a
+        # window created while a material is live must NOT be handed the raw
+        # stored opacity (which is what the old two-liner here did — the second
+        # half of why detached panels had no glass). It also installs the event
+        # spine's guard, so this window re-asserts on WinIdChange/Show. A true
+        # no-op pre-Win11 22H2 / non-Windows / headless; ships "none" by default.
+        style.reassert_window_backdrop(self)
 
     def closeEvent(self, event) -> None:
         self.closed.emit(self)
@@ -58,10 +74,20 @@ class DetachableTabWidget(QTabWidget):
         btn.setAutoRaise(True)
         btn.setToolTip("Detach the current tab into its own window "
                        "(double-click a tab does the same)")
-        btn.clicked.connect(lambda: self.detach(self.currentIndex()))
+        # A bound method, never ``lambda: self.detach(self.currentIndex())``:
+        # the corner button is a CHILD of this tab widget, and PySide6 stores a
+        # lambda slot strongly in the child's C++ connection list — closing a
+        # cycle (tabs -> button -> connection -> closure -> tabs) that gc cannot
+        # see, so the tab widget and every page in it becomes immortal. Bound
+        # methods are held weakly. See tests/test_no_immortal_panels.py.
+        btn.clicked.connect(self._detach_current)
         self.setCornerWidget(btn, Qt.Corner.TopRightCorner)
 
     # -- detach / redock ------------------------------------------------- #
+
+    def _detach_current(self) -> None:
+        """Detach the currently-visible tab (the ⧉ corner button)."""
+        self.detach(self.currentIndex())
 
     def _on_double_click(self, index: int) -> None:
         if index >= 0:

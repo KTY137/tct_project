@@ -115,6 +115,28 @@ def test_v5_palette_values_match_polish_artifact():
     # (rgba(16,23,36,0.42) composited over the real canvas hex — see
     # gui/style.py's _DARK_PANEL_V6). canvas/accent/good/warn/crit are
     # untouched by that pass.
+    # WCAG-AA CONTRAST PASS (2026-07-14) — the LIGHT semantic values below are
+    # no longer the artifact's raw hexes, and that is deliberate, ordered, and
+    # measured. The v5 light palette was systemically below WCAG AA on the
+    # surfaces it is actually painted on, and TWO SAFETY TOKENS were among the
+    # failures (`sim` = "this data is SIMULATED" at 3.18:1 on a panel and
+    # 2.66:1 on the canvas; `warn`/`armed` = the motion/homing command class at
+    # 4.07/3.40; `crit` at 4.19/3.50; `good` at 4.34). A status colour an
+    # operator cannot read is not a status colour.
+    #
+    # The artifact lineage is NOT discarded — it is made explicit: each light
+    # token is now DERIVED from its v5 artifact hex with gui/style.py's own
+    # `_darken`, at the smallest amount that clears 4.5:1 with margin. `_darken`
+    # scales R/G/B uniformly, so the HUE is preserved exactly — a contrast fix,
+    # not a re-theme. Asserting the derivation (rather than a pasted hex) is what
+    # keeps that honest: if someone hand-picks a "close enough" value later, this
+    # fails.
+    #
+    # DARK is UNCHANGED and still pinned verbatim to the artifact — its inks all
+    # cleared AA already (the dark theme's one failure was the danger BUTTON's
+    # white label, which is a separate fill token, `danger_fill`, not these).
+    from gui.style import _darken
+
     assert DARK["bg"] == "#0A0D13"
     assert DARK["panel"] == "#0d111a"
     assert DARK["accent"] == "#5AA9FF"
@@ -123,10 +145,11 @@ def test_v5_palette_values_match_polish_artifact():
     assert DARK["crit"] == "#FF5A61"
 
     assert LIGHT["bg"] == "#E6EBF3"
-    assert LIGHT["accent"] == "#2A6FE0"
-    assert LIGHT["good"] == "#128A63"
-    assert LIGHT["warn"] == "#B26F00"
-    assert LIGHT["crit"] == "#DE434B"
+    assert LIGHT["accent"] == _darken("#2A6FE0", 0.10) == "#2563c9"
+    assert LIGHT["good"] == _darken("#128A63", 0.14) == "#0f7655"
+    assert LIGHT["warn"] == _darken("#B26F00", 0.18) == "#915b00"
+    assert LIGHT["crit"] == _darken("#DE434B", 0.22) == "#ad343a"
+    assert LIGHT["sim"] == _darken("#0C9FB0", 0.28) == "#08727e"
 
 
 def test_plot_grid_overlay_tokens_present_both_themes_and_fixed():

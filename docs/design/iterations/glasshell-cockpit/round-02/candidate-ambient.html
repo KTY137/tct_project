@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark" data-tier="scene" data-desk="worst" data-ladder="new" data-drawer="open">
+<head>
+<meta charset="utf-8">
+<title>TCT · GlassShell round-02 · Candidate AMBIENT — The Tiled Cockpit</title>
+<!--
+  ============================================================================
+  BROKKR · round-02 · candidate AMBIENT
+  ============================================================================
+  DESIGN MOCKUP, not app code. Every colour is transcribed from
+  TCT_app/gui/style.py and named beside it. The ONE value that is not in
+  style.py today is `card`, which this candidate PROPOSES as a new token.
+
+  THE INVARIANT — this is the whole candidate:
+      ZERO MultiEffect panes. Ever. In any window. At any tier.
+      The ONLY translucent surface in the app is the window's own unclaimed
+      background — the 8px gutters between cards. NOTHING that carries
+      information ever sits on it.
+
+  The consequence, and the pitch: the FLAT tier is not a degradation, it is
+  this design with the gutters filled in. Flip Tier SCENE -> FLAT below and
+  watch: no layout shift, no tone shift, no contrast shift. Nothing is lost
+  when the glass goes, because nothing was ever ON the glass.
+
+  THE LADDER PROBE (switch 4) is the honest part. Flip it to "shipped panel"
+  and the dark cards VANISH — because canvas->panel measures 1.03:1 / dL* 1.47
+  in the shipped dark palette. That is why `card` exists.
+  ============================================================================
+-->
+<style>
+:root{
+  /* ── DARK (style.py DARK) ─────────────────────────────────────────── */
+  --canvas:10 13 19;            /* canvas  #0A0D13 */
+  --panel:13 17 26;             /* panel   #0D111A = _blend(#101724, canvas, .42) */
+  --card:21 29 45;              /* NEW     #151D2D = _blend(raised, panel, .60)  <-- PROPOSED */
+  --well:7 10 15;               /* well    #070A0F */
+  --raised:27 37 58;            /* raised  #1B253A */
+  --chip:29 32 41;              /* chip    #1D2029 */
+  --hairline:39 52 74;          /* hairline        #27344A */
+  --hairline-strong:51 65 89;   /* hairline_strong #334159 — PROMOTED to the card outline */
+  --text:233 237 245; --muted:152 161 181; --faint:91 101 122;
+  --good:61 214 140; --warn:255 184 77; --crit:255 90 97;
+  --accent:90 169 255; --sim:65 216 228;
+  --danger-fill:198 70 75; --on-danger:255 255 255; --on-armed:35 25 10;
+  --specular:rgba(255,255,255,.14);
+  --shadow:0 12px 32px rgba(0,0,0,.55), 0 2px 6px rgba(0,0,0,.4);
+  --plot-bg:#0a0b0d; --plot-grid:#242a33;
+
+  --sp-xs:4px; --sp-sm:8px; --sp-md:12px; --sp-lg:16px;
+  --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:20px; --r-pill:999px;
+  --f-xs:11px; --f-sm:12px; --f-md:13px; --f-lg:18px;
+  --f-value:26px; --f-value-c:18px; --f-unit:11px; --f-metric-label:11px;
+
+  --canvas-a:.80;   /* MIN_BACKDROP_CANVAS_ALPHA — the FLOOR. There is no pane alpha:
+                       there are no panes. */
+  --sans:"Segoe UI Variable Text","Segoe UI",system-ui,sans-serif;
+  --mono:"Cascadia Mono","Consolas",ui-monospace,monospace;
+}
+[data-theme="light"]{
+  --canvas:230 235 243; --panel:255 255 255; --card:255 255 255; --well:212 216 224;
+  --raised:248 250 253; --chip:240 240 240;
+  --hairline:217 223 234; --hairline-strong:191 201 218;
+  --text:19 26 40; --muted:82 93 114; --faint:148 157 176;
+  --good:15 118 87; --warn:145 91 0; --crit:173 52 58;
+  --accent:39 104 210; --sim:8 111 123;
+  --danger-fill:173 52 58; --on-danger:255 255 255; --on-armed:255 255 255;
+  --specular:rgba(255,255,255,.92);
+  --shadow:0 10px 26px rgba(19,26,40,.13), 0 1px 3px rgba(19,26,40,.10);
+}
+/* LADDER PROBE — revert the card to the SHIPPED `panel` token and watch dark die. */
+[data-ladder="old"]{ --card:var(--panel); }
+
+/* ── TIER — and the point is how little changes ────────────────────────── */
+[data-tier="scene"], [data-tier="window"]{
+  --win-bg:rgb(var(--canvas) / var(--canvas-a));   /* the ONLY translucency in the app */
+  --win-blur:blur(42px) saturate(1.35);            /* DWM. Free. Not a MultiEffect. */
+  --card-spec:var(--specular);
+  --elev:var(--shadow);
+}
+[data-tier="token"]{
+  --win-bg:rgb(var(--canvas));
+  --win-blur:none;
+  --card-spec:var(--specular);
+  --elev:var(--shadow);
+}
+[data-tier="flat"]{
+  --win-bg:rgb(var(--canvas));
+  --win-blur:none;
+  --card-spec:transparent;   /* FLAT = plain opaque solids, no specular ... */
+  --elev:none;               /* ... and no shadow. Tone + outline must carry it ALONE. */
+}
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);background:#0b0d10;color:#dfe4ec;padding:20px 20px 60px}
+.page-head{max-width:1240px;margin:0 auto 16px}
+h1{font-size:19px;font-weight:600;letter-spacing:-.2px}
+h1 small{font-weight:400;color:#8b93a3;font-size:13px;margin-left:8px}
+.phil{color:#9aa3b4;font-size:13px;margin-top:6px;max-width:940px;line-height:1.55}
+.phil b{color:#e6eaf2;font-weight:600}
+.switches{max-width:1240px;margin:14px auto;display:flex;gap:18px;flex-wrap:wrap;
+  background:#14171d;border:1px solid #242832;border-radius:12px;padding:12px 14px}
+.sw{display:flex;align-items:center;gap:7px}
+.sw > span{font:600 10px/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;color:#7f8798}
+.sw button{font:600 12px/1 var(--sans);padding:7px 11px;border-radius:7px;cursor:pointer;
+  background:#1c2029;color:#aab2c2;border:1px solid #2b303b;min-height:32px}
+.sw button[aria-pressed="true"]{background:#5AA9FF;color:#04222c;border-color:#5AA9FF}
+.sw button:focus-visible{outline:2px solid #5AA9FF;outline-offset:2px}
+.note{max-width:1240px;margin:0 auto 14px;font-size:12px;color:#7f8798;line-height:1.6}
+.note code{font-family:var(--mono);color:#a9b3c4}
+.note b{color:#c8d0dd}
+
+.stage{max-width:1240px;margin:0 auto;border-radius:18px;overflow:hidden;position:relative;
+  padding:26px;border:1px solid #242832}
+[data-desk="desk"] .stage{background:radial-gradient(900px 500px at 22% 12%,#2f4a6b 0%,#16233a 55%,#0b1220 100%)}
+[data-desk="lab"] .stage{background:linear-gradient(160deg,#eef2f7 0%,#cfd8e6 45%,#aab6c9 100%)}
+[data-desk="worst"] .stage{background:repeating-linear-gradient(52deg,#000 0 26px,#fff 26px 52px)}
+[data-desk="white"] .stage{background:#fff}
+[data-desk="black"] .stage{background:#000}
+
+/* ── the window: the one and only glass surface ───────────────────────── */
+.win{border-radius:var(--r-xl);overflow:hidden;background:var(--win-bg);
+  backdrop-filter:var(--win-blur);-webkit-backdrop-filter:var(--win-blur);
+  border:1px solid rgb(var(--hairline-strong));box-shadow:0 30px 70px rgba(0,0,0,.45)}
+.titlebar{height:32px;display:flex;align-items:center;gap:8px;padding:0 12px;
+  border-bottom:1px solid rgb(var(--hairline));color:rgb(var(--muted));font-size:var(--f-sm)}
+.tb-dot{width:9px;height:9px;border-radius:50%;background:rgb(var(--hairline-strong))}
+.tb-sp{flex:1}
+.tb-tier{font:600 10px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:rgb(var(--muted));border:1px solid rgb(var(--hairline));padding:4px 7px;border-radius:var(--r-sm)}
+
+/* ── the shell grid — NOTHING overlaps. The gutters ARE the glass. ─────── */
+.shell{display:grid;grid-template-columns:76px 1fr;gap:var(--sp-sm);padding:var(--sp-md)}
+.col{display:flex;flex-direction:column;gap:var(--sp-sm);min-width:0}
+
+/* ── CARD — opaque at EVERY tier. THE unit of the design. ─────────────── */
+.card{background:rgb(var(--card));border:1px solid rgb(var(--hairline-strong));
+  border-top:1px solid var(--card-spec);
+  border-radius:var(--r-lg);box-shadow:var(--elev);padding:var(--sp-md);
+  display:flex;flex-direction:column;gap:var(--sp-sm);min-width:0;min-height:0}
+.card h3{font:600 var(--f-metric-label)/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:rgb(var(--muted));display:flex;align-items:center;justify-content:space-between}
+.card h3 em{font-style:normal;color:rgb(var(--muted));font-weight:400;text-transform:none;
+  letter-spacing:0;font-family:var(--sans);font-size:var(--f-xs)}
+
+/* ── VITALS — opaque card. 6-slot grid. Cannot clip: overflow is unrepresentable. */
+.vitals{display:grid;grid-template-columns:repeat(6,minmax(156px,1fr));gap:var(--sp-sm)}
+@media (max-width:1200px){.vitals{grid-template-columns:repeat(3,minmax(156px,1fr))}}
+.vital{display:flex;flex-direction:column;gap:3px;min-width:0;padding:2px 6px;
+  border-left:2px solid rgb(var(--hairline));min-height:62px}
+.vital.hz{border-left-color:rgb(var(--crit))}
+.vital .lbl{font:600 var(--f-metric-label)/1.2 var(--mono);letter-spacing:.08em;
+  text-transform:uppercase;color:rgb(var(--muted));display:flex;align-items:center;gap:5px}
+.vital .val{font:600 var(--f-value-c)/1.15 var(--mono);color:rgb(var(--text));white-space:nowrap}
+.vital .cap{font:var(--f-xs)/1.3 var(--sans);color:rgb(var(--muted));display:flex;align-items:center;gap:5px}
+.lamp{width:9px;height:9px;border-radius:50%;flex:0 0 auto;border:1px solid rgba(0,0,0,.35)}
+.lamp.on{background:rgb(var(--crit))}.lamp.ok{background:rgb(var(--good))}
+.lamp.idle{background:rgb(var(--muted))}.lamp.arm{background:rgb(var(--warn))}
+.glyph{font:700 11px/1 var(--sans)}
+.spark{height:14px;width:100%;display:block}
+.meter{height:4px;background:rgb(var(--well));border-radius:var(--r-pill);overflow:hidden;margin-top:3px}
+.meter i{display:block;height:100%;width:46%;background:rgb(var(--accent))}
+
+/* ── PHASE RAIL ───────────────────────────────────────────────────────── */
+.phase{height:38px;display:flex;align-items:center;gap:var(--sp-sm);padding:0 var(--sp-md);
+  overflow:hidden;background:rgb(var(--card));border:1px solid rgb(var(--hairline-strong));
+  border-radius:var(--r-md);box-shadow:var(--elev)}
+.phase .k{font:600 var(--f-metric-label)/1 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+  color:rgb(var(--muted));margin-right:4px}
+.step{display:flex;align-items:center;gap:6px;font:var(--f-sm)/1 var(--sans);
+  color:rgb(var(--muted));white-space:nowrap}
+.step .d{width:8px;height:8px;border-radius:50%;background:rgb(var(--hairline-strong))}
+.step.now{color:rgb(var(--text));font-weight:600}
+.step.now .d{background:rgb(var(--accent));box-shadow:0 0 0 3px rgb(var(--accent)/.22)}
+.step.done .d{background:rgb(var(--good))}
+.sep{flex:1;height:1px;background:rgb(var(--hairline));min-width:8px}
+
+/* ── SPINE — a real grid TRACK. Opaque. Nothing is under it, so it frosts nothing. */
+.spine{background:rgb(var(--card));border:1px solid rgb(var(--hairline-strong));
+  border-top:1px solid var(--card-spec);border-radius:var(--r-lg);box-shadow:var(--elev);
+  display:flex;flex-direction:column;padding:var(--sp-sm) 0;gap:2px}
+.nav{display:flex;flex-direction:column;align-items:center;gap:3px;padding:7px 2px;cursor:pointer;
+  color:rgb(var(--muted));border-left:2px solid transparent;min-height:48px;justify-content:center}
+.nav i{font-style:normal;font-size:15px;line-height:1}
+.nav span{font:600 9px/1.1 var(--sans);text-align:center}
+.nav.sel{color:rgb(var(--text));border-left-color:rgb(var(--accent));background:rgb(var(--accent)/.14)}
+.nav:focus-visible{outline:2px solid rgb(var(--accent));outline-offset:-2px}
+.spine .foot{margin-top:auto;padding:8px 6px;border-top:1px solid rgb(var(--hairline));text-align:center}
+.dots{display:flex;gap:3px;justify-content:center;margin-bottom:4px}
+.dots i{width:6px;height:6px;border-radius:50%;background:rgb(var(--good));display:block}
+.dots i.off{background:rgb(var(--muted));opacity:.45}
+.spine .foot span{font:600 9px/1 var(--mono);color:rgb(var(--muted))}
+
+/* ── WORKSPACE — a grid. The DRAWER is a TRACK: it PUSHES, never covers. ── */
+.ws{display:grid;grid-template-columns:300px 1fr 284px;grid-template-rows:1fr 1fr;
+  gap:var(--sp-sm);height:404px;transition:grid-template-columns .2s ease}
+[data-drawer="closed"] .ws{grid-template-columns:300px 1fr 0px}
+[data-drawer="closed"] .drawer{display:none}
+.drawer{grid-row:1 / span 2;overflow:hidden}
+.drawer h2{font:600 var(--f-lg)/1.2 var(--sans);color:rgb(var(--text))}
+.drawer p{font:var(--f-sm)/1.5 var(--sans);color:rgb(var(--muted))}
+
+/* ── WELL — opaque. Values live here. `well` may ONLY sit on a `card`. ─── */
+.well{background:rgb(var(--well));border:1px solid rgb(var(--hairline));
+  border-radius:var(--r-md);padding:var(--sp-sm) var(--sp-md)}
+.well .k{font:600 var(--f-metric-label)/1.4 var(--mono);letter-spacing:.08em;
+  text-transform:uppercase;color:rgb(var(--muted))}
+.well .v{font:600 var(--f-value)/1.1 var(--mono);color:rgb(var(--text))}
+.well .v u{font:400 var(--f-unit)/1 var(--sans);color:rgb(var(--muted));text-decoration:none;margin-left:4px}
+.row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:var(--sp-sm)}
+.row3 .well .v{font-size:var(--f-value-c)}
+
+/* ── the DANGER WELL — panel-owned, opaque at every tier, by law ───────── */
+.danger{background:rgb(var(--well));border:1px solid rgb(var(--crit));border-radius:var(--r-md);
+  padding:var(--sp-sm) var(--sp-md);display:flex;align-items:center;gap:var(--sp-sm);margin-top:auto}
+.danger .t{flex:1;min-width:0}
+.danger .t b{display:block;font:600 var(--f-sm)/1.3 var(--sans);color:rgb(var(--text))}
+.danger .t span{font:var(--f-xs)/1.3 var(--sans);color:rgb(var(--muted))}
+.btn-danger{background:rgb(var(--danger-fill));color:rgb(var(--on-danger));border:1px solid rgb(var(--crit));
+  font:600 var(--f-md)/1 var(--sans);padding:0 14px;height:40px;min-width:112px;
+  border-radius:var(--r-sm);cursor:pointer}
+.btn-danger:focus-visible{outline:3px solid rgb(var(--accent));outline-offset:2px}
+.armlatch{font:600 10px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  color:rgb(var(--muted));border:1px dashed rgb(var(--hairline-strong));padding:5px 7px;border-radius:var(--r-sm)}
+
+.island{flex:1;min-height:0;background:var(--plot-bg);border:1px solid rgb(var(--hairline));
+  border-radius:var(--r-md);position:relative;overflow:hidden}
+.island::after{content:"ISLAND · opaque, cheap, never frosted";position:absolute;right:6px;bottom:5px;
+  font:600 9px/1 var(--mono);color:#5c6674}
+.cam{background:linear-gradient(120deg,#0f1318,#2a3340 40%,#8b96a6 70%,#e8edf4 100%)}
+.cam::after{content:"CAMERA ISLAND · opaque"}
+
+/* ── measurement panes ────────────────────────────────────────────────── */
+.meterbox{max-width:1240px;margin:22px auto 0;background:#14171d;border:1px solid #242832;
+  border-radius:14px;padding:16px 18px}
+.meterbox h2{font-size:14px;margin-bottom:4px;color:#e6eaf2}
+.meterbox .sub{font-size:12px;color:#7f8798;margin-bottom:12px;line-height:1.6}
+.meterbox .sub b{color:#c8d0dd}
+table{width:100%;border-collapse:collapse;font:12px/1.4 var(--mono)}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #232833}
+th{font:600 10px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:#7f8798}
+td.n{text-align:right;font-variant-numeric:tabular-nums}
+.pass{color:#3DD68C}.fail{color:#FF5A61;font-weight:700}.na{color:#7f8798}
+.pill{display:inline-block;font:600 9px/1 var(--mono);padding:3px 5px;border-radius:4px;margin-left:6px}
+.pill.p{background:rgba(61,214,140,.16);color:#3DD68C}
+.pill.f{background:rgba(255,90,97,.18);color:#FF5A61}
+.budget{margin-top:14px;padding:10px 12px;border-radius:10px;background:#191d25;border:1px solid #262b36;
+  font:12px/1.7 var(--mono);color:#aab2c2}
+.budget b{color:#3DD68C}
+.budget .bad{color:#FF5A61}
+.satellites{max-width:1240px;margin:22px auto 0;display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.satwrap{border-radius:14px;padding:18px;border:1px solid #242832;position:relative}
+[data-desk="worst"] .satwrap{background:repeating-linear-gradient(52deg,#000 0 26px,#fff 26px 52px)}
+[data-desk="white"] .satwrap{background:#fff}
+[data-desk="black"] .satwrap{background:#000}
+[data-desk="desk"] .satwrap{background:radial-gradient(600px 300px at 30% 10%,#2f4a6b,#0b1220)}
+[data-desk="lab"] .satwrap{background:linear-gradient(160deg,#eef2f7,#aab6c9)}
+.satlabel{position:absolute;top:-9px;left:14px;background:#14171d;color:#9aa3b4;
+  font:600 9px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;padding:4px 7px;
+  border-radius:5px;border:1px solid #242832}
+.satwin{border-radius:var(--r-lg);overflow:hidden;background:var(--win-bg);
+  backdrop-filter:var(--win-blur);-webkit-backdrop-filter:var(--win-blur);
+  border:1px solid rgb(var(--hairline-strong));box-shadow:0 20px 44px rgba(0,0,0,.4)}
+.satbody{padding:var(--sp-md);display:flex;flex-direction:column;gap:var(--sp-sm)}
+.okbox{margin-top:10px;font:12px/1.6 var(--sans);color:#3DD68C;background:rgba(61,214,140,.08);
+  border:1px solid rgba(61,214,140,.28);border-radius:8px;padding:8px 10px}
+.warnbox{margin-top:10px;font:12px/1.6 var(--sans);color:#FFB84D;background:rgba(255,184,77,.08);
+  border:1px solid rgba(255,184,77,.3);border-radius:8px;padding:8px 10px}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>Candidate AMBIENT <small>— The Tiled Cockpit · GlassShell round 02 · Brokkr</small></h1>
+  <p class="phil"><b>The window is glass. The instrument is not.</b> Zero <code>MultiEffect</code>
+  panes, in any window, at any tier. The only translucent surface in the whole application is the
+  window's own unclaimed background — the 8 px gutters. Nothing that carries information ever sits on
+  it, so <b>the FLAT tier is not a degradation: it is this design with the gutters filled in.</b>
+  Flip Tier → FLAT and watch nothing move.</p>
+</div>
+
+<div class="switches">
+  <div class="sw"><span>Theme</span>
+    <button data-set="theme" data-val="dark"  aria-pressed="true">Dark</button>
+    <button data-set="theme" data-val="light" aria-pressed="false">Light</button></div>
+  <div class="sw"><span>Tier</span>
+    <button data-set="tier" data-val="scene"  aria-pressed="true">SCENE</button>
+    <button data-set="tier" data-val="window" aria-pressed="false">WINDOW</button>
+    <button data-set="tier" data-val="token"  aria-pressed="false">TOKEN</button>
+    <button data-set="tier" data-val="flat"   aria-pressed="false">FLAT</button></div>
+  <div class="sw"><span>Desktop</span>
+    <button data-set="desk" data-val="worst" aria-pressed="true">Worst case</button>
+    <button data-set="desk" data-val="white" aria-pressed="false">White</button>
+    <button data-set="desk" data-val="black" aria-pressed="false">Black</button>
+    <button data-set="desk" data-val="desk"  aria-pressed="false">Desk</button>
+    <button data-set="desk" data-val="lab"   aria-pressed="false">Lab light</button></div>
+  <div class="sw"><span>Ladder probe</span>
+    <button data-set="ladder" data-val="new" aria-pressed="true">NEW <code>card</code></button>
+    <button data-set="ladder" data-val="old" aria-pressed="false">shipped <code>panel</code></button></div>
+  <div class="sw"><span>Drawer</span>
+    <button data-set="drawer" data-val="open"   aria-pressed="true">Open</button>
+    <button data-set="drawer" data-val="closed" aria-pressed="false">Closed</button></div>
+</div>
+
+<p class="note">
+  <b>Two switches carry this candidate's whole argument.</b><br>
+  <b>1 · Tier.</b> Go <code>SCENE → WINDOW → TOKEN → FLAT</code>. Nothing shifts but the gutters and
+  (at FLAT) the shadow and the specular edge. Every readout, every tone, every contrast ratio is
+  identical. That is the pitch — and it is also the confession that the glass programme is buying
+  very little.<br>
+  <b>2 · Ladder probe.</b> Switch the card body back to the <b>shipped <code>panel</code></b> token,
+  in <b>dark</b>, at <b>FLAT</b>. The cards <em>disappear</em>: <code>canvas → panel</code> measures
+  <b>1.03 : 1 / ΔL* 1.47</b> in the shipped dark palette. The "three-tone FLAT ladder" round 01
+  inherited from candidate C <b>does not exist in dark</b>. That is why the new <code>card</code>
+  token is not a nicety — without it, this candidate has nothing at all.
+</p>
+
+<div class="stage">
+  <div class="win">
+    <div class="titlebar">
+      <div class="tb-dot"></div><span>TCT Setup Control</span><div class="tb-sp"></div>
+      <span class="tb-tier" id="tierBadge">SCENE · 0 frosted panes</span>
+    </div>
+
+    <div class="shell">
+      <!-- SPINE — a grid track. Opaque. Costs nothing, hides nothing. -->
+      <nav class="spine" aria-label="Panels" style="grid-row:1 / span 3">
+        <div class="nav sel" tabindex="0"><i>◧</i><span>Motor</span></div>
+        <div class="nav" tabindex="0"><i>∿</i><span>Scope</span></div>
+        <div class="nav" tabindex="0"><i>◉</i><span>Camera</span></div>
+        <div class="nav" tabindex="0"><i>⚡</i><span>Bias</span></div>
+        <div class="nav" tabindex="0"><i>◈</i><span>Laser</span></div>
+        <div class="nav" tabindex="0"><i>▦</i><span>Planner</span></div>
+        <div class="nav" tabindex="0"><i>▶</i><span>Sequencer</span></div>
+        <div class="foot">
+          <div class="dots"><i></i><i></i><i></i><i></i><i class="off"></i><i class="off"></i></div>
+          <span>4/6</span>
+        </div>
+      </nav>
+
+      <div class="col">
+        <!-- VITALS — opaque card, 6-slot grid, hazard surface -->
+        <div class="card vitals" role="group" aria-label="Vitals">
+          <div class="vital hz">
+            <div class="lbl"><span class="lamp on"></span>HV</div>
+            <div class="val">+412.0 <span style="font:400 11px var(--sans);color:rgb(var(--muted))">V</span></div>
+            <div class="cap"><span class="glyph">●</span>output ON · ch 1</div>
+          </div>
+          <div class="vital hz">
+            <div class="lbl"><span class="lamp arm"></span>LEAKAGE</div>
+            <div class="val">1.84 <span style="font:400 11px var(--sans);color:rgb(var(--muted))">µA</span></div>
+            <svg class="spark" viewBox="0 0 100 14" preserveAspectRatio="none" aria-hidden="true">
+              <polyline points="0,11 12,10 24,10 36,9 48,8 60,7 72,6 84,4 100,3"
+                fill="none" stroke="rgb(var(--warn))" stroke-width="1.4"/></svg>
+            <div class="cap"><span class="glyph">▲</span>rising · 60 s</div>
+          </div>
+          <div class="vital hz">
+            <div class="lbl"><span class="lamp ok"></span>COMPLIANCE</div>
+            <div class="val">OK</div>
+            <div class="cap"><span class="glyph">■</span>limit 5.0 µA</div>
+          </div>
+          <div class="vital hz">
+            <div class="lbl"><span class="lamp idle"></span>MOTION</div>
+            <div class="val" style="font-size:14px">X 12.40 Y 8.10 Z 2.05</div>
+            <div class="cap"><span class="glyph">⌂</span>homed · idle</div>
+          </div>
+          <div class="vital hz">
+            <div class="lbl"><span class="lamp on"></span>LASER</div>
+            <div class="val">TRIG ON</div>
+            <div class="cap"><span class="glyph">●</span>1 kHz · ext</div>
+          </div>
+          <div class="vital">
+            <div class="lbl"><span class="lamp ok"></span>SCAN</div>
+            <div class="val">412<span style="color:rgb(var(--muted))">/900</span></div>
+            <div class="meter"><i></i></div>
+            <div class="cap">RUNNING · ETA 4 m 12 s</div>
+          </div>
+        </div>
+
+        <div class="phase">
+          <span class="k">Phase</span>
+          <span class="step done"><span class="d"></span>Idle</span><span class="sep"></span>
+          <span class="step done"><span class="d"></span>Armed</span><span class="sep"></span>
+          <span class="step done"><span class="d"></span>Homed</span><span class="sep"></span>
+          <span class="step now"><span class="d"></span>Scanning</span><span class="sep"></span>
+          <span class="step"><span class="d"></span>Settling</span><span class="sep"></span>
+          <span class="step"><span class="d"></span>Done</span>
+        </div>
+
+        <!-- WORKSPACE — a grid. The drawer is a TRACK. Nothing ever overlaps. -->
+        <div class="ws">
+          <div class="card" style="grid-row:1 / span 2">
+            <h3>Bias supply <em>ISEG · ch 1</em></h3>
+            <div class="well"><div class="k">Measured</div><div class="v">+412.0<u>V</u></div></div>
+            <div class="row3">
+              <div class="well"><div class="k">I</div><div class="v">1.84<u>µA</u></div></div>
+              <div class="well"><div class="k">Ramp</div><div class="v">20<u>V/s</u></div></div>
+              <div class="well"><div class="k">Limit</div><div class="v">5.0<u>µA</u></div></div>
+            </div>
+            <div class="danger">
+              <div class="t"><b>HV output is LIVE</b><span>Panel-owned. The shell displays it; the shell cannot trigger it.</span></div>
+              <span class="armlatch">Hold 2 s</span>
+              <button class="btn-danger">Ramp down</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Oscilloscope <em>DRS4 · 2 ch</em></h3>
+            <div class="island">
+              <svg style="position:absolute;inset:0" viewBox="0 0 400 120" preserveAspectRatio="none" aria-hidden="true">
+                <g stroke="#242a33" stroke-width="1">
+                  <line x1="0" y1="30" x2="400" y2="30"/><line x1="0" y1="60" x2="400" y2="60"/>
+                  <line x1="0" y1="90" x2="400" y2="90"/><line x1="100" y1="0" x2="100" y2="120"/>
+                  <line x1="200" y1="0" x2="200" y2="120"/><line x1="300" y1="0" x2="300" y2="120"/></g>
+                <polyline fill="none" stroke="#5AA9FF" stroke-width="1.6"
+                  points="0,60 60,59 90,61 110,22 130,88 150,52 175,64 200,58 240,61 300,59 400,60"/>
+                <polyline fill="none" stroke="#ffb454" stroke-width="1.2" opacity=".8"
+                  points="0,92 80,91 110,70 140,96 200,90 400,92"/>
+              </svg>
+            </div>
+          </div>
+
+          <!-- DRAWER — a grid TRACK. It PUSHES. It never covers. -->
+          <aside class="card drawer" aria-label="Inspector">
+            <h3>Inspector <em>scan point 412</em></h3>
+            <h2>128.4 fC</h2>
+            <p>The drawer is a <b>grid track</b>, not an overlay. Close it and the workspace re-lays.
+              Nothing is ever hidden behind anything — <b>and that is also this candidate's cost:
+              opening it resizes the plot, mid-run.</b></p>
+            <div class="well"><div class="k">Position</div><div class="v" style="font-size:18px">12.40, 8.10</div></div>
+            <div class="row3">
+              <div class="well"><div class="k">ToT</div><div class="v" style="font-size:15px">31</div></div>
+              <div class="well"><div class="k">σ</div><div class="v" style="font-size:15px">2.1</div></div>
+              <div class="well"><div class="k">N</div><div class="v" style="font-size:15px">64</div></div>
+            </div>
+          </aside>
+
+          <div class="card">
+            <h3>Camera <em>Blackfly · 30 fps</em></h3>
+            <div class="island cam"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="satellites">
+  <div class="satwrap"><span class="satlabel">Detached panel · own HWND · own DWM material</span>
+    <div class="satwin">
+      <div class="titlebar"><div class="tb-dot"></div><span>Bias Supply — detached</span>
+        <div class="tb-sp"></div><span class="tb-tier">0 frosted panes</span></div>
+      <div class="satbody">
+        <div class="card">
+          <h3>Bias supply <em>ISEG · ch 1</em></h3>
+          <div class="well"><div class="k">Measured</div><div class="v">+412.0<u>V</u></div></div>
+          <div class="danger">
+            <div class="t"><b>HV output is LIVE</b><span>Same rules. Same tones. Same contrast.</span></div>
+            <button class="btn-danger">Ramp down</button>
+          </div>
+        </div>
+        <div class="okbox"><b>Zero exceptions.</b> A card is a card wherever it lives. The detached
+          window gets its own DWM material on its own HWND (ratified) and its cards are the same
+          opaque cards. No code change, no special case, no per-window depth logic.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="satwrap"><span class="satlabel">Trigger dialog · ROI dialog · device manager</span>
+    <div class="satwin">
+      <div class="titlebar"><div class="tb-dot"></div><span>Trigger — Oscilloscope</span>
+        <div class="tb-sp"></div><span class="tb-tier">separate HWND</span></div>
+      <div class="satbody">
+        <div class="card">
+          <h3>Trigger <em>_TriggerDialog · floating</em></h3>
+          <div class="row3">
+            <div class="well"><div class="k">Source</div><div class="v" style="font-size:15px">CH1</div></div>
+            <div class="well"><div class="k">Level</div><div class="v" style="font-size:15px">-12 mV</div></div>
+            <div class="well"><div class="k">Slope</div><div class="v" style="font-size:15px">↓</div></div>
+          </div>
+        </div>
+        <div class="okbox"><b>AMBIENT's quiet structural win.</b> Its depth language is a statement
+          about <em>windows</em> — and <code>_TriggerDialog</code>, <code>_ROIDialog</code> and
+          <code>device_panel</code> all genuinely <em>are</em> windows. Zero exceptions, zero rewrites
+          of <code>scope_panel.py</code> / <code>camera_panel.py</code>.
+          (STRUCTURAL needs both.)</div>
+        <div class="warnbox"><b>And the honest counterweight:</b> if the only thing the whole glass
+          ladder buys is a faintly transparent 8 px gutter, then AMBIENT does not justify the glass
+          programme — it quietly <em>indicts</em> it. Kaya should be told that, not discover it.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="meterbox">
+  <h2>Contrast meter — live, composited, at the FLOOR alpha</h2>
+  <p class="sub">
+    <b>The point of this table is that it is boring.</b> AMBIENT puts no information on glass, so every
+    ink sits on an <b>opaque</b> <code>card</code> and its contrast is <b>identical at every tier and
+    over every desktop</b>. The only thing that touches the glass canvas is the card <b>edge</b> —
+    measured separately below, against both a white and a black desktop, at
+    <code>MIN_BACKDROP_CANVAS_ALPHA = 0.80</code>.
+  </p>
+  <table id="meter">
+    <thead><tr>
+      <th>ink</th><th class="n">on <code>card</code></th><th class="n">worst over ANY desktop</th>
+      <th class="n">AA text 4.5</th><th>note</th>
+    </tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="budget" id="budget"></div>
+</div>
+
+<script>
+document.querySelectorAll('.sw button').forEach(b=>{
+  b.addEventListener('click',()=>{
+    document.documentElement.setAttribute('data-'+b.dataset.set, b.dataset.val);
+    b.parentElement.querySelectorAll('button').forEach(x=>
+      x.setAttribute('aria-pressed', String(x===b)));
+    render();
+  });
+});
+
+const TOK={
+  dark:{canvas:[10,13,19], panel:[13,17,26], cardNew:[21,29,45], well:[7,10,15],
+        hairline:[39,52,74], hairlineStrong:[51,65,89],
+        text:[233,237,245], muted:[152,161,181], faint:[91,101,122],
+        good:[61,214,140], warn:[255,184,77], crit:[255,90,97],
+        accent:[90,169,255], sim:[65,216,228]},
+  light:{canvas:[230,235,243], panel:[255,255,255], cardNew:[255,255,255], well:[212,216,224],
+        hairline:[217,223,234], hairlineStrong:[191,201,218],
+        text:[19,26,40], muted:[82,93,114], faint:[148,157,176],
+        good:[15,118,87], warn:[145,91,0], crit:[173,52,58],
+        accent:[39,104,210], sim:[8,111,123]}
+};
+const CANVAS_A=0.80;
+const lin=c=>{c/=255; return c<=0.03928? c/12.92 : Math.pow((c+0.055)/1.055,2.4);};
+const L=([r,g,b])=>0.2126*lin(r)+0.7152*lin(g)+0.0722*lin(b);
+const CR=(a,b)=>{const x=L(a),y=L(b),hi=Math.max(x,y),lo=Math.min(x,y);return (hi+0.05)/(lo+0.05);};
+const over=(fg,bg,a)=>fg.map((c,i)=>c*a+bg[i]*(1-a));
+const hex=c=>'#'+c.map(v=>Math.round(v).toString(16).padStart(2,'0')).join('');
+/* CIE L* — the right ruler for SURFACE separation. WCAG ratios flatten near black. */
+const Lstar=c=>{const y=L(c); const f = y>0.008856 ? Math.cbrt(y) : 7.787*y + 16/116; return 116*f-16;};
+
+const INKS=['text','muted','good','warn','crit','accent','sim','faint'];
+
+function render(){
+  const theme=document.documentElement.dataset.theme;
+  const tier =document.documentElement.dataset.tier;
+  const ladder=document.documentElement.dataset.ladder;
+  const P=TOK[theme];
+  const card = (ladder==='new') ? P.cardNew : P.panel;
+
+  const tb=document.querySelector('#meter tbody'); tb.innerHTML='';
+  for(const ink of INKS){
+    const r = CR(P[ink], card);                       /* opaque. desktop cannot reach it. */
+    const retired = (ink==='faint');
+    tb.insertAdjacentHTML('beforeend',`<tr>
+      <td><span style="display:inline-block;width:10px;height:10px;border-radius:2px;
+           background:${hex(P[ink])};margin-right:6px;vertical-align:-1px;outline:1px solid #333"></span>${ink}</td>
+      <td class="n ${r>=4.5?'pass':'fail'}">${r.toFixed(2)}</td>
+      <td class="n ${r>=4.5?'pass':'fail'}">${r.toFixed(2)} <span class="na">(same)</span></td>
+      <td class="n">${r>=4.5?'<span class="pill p">PASS</span>':'<span class="pill f">FAIL</span>'}</td>
+      <td class="${retired?'na':'pass'}">${retired
+        ? 'retired for text (repo law) — decoration / disabled only'
+        : 'opaque surface ⇒ tier-independent, desktop-independent'}</td></tr>`);
+  }
+
+  /* the ONE thing AMBIENT puts against glass: the card EDGE. */
+  const rows=[];
+  for(const [dn,desk] of [['white',[255,255,255]],['black',[0,0,0]]]){
+    const cg = over(P.canvas, desk, CANVAS_A);
+    rows.push(
+      `desk ${dn.padEnd(5)} → glass canvas ${hex(cg)} · `+
+      `card body ΔL* <b>${(Math.abs(Lstar(card)-Lstar(cg))).toFixed(2)}</b> · `+
+      `<code>hairline</code> ${CR(P.hairline,cg).toFixed(2)}:1 · `+
+      `<b>hairline_strong ${CR(P.hairlineStrong,cg).toFixed(2)}:1</b>`);
+  }
+  const dL_cardCanvas = Math.abs(Lstar(card)-Lstar(P.canvas));
+  const dL_cardWell   = Math.abs(Lstar(card)-Lstar(P.well));
+  const ladderBad = dL_cardCanvas < 4;
+
+  document.getElementById('tierBadge').textContent = tier.toUpperCase()+' · 0 frosted panes';
+  document.getElementById('budget').innerHTML =
+    `<b>MultiEffect budget — 0 panes. +0 pp CPU. At every tier, in every window.</b><br>`+
+    `<br><b>The FLAT ladder</b> (ΔL*, the perceptual step — WCAG ratios are the wrong ruler near black):<br>`+
+    `&nbsp;&nbsp;container <code>canvas</code> → card <code>${ladder==='new'?'card (NEW)':'panel (SHIPPED)'}</code>: `+
+    `<span class="${ladderBad?'bad':''}">ΔL* <b class="${ladderBad?'bad':''}">${dL_cardCanvas.toFixed(2)}</b>`+
+    `${ladderBad?' ← BELOW THE PRACTICAL JND. The cards are gone.':' ✓'}</span><br>`+
+    `&nbsp;&nbsp;card → <code>well</code>: ΔL* <b>${dL_cardWell.toFixed(2)}</b> (a well may ONLY sit on a card — `+
+    `on the canvas it is ΔL* ${(Math.abs(Lstar(P.well)-Lstar(P.canvas))).toFixed(2)}, i.e. invisible)<br>`+
+    `<br><b>The card EDGE — the only thing AMBIENT ever puts against glass:</b><br>&nbsp;&nbsp;`+
+    rows.join('<br>&nbsp;&nbsp;');
+}
+render();
+</script>
+</body>
+</html>

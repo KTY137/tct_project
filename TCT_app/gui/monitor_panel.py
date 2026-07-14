@@ -8,6 +8,7 @@ SlowControlManager via a QTimer — no background threads needed.
 from __future__ import annotations
 
 import collections
+import logging
 import math
 import time
 from typing import TYPE_CHECKING
@@ -29,11 +30,14 @@ except ImportError:
 from devices.slow_control_base import AlarmStatus, SlowControlReading
 from gui.app_settings import theme_mode
 from gui.panel_kit import Card, FigureCard, MetricGrid, MetricTile, panel_header
+from gui.status_bus import notify, set_alarm
 from gui.status_widgets import StatusChip, set_button_icon
 from gui.style import DARK, LIGHT, SPACE_SM
 
 if TYPE_CHECKING:
     from controller.slow_control_manager import SlowControlManager
+
+logger = logging.getLogger(__name__)
 
 # How many history points to keep per channel
 _HISTORY_LEN = 600
@@ -56,6 +60,41 @@ _BANNER_SEVERITY: dict[AlarmStatus, int] = {
     AlarmStatus.UNAVAILABLE: 2,
     AlarmStatus.ALARM_LOW:   3,
     AlarmStatus.ALARM_HIGH:  3,
+}
+
+# ── App-wide alarm announcer (TECH_DEBT round-01, "the alarm with no home") ──
+# A slow-control ALARM used to exist ONLY as a coloured row in this tab's
+# table. During a scan the machine supervises itself (ScanController's
+# slow-control policy auto-holds/auto-aborts), but during a MANUAL HV ramp at
+# the bench -- exactly when nothing supervises and a human is at the probe
+# station -- an operator sitting on the Bias or Motor tab could not see the
+# alarm at all. Transitions are therefore pushed onto the app-wide status bus
+# (gui/status_bus.py), the same mechanism every other panel already uses:
+#   notify()    -> the human-readable event (status bar + Log dock), and
+#   set_alarm() -> the sticky worst-state headline for a persistent indicator.
+#
+# Storm control: an announcement fires on a CLASS transition (OK / WARN /
+# UNAVAILABLE / ALARM, ranked by _BANNER_SEVERITY above), never once per poll
+# -- a notification storm is how a real alarm gets ignored. Escalations are
+# announced on the FIRST poll that sees them: a hazard is never delayed.
+# Improvements (including "cleared") must instead persist for
+# _CLEAR_HOLD_POLLS consecutive polls before they are announced, which kills
+# the dominant storm mode -- a value dithering across its limit would
+# otherwise alternate "ALARM"/"cleared" forever. Holding an IMPROVEMENT is
+# always safe; holding an escalation would not be, so we never do.
+_CLEAR_HOLD_POLLS = 2
+
+_ALARM_STATUSES = (AlarmStatus.ALARM_LOW, AlarmStatus.ALARM_HIGH)
+_WARN_STATUSES  = (AlarmStatus.WARN_LOW, AlarmStatus.WARN_HIGH)
+
+# status -> (AlarmThresholds attribute, direction word) so the message can NAME
+# the limit that was crossed: "ALARM - Temperature 31.4 °C (above limit 30 °C)".
+# A bare "slow-control alarm" gives an operator nothing to act on.
+_LIMIT_FOR: dict[AlarmStatus, tuple[str, str]] = {
+    AlarmStatus.ALARM_HIGH: ("alarm_high", "above"),
+    AlarmStatus.ALARM_LOW:  ("alarm_low",  "below"),
+    AlarmStatus.WARN_HIGH:  ("warn_high",  "above"),
+    AlarmStatus.WARN_LOW:   ("warn_low",   "below"),
 }
 
 # The four headline dashboard tiles (design system §7 "Monitor: 4
@@ -118,6 +157,15 @@ class MonitorPanel(QWidget):
         # Read once from the same QSettings key main.py/tct_gui.py use,
         # mirroring MotorPanel/BiasPanel; see refresh_theme() below.
         self._theme_mode = theme_mode()
+        # ── Alarm announcer state (see _CLEAR_HOLD_POLLS above) ───────────
+        # Last ANNOUNCED status per channel. A channel absent here is treated
+        # as OK, so a panel that opens straight into a hot box announces the
+        # alarm on its first poll instead of adopting it silently.
+        self._alarm_announced: dict[str, AlarmStatus] = {}
+        # Pending IMPROVEMENT per channel: (status, consecutive_polls_seen).
+        self._alarm_pending: dict[str, tuple[AlarmStatus, int]] = {}
+        # Last sticky headline emitted on the bus — emit only on change.
+        self._alarm_headline: tuple[str, str] = ("", "")
         self._build_ui()
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._poll)
@@ -304,6 +352,15 @@ class MonitorPanel(QWidget):
         self._store_history(readings)
         self._update_plot()
         self._update_alarm_banner(readings)
+        # App-wide announcement runs AFTER this tab's own widgets are already
+        # updated, and can never take the poll loop down with it: the Monitor
+        # tab must keep working exactly as before even if the status bus is
+        # unavailable (fail safe and quiet).
+        try:
+            self._announce_alarms(readings)
+        except Exception:                                   # pragma: no cover
+            logger.exception(
+                "Slow-control alarm announcer failed — polling continues")
         if self._influx is not None:
             self._influx.write_readings(readings)
 
@@ -476,6 +533,140 @@ class MonitorPanel(QWidget):
                 f"Stale {age_s:.0f}s" if stale else "Fresh",
                 "warn" if stale else "neutral",
             )
+
+    # ------------------------------------------------------------------ #
+    # App-wide alarm announcer                                            #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _rank(status: AlarmStatus) -> int:
+        return _BANNER_SEVERITY.get(status, 0)
+
+    def _safe_notify(self, text: str, level: str) -> None:
+        """Push one event onto the app-wide status bus, never letting a broken
+        sink break the poll loop (fail safe and quiet). The Monitor tab's own
+        table/tiles/banner are already updated by the time we get here."""
+        try:
+            notify(text, level)
+        except Exception:
+            logger.exception("Alarm notify failed (%s) — polling continues", text)
+
+    def _limit_text(self, name: str, status: AlarmStatus, unit: str) -> str:
+        """" (above limit 30 °C)" for the threshold this status crossed — or
+        "" when the channel exposes no thresholds (duck-typed managers, and
+        UNAVAILABLE/OK, which cross nothing)."""
+        spec = _LIMIT_FOR.get(status)
+        if spec is None:
+            return ""
+        attr, direction = spec
+        ch = next((c for c in self._manager.channels if c.name == name), None)
+        thresholds = getattr(ch, "thresholds", None)
+        limit = getattr(thresholds, attr, None) if thresholds is not None else None
+        if limit is None:
+            return ""
+        shown = f"{float(limit):g} {unit}".strip()
+        return f" ({direction} limit {shown})"
+
+    def _announce(self, r: SlowControlReading, previous: AlarmStatus) -> None:
+        """One human-readable transition message. Never colour-only: the state
+        word (ALARM / WARN / SENSOR LOST / OK) is carried by the TEXT, so it
+        survives the FLAT glass tier, a frostless RDP session and a
+        colour-blind operator — the status bar and the Log dock both render it
+        as plain text."""
+        label = friendly_channel_name(r.name)
+        unit  = (r.unit or "").strip()
+        value = "N/A" if math.isnan(r.value) else f"{r.value:.4g}"
+        shown = f"{value} {unit}".strip()
+        status = r.status
+        limit = self._limit_text(r.name, status, unit)
+
+        if status in _ALARM_STATUSES:
+            self._safe_notify(f"ALARM — {label} {shown}{limit}", "error")
+        elif status in _WARN_STATUSES:
+            # An ALARM that eases to WARN is an improvement, but it is still a
+            # CHANGE the operator must hear about — never swallowed silently.
+            eased = " — eased from ALARM" if previous in _ALARM_STATUSES else ""
+            self._safe_notify(f"WARN — {label} {shown}{limit}{eased}", "warn")
+        elif status == AlarmStatus.UNAVAILABLE:
+            # Law 7: "we don't know" is its own state. A sensor that stopped
+            # answering during a manual HV ramp is not "fine".
+            self._safe_notify(
+                f"SENSOR LOST — {label} is not responding", "warn")
+        else:  # back to OK
+            if previous == AlarmStatus.UNAVAILABLE:
+                self._safe_notify(
+                    f"OK — {label} {shown} — sensor readings restored", "info")
+            else:
+                was = "Alarm" if previous in _ALARM_STATUSES else "Warning"
+                self._safe_notify(
+                    f"OK — {label} {shown} back within limits "
+                    f"({was.lower()} cleared)", "info")
+
+    def _announce_alarms(self, readings: dict[str, SlowControlReading]) -> None:
+        """Fire per-channel transition messages, then publish the sticky
+        worst-state headline. Called once per poll; announces nothing while
+        the state is unchanged."""
+        for name, r in readings.items():
+            previous = self._alarm_announced.get(name, AlarmStatus.OK)
+            now, was = self._rank(r.status), self._rank(previous)
+            if now == was:
+                # Same severity class (e.g. WARN_LOW -> WARN_HIGH): no news.
+                # Any pending improvement is void — the channel came back.
+                self._alarm_pending.pop(name, None)
+                self._alarm_announced[name] = r.status
+                continue
+            if now > was:
+                # Escalation — announce immediately, never held back.
+                self._alarm_pending.pop(name, None)
+                self._alarm_announced[name] = r.status
+                self._announce(r, previous)
+                continue
+            # Improvement — only once it has held for _CLEAR_HOLD_POLLS polls
+            # (anti-flap; see the module note). A value dithering across its
+            # limit therefore stays quiet instead of storming.
+            held, count = self._alarm_pending.get(name, (r.status, 0))
+            count = count + 1 if self._rank(held) == now else 1
+            if count >= _CLEAR_HOLD_POLLS:
+                self._alarm_pending.pop(name, None)
+                self._alarm_announced[name] = r.status
+                self._announce(r, previous)
+            else:
+                self._alarm_pending[name] = (r.status, count)
+        self._publish_headline(readings)
+
+    def _publish_headline(self, readings: dict[str, SlowControlReading]) -> None:
+        """Sticky worst-state headline for a persistent, app-wide indicator
+        (status-bar chip) — visible from every tab and every detached window,
+        for as long as the hazard lasts, unlike a transient status message.
+
+        Deliberately carries NO live value: a steady alarm whose number drifts
+        must not re-emit. The number lives in the notify() message and on the
+        Monitor tab."""
+        worst = AlarmStatus.OK
+        for r in readings.values():
+            if self._rank(r.status) > self._rank(worst):
+                worst = r.status
+        offenders = [r for r in readings.values()
+                     if self._rank(r.status) == self._rank(worst)]
+        extra = f" +{len(offenders) - 1} more" if len(offenders) > 1 else ""
+        first = friendly_channel_name(offenders[0].name) if offenders else ""
+
+        if worst in _ALARM_STATUSES:
+            headline, level = f"ALARM · {first}{extra}", "error"
+        elif worst == AlarmStatus.UNAVAILABLE:
+            headline, level = f"SENSOR LOST · {first}{extra}", "warn"
+        elif worst in _WARN_STATUSES:
+            headline, level = f"WARN · {first}{extra}", "warn"
+        else:
+            headline, level = "", ""
+
+        if (headline, level) == self._alarm_headline:
+            return
+        self._alarm_headline = (headline, level)
+        try:
+            set_alarm(headline, level)
+        except Exception:
+            logger.exception("Alarm headline publish failed — polling continues")
 
     # ------------------------------------------------------------------ #
     # Public API                                                          #

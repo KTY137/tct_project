@@ -39,12 +39,23 @@ should reach for instead of a generic ``FONT["xs".."display"]`` step.
 from __future__ import annotations
 
 import json
+import logging
+import math
 import re
+import weakref
+from typing import Callable
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QFont, QPalette
+import numpy as np
+
+from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtGui import (
+    QBrush, QColor, QFont, QImage, QLinearGradient, QPainter, QPalette,
+    QPixmap, QRadialGradient,
+)
 
 from gui import backdrop
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Scales — reference these instead of magic numbers so spacing/rounding/type
@@ -85,9 +96,17 @@ RADIUS_LG = 16
 # only ever covered sm/md/lg) — a fixed constant, consistent with how
 # RADIUS_XS/RADIUS_PILL already sit outside that preset system too.
 RADIUS_XL = 20
+# Round-03 glass kit (docs/design/iterations/glasshell-cockpit/round-03/kit.md
+# §3.2, the concentric-radius law): nested rounded rects only read as nested
+# when r_outer = r_inner + gap. RADIUS_SHELF is therefore DERIVED, not picked:
+# a card (RADIUS_XL) sitting SPACE_XS inside a shelf needs 20 + 4 = 24. Like
+# RADIUS_XS/RADIUS_PILL it sits outside the theme editor's s/m/l density
+# preset (that scale only ever covered sm/md/lg).
+RADIUS_SHELF = RADIUS_XL + SPACE_XS
 RADIUS_PILL = 999
 RADIUS = {"xs": RADIUS_XS, "sm": RADIUS_SM, "md": RADIUS_MD,
-          "lg": RADIUS_LG, "xl": RADIUS_XL, "pill": RADIUS_PILL}
+          "lg": RADIUS_LG, "xl": RADIUS_XL, "shelf": RADIUS_SHELF,
+          "pill": RADIUS_PILL}
 
 # Type scale (px). Roles (see build_qss() call sites for where each lands):
 #   xs/sm  = caption / small label (eyebrows, table headers, chip text).
@@ -305,7 +324,15 @@ def _blend(fg_hex: str, bg_hex: str, alpha: float) -> str:
 # ``accent_strong`` is DERIVED (``_darken(accent, 0.15)``, no longer a
 # separately hand-picked hex) — the hover/pressed/default-fill variant.
 # ---------------------------------------------------------------------------
-ACCENT_LIGHT = "#2A6FE0"
+# WCAG pass (2026-07-14): the v5 light accent (#2A6FE0) is the ink of every
+# outline button (Connect, "secondary") and of the info/busy chip, whose fill is
+# an accent WASH — ink on a tint of itself. That pair measured 4.16:1, and the
+# plain-surface pairs sat on the line at 4.51. Darkened by the smallest amount
+# that lifts the whole accent family clear (tint 4.58, field 5.02, white-on-
+# accent 5.25); hue preserved, and the DARK accent — the dominant theme — is
+# untouched. Unlike the safety tokens this one stays user-overridable.
+_ACCENT_LIGHT_V5 = "#2A6FE0"
+ACCENT_LIGHT = _darken(_ACCENT_LIGHT_V5, 0.10)          # #2563c9
 ACCENT_LIGHT_STRONG = _darken(ACCENT_LIGHT, 0.15)
 ACCENT_DARK = "#5AA9FF"
 ACCENT_DARK_STRONG = _darken(ACCENT_DARK, 0.15)
@@ -323,9 +350,48 @@ ACCENT_DARK_STRONG = _darken(ACCENT_DARK, 0.15)
 OK_GREEN = "#3DD68C"          # dark "good" (spec §2)
 WARN_AMBER = "#FFB84D"        # dark "armed" (spec §2) — kept under the old
 WARN_RED = "#FF5A61"          # dark "danger" (spec §2)   name for compat
-OK_GREEN_LIGHT = "#128A63"
-WARN_AMBER_LIGHT = "#B26F00"
-WARN_RED_LIGHT = "#DE434B"
+
+# ---------------------------------------------------------------------------
+# LIGHT semantic accents — WCAG-AA CONTRAST PASS (2026-07-14).
+#
+# The v5 artifact's light hexes (``*_V5`` below, kept as the named source they
+# are derived FROM — not deleted, so the derivation stays auditable) were
+# measured against the surfaces they are actually painted on and FAILED WCAG AA
+# (4.5:1) as text, systemically, and two of them are SAFETY tokens:
+#
+#     sim   #0C9FB0   3.18 on panel / 2.66 on canvas   (law 6: "SIMULATED")
+#     warn  #B26F00   4.07 / 3.40                      (law 5: motion/homing)
+#     crit  #DE434B   4.19 / 3.50                      (danger ink)
+#     good  #128A63   4.34                             (near-miss)
+#
+# A status colour an operator cannot read is not a status colour. Each token is
+# now DERIVED from its v5 hex with the module's own ``_darken`` primitive (house
+# rule: derived, not sprinkled — a hand-picked "looks about right" hex is exactly
+# how a palette drifts out of compliance again), at the SMALLEST amount that
+# clears 4.5:1 on every surface it actually lands on, with margin.
+#
+# ``_darken`` scales R/G/B by one factor, so the HUE IS PRESERVED EXACTLY —
+# this is a contrast fix, not a re-theme: amber stays amber, cyan stays cyan
+# (sim's 186° vs good's 160° hue separation is byte-for-byte what it was, so
+# law 6's "sim never borrows green" is untouched).
+#
+# Guard: tests/test_palette_contrast.py measures every pair, both themes.
+# ---------------------------------------------------------------------------
+_OK_GREEN_LIGHT_V5 = "#128A63"
+_WARN_AMBER_LIGHT_V5 = "#B26F00"
+_WARN_RED_LIGHT_V5 = "#DE434B"
+
+OK_GREEN_LIGHT = _darken(_OK_GREEN_LIGHT_V5, 0.14)      # #0f7657 — 5.6 panel / 4.7 canvas
+WARN_AMBER_LIGHT = _darken(_WARN_AMBER_LIGHT_V5, 0.18)  # #915b00 — 5.7 / 4.7
+WARN_RED_LIGHT = _darken(_WARN_RED_LIGHT_V5, 0.22)      # #ad343a — 6.3 / 5.3
+
+# NOTE for the reader of docs/design/glass_council/baldr.md: that note proposes
+# ``crit_ink_light = #C22A33``, described as "WARN_RED_LIGHT darkened ~22%".
+# It is NOT what ``_darken(WARN_RED_LIGHT, 0.22)`` produces — #C22A33's channel
+# ratios are not uniform, so that hex was HSL-derived or hand-picked. The
+# codebase's own primitive yields #AD343A, which measures BETTER (6.31/5.27/6.31
+# vs 5.72/4.78/5.72). The derived value wins; the doc's arithmetic claim was the
+# thing that was wrong, not the direction.
 
 # Canonical spec names (§2) as their own constants/aliases, for new call
 # sites (and the dict keys below) that want to say what they mean instead of
@@ -333,6 +399,40 @@ WARN_RED_LIGHT = "#DE434B"
 GOOD_DARK, GOOD_LIGHT = OK_GREEN, OK_GREEN_LIGHT
 ARMED_DARK, ARMED_LIGHT = WARN_AMBER, WARN_AMBER_LIGHT
 DANGER_DARK, DANGER_LIGHT = WARN_RED, WARN_RED_LIGHT
+
+# ---------------------------------------------------------------------------
+# HAZARD FILL + ITS LABEL — the pair nobody had ever measured.
+#
+# ``crit`` has two incompatible jobs: it is the INK of a danger state (it must
+# be bright to read on a DARK panel) and it was ALSO the FILL of the HV / scan-
+# abort button, under a hardcoded ``color: white`` label. Those pull in opposite
+# directions, and in the dark theme the fill won: white on #FF5A61 measures
+# **3.05:1** — the Abort button's own label, below even the 3:1 non-text floor.
+# (Light was 4.19 — also failing.) Nobody checked it because the QSS said the
+# quiet word "white" instead of naming a token.
+#
+# So the two jobs are now two tokens. ``crit``/``danger`` stays the INK (bright
+# in dark, darkened in light, above); ``danger_fill`` is the button BODY — dark
+# enough in BOTH themes to carry a white label — and ``on_danger`` is that
+# label, a real token instead of a literal. Both are LOCKED (SAFETY_TOKENS).
+# Hover/pressed derive by darkening the fill further, so the label's contrast
+# only ever IMPROVES as the button is pressed (monotone by construction — a
+# later tweak to the hover amount cannot silently break the label).
+# The dark fill is a NARROW window, and worth spelling out: it must be dark
+# enough for a white label (>=4.5:1) yet light enough that the button BODY is
+# still identifiable against the dark cluster surface it sits on (>=3:1, WCAG
+# 1.4.11). That leaves relative luminance in roughly [0.163, 0.185] — 0.22 lands
+# at white 4.80 / body 3.19, the only amount with margin on BOTH sides.
+DANGER_FILL_LIGHT = WARN_RED_LIGHT                    # #ad343a — white 6.31, body 6.03
+DANGER_FILL_DARK = _darken(WARN_RED, 0.22)            # #c6464b — white 4.80, body 3.19
+ON_DANGER = "#FFFFFF"                                 # both themes: one danger language
+
+# The motion command class (law 5) fills with ``armed`` while pressed, so it
+# needs its own label ink: light "armed" is a dark ochre (white reads on it),
+# dark "armed" is a bright amber (only a near-black ink reads on it — white
+# would be 1.72:1). Derived from the armed token itself, so the pair tracks it.
+ON_ARMED_LIGHT = "#FFFFFF"                            # on #915b00 — 5.68:1
+ON_ARMED_DARK = _darken(WARN_AMBER, 0.86)             # on #FFB84D — 11.9:1
 
 # Device-manager status accents (gui/device_panel.py's ``_STATUS_STYLE``) —
 # "simulated" and "error", alongside OK_GREEN/WARN_AMBER/WARN_RED above.
@@ -346,10 +446,17 @@ DANGER_DARK, DANGER_LIGHT = WARN_RED, WARN_RED_LIGHT
 # unchanged — not one of the four spec semantic tokens, left for a future
 # Bias/Camera EmptyState-error pass (D4) to reconsider.
 SIM_PURPLE = "#41D8E4"
-SIM_PURPLE_LIGHT = "#0C9FB0"
+# WCAG pass (2026-07-14): the light sim cyan was the WORST token in the palette
+# — 3.18:1 on a panel, 2.66:1 on the canvas, i.e. below even the 3:1 non-text
+# floor for the StatusLamp dot. "This data is SIMULATED" is a law-6 safety
+# claim; it has to be readable. Derived (see the LIGHT semantic block above);
+# the hue is preserved exactly, so it is the same cyan, just legible.
+_SIM_CYAN_LIGHT_V5 = "#0C9FB0"
+SIM_PURPLE_LIGHT = _darken(_SIM_CYAN_LIGHT_V5, 0.28)    # #086f7b — 5.6 / 4.7
 SIM_CYAN_DARK, SIM_CYAN_LIGHT = SIM_PURPLE, SIM_PURPLE_LIGHT
 ERROR_ORANGE = "#ff8a1f"
-ERROR_ORANGE_LIGHT = "#d96c00"
+_ERROR_ORANGE_LIGHT_V5 = "#d96c00"
+ERROR_ORANGE_LIGHT = _darken(_ERROR_ORANGE_LIGHT_V5, 0.28)   # #9c4d00 — 6.0 / 5.1
 
 # General amber token (distinct from the warn status colour): matches the
 # bias axis-rail hue so a "bias" accent is amber everywhere. Unchanged by the
@@ -420,6 +527,49 @@ _LIGHT_WELL_ALPHA = 0.08
 _LIGHT_PANEL_V6 = "#FFFFFF"
 _LIGHT_WELL_V6 = _blend("#000000", "#E6EBF3", _LIGHT_WELL_ALPHA)
 
+# ---------------------------------------------------------------------------
+# Round-03 glass kit — the `card`/`shelf` elevation rungs
+# (docs/design/iterations/glasshell-cockpit/round-03/kit.md §2, implemented
+# 2026-07-14 on Kaya's implement-today order; arbitrated by
+# scripts/kit_contrast_check.py).
+#
+# The measured defect these fix: dark ``canvas -> panel`` is ΔL* 1.46 — the
+# dark theme HAS no elevation ladder today (a card is invisible across the
+# room). Both rungs are DERIVED, never picked:
+#
+#   card  (dark)  = _blend(raised, panel, 0.60)   -> #151D2D (L* 10.77)
+#                   0.60 is the smallest step from panel toward raised that
+#                   gives dark the same canvas->card separation light already
+#                   ships (ΔL* 7.16 vs 7.11 — a match, not a taste).
+#   card  (light) = panel — light's ceiling is already white; no new value.
+#   shelf (dark)  = _blend(card, panel, 0.30)     -> #0F141F (the container
+#   shelf (light) = _blend(panel, canvas, 0.50)   -> #F3F5F9  slab BELOW the
+#                   card in both themes; chrome + labels only).
+#
+# GOVERNANCE: the dark `card` partially reverses the ratified v6 "cards
+# recede toward the canvas" pass — landed on Kaya's explicit implement-today
+# order for the round-03 kit; the before/after render for his one-look veto
+# lives in artifacts_claude/card_token_delta/. Both rungs re-derive from the
+# live (possibly user-overridden) panel/raised/canvas in _recompute_palettes,
+# so a theme-editor "panel" override moves the whole ladder coherently.
+# ---------------------------------------------------------------------------
+_KIT_CARD_BLEND_DARK = 0.60      # kit.md §2 "card = _blend(raised, panel, .60)"
+_KIT_SHELF_BLEND_DARK = 0.30     # kit.md §2 "shelf = _blend(card, panel, .30)"
+_KIT_SHELF_BLEND_LIGHT = 0.50    # kit.md §2 "_blend(panel, canvas, .50)" (light)
+_DARK_RAISED = "#1B253A"         # the shipped dark "raised" token (spec §2)
+_DARK_CARD = _blend(_DARK_RAISED, _DARK_PANEL_V6, _KIT_CARD_BLEND_DARK)
+_DARK_SHELF = _blend(_DARK_CARD, _DARK_PANEL_V6, _KIT_SHELF_BLEND_DARK)
+_LIGHT_CARD = _LIGHT_PANEL_V6    # kit.md §2: light card IS panel, byte for byte
+_LIGHT_SHELF = _blend(_LIGHT_PANEL_V6, "#E6EBF3", _KIT_SHELF_BLEND_LIGHT)
+
+# SCENE-tier glass-card alphas (kit.md §8 GLASS_CARD_ALPHA): a translucent
+# Card paints "one rung up, at its rung's alpha" (§2.1 tier invariance) —
+# `raised` @ 0.62 in dark / `panel` @ 0.86 in light — so its COMPOSITE over
+# the bounded ground lands back on the opaque `card` tone (within ΔL* 1.0).
+# Both sit above MIN_PANEL_GLASS_ALPHA (0.50), the ratified scrim floor.
+GLASS_CARD_ALPHA_DARK = 0.62
+GLASS_CARD_ALPHA_LIGHT = 0.86
+
 LIGHT = {
     "accent": ACCENT_LIGHT, "accent_strong": ACCENT_LIGHT_STRONG,
     "amber": AMBER_LIGHT,
@@ -429,6 +579,11 @@ LIGHT = {
     # added so new code can read/write the name the design contract actually
     # uses instead of the legacy good/warn/crit vocabulary.
     "danger": DANGER_LIGHT, "armed": ARMED_LIGHT,
+    # Hazard FILL + its label ink (see the DANGER_FILL_* block above): a filled
+    # danger/armed control is a different job from the danger INK, and conflating
+    # them is what put a 3.05:1 label on the dark theme's Abort button.
+    "danger_fill": DANGER_FILL_LIGHT, "on_danger": ON_DANGER,
+    "on_armed": ON_ARMED_LIGHT,
     # Codex S1 audit (2026-07-13) item 2: canvas nudged one step darker so
     # panel/raised/well read as a real material ladder instead of a flat pale
     # grey stack; bg/material_strong stay byte-synced to canvas (pre-existing
@@ -444,6 +599,10 @@ LIGHT = {
     # faint canvas-tinted glass reveal.
     "material": _LIGHT_PANEL_V6, "material_strong": "#E6EBF3",
     "panel": _LIGHT_PANEL_V6,
+    # Round-03 kit elevation rungs (see the _KIT_* block above): light `card`
+    # IS panel (kit.md §2 — light's ceiling is white); `shelf` is the container
+    # slab below it. Derived, non-editable; re-derived in _recompute_palettes.
+    "card": _LIGHT_CARD, "shelf": _LIGHT_SHELF,
     # border/border_strong: kept as their own keys for existing call sites,
     # synced 1:1 to hairline/hairline_strong (the two concepts were already
     # near-identical pre-v5; DARK even had them byte-equal).
@@ -457,6 +616,22 @@ LIGHT = {
     # toplight" direction gets a much smaller absolute step than dark's.
     "specular": "rgba(255, 255, 255, 0.92)",
     "toplight": "#F8FAFD",
+    # ── INK LADDER ────────────────────────────────────────────────────────
+    # text  — body/value ink.
+    # muted — THE quiet-text ink: captions, chip labels, group titles, table
+    #         headers, stale readouts. Certified for text on every surface in
+    #         both themes (worst opaque pair 4.64, worst GLASS pair 4.91 —
+    #         Baldr's scrim floor, docs/design/glass_council/baldr.md §1.2).
+    # faint — RETIRED FOR TEXT (2026-07-14 WCAG pass). It measures 2.73:1 on a
+    #         panel and 2.28:1 on the canvas — below even the 3:1 non-text
+    #         floor — and there is NO fix: a third grey that clears 4.5:1 in
+    #         light mode necessarily collapses onto `muted` (the arithmetic is
+    #         in tests/test_palette_contrast.py). So the token survives ONLY
+    #         for ink that WCAG 1.4.3 explicitly exempts — the text of an
+    #         INACTIVE (disabled) control — and for non-text decoration (the
+    #         jog pad's decorative crosshair). Caption hierarchy is carried by
+    #         size/weight/case instead of by contrast we cannot afford.
+    #         Guard: test_faint_is_never_used_as_text_ink_in_the_qss.
     "text": "#131A28", "muted": "#525D72", "faint": "#949DB0",
     "on_accent": "#ffffff",
     # tint/active: accent-tinted wash, blended (see ``_blend``) at the
@@ -540,7 +715,7 @@ LIGHT = {
     # themes, so its grid/overlay accents don't repaint on a theme switch
     # either. Present in both dicts so FigureCard/panels can resolve them
     # via palette(mode) without a fixed-vs-per-theme special case.
-    "plot_grid": None, "plot_overlay": None,
+    "plot_grid": None, "plot_overlay": None, "plot_accent": None,
 }
 
 DARK = {
@@ -549,6 +724,11 @@ DARK = {
     "good": OK_GREEN, "warn": WARN_AMBER, "crit": WARN_RED,
     "sim": SIM_PURPLE, "error": ERROR_ORANGE,
     "danger": DANGER_DARK, "armed": ARMED_DARK,
+    # See LIGHT. The dark theme is where the danger-button label was WORST
+    # (white on the bright #FF5A61 fill = 3.05:1), so the fill darkens here
+    # while the danger INK stays bright for chips/lamps/hero values.
+    "danger_fill": DANGER_FILL_DARK, "on_danger": ON_DANGER,
+    "on_armed": ON_ARMED_DARK,
     "canvas": "#0A0D13", "bg": "#0A0D13",
     # v6 glass pass: material/panel now read the pre-blended _DARK_PANEL_V6
     # (see the module comment above LIGHT) — the artifact's own
@@ -556,6 +736,11 @@ DARK = {
     # instead of the flat opaque #121824 slate tone.
     "material": _DARK_PANEL_V6, "material_strong": "#0A0D13",
     "panel": _DARK_PANEL_V6,
+    # Round-03 kit elevation rungs (see the _KIT_* block above LIGHT): the
+    # dark ladder's missing card/shelf steps — canvas->card ΔL* 7.16 where
+    # canvas->panel was 1.46. Derived, non-editable; re-derived in
+    # _recompute_palettes so a user "panel" override moves the ladder with it.
+    "card": _DARK_CARD, "shelf": _DARK_SHELF,
     # Codex S1 audit item 2: dark hairline/border nudged lighter for material
     # separation against panel; hairline_strong unchanged.
     "border": "#27344A", "border_strong": "#334159",
@@ -564,6 +749,9 @@ DARK = {
     # value (``0 1px 0 rgba(255,255,255,0.14) inset``), applied verbatim.
     "specular": "rgba(255, 255, 255, 0.14)",
     "toplight": "#1B253A",
+    # See the INK LADDER comment in LIGHT. `faint` is retired for text here too
+    # — 3.23:1 on a panel, and only 2.61 on `raised`, the surface the metric
+    # tiles actually use.
     "text": "#E9EDF5", "muted": "#98A1B5", "faint": "#5B657A",
     "on_accent": "#04222c",
     "tint": _blend(ACCENT_DARK, _DARK_PANEL_V6, 0.13),
@@ -601,7 +789,7 @@ DARK = {
     "strip": _blend(_DARK_WELL_V6, _DARK_PANEL_V6, 0.55),
     "edge": _blend("#FFFFFF", "#27344A", 0.14),
     "edge_shade": _blend("#000000", "#27344A", 0.30),
-    "plot_grid": None, "plot_overlay": None,
+    "plot_grid": None, "plot_overlay": None, "plot_accent": None,
 }
 
 # ---------------------------------------------------------------------------
@@ -703,9 +891,20 @@ def set_chip_state(chip, state: str) -> None:
 # one, so touching the panel role risks the "content stays opaque" hard
 # rule for the widgets that actually matter. See
 # docs/design/glass_gap_findings.md for the full barrier list and why this
-# stays canvas-only. Tunable by Kaya's own eyeball (real DWM blur cannot be
-# judged from an offscreen capture) — the number itself is a placeholder.
+# stays canvas-only. Tunable live via the theme editor's Material section
+# (set_backdrop_canvas_alpha) — this constant is the SHIPPED DEFAULT, and the
+# module reads the mutable ``_canvas_alpha`` below (which starts here).
 BACKDROP_CANVAS_ALPHA = 0.82
+# Safety clamp on the canvas alpha (Baldr's scrim-floor / worst-case-contrast
+# contract, docs/design/glass_council/baldr.md §1.2): every glass alpha ships
+# with a clamped legal range so a hand-edited settings file / an over-eager
+# slider can never wash a glass surface out below WCAG-AA legibility. The floor
+# 0.80 was picked with the panel-glass floor (0.50) so the WORST combined
+# corner — the most-translucent legal canvas AND panel, over a pure-white or
+# pure-black desktop, dark OR light theme — still clears 4.5:1 for muted text
+# (measured 4.90:1 at 0.80/0.50; the shipped 0.82/0.55 default is 5.16:1).
+MIN_BACKDROP_CANVAS_ALPHA = 0.80
+MAX_BACKDROP_CANVAS_ALPHA = 1.0
 
 
 # Panel-glass opt-in (experimental, Kaya-ratified 2026-07-13): how translucent
@@ -717,25 +916,74 @@ BACKDROP_CANVAS_ALPHA = 0.82
 # NOT a blanket ``QFrame#cardPane`` selector, which cannot tell a plot/camera/
 # danger-well pane from a plain one and so would violate the "content stays
 # opaque" hard rule for the widgets that actually matter (live readouts). Like
-# BACKDROP_CANVAS_ALPHA this is a PLACEHOLDER for Kaya's live tuning — real DWM
-# blur cannot be judged from an offscreen capture.
+# BACKDROP_CANVAS_ALPHA this is the SHIPPED DEFAULT; the glassPane QSS reads the
+# mutable ``_panel_glass_alpha`` below, tunable live via the theme editor's
+# Material section (set_panel_glass_alpha).
 PANEL_GLASS_ALPHA = 0.55
+# Safety clamp on the panel-glass alpha — same scrim-floor contract as the
+# canvas clamp above (Baldr §1.2). Floor 0.50 keeps the worst combined corner
+# (canvas at its 0.80 floor too) at 4.90:1 for muted text on a glass pane over
+# a pure-white/black desktop; the shipped 0.55 default measures 5.16:1. The
+# readouts that MUST stay legible (Z4 hero tiles/wells) are opaque regardless —
+# these panes only ever carry chrome/labels (Baldr Z-ladder), never live values.
+MIN_PANEL_GLASS_ALPHA = 0.50
+MAX_PANEL_GLASS_ALPHA = 1.0
 
 
 def _canvas_fill(p: dict) -> str:
-    """QMainWindow/QDialog/#mainShell background — opaque ``p['bg']`` (BYTE-
-    IDENTICAL to before this existed) unless a real backdrop material is the
-    user's persisted preference, in which case it becomes an ``rgba()`` alpha
-    fill so DWM can actually show through the window's own canvas — see the
-    ``BACKDROP_CANVAS_ALPHA`` comment above for scope. Guard:
-    tests/test_theme_editor.py's canvas-passthrough tests."""
+    """The GLASS canvas fill — an ``rgba()`` alpha fill so a real DWM material
+    can show through the window's own unclaimed background, or the opaque
+    ``p['bg']`` when no material is the user's persisted preference at all.
+
+    UNDERLAY LAW (2026-07-13, beat G-B1): this value is NOT what the plain
+    ``QMainWindow, QDialog`` / ``#mainShell`` rules paint. Those always paint the
+    opaque ``p['bg']`` token pre-blend; the rgba fill below only ever applies
+    behind the ``[glassCanvas="true"]`` attribute selector, and
+    ``gui.backdrop`` sets that property on a window ONLY while a material is
+    verifiably attached to its current HWND. Painting rgba on every window just
+    because the *preference* was set is exactly how a window whose DWM
+    attributes had died (a recreated HWND, a layered window, a path-D window)
+    ended up as an alpha hole over nothing — the BLACK Kaya reported when he
+    closed and reopened the theme editor. See ``gui/backdrop.py``'s
+    CANVAS_GLASS_PROPERTY. Guard: tests/test_theme_editor.py's canvas-passthrough
+    tests + tests/test_backdrop_event_spine.py's underlay-law tests."""
     if get_window_backdrop() == "none":
         return p["bg"]
-    return _rgba(p["bg"], BACKDROP_CANVAS_ALPHA)
+    return _rgba(p["bg"], _canvas_alpha)
+
+
+def _glass_canvas_qss(p: dict) -> str:
+    """The property-gated glass-canvas rules (underlay law, see
+    :func:`_canvas_fill`). Empty string while the shipped "none" backdrop is
+    active — with no material anywhere, the rules would be dead weight and the
+    QSS stays byte-identical to the pre-glass build."""
+    if get_window_backdrop() == "none":
+        return ""
+    fill = _canvas_fill(p)
+    return f"""
+/* Glass canvas (underlay law) — ONLY on a window whose DWM material is
+   verifiably attached to its CURRENT HWND right now. gui.backdrop sets
+   glassCanvas="true" after both DWM calls returned S_OK on that handle, and
+   clears it again on every loss/reset path (HWND recreated, attach failed,
+   material reset). The unqualified rules above keep painting the opaque token
+   pre-blend, so a lost material degrades to "looks like token glass" and can
+   never degrade to a translucent hole over nothing (black). */
+QMainWindow[glassCanvas="true"], QDialog[glassCanvas="true"] {{ background: {fill}; }}
+QWidget#mainShell[glassCanvas="true"] {{ background: {fill}; }}
+"""
 
 
 def build_qss(p: dict) -> str:
-    canvas_fill = _canvas_fill(p)
+    glass_canvas = _glass_canvas_qss(p)
+    # Round-03 kit: the SCENE glass-card fill paints "one rung up at the card
+    # rung's alpha" (kit.md §2.1) — raised@0.62 dark / panel@0.86 light. The
+    # mode is resolved by dict identity, the same ``palette is DARK`` idiom
+    # apply_theme already uses (overrides mutate the dicts IN PLACE, so
+    # identity always holds for the live palettes every caller passes).
+    _is_dark = p is DARK
+    glass_card_fill = _rgba(
+        p["raised"] if _is_dark else p["panel"],
+        GLASS_CARD_ALPHA_DARK if _is_dark else GLASS_CARD_ALPHA_LIGHT)
     return f"""
 * {{
     font-family: {SANS_FAMILY};
@@ -760,15 +1008,20 @@ def build_qss(p: dict) -> str:
    shown as its own window without being one of those (e.g. a panel grabbed
    standalone by scripts/capture_panels.py).
    Guard: tests/test_style_no_label_box.py.
-   HISTORY (2026-07-13, the glass-gap fix): `canvas_fill` (computed above,
-   see `_canvas_fill`) is `p['bg']` byte-identical UNLESS a real DWM backdrop
-   material is active, in which case it is an rgba() alpha fill so the
-   backdrop can show through the window's own unclaimed background — the
-   ONE thing `gui.backdrop._prepare_window_canvas`'s transparent Window-role
-   palette was ALWAYS meant to expose, but this rule used to paint a fully
-   opaque hex directly over it regardless. */
-QMainWindow, QDialog {{ background: {canvas_fill}; }}
-QWidget#mainShell {{ background: {canvas_fill}; }}
+   HISTORY (2026-07-13, the glass-gap fix, then the underlay law the same
+   night): these two rules paint the OPAQUE `p['bg']` token pre-blend —
+   always, in every backdrop state. The rgba() alpha fill that actually lets a
+   DWM material through lives in a separate, property-gated rule
+   (`_glass_canvas_qss`, emitted right below) that only matches a window whose
+   material `gui.backdrop` has verified on its current HWND. The first version
+   of the glass-gap fix put the rgba fill HERE, unconditionally, for every
+   QMainWindow/QDialog the moment the preference was set — so any window that
+   did not actually get the material (recreated HWND, layered window,
+   GL-hosting window) painted an alpha hole over nothing, i.e. BLACK. Never
+   put an alpha fill in an unqualified canvas rule again. */
+QMainWindow, QDialog {{ background: {p['bg']}; }}
+QWidget#mainShell {{ background: {p['bg']}; }}
+{glass_canvas}
 
 /* Text-ish widgets are transparent — they sit ON a surface, they are not one.
    Explicit (not merely "inherited by omission") so that re-introducing a
@@ -777,7 +1030,9 @@ QWidget#mainShell {{ background: {canvas_fill}; }}
    type selector (QLabel#statusChip, QLabel#ribbonMark, ...). */
 QLabel, QCheckBox, QRadioButton {{ background: transparent; }}
 
-QScrollArea#ribbonScroll {{ background: transparent; border: none; }}
+/* (The QScrollArea#ribbonScroll rule is gone with the scroll area itself: the
+   ribbon WRAPS now instead of scrolling — a fixed-height scroll strip was
+   silently clipping the MOTION chip off the right edge. See tct_gui.py.) */
 QFrame#systemRibbon {{
     background: {p['chrome']}; border: 1px solid {p['hairline']};
     border-top-color: {p['edge']};
@@ -795,8 +1050,13 @@ QFrame#ribbonGroup {{
     border-top-color: {p['edge']};
     border-radius: {RADIUS_MD}px;
 }}
+/* Ribbon group caption ("DEVICES", "BIAS", "MOTION", ...). WCAG pass: was
+   `faint` (2.73:1 — unreadable); the ink ladder's quiet-text token is `muted`
+   (6.34:1 on the ribbon group's own surface). The caption still reads as
+   quieter than the chips beside it — through size (11px) and case, not through
+   contrast we cannot afford. */
 QLabel#ribbonLabel {{
-    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
+    color: {p['muted']}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
 }}
 
 /* Group boxes: card-like with breathing room — padding matches the v5
@@ -813,9 +1073,16 @@ QLabel#ribbonLabel {{
    segments, dock titles, control clusters). */
 /* v6 "Glass" material pass: card radius 16 -> 20px (RADIUS_XL, see its own
    comment near RADIUS_LG) — QGroupBox IS the app's "card" surface. */
+/* Round-03 glass kit (kit.md S2/S3) — QGroupBox is the app's CARD surface,
+   so it paints the new `card` rung (dark, the elevation ladder finally
+   exists, canvas->card dL* 7.16 where canvas->panel was 1.46 / light, card
+   == panel byte-identical, zero change) with the kit's mandatory
+   `hairline_strong` outline (S8, plain hairline measures 1.16 to 1 on a
+   light glass canvas, the card edge dissolves). Uniform border still (hard
+   rule 3, see above). */
 QGroupBox {{
-    background: {p['panel']};
-    border: 1px solid {p['hairline']};
+    background: {p['card']};
+    border: 1px solid {p['hairline_strong']};
     border-radius: {RADIUS_XL}px;
     margin-top: {SPACE_LG - 2}px;
     padding: {SPACE_LG - 1}px {SPACE_LG + 1}px {SPACE_LG - 1}px {SPACE_LG + 1}px;
@@ -910,17 +1177,19 @@ QPushButton[state="busy"] {{
     background: {p['tint']}; color: {p['accent']};
     border: 1px solid {_rgba(p['accent'], 0.55)};
 }}
+/* State buttons: the same ink/fill decoupling as QLabel#statusChip below (see
+   the long comment there) — coloured fill + coloured border, `text` label. */
 QPushButton[state="good"] {{
-    background: {_rgba(p['good'], 0.16)}; color: {p['good']};
+    background: {_rgba(p['good'], 0.16)}; color: {p['text']};
     border: 1px solid {_rgba(p['good'], 0.55)};
 }}
 QPushButton[state="warn"], QPushButton#armedBtn, QPushButton[state="armed"] {{
-    background: {_rgba(p['warn'], 0.16)}; color: {p['warn']};
+    background: {_rgba(p['warn'], 0.16)}; color: {p['text']};
     border: 1px solid {_rgba(p['warn'], 0.65)};
     font-weight: 700;
 }}
 QPushButton[state="crit"] {{
-    background: {_rgba(p['crit'], 0.16)}; color: {p['crit']};
+    background: {_rgba(p['crit'], 0.16)}; color: {p['text']};
     border: 1px solid {_rgba(p['crit'], 0.55)};
 }}
 
@@ -937,7 +1206,13 @@ QPushButton[state="secondary"] {{
 QPushButton[state="secondary"]:hover {{
     background: {p['tint']}; border-color: {p['accent']};
 }}
-QPushButton[state="secondary"]:pressed {{ background: {_rgba(p['accent'], 0.18)}; }}
+/* Pressed FILLS instead of deepening the accent wash under an accent label
+   (that wash reached 0.18 — accent ink on a 0.18 tint of itself is ~4.2:1).
+   An outline button that fills on press is the stronger affordance anyway, and
+   `on_accent` on `accent` is a measured pair. Same move as the motion key. */
+QPushButton[state="secondary"]:pressed {{
+    background: {p['accent']}; color: {p['on_accent']}; border-color: {p['accent']};
+}}
 QPushButton[state="secondary"]:disabled {{
     color: {p['faint']}; background: {p['disabled_bg']}; border-color: transparent;
 }}
@@ -959,15 +1234,27 @@ QPushButton[state="ghost"]:disabled {{ color: {p['faint']}; background: transpar
    "armed" (the canonical spec name — see the palette dicts) rather than the
    legacy "warn" key so a reader can tell this rule was written against the
    ratified command-class law, not a generic warning look. */
+/* WCAG pass: the motion button is the ONE place the armed ink survives on a
+   plain surface (it is the law-5 command class — a stage move must READ as
+   amber, not as a neutral button), which is exactly why the light `armed` token
+   was darkened until it clears 4.5:1 there (5.43 on a control cluster).
+   Its hover/pressed feedback may NOT be an armed wash, though: ink on a tint of
+   itself caps out around 4.3 even at 0.14 (see the statusChip comment). So hover
+   is border-only — which is the artifact's own `.btn:hover` recipe anyway — and
+   pressed FILLS with armed and flips to the `on_armed` label ink (white in
+   light, near-black on dark's bright amber). A motion key that lights up when
+   you push it is a better affordance than a wash, and it is AA in both themes. */
 QPushButton[state="motion"] {{
     background: transparent; color: {p['armed']};
     border: 1.5px solid {_rgba(p['armed'], 0.55)}; font-weight: 620;
     padding: {SPACE_SM - 1}px {SPACE_LG}px;
 }}
 QPushButton[state="motion"]:hover {{
-    background: {_rgba(p['armed'], 0.14)}; border-color: {p['armed']};
+    background: transparent; border-color: {p['armed']};
 }}
-QPushButton[state="motion"]:pressed {{ background: {_rgba(p['armed'], 0.24)}; }}
+QPushButton[state="motion"]:pressed {{
+    background: {p['armed']}; color: {p['on_armed']}; border-color: {p['armed']};
+}}
 QPushButton[state="motion"]:disabled {{
     color: {p['faint']}; background: transparent; border-color: {p['hairline']};
 }}
@@ -982,7 +1269,10 @@ QToolButton {{
     border-radius: {RADIUS_SM}px; padding: {SPACE_XS}px {SPACE_SM}px;
 }}
 QToolButton:hover {{ background: {p['field']}; border-color: {p['hairline']}; }}
-QToolButton:pressed {{ background: {_rgba(p['accent'], 0.18)}; }}
+/* Fills on press (see QPushButton[state="secondary"]:pressed): a CHECKED
+   toolbutton carries accent ink, so an accent wash underneath it was ink on a
+   tint of itself. */
+QToolButton:pressed {{ background: {p['accent']}; color: {p['on_accent']}; }}
 QToolButton:checked {{
     background: {p['tint']}; color: {p['accent']};
     border-color: {_rgba(p['accent'], 0.55)};
@@ -998,7 +1288,9 @@ QToolButton#detachTabButton:hover {{
     background: {p['tint']}; color: {p['accent']};
     border-color: {_rgba(p['accent'], 0.45)};
 }}
-QToolButton#detachTabButton:pressed {{ background: {_rgba(p['accent'], 0.20)}; }}
+QToolButton#detachTabButton:pressed {{
+    background: {p['accent']}; color: {p['on_accent']};
+}}
 
 /* Connect/Disconnect toolbar buttons (objectName set by tct_gui.py after
    building the QToolBar action widgets — "objectNames for the green/red QSS
@@ -1023,7 +1315,7 @@ QPushButton#connectBtn:hover, QToolButton#connectBtn:hover {{
     background: {p['tint']}; border-color: {p['accent']};
 }}
 QPushButton#connectBtn:pressed, QToolButton#connectBtn:pressed {{
-    background: {_rgba(p['accent'], 0.24)};
+    background: {p['accent']}; color: {p['on_accent']}; border-color: {p['accent']};
 }}
 QPushButton#disconnectBtn, QToolButton#disconnectBtn {{
     background: {p['field']}; color: {p['text']};
@@ -1242,15 +1534,31 @@ QTreeWidget::item:hover, QListWidget::item:hover {{ background: {p['raised']}; }
    folded into the same selectors byte-for-byte — an opt-in via the state
    property reaches the identical look instead of a second danger language
    (cockpit_style_overhaul.md §1 rule 2: one danger visual language). */
+/* WCAG pass (2026-07-14) — THE worst finding of the audit. This rule used to
+   read ``background: {{crit}}; color: white``. Nobody ever measured that pair,
+   because the QSS said the quiet word "white" instead of naming a token: white
+   on the DARK theme's bright #FF5A61 is **3.05:1** — the label of the HV /
+   scan-abort button, below even the 3:1 non-text floor. Light was 4.19, also
+   failing. An Abort button you cannot read is a hazard, not a control.
+   The fill is now its own token (``danger_fill`` — dark enough in BOTH themes to
+   carry a label) and the label is ``on_danger``, so the pair is a thing that can
+   be, and is, measured (tests/test_palette_contrast.py). ``crit``/``danger``
+   stays the bright INK for chips/lamps/hero values — the two jobs are no longer
+   one token. Hover/pressed darken the FILL, so the label only ever gets MORE
+   readable as the button is pressed. */
 QPushButton#dangerBtn, QPushButton[state="danger"] {{
-    background: {p['crit']}; color: white; border: 1px solid {p['crit']};
+    background: {p['danger_fill']}; color: {p['on_danger']};
+    border: 1px solid {p['danger_fill']};
     font-weight: 700;
     padding: {SPACE_SM - 1}px {SPACE_LG}px;
 }}
 QPushButton#dangerBtn:hover, QPushButton[state="danger"]:hover {{
-    background: {_darken(p['crit'], 0.12)}; border-color: {_darken(p['crit'], 0.12)};
+    background: {_darken(p['danger_fill'], 0.12)};
+    border-color: {_darken(p['danger_fill'], 0.12)};
 }}
-QPushButton#dangerBtn:pressed, QPushButton[state="danger"]:pressed {{ background: {_darken(p['crit'], 0.22)}; }}
+QPushButton#dangerBtn:pressed, QPushButton[state="danger"]:pressed {{
+    background: {_darken(p['danger_fill'], 0.22)};
+}}
 QPushButton#dangerBtn:focus, QPushButton[state="danger"]:focus {{ outline: 2px solid {_rgba(p['crit'], 0.40)}; outline-offset: 1px; }}
 QPushButton#dangerBtn:disabled, QPushButton[state="danger"]:disabled {{
     background: {p['disabled_bg']}; color: {p['muted']}; border: 1px solid {p['border']};
@@ -1268,8 +1576,12 @@ QFrame#instrumentReadout {{
 QLabel#readoutAxis {{
     color: {PLOT_FG}; font-size: {FONT_XS}px; font-weight: 600; letter-spacing: 0;
 }}
+/* The value ink is the FIXED instrument-screen accent, not the theme accent:
+   this label sits on PLOT_BG (a dark screen in BOTH themes), so painting the
+   LIGHT theme's accent on it gave 4.17:1 — a failing pair on a real hardware
+   readout (stage position). See PLOT_ACCENT. */
 QLabel#readoutValue {{
-    color: {p['accent']};
+    color: {p['plot_accent']};
     font-family: {MONO_FAMILY};
     font-size: {FONT_XL}px; font-weight: 600;
 }}
@@ -1326,8 +1638,14 @@ QLabel#readoutCellValue[state="crit"], QLabel#readoutCellValue[state="danger"] {
     color: {p['danger']}; font-weight: 700;
 }}
 QLabel#readoutCellValue[state="sim"] {{ color: {p['sim']}; }}
-QLabel#readoutCellValue[stale="true"] {{ color: {p['faint']}; font-weight: 400; }}
-QLabel#readoutCellTitle[stale="true"] {{ color: {p['faint']}; }}
+/* Stale ink (law 4: "staleness is designed"). WCAG pass: this used to desaturate
+   to `faint` ON the recessed `well` surface — 1.91:1 in light, the single worst
+   pair in the app, on the LAST KNOWN VALUE of a live instrument. An operator has
+   to be able to READ a stale reading (that is the whole point of showing it) and
+   see that it is stale. Staleness now reads through the recessed surface + the
+   dropped weight + the caption ("value aged Ns"), and the ink stays legible. */
+QLabel#readoutCellValue[stale="true"] {{ color: {p['muted']}; font-weight: 400; }}
+QLabel#readoutCellTitle[stale="true"] {{ color: {p['muted']}; }}
 QFrame#readoutCell[stale="true"] {{ background: {p['well']}; }}
 /* MetricTile caption (gui/panel_kit.py) — the law-4 "why" line under a stale
    tile ("not connected" / "no run" / "value aged Ns"), and any live tile's
@@ -1335,9 +1653,9 @@ QFrame#readoutCell[stale="true"] {{ background: {p['well']}; }}
    3: "Explanations: sentence-case sans. Never uppercase prose."), never the
    tracked-mono-uppercase label treatment above. */
 QLabel#metricTileCaption {{
-    color: {p['faint']}; font-size: {FONT_XS}px; font-weight: {WEIGHT_BODY};
+    color: {p['muted']}; font-size: {FONT_XS}px; font-weight: {WEIGHT_BODY};
 }}
-QLabel#metricTileCaption[stale="true"] {{ color: {p['faint']}; }}
+QLabel#metricTileCaption[stale="true"] {{ color: {p['muted']}; }}
 QFrame#readoutCell[flash="accent"] {{
     border: 1px solid {p['accent']}; background: {_rgba(p['accent'], 0.10)};
 }}
@@ -1414,8 +1732,10 @@ QPushButton#segBtn:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outli
 /* v6 "Glass" material pass: card radius 16 -> 20px (RADIUS_XL) — cardPane is
    a Card's own surface (gui/panel_kit.py), the same "card" concept as
    QGroupBox above. */
+/* Round-03 glass kit: same `card` rung + `hairline_strong` outline as
+   QGroupBox above — the two rules ARE one "card" concept (kit.md §4.2). */
 QFrame#cardPane {{
-    background: {p['panel']}; border: 1px solid {p['hairline']};
+    background: {p['card']}; border: 1px solid {p['hairline_strong']};
     border-radius: {RADIUS_XL}px;
 }}
 
@@ -1436,9 +1756,68 @@ QFrame#channelCard {{
    carries it) otherwise. HARD exclusion by construction: nothing registers a
    plot/camera/danger-well pane (a FigureCard is refused outright), so those
    never get the property — guard: tests/test_panel_kit_cockpit.py. See
-   PANEL_GLASS_ALPHA / docs/design/glass_gap_findings.md §6. */
-QFrame#cardPane[glassPane="true"] {{ background: {_rgba(p['panel'], PANEL_GLASS_ALPHA)}; }}
-QGroupBox[glassPane="true"] {{ background: {_rgba(p['panel'], PANEL_GLASS_ALPHA)}; }}
+   PANEL_GLASS_ALPHA / docs/design/glass_gap_findings.md §6.
+   Round-03 glass kit (kit.md §2.1 "paint one rung up, at your rung's alpha"):
+   the glass PANE tint now paints `card` (not `panel`) at the pane alpha, so
+   its composite over the bounded ground lands back on the shelf tone. Light
+   is byte-identical (card == panel there); dark panes pick up the new rung.
+   Worst-corner contrast stays certified: tests/test_glass_text_contract.py
+   models exactly this fill at the legal alpha floors. */
+QFrame#cardPane[glassPane="true"] {{ background: {_rgba(p['card'], _panel_glass_alpha)}; }}
+QGroupBox[glassPane="true"] {{ background: {_rgba(p['card'], _panel_glass_alpha)}; }}
+QFrame#shelfPane[glassPane="true"] {{ background: {_rgba(p['card'], _panel_glass_alpha)}; }}
+
+/* Round-03 glass kit component surfaces (kit.md §4; gui/panel_kit.py builds
+   the widgets). Every component has a stated FLAT/TOKEN form — the opaque
+   rule below — and resolves any glass form through the SAME per-instance
+   property mechanics as glassPane above (never a parallel tier ladder).
+
+   shelfPane (kit §4.1 `Pane`/GlassPane): the container slab. Chrome + labels
+   only (ink law: text/muted — no value ever lives on a pane). FLAT form:
+   opaque `shelf` token. Carries the kit's machined edge: hairline_strong
+   outline + specular top edge (the same border-top-color idiom the ribbon/
+   buttons already use — a shelf is static chrome, never a plot host, so hard
+   rule 3's four-edge-border repaint concern does not apply to it). */
+QFrame#shelfPane {{
+    background: {p['shelf']};
+    border: 1px solid {p['hairline_strong']};
+    border-top-color: {p['edge']};
+    border-radius: {RADIUS_SHELF}px;
+}}
+
+/* wellPane (kit §4.4 `Well`): the recess — inputs/troughs/list rows. OPAQUE
+   ALWAYS, at every tier; it never composites (its FLAT form is its only
+   form) and it may only ever sit on a card, never on the ground (§2). The
+   edge_shade top edge is the inverse machined cue for sunken surfaces. */
+QFrame#wellPane {{
+    background: {p['well']};
+    border: 1px solid {p['hairline']};
+    border-top-color: {p['edge_shade']};
+    border-radius: {RADIUS_MD}px;
+}}
+
+/* hazardSurface (kit §4.6 `HazardSurface`): the stone in the glass room.
+   OPAQUE AT EVERY TIER (consequence rule) — deliberately NO [glassPane]/
+   [glassCard] variant exists for this selector, gui.panel_kit's registry
+   refuses the class outright, and the widget pins an opaque instance fill
+   as the last belt. The 4px danger/armed stripe + 45° hatch (the texture
+   channel that survives greyscale) are painted by the widget itself from
+   tokens — QSS cannot hatch. */
+QFrame#hazardSurface {{
+    background: {p['panel']};
+    border: 1px solid {p['hairline_strong']};
+    border-radius: {RADIUS_XL}px;
+}}
+
+/* Glass CARD (kit §2.1/§4.2): a card whose fill goes translucent paints one
+   rung up at the card-rung alpha — `raised` @ {GLASS_CARD_ALPHA_DARK} dark /
+   `panel` @ {GLASS_CARD_ALPHA_LIGHT} light — so the composite lands back on
+   the opaque `card` tone (measured ΔL* <= 1.0, tests/test_material_contract).
+   Driven by the same opt-in registry as glassPane (role="card"); inert until
+   a pane registered with that role AND the panel-glass switch set it. */
+QFrame#cardPane[glassCard="true"], QGroupBox[glassCard="true"] {{
+    background: {glass_card_fill};
+}}
 
 /* Eyebrow — a small caption label above a heading/value.  QSS cannot
    uppercase text, so the panel should pass already-uppercased text; letter-
@@ -1449,7 +1828,7 @@ QGroupBox[glassPane="true"] {{ background: {_rgba(p['panel'], PANEL_GLASS_ALPHA)
    exact same "reused for punctuation-bearing captions" risk: eyebrow_title
    AND form_row's per-field caption both key off it). */
 QLabel#eyebrow {{
-    color: {p['faint']};
+    color: {p['muted']};
     font-size: {FONT_METRIC_LABEL_PX}px; font-weight: {WEIGHT_METRIC_LABEL};
     letter-spacing: {TRACKING_METRIC_LABEL_PX}px;
 }}
@@ -1509,24 +1888,46 @@ QLabel#statusChip[state="neutral"] {{
     background: {p['chip']}; color: {p['muted']}; border: 1px solid {p['hairline']};
 }}
 QLabel#statusChip[state="disconnected"] {{
-    background: transparent; color: {p['faint']}; border: 1px solid {p['hairline']};
+    background: transparent; color: {p['muted']}; border: 1px solid {p['hairline']};
 }}
 QLabel#statusChip[state="unknown"] {{
     background: {p['chip']}; color: {p['muted']};
     border: 1px dashed {p['hairline_strong']};
 }}
+/* ── WHY THE STATE CHIPS' LABEL IS `text`, NOT THE STATE COLOUR ──────────────
+   (WCAG pass, 2026-07-14 — this is the structural half of the palette fix.)
+
+   A state chip paints ``rgba(token, 0.16)`` over its parent surface and then
+   put a label ON it IN THE SAME TOKEN: ink on a wash OF ITSELF. That wash pulls
+   the background toward the ink, so the pair is capped far below where the
+   token's own plain-surface contrast suggests — light `good` on its own chip
+   measured 3.53:1, `warn` 3.35, `sim` 2.78. Darkening the tokens does not
+   rescue it: to clear 4.5:1 at these alphas the light hues have to go 25-36%
+   darker, at which point amber is brown, sim's cyan collapses toward good's
+   green (law 6!), and it IS the re-theme Kaya ruled out.
+
+   So the ink and the fill are decoupled: the chip keeps its coloured FILL and
+   its coloured BORDER — the colour language an operator reads at a glance is
+   untouched — and the LABEL takes the neutral `text` ink, which clears 10.3:1
+   (light) / 6.4:1 (dark) on EVERY one of these washes at EVERY alpha. That is
+   also robust by construction: a future tweak to a fill alpha cannot make a
+   label unreadable. State is never colour-alone anyway (the chip's own text
+   names it — house rule), so nothing is lost from the redundant channel.  */
 QLabel#statusChip[state="good"] {{
-    background: {_rgba(p['good'], 0.16)}; color: {p['good']};
+    background: {_rgba(p['good'], 0.16)}; color: {p['text']};
     border: 1px solid {_rgba(p['good'], 0.55)};
 }}
 QLabel#statusChip[state="warn"], QLabel#statusChip[state="fault"] {{
-    background: {_rgba(p['warn'], 0.16)}; color: {p['warn']};
+    background: {_rgba(p['warn'], 0.16)}; color: {p['text']};
     border: 1px solid {_rgba(p['warn'], 0.55)};
 }}
 QLabel#statusChip[state="crit"] {{
-    background: {_rgba(p['crit'], 0.16)}; color: {p['crit']};
+    background: {_rgba(p['crit'], 0.16)}; color: {p['text']};
     border: 1px solid {_rgba(p['crit'], 0.55)};
 }}
+/* The accent family is the ONE exception: `tint` is a fixed 0.10/0.13 wash
+   computed at palette-build time (not a per-rule rgba), and the darkened light
+   accent clears it at 4.58:1 — so info/busy keep their accent ink. */
 QLabel#statusChip[state="info"], QLabel#statusChip[state="busy"] {{
     background: {p['tint']}; color: {p['accent']};
     border: 1px solid {_rgba(p['accent'], 0.50)};
@@ -1537,39 +1938,49 @@ QLabel#statusChip[state="info"], QLabel#statusChip[state="busy"] {{
    gui/status_widgets.py — see StatusChip.set_pulse_phase()); distinct from
    the pre-existing per-subsystem ``motionPulse``/``motionPulsePhase`` hooks
    below, which stay as-is for their own laser/HV/scan call sites. */
+/* The busy pulse used to swing the FILL to rgba(accent, 0.30) — a wash that
+   deep drags the accent label down to 3.3:1 on the beat. The pulse now lives
+   entirely in the BORDER (law 8 is satisfied by any visible periodic change),
+   so the label's contrast is constant across both phases instead of dipping
+   every second. */
 QLabel#statusChip[state="busy"][pulsePhase="1"] {{
-    background: {_rgba(p['accent'], 0.30)}; border: 1px solid {p['accent']};
+    background: {p['tint']}; border: 1px solid {p['accent']};
 }}
+/* armed / simulated / the motion-pulse chips: same ink/fill decoupling as the
+   good/warn/crit block above (these carry the DEEPEST washes — 0.20 armed,
+   0.24 at pulse phase 1 — so they were the worst offenders of the lot). The
+   sim chip keeps its dashed cyan ring: law 6's "sim can never pass as real"
+   never rested on the ink colour alone. */
 QLabel#statusChip[state="armed"] {{
-    background: {_rgba(p['warn'], 0.20)}; color: {p['warn']};
+    background: {_rgba(p['warn'], 0.20)}; color: {p['text']};
     border: 1px solid {_rgba(p['warn'], 0.70)};
 }}
 QLabel#statusChip[state="simulated"] {{
-    background: {_rgba(p['sim'], 0.12)}; color: {p['sim']};
+    background: {_rgba(p['sim'], 0.12)}; color: {p['text']};
     border: 1px dashed {_rgba(p['sim'], 0.70)};
 }}
 QLabel#statusChip[motionPulse="laser"][motionPulsePhase="0"] {{
-    background: {_rgba(p['crit'], 0.14)}; color: {p['crit']};
+    background: {_rgba(p['crit'], 0.14)}; color: {p['text']};
     border: 1px solid {_rgba(p['crit'], 0.42)};
 }}
 QLabel#statusChip[motionPulse="laser"][motionPulsePhase="1"] {{
-    background: {_rgba(p['crit'], 0.24)}; color: {p['crit']};
+    background: {_rgba(p['crit'], 0.24)}; color: {p['text']};
     border: 1px solid {_rgba(p['crit'], 0.78)};
 }}
 QLabel#statusChip[motionPulse="hv"][motionPulsePhase="0"] {{
-    background: {_rgba(p['warn'], 0.14)}; color: {p['warn']};
+    background: {_rgba(p['warn'], 0.14)}; color: {p['text']};
     border: 1px solid {_rgba(p['warn'], 0.42)};
 }}
 QLabel#statusChip[motionPulse="hv"][motionPulsePhase="1"] {{
-    background: {_rgba(p['warn'], 0.24)}; color: {p['warn']};
+    background: {_rgba(p['warn'], 0.24)}; color: {p['text']};
     border: 1px solid {_rgba(p['warn'], 0.78)};
 }}
 QLabel#statusChip[motionPulse="scan"][motionPulsePhase="0"] {{
-    background: {_rgba(p['accent'], 0.14)}; color: {p['accent']};
+    background: {_rgba(p['accent'], 0.14)}; color: {p['text']};
     border: 1px solid {_rgba(p['accent'], 0.42)};
 }}
 QLabel#statusChip[motionPulse="scan"][motionPulsePhase="1"] {{
-    background: {_rgba(p['accent'], 0.24)}; color: {p['accent']};
+    background: {_rgba(p['accent'], 0.24)}; color: {p['text']};
     border: 1px solid {_rgba(p['accent'], 0.78)};
 }}
 
@@ -1585,11 +1996,17 @@ QFrame#statusLamp {{
     border-radius: 4px; background: {p['muted']}; border: none;
 }}
 QFrame#statusLamp[state="neutral"] {{ background: {p['muted']}; border: none; }}
+/* WCAG pass: a StatusLamp is a 9px dot with NO label — its colour is the SOLE
+   carrier of the state, so it owes 3:1 (WCAG 1.4.11), and `faint` gave it
+   2.72:1 in light / 2.61 on a dark card. "Disconnected" and "unknown" are
+   law-7 states (never lie about hardware); an invisible one lies by omission.
+   Both move to `muted` — still the quiet, colourless end of the ladder, but a
+   dot you can actually see (6.63:1). */
 QFrame#statusLamp[state="disconnected"] {{
-    background: transparent; border: 1px solid {p['faint']};
+    background: transparent; border: 1px solid {p['muted']};
 }}
 QFrame#statusLamp[state="unknown"] {{
-    background: {p['faint']}; border: 1px dashed {p['hairline_strong']};
+    background: {p['muted']}; border: 1px dashed {p['hairline_strong']};
 }}
 QFrame#statusLamp[state="good"] {{ background: {p['good']}; border: none; }}
 QFrame#statusLamp[state="warn"], QFrame#statusLamp[state="armed"], QFrame#statusLamp[state="fault"] {{
@@ -1702,10 +2119,271 @@ PLOT_FG = "#c7cfda"
 # token the same way via palette(mode) instead of a special case for these two.
 PLOT_GRID = "#242a33"
 PLOT_OVERLAY = "#ffb454"
+# PLOT_ACCENT — accent ink ON the instrument screen, fixed in both themes for
+# exactly the same reason as PLOT_BG/PLOT_FG above. WCAG pass (2026-07-14): the
+# motor position LCD (``QLabel#readoutValue``) painted the *theme* accent on
+# this fixed dark canvas, so in LIGHT mode it was the light accent on near-black
+# — 4.17:1, a failing pair on a genuine instrument readout (stage position). The
+# plot canvas does not repaint on a theme switch, so its ink must not depend on
+# the theme either: the dark accent is the only one that belongs here (8.02:1).
+PLOT_ACCENT = ACCENT_DARK
 for _p in (LIGHT, DARK):
     _p["plot_grid"] = PLOT_GRID
     _p["plot_overlay"] = PLOT_OVERLAY
+    _p["plot_accent"] = PLOT_ACCENT
 del _p
+
+
+# ---------------------------------------------------------------------------
+# AMBIENT GROUND — round-03 glass kit §1 (layer 0).
+#
+# The app-owned procedural backdrop wash: two faint accent radials (top-left
+# 60% / bottom-right 70%) plus a specular white toplight over the top 30%,
+# rendered ONCE per (size-bucket x theme x DPR) into a cached QPixmap and
+# painted by gui.panel_kit.AmbientGround UNDER the panels, ON TOP of the
+# window's canvas fill (opaque token, or the rgba underlay-law fill while a
+# DWM material is live) — never instead of it. Zero per-frame procedural
+# painting: during a scan the cockpit repaints plots at 15-30 Hz and the
+# ground costs nothing on that path (a cached blit at most, and only when Qt
+# dirties the wash widget itself).
+#
+# THE GROUND BAND LAW (kit §1.1): no pixel of the ground may deviate from
+# `canvas` by more than ΔL* 4.0. GROUND_TINT_ALPHA_MAX bounds the SUMMED wash
+# alpha at any pixel by construction (main radial peaks at the top-left
+# corner where the toplight also peaks: 0.045 + 0.025 == 0.07; the soft
+# radial peaks in the opposite corner where both are ~0). But Baldr proved
+# the "0.07 -> ΔL* 4.0" arithmetic UNPROVEN — and it is in fact FALSE on the
+# dark canvas (accent at 0.07 over #0A0D13 measures ΔL* 4.45; the corner
+# stack measures 5.5) — so the budget alone is NOT trusted: the wash is
+# additionally CLAMPED by measurement (_ground_clamp_scale renders a probe,
+# measures the real ΔL* band against the live canvas, and scales every wash
+# alpha down until the band holds, with margin). The wash is clamped, never
+# the law. Guard: tests/test_ambient_ground.py re-measures the shipped
+# pixmap with its own independent L* math.
+#
+# The ground carries NO information (kit §1.2): it is tinted only with
+# `accent` and neutral white — never a semantic token — and it never
+# animates (no timer, no repaint source of its own).
+# ---------------------------------------------------------------------------
+GROUND_TINT_ALPHA_MAX = 0.07            # kit §1.1 — summed wash alpha budget
+GROUND_BAND_MAX_DELTA_LSTAR = 4.0       # kit §1.1 — the band law itself
+_GROUND_RADIAL_MAIN_ALPHA = 0.045       # kit §1 — top-left accent radial
+_GROUND_RADIAL_SOFT_ALPHA = 0.025       # kit §1 — bottom-right accent radial
+_GROUND_TOPLIGHT_ALPHA = GROUND_TINT_ALPHA_MAX - _GROUND_RADIAL_MAIN_ALPHA
+_GROUND_CLAMP_TARGET_LSTAR = GROUND_BAND_MAX_DELTA_LSTAR - 0.1   # clamp margin
+_GROUND_BUCKET_PX = 256                 # size-bucket step for the pixmap cache
+_GROUND_CACHE_MAX = 12
+_GROUND_PROBE_SIZE = (96, 72)           # clamp-measurement render (build-time only)
+# RISK 2 (Mary's pilot review): the wash is a LOW-FREQUENCY gradient, so the
+# cached pixmap need not match the full window x DPR resolution — at 4K/DPR2 a
+# 1:1 render is ~141 MB PER cache entry (up to ~1.7 GB retained). We render at
+# a capped long edge and let AmbientGround.paintEvent's
+# ``drawPixmap(self.rect(), pm)`` scale it up; the gradient has no detail to
+# lose, so there is no banding at scale (before/after pair in
+# artifacts_claude/ground_perf/). 1024 keeps every existing cache case
+# (<=512-bucket up to DPR2 == 1024 physical) byte-identical.
+_GROUND_MAX_RENDER_PX = 1024
+
+_ground_pixmaps: "dict[tuple, QPixmap]" = {}
+_ground_clamp_cache: dict[tuple, float] = {}
+
+
+def _srgb8_to_linear(c8: int) -> float:
+    c = c8 / 255.0
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _lstar_of_rgb(r: int, g: int, b: int) -> float:
+    """CIE L* of an sRGB pixel (D65, Yn=1 — the same Y the WCAG relative-
+    luminance formula uses, so the band law and the contrast contracts live
+    on one scale)."""
+    y = (0.2126 * _srgb8_to_linear(r) + 0.7152 * _srgb8_to_linear(g)
+         + 0.0722 * _srgb8_to_linear(b))
+    if y > (6 / 29) ** 3:
+        return 116.0 * (y ** (1.0 / 3.0)) - 16.0
+    return y * (29 / 3) ** 3
+
+
+def _ground_wash_image(width_px: int, height_px: int, mode: str,
+                       scale: float = 1.0) -> QImage:
+    """The wash ALONE — transparent base + the kit §1 gradients at *scale*
+    times their base alphas. The caller composites it over the canvas fill;
+    painting the canvas into the pixmap itself would cover a live DWM
+    material (the wash sits ON the canvas fill, not instead of it)."""
+    w, h = max(1, int(width_px)), max(1, int(height_px))
+    img = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(0)
+    p = palette(mode)
+    accent = QColor(p["accent"])
+    painter = QPainter(img)
+    try:
+        # Main accent radial — top-left, 60% (kit §1).
+        g1 = QRadialGradient(0.12 * w, 0.10 * h, 0.60 * max(w, h))
+        c0 = QColor(accent)
+        c0.setAlphaF(min(1.0, _GROUND_RADIAL_MAIN_ALPHA * scale))
+        c1 = QColor(accent)
+        c1.setAlphaF(0.0)
+        g1.setColorAt(0.0, c0)
+        g1.setColorAt(1.0, c1)
+        painter.fillRect(img.rect(), QBrush(g1))
+        # Soft accent radial — bottom-right, 70% (kit §1).
+        g2 = QRadialGradient(0.88 * w, 0.90 * h, 0.70 * max(w, h))
+        c0 = QColor(accent)
+        c0.setAlphaF(min(1.0, _GROUND_RADIAL_SOFT_ALPHA * scale))
+        g2.setColorAt(0.0, c0)
+        g2.setColorAt(1.0, c1)
+        painter.fillRect(img.rect(), QBrush(g2))
+        # Specular toplight — white linear over the top 30% (kit §1:
+        # "dark: lifts; light: a white toplight").
+        top_h = max(1, int(0.30 * h))
+        g3 = QLinearGradient(0.0, 0.0, 0.0, float(top_h))
+        w0 = QColor(255, 255, 255)
+        w0.setAlphaF(min(1.0, _GROUND_TOPLIGHT_ALPHA * scale))
+        w1 = QColor(255, 255, 255)
+        w1.setAlphaF(0.0)
+        g3.setColorAt(0.0, w0)
+        g3.setColorAt(1.0, w1)
+        painter.fillRect(QRect(0, 0, w, top_h), QBrush(g3))
+    finally:
+        painter.end()
+    return img
+
+
+def _image_lstar_array(img: QImage) -> np.ndarray:
+    """Per-pixel CIE L* of an (opaque) QImage, vectorised.
+
+    RISK 1 (Mary's pilot review): the band probe below used to walk the probe
+    with a pure-Python nested ``pixelColor()`` loop (~96x72 x up to 6 clamp
+    iterations, tens-to-hundreds of ms) synchronously on the first paint. This
+    moves that inner loop off Python and onto numpy — the SAME independent
+    idiom tests/test_ambient_ground.py already measures the shipped pixmap with,
+    so the measured band is unchanged (the clamp scale stays byte-stable)."""
+    img = img.convertToFormat(QImage.Format.Format_ARGB32)
+    h, w = img.height(), img.width()
+    buf = np.frombuffer(img.constBits(), dtype=np.uint8)
+    px = buf.reshape(h, img.bytesPerLine() // 4, 4)[:, :w, :]
+    # ARGB32 on little-endian is B,G,R,A in memory.
+    b = px[..., 0].astype(np.float64)
+    g = px[..., 1].astype(np.float64)
+    r = px[..., 2].astype(np.float64)
+
+    def _lin(c):
+        c = c / 255.0
+        return np.where(c <= 0.04045, c / 12.92, ((c + 0.055) / 1.055) ** 2.4)
+
+    y = 0.2126 * _lin(r) + 0.7152 * _lin(g) + 0.0722 * _lin(b)
+    knee = (6 / 29) ** 3
+    return np.where(y > knee, 116.0 * np.cbrt(y) - 16.0, y * (29 / 3) ** 3)
+
+
+def _ground_band_probe(mode: str, scale: float) -> float:
+    """Max |ΔL*| of the wash composited over the live canvas token — measured
+    on a small probe render (build-time only, never on a paint path)."""
+    p = palette(mode)
+    canvas = QColor(p["canvas"])
+    pw, ph = _GROUND_PROBE_SIZE
+    probe = QImage(pw, ph, QImage.Format.Format_ARGB32_Premultiplied)
+    probe.fill(canvas)
+    wash = _ground_wash_image(pw, ph, mode, scale)
+    painter = QPainter(probe)
+    painter.drawImage(0, 0, wash)
+    painter.end()
+    canvas_l = _lstar_of_rgb(canvas.red(), canvas.green(), canvas.blue())
+    return float(np.abs(_image_lstar_array(probe) - canvas_l).max())
+
+
+def _ground_clamp_scale(mode: str) -> float:
+    """The measured clamp (see the module comment above): the largest wash
+    scale (<= 1.0) whose real rendered band stays inside the ΔL* 4.0 law with
+    margin. Cached per (mode, canvas, accent) so presets/overrides re-derive
+    their own clamp; L* is monotone in the wash alpha at these magnitudes, so
+    a couple of proportional steps converge."""
+    p = palette(mode)
+    key = (mode, p["canvas"], p["accent"])
+    cached = _ground_clamp_cache.get(key)
+    if cached is not None:
+        return cached
+    scale = 1.0
+    for _ in range(6):
+        worst = _ground_band_probe(mode, scale)
+        if worst <= _GROUND_CLAMP_TARGET_LSTAR:
+            break
+        scale *= (_GROUND_CLAMP_TARGET_LSTAR / worst) * 0.97
+    _ground_clamp_cache[key] = scale
+    return scale
+
+
+def ground_band_measured(mode: str) -> float:
+    """The real, clamped ΔL* band of the shipped wash for *mode* — the number
+    the kit's §1.1 claims must be checked against (dev/report helper; the
+    guard test measures the pixmap independently)."""
+    return _ground_band_probe(mode, _ground_clamp_scale(mode))
+
+
+def prewarm_ground(mode: str) -> None:
+    """Prime the ground band clamp for *mode* OFF the GUI paint path (RISK 1).
+
+    The clamp's measurement probe is the only non-trivial step in
+    ``ground_pixmap`` (the wash render itself is a handful of gradient fills).
+    Priming it here — from ``AmbientGround.__init__`` / ``refresh_theme``, off
+    the paint hot path — means the first ``paintEvent`` renders + caches a
+    (capped) pixmap and hits an already-computed clamp, never runs the probe.
+    Size/DPR-independent (the clamp keys only on mode/canvas/accent), so one
+    call per theme covers every window size. Never lets a probe failure break
+    widget construction."""
+    try:
+        _ground_clamp_scale("dark" if str(mode).lower() == "dark" else "light")
+    except Exception:  # pragma: no cover - defensive: prewarm is best-effort
+        logger.debug("ground clamp prewarm skipped", exc_info=True)
+
+
+def _ground_bucket(size_px: int) -> int:
+    return max(_GROUND_BUCKET_PX,
+               int(math.ceil(size_px / _GROUND_BUCKET_PX)) * _GROUND_BUCKET_PX)
+
+
+def ground_pixmap(width: int, height: int, mode: str, dpr: float = 1.0) -> QPixmap:
+    """The cached ambient-ground wash pixmap covering *width* x *height*
+    logical px (bucketed to _GROUND_BUCKET_PX steps so a resize storm
+    re-renders nothing; the caller scales it to its rect — the wash is
+    defined proportionally, so scaling is exact up to the bucket's aspect
+    error). Keyed by (bucket, mode, DPR, canvas, accent): a theme switch,
+    preset or accent override resolves to its own entry and its own
+    measured clamp."""
+    mode = "dark" if str(mode).lower() == "dark" else "light"
+    try:
+        dpr = float(dpr)
+    except (TypeError, ValueError):
+        dpr = 1.0
+    if dpr != dpr or dpr <= 0:          # NaN / garbage — render at 1:1
+        dpr = 1.0
+    bw = _ground_bucket(max(1, int(width)))
+    bh = _ground_bucket(max(1, int(height)))
+    p = palette(mode)
+    key = (bw, bh, mode, round(dpr * 100), p["canvas"], p["accent"])
+    pm = _ground_pixmaps.get(key)
+    if pm is not None:
+        return pm
+    scale = _ground_clamp_scale(mode)
+    # RISK 2: render the low-frequency wash at a capped long edge and let the
+    # caller's ``drawPixmap(rect, pm)`` scale it up (no banding — the gradient
+    # has no detail to lose). Aspect ratio is preserved so the radial anchors
+    # (proportional to w/h) land identically. Sub-cap sizes render exactly as
+    # before, so every existing cache case stays byte-identical.
+    pw = int(bw * dpr)
+    ph = int(bh * dpr)
+    long_edge = max(pw, ph)
+    if long_edge > _GROUND_MAX_RENDER_PX:
+        shrink = _GROUND_MAX_RENDER_PX / long_edge
+        pw = max(1, int(round(pw * shrink)))
+        ph = max(1, int(round(ph * shrink)))
+    img = _ground_wash_image(pw, ph, mode, scale)
+    pm = QPixmap.fromImage(img)
+    pm.setDevicePixelRatio(dpr)
+    while len(_ground_pixmaps) >= _GROUND_CACHE_MAX:
+        _ground_pixmaps.pop(next(iter(_ground_pixmaps)))
+    _ground_pixmaps[key] = pm
+    return pm
 
 
 # ---------------------------------------------------------------------------
@@ -1788,7 +2466,12 @@ _GLASS_BLEND_ALPHAS = {
 # "crit" writable would be a bypass, since most QSS rules read p['crit'].
 # There is NO override path — apply_theme_overrides raises, and
 # sanitize_overrides silently drops these on any preset-JSON load.
-SAFETY_TOKENS = frozenset({"danger", "armed", "sim", "error", "crit", "warn"})
+# WCAG pass (2026-07-14): "danger_fill"/"on_danger"/"on_armed" join the lock.
+# They ARE the hazard surfaces (the HV/abort button body and the ink on it, the
+# pressed motion key) — a user-editable "on_danger" would let a preset paint the
+# Abort label in any colour it liked, including one that vanishes into the fill.
+SAFETY_TOKENS = frozenset({"danger", "armed", "sim", "error", "crit", "warn",
+                           "danger_fill", "on_danger", "on_armed"})
 
 # User-editable token GROUPS: one editor swatch fans out to every dict key
 # that names the same concept (bg/canvas are byte-equal aliases today;
@@ -2017,14 +2700,54 @@ _SETTINGS_TYPOGRAPHY_KEY = "theme/typography"
 _SETTINGS_RADIUS_KEY = "theme/radius_scale"
 _SETTINGS_WINDOW_OPACITY_KEY = "theme/window_opacity"
 _SETTINGS_WINDOW_BACKDROP_KEY = "theme/window_backdrop"
+_SETTINGS_CANVAS_ALPHA_KEY = "theme/canvas_alpha"
+_SETTINGS_PANEL_GLASS_ALPHA_KEY = "theme/panel_glass_alpha"
 
 # Live customization state (module-level; reset via reset_theme_customization).
 _glass_amount: float = DEFAULT_GLASS_AMOUNT
 _window_opacity: float = DEFAULT_WINDOW_OPACITY
+# Glass alphas — the two material dials the theme editor's Material section
+# exposes (Baldr T3 "mechanism-tunable" tokens). Mutable so a live slider can
+# retune them; the QSS builder / _canvas_fill read these, not the DEFAULT
+# constants above. Clamped on every write to the scrim-floor legal range.
+_canvas_alpha: float = BACKDROP_CANVAS_ALPHA
+_panel_glass_alpha: float = PANEL_GLASS_ALPHA
 # Windows 11 DWM system backdrop material — see gui/backdrop.py. Preference
 # state only; whether it actually renders is decided at apply time by
 # backdrop.is_backdrop_supported(). "none" everywhere else in the module.
 _window_backdrop: str = "none"
+# The theme mode ("dark"/"light") of the last apply_theme call. Authoritative
+# after the first apply_theme (which always runs at startup, main.py). Read by
+# apply_window_backdrop_to so the DWM material's immersive-dark tint matches the
+# active theme (gui.backdrop.DWMWA_USE_IMMERSIVE_DARK_MODE) — the cockpit is
+# dark-first, so "dark" is the safe pre-first-apply fallback.
+_active_mode: str = "dark"
+# The backdrop kind the CURRENTLY INSTALLED app stylesheet was built with (None
+# before the first apply_theme). The glass-canvas rules (_glass_canvas_qss) exist
+# in the QSS only while a material is preferred, so flipping the preference
+# LIVE changes the stylesheet — and nothing on the theme editor's backdrop path
+# (set_window_backdrop → apply_window_backdrop → apply_window_opacity) used to
+# rebuild it. Result (Mary, G-B1 review, BUG 1): after a live none → acrylic
+# toggle, gui.backdrop dutifully set glassCanvas="true" on the windows whose
+# material attached, but the QSS carried NO rule behind that selector, so the
+# window kept painting the opaque p['bg'] — the alpha hole never opened and Kaya
+# saw no glass. apply_window_backdrop() now compares this against the resolved
+# kind and rebuilds the QSS first. NOT part of the user's customization (it
+# describes the installed stylesheet, not a preference), so
+# reset_theme_customization does not touch it — apply_theme is its only writer.
+_qss_backdrop: str | None = None
+# Windows currently inside a backdrop re-assert — the re-entrancy guard for
+# _apply_window_backdrop_to (see its docstring: our own palette write delivers
+# PaletteChange back into the event filter that called us). WeakSet so a closed
+# window is never kept alive by this module.
+_reasserting_windows: "weakref.WeakSet" = weakref.WeakSet()
+# True while a deferred post-toggle re-assert is already queued — see
+# _schedule_post_toggle_reassert (coalesced: at most one pending pass).
+_post_toggle_pending: bool = False
+# Injectable "is a scan running right now?" predicate — see
+# set_scan_active_provider. Presentation must never import controller/, so the
+# run-state source is WIRED IN by the composition root (tct_gui) instead.
+_scan_active_provider: "Callable[[], bool] | None" = None
 _overrides: dict[str, dict[str, str]] = {"light": {}, "dark": {}}
 _typography: dict = {"sans": None, "mono": None, "hinting": None, "base_px": None}
 _radius_scale: str = "m"
@@ -2051,6 +2774,21 @@ def _recompute_palettes() -> None:
         merged["accent_strong"] = _darken(merged["accent"], 0.15)
         merged["tint"] = merged["active"] = _blend(
             merged["accent"], merged["panel"], tint_alpha)
+        # Round-03 kit elevation rungs — ALWAYS re-derived from the (possibly
+        # overridden) panel/raised/canvas, same formulas as the inline dict
+        # definitions (byte-identical at the defaults, guarded by
+        # test_recompute_at_defaults_is_byte_identical). This is the whole
+        # "card is derived, not editable" plumbing: a user "panel" override
+        # fans into card/shelf here rather than via _OVERRIDE_FANOUT.
+        if mode == "dark":
+            merged["card"] = _blend(merged["raised"], merged["panel"],
+                                    _KIT_CARD_BLEND_DARK)
+            merged["shelf"] = _blend(merged["card"], merged["panel"],
+                                     _KIT_SHELF_BLEND_DARK)
+        else:
+            merged["card"] = merged["panel"]
+            merged["shelf"] = _blend(merged["panel"], merged["canvas"],
+                                     _KIT_SHELF_BLEND_LIGHT)
         if "hairline" in ov:
             # Approximate "strong" as a wash of text over the picked hairline
             # (only when overridden — the shipped strong values stay exact).
@@ -2091,6 +2829,51 @@ def get_glass_amount() -> float:
     return _glass_amount
 
 
+def set_backdrop_canvas_alpha(value) -> float:
+    """Set how much the window-canvas fill lets a DWM backdrop through and
+    return the value actually set — CLAMPED to
+    [MIN_BACKDROP_CANVAS_ALPHA, MAX_BACKDROP_CANVAS_ALPHA] (the scrim-floor
+    safety rail, Baldr §1.2). Garbage (None, "", NaN) fails to the fully-opaque
+    end. Does NOT recompute palettes (the alpha only affects _canvas_fill's QSS,
+    never the palette dicts); the caller still regenerates + reapplies the QSS
+    (apply_theme) and re-runs apply_window_backdrop to repaint."""
+    global _canvas_alpha
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = MAX_BACKDROP_CANVAS_ALPHA
+    if value != value:                      # NaN — clamp to the opaque end
+        value = MAX_BACKDROP_CANVAS_ALPHA
+    _canvas_alpha = max(MIN_BACKDROP_CANVAS_ALPHA,
+                        min(MAX_BACKDROP_CANVAS_ALPHA, value))
+    return _canvas_alpha
+
+
+def get_backdrop_canvas_alpha() -> float:
+    return _canvas_alpha
+
+
+def set_panel_glass_alpha(value) -> float:
+    """Set the opted-in panel-glass tint alpha and return the value actually
+    set — CLAMPED to [MIN_PANEL_GLASS_ALPHA, MAX_PANEL_GLASS_ALPHA] (scrim
+    floor, Baldr §1.2). Garbage / NaN fails opaque. Only affects the glassPane
+    QSS rule, so no palette recompute; caller reapplies the QSS to repaint."""
+    global _panel_glass_alpha
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        value = MAX_PANEL_GLASS_ALPHA
+    if value != value:                      # NaN — clamp to the opaque end
+        value = MAX_PANEL_GLASS_ALPHA
+    _panel_glass_alpha = max(MIN_PANEL_GLASS_ALPHA,
+                             min(MAX_PANEL_GLASS_ALPHA, value))
+    return _panel_glass_alpha
+
+
+def get_panel_glass_alpha() -> float:
+    return _panel_glass_alpha
+
+
 def set_window_opacity(value) -> float:
     """Set the real (compositor) window opacity and return the value actually
     set — CLAMPED to [MIN_WINDOW_OPACITY, MAX_WINDOW_OPACITY].
@@ -2115,6 +2898,28 @@ def get_window_opacity() -> float:
     return _window_opacity
 
 
+def effective_window_opacity() -> float:
+    """The opacity a window must ACTUALLY carry right now.
+
+    A DWM system backdrop material and a LAYERED window (``setWindowOpacity``
+    < 1 ⇒ ``WS_EX_LAYERED``) are mutually exclusive: the uniform per-window
+    alpha suppresses the material outright (Kaya's live 98 % was the proof the
+    acrylic "vanished"). So while a material is the active preference, every
+    window is pinned to fully opaque; the stored preference
+    (:func:`get_window_opacity`) is untouched and returns the moment the
+    backdrop goes back to "none".
+
+    Extracted from :func:`apply_window_opacity` (beat G-B1) because the
+    CONSTRUCTION paths — ``_DetachedWindow``, ``ThemeEditorDialog``,
+    ``SettingsWindow``, ``TCTMainWindow`` — used to push the RAW stored value
+    onto a brand-new window and so layered every satellite created while a
+    material was live. A detached panel could therefore never show glass: it
+    laid ``WS_EX_LAYERED`` over its own material microseconds after attaching
+    it. Every one of those call sites now goes through
+    :func:`reassert_window_backdrop`, which applies this pin."""
+    return 1.0 if _window_backdrop != "none" else _window_opacity
+
+
 def apply_window_opacity(app=None, opacity: float | None = None) -> float:
     """Push the current window opacity onto EVERY top-level window of *app*.
 
@@ -2133,15 +2938,9 @@ def apply_window_opacity(app=None, opacity: float | None = None) -> float:
     app = app if app is not None else QApplication.instance()
     if app is None:
         return value
-    # A DWM system backdrop material and a LAYERED window (setWindowOpacity < 1,
-    # WS_EX_LAYERED) are mutually exclusive: the uniform per-window alpha
-    # suppresses the material outright (apply_window_backdrop's interaction
-    # matrix, row 4 — Kaya's live 98% was the proof the acrylic "vanished").
-    # So while a material is active, PIN every window to fully opaque. The
-    # stored preference (_window_opacity, returned below) is left untouched, so
-    # the user's translucency returns the moment the backdrop is set back to
-    # "none". See gui/theme_editor.py for the matching UI clamp + visible note.
-    effective = 1.0 if _window_backdrop != "none" else value
+    # The WS_EX_LAYERED pin — see effective_window_opacity() for the mechanism
+    # and gui/theme_editor.py for the matching UI clamp + visible note.
+    effective = effective_window_opacity()
     for w in app.topLevelWidgets():
         if w.isWindow() and not _is_transient_window(w):
             w.setWindowOpacity(effective)
@@ -2168,6 +2967,52 @@ def set_window_backdrop(kind) -> str:
 
 def get_window_backdrop() -> str:
     return _window_backdrop
+
+
+def set_scan_active_provider(provider: "Callable[[], bool] | None") -> None:
+    """Wire the presentation layer to the app's run-state source — WITHOUT
+    importing it (Mary, G-B1 review, RISK 5).
+
+    ``gui.backdrop.nudge_repaint`` heals a stale surface with a REAL 1-px resize
+    + restore of the top-level, and the backdrop spine calls it on every
+    successful re-assert of a live-material window (Show, WinIdChange,
+    WindowStateChange, post-toggle, the deferred theme pass). A resize is not
+    cosmetic work: it forces a full relayout of the dock tree, every pyqtgraph
+    plot and the camera view on the GUI thread — of an app that is already
+    CPU-bound during an acquisition. A minimize→restore or an OS theme flip mid
+    scan would therefore stall the run's UI for a purely visual repair. Not data
+    loss (the workers own acquisition + HDF5), but a self-inflicted freeze, and
+    "scan-aware deferral" is a named element of the glass synthesis
+    (docs/design/glass_council/SYNTHESIS.md §136/§179/§610).
+
+    The predicate is INJECTED rather than read, because ``gui/style.py`` must
+    never import ``controller/`` (presentation stays decoupled from the state
+    machine — see docs/design/gui_architecture_plan.md's composition-root rule).
+    The composition root (``tct_gui.TCTMainWindow``) wires it to the existing
+    run-state source; unset (every test, every script, any embedding that has no
+    scan) means "not scanning", so the behaviour is unchanged by default.
+    Pass ``None`` to unwire (teardown / test isolation)."""
+    global _scan_active_provider
+    _scan_active_provider = provider
+
+
+def scan_is_active() -> bool:
+    """True only while the wired-in provider says a run is in flight.
+
+    Fails SAFE for the cosmetic caller: no provider, or a provider that raises,
+    means "no scan" — the repaint nudge is a repair, and suppressing it forever
+    because a predicate broke would resurrect the stale-surface bug it exists to
+    fix. (The reverse failure — one skipped nudge during a run — costs at most a
+    stale frame until the next re-assert.)"""
+    provider = _scan_active_provider
+    if provider is None:
+        return False
+    try:
+        return bool(provider())
+    except Exception:
+        logger.debug("scan-active provider raised; assuming no scan",
+                     exc_info=True)
+        return False
 
 
 def _reassert_window_palette(window) -> None:
@@ -2254,15 +3099,198 @@ def apply_window_backdrop_to(window, kind: str | None = None) -> str:
     reserved for the palette-reset case) schedules the missing repaint without
     touching the palette the DWM material needs to show through.
     """
+    return _apply_window_backdrop_to(window, kind, reason="apply")
+
+
+def _apply_window_backdrop_to(window, kind: str | None = None, *,
+                              reason: str = "apply") -> str:
+    """:func:`apply_window_backdrop_to` with the truth-log ``reason`` tag the
+    event spine passes ("show", "winidchange", "themechange", ...).
+
+    RE-ENTRANCY (the loop this function must not close): the work below writes
+    the window's palette (``_reassert_window_palette``) and repolishes it, and Qt
+    delivers ``PaletteChange`` for exactly that — synchronously, to the very
+    window whose event filter then wants to re-assert again. Without this guard
+    the "none" branch recurses until the stack dies. A window already inside a
+    re-assert simply skips the nested one: it is redundant by definition, the
+    outer pass is mid-flight and will finish the job."""
     resolved = _window_backdrop if kind is None else kind
-    applied = backdrop.apply_backdrop(window, resolved)
+    if window in _reasserting_windows:
+        return resolved
+    _reasserting_windows.add(window)
+    try:
+        return _apply_window_backdrop_to_impl(window, resolved, reason)
+    finally:
+        _reasserting_windows.discard(window)
+
+
+def _apply_window_backdrop_to_impl(window, resolved: str, reason: str) -> str:
+    # Guard EVERY window this ever touches (idempotent): the DWM attributes are
+    # per-HWND state, and Qt re-creates HWNDs behind our back — see
+    # gui.backdrop._BackdropGuard. Installed even for kind == "none" so that
+    # switching a material on later needs no second wiring pass.
+    backdrop.install_backdrop_guard(
+        window, _guard_reassert, _schedule_post_toggle_reassert, _guard_activation)
+    # Assert the DWM material's immersive-dark tint from the live theme mode so
+    # Mica/Acrylic composes dark under the dark cockpit theme instead of DWM's
+    # light default ("komplett weiss"). backdrop.py stays theme-blind; this is
+    # where style.py — which owns the mode — relays it. Re-asserted on every
+    # theme switch (apply_window_backdrop's fan-out runs after apply_theme in
+    # _toggle_theme), so a dark<->light flip re-tints the material explicitly
+    # rather than relying on a stylesheet-repolish side effect the identical-QSS
+    # perf guard can skip.
+    had_material = backdrop.window_has_material(window)
+    applied = backdrop.reassert_backdrop(
+        window, resolved, dark=(_active_mode == "dark"), reason=reason)
     if resolved == "none":
-        _reassert_window_palette(window)
-        _repaint_central_widget(window)
+        # The palette resync exists for the material → "none" TRANSITION (the C1
+        # risk-note fix). A spine-triggered re-assert (Show, WinIdChange, ...) on
+        # a window that has no material and is not being switched has nothing to
+        # undo — so it must not repolish. That keeps the event spine a TRUE no-op
+        # in the shipped default configuration (backdrop "none"): zero repolish
+        # churn on every show, zero risk to a suite that never asked for glass.
+        if reason == "apply" or had_material:
+            _reassert_window_palette(window)
+            _repaint_central_widget(window)
     elif applied:
         window.update()
         _repaint_central_widget(window)
+        # Stale-surface heal (Frigg/W4): a re-assert that follows an HWND or
+        # surface recreation needs a REAL repaint, not just an update() — the
+        # window can otherwise keep compositing the old backing store. Inert
+        # headless and while the window is not on screen.
+        #
+        # SCAN GATE (Mary, G-B1 review, RISK 5): nudge_repaint resizes the
+        # top-level by 1 px and back, which relayouts the whole dock tree, every
+        # plot and the camera view on the GUI thread. A cosmetic repair must
+        # never preempt a run — during a scan we skip it and let the NEXT
+        # re-assert (the run ends, the user shows/restores a window, the next
+        # theme touch) do the healing. Worst case while gated: one stale frame,
+        # already opaque-by-construction under the underlay law.
+        if scan_is_active():
+            logger.debug(
+                "glass: skipping the repaint nudge on %s — a scan is running "
+                "(a cosmetic relayout must not preempt a run)",
+                type(window).__name__)
+        else:
+            backdrop.nudge_repaint(window)
     return resolved
+
+
+def prepare_window_surface(window) -> bool:
+    """Call this as the FIRST line of a material-capable top-level's ``__init__``
+    (before it builds children), so the window is guaranteed an alpha-capable
+    native surface — on every material-capable HOST, regardless of the current
+    backdrop PREFERENCE.
+
+    Qt fixes a top-level's surface alpha when the native window is created. Any
+    child that realizes the HWND first (``winId()``, a ``QQuickWidget``, an early
+    ``show()``) permanently locks that window out of per-pixel alpha, and from
+    then on the material attaches with S_OK and composites NOTHING — the failure
+    that made the cockpit look glass-less while the freshly-built theme dialog
+    looked fine (GL-island spike, finding 2).
+
+    NO PREFERENCE GATE (Mary, G-B1 review, BUG 2 — this is the fix): gating the
+    surface prep on ``_window_backdrop != "none"`` made the LIVE toggle
+    unreachable by construction. With the shipped default ("none") every window
+    was realized without ``WA_TranslucentBackground`` ⇒ ``alphaBufferSize == -1``
+    for the life of that HWND. Picking "acrylic" in the theme editor then hit
+    ``backdrop._renegotiate_alpha_surface``, which correctly REFUSES to destroy
+    and re-create the native handle of a VISIBLE window (that would take the
+    cockpit's native children with it) — so the already-open window could never
+    gain alpha, and the user got nothing but a developer-facing log line. The
+    surface is now negotiated up front for every window that COULD carry a
+    material, and only the PIXELS stay gated on DWM success.
+
+    That is safe by the module's own underlay law
+    (``gui/backdrop.py:_set_glass_canvas``): "a translucent-capable surface
+    painted with an opaque fill is simply an opaque window — harmless". In the
+    shipped "none" default the QSS emits no ``[glassCanvas="true"]`` rule at all,
+    ``gui.backdrop`` sets no ``glassCanvas`` property, and the unqualified canvas
+    rule paints the OPAQUE ``p['bg']`` — so the window looks byte-identical; it
+    merely *could* now show a material if one were ever attached. Pinned by
+    ``tests/test_backdrop.py::
+    test_default_backdrop_stays_visually_inert_even_though_the_surface_has_alpha``.
+
+    ``gui.backdrop.prepare_surface`` still gates on
+    :func:`gui.backdrop.is_backdrop_supported`, so Linux, macOS, pre-22H2
+    Windows and the whole offscreen test suite are untouched.
+
+    :func:`reassert_window_backdrop` runs the same prep, so a window that is
+    still unrealized when it calls that is already safe; this exists for the ones
+    that build a heavy child tree first (the cockpit, the device manager, a
+    torn-off panel)."""
+    return backdrop.prepare_surface(window)
+
+
+def reassert_window_backdrop(window, *, reason: str = "apply") -> str:
+    """THE single entry point for putting a top-level window into the material
+    state the app is currently in: DWM chain first, then the WS_EX_LAYERED
+    opacity pin — in that order, which is the apply-order contract.
+
+    Every material-capable top-level goes through exactly this function — the
+    cockpit (``tct_gui.TCTMainWindow``), the theme editor, the settings window,
+    the device-manager window, and every torn-off panel
+    (``gui.detachable_tabs._DetachedWindow``) — at construction, and again from
+    the event spine whenever the window's native state could have dropped the
+    attributes (``gui.backdrop._BackdropGuard``).
+
+    Before this existed, each of those call sites hand-rolled
+    ``apply_window_backdrop_to(w)`` + ``w.setWindowOpacity(get_window_opacity())``
+    — and that second line pushed the RAW stored opacity, layering the window
+    and killing the material it had just attached (see
+    :func:`effective_window_opacity`).
+
+    The re-entrancy lock spans BOTH steps: creating the native window (``winId``
+    inside the DWM chain) delivers ``WinIdChange`` synchronously, straight back
+    into this window's event filter. A nested pass that skipped the DWM chain
+    (already locked) but still pushed ``setWindowOpacity`` would land the
+    opacity BEFORE the material — inverting the apply-order contract from the
+    inside."""
+    if window in _reasserting_windows:
+        return _window_backdrop
+    _reasserting_windows.add(window)
+    try:
+        resolved = _apply_window_backdrop_to_impl(window, _window_backdrop, reason)
+        window.setWindowOpacity(effective_window_opacity())
+        return resolved
+    finally:
+        _reasserting_windows.discard(window)
+
+
+def _guard_reassert(window, reason: str) -> None:
+    """Callback injected into ``gui.backdrop``'s event filter — keeps that
+    module theme-blind (it never imports style.py; the dependency runs one way
+    only)."""
+    reassert_window_backdrop(window, reason=reason)
+
+
+def _guard_activation(window, active: bool) -> None:
+    """Underlay law, activation clause — with the run-state gate style.py owns.
+
+    An INACTIVE window has no live material: DWM paints a fallback solid behind a
+    system backdrop on a non-active window (measured, 82ddd2f — a live, never
+    minimized window reproduces it simply by losing focus). So "inactive" is a
+    loss path like any other, and the alpha hole must close or we paint a
+    translucent gap over a material that is not being composited.
+
+    ASYMMETRIC, by the glass contract's own transition law
+    (``glass_env.plan_transition``): the CLOSE is a downgrade and is NEVER queued,
+    mid-scan or not — gating it would leave open the exact hole this repairs. Only
+    the REOPEN is a cosmetic upgrade (it costs a repolish) and waits for scan-idle,
+    like ``nudge_repaint``. Holding an improvement is always safe; holding a hazard
+    never is.
+
+    A gated skip is self-healing: the window keeps the opaque TOKEN canvas until
+    the next activation event or re-assert.
+    """
+    if active and scan_is_active():
+        logger.debug(
+            "glass: deferring the activation canvas repair on %s — a scan is running",
+            type(window).__name__,
+        )
+        return
+    backdrop.set_canvas_for_activation(window, active)
 
 
 def _repaint_central_widget(window) -> None:
@@ -2304,6 +3332,31 @@ def apply_window_backdrop(app=None) -> str:
     Windows created *later* pick up the current kind at construction — see
     :func:`apply_window_backdrop_to`. Safe to call with no QApplication
     (no-op).
+
+    TWO fixes from Mary's G-B1 review live here:
+
+    * **BUG 1 — the QSS rebuild.** The glass-canvas rules
+      (:func:`_glass_canvas_qss`) are emitted only while a material is preferred,
+      so a LIVE ``none → acrylic`` flip genuinely changes the stylesheet. Nothing
+      on the theme editor's backdrop path rebuilt it, so ``gui.backdrop`` set
+      ``glassCanvas="true"`` on windows whose material had attached while the
+      installed QSS had no rule behind that selector — the alpha hole never
+      opened and the window kept painting the opaque ``p['bg']``. Glass only
+      appeared if something *else* happened to rebuild the QSS (a dark/light
+      toggle, a preset, a slider) or after a restart; ``scripts/glass_probe.py``
+      hand-added an ``apply_theme`` call and so measured glass the product path
+      could not show. The rebuild below runs BEFORE the per-window fan-out, so
+      the rule exists by the time any window claims the property. It is skipped
+      when the installed QSS was already built with this kind, and
+      :func:`apply_theme`'s identical-QSS guard makes a redundant call
+      (mica → acrylic: same rules) cost only a string build + compare.
+    * **the opacity pin folded in.** The fan-out now goes through
+      :func:`reassert_window_backdrop` — the SAME single entry point every
+      construction site uses — so it applies the ``WS_EX_LAYERED`` pin itself
+      instead of relying on every caller to remember a separate
+      :func:`apply_window_opacity`. Callers still call it (harmless: the same
+      effective value, and it also covers windows this fan-out skipped), but the
+      invariant no longer rests on caller discipline.
     """
     from PySide6.QtWidgets import QApplication
 
@@ -2311,10 +3364,62 @@ def apply_window_backdrop(app=None) -> str:
     app = app if app is not None else QApplication.instance()
     if app is None:
         return kind
+    if _qss_backdrop != kind:
+        # The glass rule appears/disappears with the kind — rebuild first (see
+        # BUG 1 above). Same mode: this is a backdrop change, not a theme change.
+        apply_theme(app, _active_mode)
     for w in app.topLevelWidgets():
         if w.isWindow() and not _is_transient_window(w):
-            apply_window_backdrop_to(w, kind)
+            reassert_window_backdrop(w)
+    _schedule_post_toggle_reassert()
     return kind
+
+
+def _schedule_post_toggle_reassert() -> None:
+    """Re-assert the whole fan-out ONE event-loop turn later (Fenrir rider 2).
+
+    Qt's own palette/colour-scheme heuristic can write
+    ``DWMWA_USE_IMMERSIVE_DARK_MODE`` on a window AFTER we do, during the
+    stylesheet repolish that a theme switch kicks off — last writer wins, and on
+    that path the loser is our explicitly-asserted tint. Scheduling one more
+    pass after the current event-loop turn puts us last.
+
+    Three gates, all load-bearing:
+
+    * no material preferred (the shipped default) ⇒ nothing to re-assert;
+    * no real compositor (``is_backdrop_supported``) ⇒ nothing to re-assert —
+      this is what keeps the headless suite from ever queueing a timer;
+    * COALESCED — at most one pass may be pending. Without this, a caller that
+      re-applies the backdrop in a loop (the theme editor's live preview; a test
+      sweeping presets) queues one full fan-out per call, and the next
+      ``processEvents()`` drains them all across every window that exists.
+
+    The deferred pass calls the per-window apply directly — it never re-enters
+    this function, so it cannot reschedule itself."""
+    global _post_toggle_pending
+    if _window_backdrop == "none" or not backdrop.is_backdrop_supported():
+        return
+    if _post_toggle_pending:
+        return
+    _post_toggle_pending = True
+    QTimer.singleShot(0, _reassert_all_top_levels)
+
+
+def _reassert_all_top_levels() -> None:
+    global _post_toggle_pending
+    _post_toggle_pending = False
+
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        return
+    for w in app.topLevelWidgets():
+        try:
+            if w.isWindow() and not _is_transient_window(w):
+                reassert_window_backdrop(w, reason="post-toggle")
+        except RuntimeError:        # window destroyed between turns
+            continue
 
 
 # Window TYPE lives as a value inside WindowType_Mask (Window=0x1, Dialog=0x3,
@@ -2467,11 +3572,22 @@ def reset_theme_customization() -> None:
     ``_window_opacity``) — callers that need the reset visible re-apply it
     (``apply_window_backdrop`` / ``apply_window_opacity``)."""
     global _glass_amount, _window_opacity, _window_backdrop
+    global _canvas_alpha, _panel_glass_alpha, _post_toggle_pending
     _overrides["light"] = {}
     _overrides["dark"] = {}
     _glass_amount = DEFAULT_GLASS_AMOUNT
     _window_opacity = DEFAULT_WINDOW_OPACITY
     _window_backdrop = "none"
+    _canvas_alpha = BACKDROP_CANVAS_ALPHA
+    _panel_glass_alpha = PANEL_GLASS_ALPHA
+    # The coalescing latch (Mary, G-B1 review, RISK 3). It is set BEFORE the
+    # QTimer.singleShot that clears it, so if that timer never fires — shutdown,
+    # or a caller/test that never drains the event loop — the flag latches True
+    # and every future post-toggle re-assert is suppressed for the life of the
+    # process. It is not a user preference, but this IS the "put the module back
+    # to a known state" function (and the suite's autouse fixture), so a leaked
+    # latch dies here instead of silently disarming the spine for later tests.
+    _post_toggle_pending = False
     apply_typography(sans=None, mono=None, hinting=None, base_px=None)
     apply_radius_scale("m")
     _recompute_palettes()
@@ -2489,6 +3605,8 @@ def save_theme_customization(settings=None) -> None:
     s.setValue(_SETTINGS_GLASS_KEY, float(_glass_amount))
     s.setValue(_SETTINGS_WINDOW_OPACITY_KEY, float(_window_opacity))
     s.setValue(_SETTINGS_WINDOW_BACKDROP_KEY, _window_backdrop)
+    s.setValue(_SETTINGS_CANVAS_ALPHA_KEY, float(_canvas_alpha))
+    s.setValue(_SETTINGS_PANEL_GLASS_ALPHA_KEY, float(_panel_glass_alpha))
     s.setValue(_SETTINGS_OVERRIDES_KEY, json.dumps(_overrides))
     s.setValue(_SETTINGS_TYPOGRAPHY_KEY, json.dumps(_typography))
     s.setValue(_SETTINGS_RADIUS_KEY, _radius_scale)
@@ -2503,6 +3621,7 @@ def load_theme_customization(settings=None) -> None:
     a hand-edited registry can neither unlock the safety palette nor wedge
     startup."""
     global _glass_amount, _window_opacity, _window_backdrop
+    global _canvas_alpha, _panel_glass_alpha
     s = settings if settings is not None else _default_settings()
     # A load DEFINES the customization state; it never inherits leftovers from
     # whatever was loaded/applied before. An ABSENT key means "shipped default",
@@ -2534,6 +3653,19 @@ def load_theme_customization(settings=None) -> None:
         _window_backdrop = "none"
     else:
         set_window_backdrop(raw_backdrop)
+    # Glass alphas go through their clamped setters, so a hand-edited registry
+    # value below the scrim floor is raised to the floor, never obeyed (same
+    # fail-safe philosophy as the opacity clamp). Absent -> shipped default.
+    raw_canvas_alpha = s.value(_SETTINGS_CANVAS_ALPHA_KEY, None)
+    if raw_canvas_alpha is None:
+        _canvas_alpha = BACKDROP_CANVAS_ALPHA
+    else:
+        set_backdrop_canvas_alpha(raw_canvas_alpha)
+    raw_panel_alpha = s.value(_SETTINGS_PANEL_GLASS_ALPHA_KEY, None)
+    if raw_panel_alpha is None:
+        _panel_glass_alpha = PANEL_GLASS_ALPHA
+    else:
+        set_panel_glass_alpha(raw_panel_alpha)
     try:
         blob = json.loads(str(s.value(_SETTINGS_OVERRIDES_KEY, "") or "{}"))
     except (TypeError, ValueError):
@@ -2618,11 +3750,19 @@ def apply_theme(app, mode: str = "light") -> str:
     so no panel loses its styling. This turns the repeated-soft-reload path from
     O(cumulative-tree) per cycle into O(new-subtree), the root fix for the
     QML-shell repeated-reload regression (bench PHASE 0)."""
+    global _active_mode, _qss_backdrop
     palette = DARK if str(mode).lower() == "dark" else LIGHT
+    _active_mode = "dark" if palette is DARK else "light"
     _apply_app_font(app)
     _apply_app_palette(app, palette)
     qss = build_qss(palette)
     if app.styleSheet() != qss:
         app.setStyleSheet(qss)
+    # Remember which backdrop kind THIS stylesheet carries the glass rules for —
+    # apply_window_backdrop compares against it and rebuilds when a live toggle
+    # makes them appear/disappear (Mary, G-B1 review, BUG 1). Recorded even when
+    # the identical-QSS guard skipped the set: the installed sheet still matches
+    # this kind (that is exactly why it was identical).
+    _qss_backdrop = _window_backdrop
     _apply_pyqtgraph(palette)
-    return "dark" if palette is DARK else "light"
+    return _active_mode

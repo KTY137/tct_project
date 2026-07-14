@@ -1,0 +1,575 @@
+<title>Candidate B — STAGE · GlassShell cockpit round 01</title>
+<style>
+/* ============================================================================
+   CANDIDATE B — "STAGE"
+   One task fills the screen. Chrome is summoned, not resident. Danger is a
+   ceremony that takes the stage away from you.
+   All colours are TOKENS from TCT_app/gui/style.py (+ --crit-ink, see .md).
+   ========================================================================== */
+:root{
+  --canvas:#E6EBF3; --panel:#FFFFFF; --well:#D4D8E0;
+  --ink:#131A28; --muted:#525D72; --faint:#949DB0;
+  --accent:#2A6FE0; --good:#128A63; --armed:#B26F00; --crit:#DE434B;
+  --crit-ink:#C22A33; --sim:#0C9FB0;
+  --hairline:#D9DFEA; --hairline-strong:#BFC9DA;
+  --specular:rgba(255,255,255,.92);
+  --on-crit:#FFFFFF; --on-accent:#FFFFFF;
+  --glass-panel-fg:255,255,255; --glass-panel-a:.72;
+  --glass-well-fg:0,0,0;        --glass-well-a:.06;
+  --glass-chrome-fg:255,255,255;--glass-chrome-a:.86;
+  --shadow:0 12px 40px rgba(19,26,40,.16), 0 2px 8px rgba(19,26,40,.08);
+  --shadow-lift:0 28px 80px rgba(19,26,40,.28), 0 4px 12px rgba(19,26,40,.12);
+  --r-container:28px; --r-card:20px; --r-tile:12px; --r-ctl:8px; --r-pill:999px;
+  --s-xs:4px; --s-sm:8px; --s-md:12px; --s-lg:16px; --s-xl:24px; --s-xxl:32px;
+  --f-cap:11px; --f-sm:12px; --f-body:13px; --f-title:18px; --f-val:26px; --f-vital:34px;
+  --sans:"Segoe UI Variable Display","Segoe UI Variable Text","Segoe UI",Inter,"Helvetica Neue",Arial,system-ui,sans-serif;
+  --mono:"Cascadia Mono","Cascadia Code",Consolas,"JetBrains Mono","Courier New",monospace;
+  --blur:30px; --sat:1.8;
+}
+@media (prefers-color-scheme:dark){:root{
+  --canvas:#0A0D13; --panel:#0D111A; --well:#070A0F;
+  --ink:#E9EDF5; --muted:#98A1B5; --faint:#5B657A;
+  --accent:#5AA9FF; --good:#3DD68C; --armed:#FFB84D; --crit:#FF5A61;
+  --crit-ink:#FF5A61; --sim:#41D8E4;
+  --hairline:#27344A; --hairline-strong:#334159;
+  --specular:rgba(255,255,255,.14);
+  --on-crit:#0A0D13; --on-accent:#04222C;
+  --glass-panel-fg:16,23,36; --glass-panel-a:.42;
+  --glass-well-fg:4,7,12;    --glass-well-a:.55;
+  --glass-chrome-fg:27,37,58;--glass-chrome-a:.62;
+  --shadow:0 16px 48px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+  --shadow-lift:0 36px 100px rgba(0,0,0,.72), 0 4px 14px rgba(0,0,0,.5);
+}}
+:root[data-theme="dark"]{
+  --canvas:#0A0D13; --panel:#0D111A; --well:#070A0F;
+  --ink:#E9EDF5; --muted:#98A1B5; --faint:#5B657A;
+  --accent:#5AA9FF; --good:#3DD68C; --armed:#FFB84D; --crit:#FF5A61;
+  --crit-ink:#FF5A61; --sim:#41D8E4;
+  --hairline:#27344A; --hairline-strong:#334159;
+  --specular:rgba(255,255,255,.14);
+  --on-crit:#0A0D13; --on-accent:#04222C;
+  --glass-panel-fg:16,23,36; --glass-panel-a:.42;
+  --glass-well-fg:4,7,12;    --glass-well-a:.55;
+  --glass-chrome-fg:27,37,58;--glass-chrome-a:.62;
+  --shadow:0 16px 48px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+  --shadow-lift:0 36px 100px rgba(0,0,0,.72), 0 4px 14px rgba(0,0,0,.5);
+}
+:root[data-theme="light"]{
+  --canvas:#E6EBF3; --panel:#FFFFFF; --well:#D4D8E0;
+  --ink:#131A28; --muted:#525D72; --faint:#949DB0;
+  --accent:#2A6FE0; --good:#128A63; --armed:#B26F00; --crit:#DE434B;
+  --crit-ink:#C22A33; --sim:#0C9FB0;
+  --hairline:#D9DFEA; --hairline-strong:#BFC9DA;
+  --specular:rgba(255,255,255,.92);
+  --on-crit:#FFFFFF; --on-accent:#FFFFFF;
+  --glass-panel-fg:255,255,255; --glass-panel-a:.72;
+  --glass-well-fg:0,0,0;        --glass-well-a:.06;
+  --glass-chrome-fg:255,255,255;--glass-chrome-a:.86;
+  --shadow:0 12px 40px rgba(19,26,40,.16), 0 2px 8px rgba(19,26,40,.08);
+  --shadow-lift:0 28px 80px rgba(19,26,40,.28), 0 4px 12px rgba(19,26,40,.12);
+}
+.shell{ --surf-shell:rgba(var(--glass-panel-fg),.30);
+        --surf-panel:rgba(var(--glass-panel-fg),var(--glass-panel-a));
+        --surf-well:rgba(var(--glass-well-fg),var(--glass-well-a));
+        --surf-chrome:rgba(var(--glass-chrome-fg),var(--glass-chrome-a));
+        --bf:blur(var(--blur)) saturate(var(--sat));
+        --spec:var(--specular); --shad:var(--shadow); --lift:var(--shadow-lift);
+        --hair:var(--hairline); }
+:root[data-theme="light"] .shell{ --surf-shell:rgba(var(--glass-panel-fg),.55); }
+.shell[data-tier="token"]{--surf-shell:var(--canvas);--surf-panel:var(--panel);
+        --surf-well:var(--well);--surf-chrome:var(--panel);--bf:none}
+.shell[data-tier="flat"]{--surf-shell:var(--canvas);--surf-panel:var(--panel);
+        --surf-well:var(--well);--surf-chrome:var(--panel);--bf:none;
+        --spec:transparent;--shad:none;--lift:none;--hair:var(--hairline-strong)}
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);color:var(--ink);background:var(--canvas);
+  -webkit-font-smoothing:antialiased;font-size:var(--f-body);line-height:1.45}
+h1,h2,h3{font-weight:650;text-wrap:balance}
+.harness{max-width:1400px;margin:0 auto;padding:var(--s-xl) var(--s-lg) 64px}
+.harness-head{display:flex;flex-wrap:wrap;gap:var(--s-lg);align-items:baseline;
+  justify-content:space-between;padding-bottom:var(--s-lg);margin-bottom:var(--s-lg);
+  border-bottom:1px solid var(--hairline)}
+.harness-head h1{font-size:20px;letter-spacing:-.01em}
+.harness-head .sub{color:var(--muted);max-width:62ch}
+.eyebrow{font-family:var(--mono);font-size:var(--f-cap);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);font-weight:600}
+.controls{display:flex;flex-wrap:wrap;gap:var(--s-sm);align-items:center}
+.seg{display:inline-flex;background:var(--well);border:1px solid var(--hairline);
+  border-radius:var(--r-pill);padding:3px;gap:2px}
+.seg button{font:600 var(--f-sm)/1 var(--sans);color:var(--muted);background:none;border:0;
+  padding:7px 13px;border-radius:var(--r-pill);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.seg button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.seg-label{font-family:var(--mono);font-size:var(--f-cap);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--faint);font-weight:600;margin-right:2px}
+
+.desk{border-radius:var(--r-container);padding:26px;position:relative;overflow:hidden;
+  background:
+    radial-gradient(900px 500px at 12% 8%, #2b4a7a 0%, transparent 60%),
+    radial-gradient(700px 600px at 88% 90%, #6b3a5e 0%, transparent 58%),
+    linear-gradient(140deg,#101828,#1d2a3d 45%,#0c141f)}
+.desk[data-back="hostile"]{background:
+  repeating-linear-gradient(52deg,#FFFFFF 0 22px,#0A0D13 22px 44px),linear-gradient(#fff,#fff)}
+.desk[data-back="lab"]{background:
+  radial-gradient(800px 420px at 20% 15%, #d9e2ee 0%, transparent 62%),
+  radial-gradient(600px 520px at 85% 85%, #b9c6d8 0%, transparent 55%),
+  linear-gradient(160deg,#eef2f7,#c9d3e0)}
+
+/* ============================== THE SHELL ================================= */
+/* glass lives on .shell itself — an isolation:isolate wrapper would create a
+   Backdrop Root and every nested backdrop-filter would sample nothing. */
+.shell{position:relative;border-radius:var(--r-container);overflow:hidden;
+  min-height:700px;display:flex;flex-direction:column;
+  border:1px solid var(--hair);box-shadow:var(--shad);
+  background:var(--surf-shell);
+  backdrop-filter:var(--bf);-webkit-backdrop-filter:var(--bf)}
+
+/* ---- THE RIBBON — the only resident chrome. 30 px. -----------------------
+   Quiet at rest. A cell that changes state does not merely change colour: it
+   FILLS (opaque block + inverted ink + a glyph). Form change, so it survives
+   greyscale, colour-blindness, and the FLAT tier identically.               */
+.ribbon{display:flex;align-items:stretch;gap:0;height:38px;flex:none;position:relative;
+  border-bottom:1px solid var(--hair);background:var(--surf-chrome);
+  backdrop-filter:var(--bf);-webkit-backdrop-filter:var(--bf);-webkit-app-region:drag}
+.ribbon::after{content:"";position:absolute;inset:0 0 auto 0;height:1px;background:var(--spec)}
+.rb{display:flex;align-items:center;gap:7px;padding:0 var(--s-md);border-right:1px solid var(--hair);
+  font-family:var(--mono);font-size:var(--f-sm);font-variant-numeric:tabular-nums;
+  color:var(--muted);white-space:nowrap}
+.rb b{color:var(--ink);font-weight:600}
+.rb .g{font-size:12px;width:12px;text-align:center;flex:none}
+.rb[data-fill]{font-weight:700}
+.rb[data-fill="crit"]{background:var(--crit-ink);color:var(--on-crit)}
+.rb[data-fill="crit"] b{color:var(--on-crit)}
+.rb[data-fill="armed"]{background:var(--armed);color:var(--on-crit)}
+.rb[data-fill="armed"] b{color:var(--on-crit)}
+.rb[data-fill="run"]{background:var(--accent);color:var(--on-accent)}
+.rb[data-fill="run"] b{color:var(--on-accent)}
+.rb.brand{font-family:var(--sans);font-weight:650;color:var(--ink);gap:var(--s-sm)}
+.rb.brand .mark{width:18px;height:18px;border-radius:5px;display:grid;place-items:center;
+  background:linear-gradient(145deg,var(--accent),var(--sim));color:var(--on-accent);
+  font:700 10px var(--sans)}
+.rb.spacer{flex:1;border-right:0;-webkit-app-region:drag}
+.rb.hint{border-right:0;color:var(--faint);font-size:var(--f-cap);letter-spacing:.04em}
+kbd{font-family:var(--mono);font-size:10px;border:1px solid var(--hair);border-radius:4px;
+  padding:1px 5px;background:var(--surf-well);color:var(--muted)}
+
+/* ---- THE STAGE — one task, full bleed ---------------------------------- */
+.body{flex:1;display:flex;min-height:0;position:relative}
+.stage{flex:1;min-width:0;padding:var(--s-xxl);display:flex;flex-direction:column;
+  gap:var(--s-lg)}
+.stage-head{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--s-lg)}
+.stage-head .who{font-family:var(--mono);font-size:var(--f-cap);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);font-weight:600}
+.stage-head h2{font-size:28px;font-weight:600;letter-spacing:-.02em;line-height:1.1}
+.stage-head .meta{font-family:var(--mono);font-size:var(--f-sm);color:var(--muted);
+  font-variant-numeric:tabular-nums;text-align:right}
+.canvas-well{flex:1;min-height:0;border-radius:var(--r-card);border:1px solid var(--hair);
+  background:var(--surf-well);position:relative;overflow:hidden}
+.canvas-well::before{content:"";position:absolute;inset:0 0 auto 0;height:1px;background:var(--spec)}
+.scope-svg{width:100%;height:100%;display:block}
+.readouts{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--s-lg);flex:none}
+.ro{display:flex;flex-direction:column;gap:1px;min-width:0;padding-left:var(--s-md);
+  border-left:2px solid var(--hair)}
+.ro .cap{font-family:var(--mono);font-size:var(--f-cap);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);font-weight:600;white-space:nowrap}
+.ro .val{font-family:var(--mono);font-size:var(--f-vital);font-weight:600;letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;line-height:1.1;white-space:nowrap}
+.ro .val small{font-size:var(--f-cap);font-weight:400;color:var(--muted);margin-left:3px}
+
+/* ---- PEEK STUBS — the demoted periphery -------------------------------- */
+.peeks{width:132px;flex:none;padding:var(--s-xxl) var(--s-lg) var(--s-xxl) 0;
+  display:flex;flex-direction:column;gap:var(--s-sm);overflow:auto}
+.peek{text-align:left;border:1px solid var(--hair);border-radius:var(--r-tile);
+  padding:var(--s-sm) var(--s-md);background:var(--surf-well);cursor:pointer;
+  display:flex;flex-direction:column;gap:1px;position:relative;font-family:var(--sans);
+  color:var(--ink);flex:none}
+.peek:hover{border-color:var(--accent)}
+.peek:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.peek .cap{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--muted);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.peek .val{font-family:var(--mono);font-size:15px;font-weight:600;font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+.peek .val small{font-size:9.5px;color:var(--muted);font-weight:400;margin-left:2px}
+.peek[data-state="crit"]{border-left:3px solid var(--crit)}
+.peek[data-state="armed"]{border-left:3px solid var(--armed)}
+.peek[data-state="good"]{border-left:3px solid var(--good)}
+.peek[data-state="off"]{border-left:3px solid var(--faint);opacity:.75}
+.peeks .ttl{font-family:var(--mono);font-size:9px;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--faint);font-weight:700;padding:0 0 2px 2px}
+
+/* ---- SUMMONED CAPSULE — visionOS floating toolbar ----------------------- */
+.capsule{position:absolute;left:50%;bottom:var(--s-xl);transform:translateX(-50%) translateY(0);
+  display:flex;align-items:center;gap:var(--s-xs);padding:6px;border-radius:var(--r-pill);
+  border:1px solid var(--hair);background:var(--surf-chrome);box-shadow:var(--lift);
+  backdrop-filter:var(--bf);-webkit-backdrop-filter:var(--bf);z-index:5;
+  transition:opacity .18s ease, transform .18s ease}
+.capsule[data-visible="false"]{opacity:0;transform:translateX(-50%) translateY(14px);
+  pointer-events:none}
+.capsule button{width:38px;height:38px;border-radius:var(--r-pill);border:0;background:none;
+  color:var(--muted);font:600 15px var(--mono);cursor:pointer;display:grid;place-items:center}
+.capsule button:hover{background:var(--surf-well);color:var(--ink)}
+.capsule button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.capsule button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.capsule .sep{width:1px;height:22px;background:var(--hair);margin:0 var(--s-xs)}
+/* the danger entry point in the capsule is a KEY, not a button: it opens the
+   ceremony, it never performs an action. */
+.capsule .key{width:auto;padding:0 var(--s-md);gap:6px;font:700 var(--f-sm) var(--sans);
+  color:var(--crit-ink);border:1.5px solid var(--crit-ink);display:inline-flex}
+.capsule .key:hover{background:var(--crit-ink);color:var(--on-crit)}
+
+/* ---- THE CEREMONY — danger takes the stage away ------------------------ */
+.scrim{position:absolute;inset:0;z-index:10;display:none;align-items:center;justify-content:center;
+  padding:var(--s-xl);background:rgba(0,0,0,.42);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+.shell[data-ceremony="true"] .scrim{display:flex}
+.shell[data-tier="flat"] .scrim{background:rgba(0,0,0,.72);backdrop-filter:none;-webkit-backdrop-filter:none}
+/* THE CEREMONY SLAB IS OPAQUE AT EVERY TIER — --panel, never a material.
+   LAW: the hazard surface is tier-invariant. */
+.ceremony{width:min(620px,100%);border-radius:var(--r-card);border:2px solid var(--crit-ink);
+  background:var(--panel);box-shadow:var(--shadow-lift);overflow:hidden}
+.ceremony header{padding:var(--s-lg) var(--s-xl);border-bottom:1px solid var(--hairline);
+  display:flex;align-items:center;gap:var(--s-md);background:var(--crit-ink);color:var(--on-crit)}
+.ceremony header .g{font:700 20px var(--mono)}
+.ceremony header h3{font-size:var(--f-title);font-weight:700;color:var(--on-crit)}
+.ceremony header .sub{font-family:var(--mono);font-size:var(--f-cap);letter-spacing:.06em;
+  text-transform:uppercase;opacity:.9;margin-left:auto;font-weight:700}
+.ceremony .body2{padding:var(--s-xl);display:flex;flex-direction:column;gap:var(--s-lg)}
+.envelope{border:1px solid var(--hairline);border-radius:var(--r-tile);overflow:hidden}
+.envelope div{display:flex;justify-content:space-between;gap:var(--s-lg);padding:9px var(--s-md);
+  font-family:var(--mono);font-size:var(--f-sm);border-bottom:1px solid var(--hairline)}
+.envelope div:last-child{border-bottom:0}
+.envelope div span:first-child{color:var(--muted);letter-spacing:.06em;text-transform:uppercase;
+  font-weight:600;font-size:var(--f-cap)}
+.envelope div span:last-child{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;
+  text-align:right}
+.checks{display:flex;flex-direction:column;gap:var(--s-sm)}
+.check{display:flex;align-items:center;gap:var(--s-md);padding:10px var(--s-md);
+  border:1px solid var(--hairline);border-radius:var(--r-ctl);font-size:var(--f-body);
+  background:var(--well);cursor:pointer}
+.check input{width:18px;height:18px;accent-color:var(--crit-ink);flex:none;cursor:pointer}
+.check .txt{flex:1}
+.check .who{font-family:var(--mono);font-size:var(--f-cap);color:var(--muted);
+  text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+.check:has(input:checked){border-color:var(--good)}
+.check input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ceremony footer{display:flex;gap:var(--s-md);align-items:center;padding:var(--s-lg) var(--s-xl);
+  border-top:1px solid var(--hairline);background:var(--well)}
+.hold{flex:1;position:relative;overflow:hidden;padding:13px var(--s-lg);border-radius:var(--r-ctl);
+  border:2px solid var(--hairline-strong);background:var(--panel);color:var(--faint);
+  font:700 var(--f-body) var(--sans);cursor:not-allowed;text-align:center}
+.hold[data-ready="true"]{border-color:var(--crit-ink);color:var(--crit-ink);cursor:pointer}
+.hold[data-ready="true"]:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.hold i{position:absolute;inset:0;width:0;background:var(--crit-ink);z-index:0;transition:width .05s linear}
+.hold span{position:relative;z-index:1}
+.hold[data-holding="true"] span{color:var(--on-crit)}
+.cancel{padding:13px var(--s-xl);border-radius:var(--r-ctl);border:1px solid var(--hairline-strong);
+  background:var(--panel);color:var(--ink);font:650 var(--f-body) var(--sans);cursor:pointer}
+.cancel:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ---- RUN TAKEOVER ------------------------------------------------------ */
+.shell[data-mode="run"] .stage-head h2::after{content:" — running";color:var(--accent)}
+.runbar{display:none;flex:none;align-items:center;gap:var(--s-lg);padding:var(--s-md) var(--s-lg);
+  border-radius:var(--r-card);border:1px solid var(--hair);background:var(--surf-well)}
+.shell[data-mode="run"] .runbar{display:flex}
+.runbar .big{font-family:var(--mono);font-size:var(--f-val);font-weight:600;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.runbar .bar{flex:1;height:8px;border-radius:4px;background:var(--panel);overflow:hidden;
+  border:1px solid var(--hair)}
+.runbar .bar i{display:block;height:100%;background:var(--accent)}
+.runbar .k{font-family:var(--mono);font-size:var(--f-cap);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);font-weight:600}
+.runbar .abort{padding:9px var(--s-lg);border-radius:var(--r-ctl);border:2px solid var(--crit-ink);
+  background:transparent;color:var(--crit-ink);font:800 var(--f-body) var(--sans);
+  letter-spacing:.04em;cursor:pointer}
+.runbar .abort:hover{background:var(--crit-ink);color:var(--on-crit)}
+.runbar .abort:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+
+.notes{margin-top:var(--s-xl);display:grid;gap:var(--s-md);
+  grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.note{border:1px solid var(--hairline);border-radius:var(--r-card);padding:var(--s-lg);background:var(--panel)}
+.note h4{font-size:var(--f-body);font-weight:650;margin-bottom:6px}
+.note p{font-size:var(--f-sm);color:var(--muted)}
+.note code{font-family:var(--mono);font-size:11px;color:var(--ink)}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+@media (max-width:900px){.peeks{display:none}.stage{padding:var(--s-lg)}
+  .readouts{grid-template-columns:1fr 1fr}}
+</style>
+
+<div class="harness">
+  <header class="harness-head">
+    <div>
+      <div class="eyebrow">GlassShell cockpit · round 01 · candidate B</div>
+      <h1>STAGE — one task, everything else demoted</h1>
+      <p class="sub">At any moment you are doing exactly one thing. The cockpit shows <i>that</i>, full-bleed.
+        Chrome is summoned (<kbd>Space</kbd>) and dissolves. Danger is not a button you can reach — it is a
+        <b>ceremony that takes the stage away from you</b>.</p>
+    </div>
+    <div class="controls">
+      <span class="seg-label">Theme</span>
+      <div class="seg" id="segTheme" role="group" aria-label="Theme">
+        <button data-v="light" aria-pressed="false">Light</button>
+        <button data-v="dark" aria-pressed="true">Dark</button></div>
+      <span class="seg-label">Tier</span>
+      <div class="seg" id="segTier" role="group" aria-label="Glass tier">
+        <button data-v="real" aria-pressed="true">Real glass</button>
+        <button data-v="token" aria-pressed="false">Token</button>
+        <button data-v="flat" aria-pressed="false">Flat</button></div>
+      <span class="seg-label">Backdrop</span>
+      <div class="seg" id="segBack" role="group" aria-label="Backdrop">
+        <button data-v="desk" aria-pressed="true">Desk</button>
+        <button data-v="lab" aria-pressed="false">Lab light</button>
+        <button data-v="hostile" aria-pressed="false">Worst case</button></div>
+      <span class="seg-label">State</span>
+      <div class="seg" id="segMode" role="group" aria-label="Cockpit state">
+        <button data-v="idle" aria-pressed="true">Idle</button>
+        <button data-v="run" aria-pressed="false">Scanning</button>
+        <button data-v="ceremony" aria-pressed="false">HV ceremony</button></div>
+    </div>
+  </header>
+
+  <div class="desk" id="desk" data-back="desk">
+    <div class="shell" id="shell" data-tier="real" data-mode="idle" data-ceremony="false">
+
+      <!-- ================ THE RIBBON (the only resident chrome) ============ -->
+      <div class="ribbon">
+        <div class="rb brand"><span class="mark">T</span>TCT</div>
+        <div class="rb" data-fill="crit"><span class="g">⚡</span>HV <b>−400.0 V</b> ON</div>
+        <div class="rb"><span class="g">◦</span>I <b>12.4 nA</b></div>
+        <div class="rb"><span class="g">⌗</span>XYZ <b>112.500 · 48.250 · 9.000</b></div>
+        <div class="rb" data-fill="armed"><span class="g">✳</span>LASER <b>ARMED</b></div>
+        <div class="rb" data-fill="run" id="rbRun"><span class="g">▶</span>SCAN <b>47 / 400</b></div>
+        <div class="rb spacer"></div>
+        <div class="rb hint">Press <kbd>Space</kbd> for controls · <kbd>⌘K</kbd> to jump</div>
+      </div>
+
+      <div class="body">
+        <!-- ================ THE STAGE ================ -->
+        <main class="stage">
+          <div class="stage-head">
+            <div>
+              <div class="who">Set up · Oscilloscope · CH1</div>
+              <h2>Transient</h2>
+            </div>
+            <div class="meta">2 GS/s · 50 Ω · 512 avg<br>trig ext ↑ 1.000 kHz</div>
+          </div>
+
+          <div class="runbar">
+            <span class="k">Scanning</span>
+            <span class="big">047 / 400</span>
+            <div class="bar" role="progressbar" aria-valuenow="12" aria-valuemin="0" aria-valuemax="100">
+              <i style="width:11.75%"></i></div>
+            <span class="k">ETA 07:12</span>
+            <button class="abort">ABORT</button>
+          </div>
+
+          <div class="canvas-well">
+            <svg class="scope-svg" id="scopeSvg" viewBox="0 0 900 340" preserveAspectRatio="none"
+              role="img" aria-label="TCT transient: rise 1.1 ns, decay 8.4 ns, peak 1.86 mA"></svg>
+          </div>
+
+          <div class="readouts">
+            <div class="ro"><div class="cap">Peak current</div><div class="val">1.86<small>mA</small></div></div>
+            <div class="ro"><div class="cap">Rise (10–90)</div><div class="val">1.1<small>ns</small></div></div>
+            <div class="ro"><div class="cap">Decay τ</div><div class="val">8.4<small>ns</small></div></div>
+            <div class="ro"><div class="cap">Charge</div><div class="val">24.7<small>fC</small></div></div>
+          </div>
+        </main>
+
+        <!-- ================ PEEK STUBS ================ -->
+        <aside class="peeks" aria-label="Peripheral panels">
+          <div class="ttl">Peek</div>
+          <button class="peek" data-state="crit"><span class="cap">Bias</span>
+            <span class="val">−400.0<small>V</small></span></button>
+          <button class="peek" data-state="good"><span class="cap">Stage</span>
+            <span class="val">112.500<small>mm</small></span></button>
+          <button class="peek" data-state="armed"><span class="cap">Laser</span>
+            <span class="val">42<small>%</small></span></button>
+          <button class="peek" data-state="good"><span class="cap">Scan</span>
+            <span class="val">47<small>/400</small></span></button>
+          <button class="peek" data-state="good"><span class="cap">Ref mon</span>
+            <span class="val">0.982</span></button>
+          <button class="peek" data-state="off"><span class="cap">Camera</span>
+            <span class="val">off</span></button>
+          <button class="peek" data-state="off"><span class="cap">Wavegen</span>
+            <span class="val">off</span></button>
+          <div class="ttl" style="margin-top:8px">Study</div>
+          <button class="peek" data-state="off"><span class="cap">Analysis</span>
+            <span class="val">—</span></button>
+          <button class="peek" data-state="off"><span class="cap">Calib.</span>
+            <span class="val">—</span></button>
+        </aside>
+      </div>
+
+      <!-- ================ SUMMONED CAPSULE ================ -->
+      <div class="capsule" id="capsule" data-visible="true" role="toolbar" aria-label="Stage controls">
+        <button title="Previous panel" aria-label="Previous panel">◀</button>
+        <button title="Next panel" aria-label="Next panel">▶</button>
+        <span class="sep"></span>
+        <button title="Jump to panel (⌘K)" aria-label="Jump to panel">⌘</button>
+        <button title="Autoscale" aria-label="Autoscale">⤢</button>
+        <button title="Single shot" aria-label="Single shot">◉</button>
+        <button title="Record" aria-pressed="true" aria-label="Record">⏺</button>
+        <span class="sep"></span>
+        <button class="key" id="openCeremony" title="Open the HV ceremony">⚡ HV…</button>
+      </div>
+
+      <!-- ================ THE CEREMONY ================ -->
+      <div class="scrim" id="scrim">
+        <div class="ceremony" role="dialog" aria-modal="true" aria-labelledby="cerTitle">
+          <header>
+            <span class="g" aria-hidden="true">⚡</span>
+            <h3 id="cerTitle">Enable high voltage</h3>
+            <span class="sub">Danger · ISEG NHR 4220</span>
+          </header>
+          <div class="body2">
+            <div class="envelope">
+              <div><span>Target</span><span>−400.0 V</span></div>
+              <div><span>Ramp rate</span><span>10 V/s · ≈ 40 s</span></div>
+              <div><span>Compliance</span><span>2.0 µA (hardware trip)</span></div>
+              <div><span>Channel</span><span>0 · sensor W3-07 · 300 µm FZ</span></div>
+              <div><span>Interlock</span><span>closed · lid sensor OK</span></div>
+            </div>
+            <div class="checks">
+              <label class="check"><input type="checkbox" class="ck">
+                <span class="txt">The dark box is closed and the interlock is engaged.</span>
+                <span class="who">Operator</span></label>
+              <label class="check"><input type="checkbox" class="ck">
+                <span class="txt">Nobody is touching the probe station or the bias cable.</span>
+                <span class="who">Operator</span></label>
+              <label class="check"><input type="checkbox" class="ck">
+                <span class="txt">−400 V is within this sensor's rated envelope.</span>
+                <span class="who">Operator</span></label>
+            </div>
+          </div>
+          <footer>
+            <button class="cancel" id="cerCancel">Cancel</button>
+            <button class="hold" id="cerHold" data-ready="false" data-holding="false">
+              <i></i><span>Hold 2 s to enable HV</span></button>
+          </footer>
+        </div>
+      </div>
+
+    </div><!-- /shell -->
+  </div><!-- /desk -->
+
+  <div class="notes">
+    <div class="note">
+      <h4>Try the ceremony</h4>
+      <p>State → <b>HV ceremony</b>, or click <code>⚡ HV…</code> in the capsule. The Hold button stays
+      <i>dead</i> until all three checks are ticked, and it needs a real 2-second press. Three gates:
+      acknowledge, hold, release. Slower than today, on purpose.</p>
+    </div>
+    <div class="note">
+      <h4>The ribbon fills, it does not tint</h4>
+      <p>A cell in an active hazard state becomes an <b>opaque colour block with inverted ink and a
+      glyph</b>. Print it in greyscale and HV-ON still reads as different <i>form</i>, not a different
+      hue. The material never carries this — the fill is painted at every tier.</p>
+    </div>
+    <div class="note">
+      <h4>Where this bets — and where it can lose</h4>
+      <p>It bets that a TCT operator is doing one thing at a time. If they are actually watching bias
+      <i>while</i> aligning, the Peek stubs are too little and this candidate is wrong. That is the
+      question for Kaya, and it is an empirical one.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const root=document.documentElement, shell=document.getElementById("shell"),
+        desk=document.getElementById("desk"), capsule=document.getElementById("capsule");
+  root.setAttribute("data-theme","dark");
+
+  function wire(id,fn){const g=document.getElementById(id);
+    g.addEventListener("click",e=>{const b=e.target.closest("button"); if(!b) return;
+      [...g.querySelectorAll("button")].forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
+      fn(b.dataset.v);});}
+  wire("segTheme",v=>root.setAttribute("data-theme",v));
+  wire("segTier", v=>shell.setAttribute("data-tier",v));
+  wire("segBack", v=>desk.setAttribute("data-back",v));
+  wire("segMode", v=>{
+    shell.setAttribute("data-ceremony", String(v==="ceremony"));
+    shell.setAttribute("data-mode", v==="run"?"run":"idle");
+  });
+
+  /* summon / dismiss the capsule */
+  addEventListener("keydown",e=>{
+    if(e.code==="Space" && e.target===document.body){
+      e.preventDefault();
+      const vis=capsule.dataset.visible==="true";
+      capsule.dataset.visible=String(!vis);
+    }
+    if(e.key==="Escape") closeCeremony();
+  });
+
+  /* --- the TCT transient --- */
+  const svg=document.getElementById("scopeSvg"), W=900,H=340, t0=140, base=H*0.8;
+  let d="M0,"+base.toFixed(1);
+  for(let x=0;x<=W;x+=1.5){
+    const t=(x-t0)/16.8; let y=base;
+    if(t>0){
+      const rise=1-Math.exp(-t/0.42), decay=Math.exp(-t/8.4);
+      const ring=Math.exp(-t/3.1)*Math.sin(t*1.55)*0.06;
+      y=base-(rise*decay+ring)*(base-30)*1.02;
+    }
+    y+=(Math.random()-0.5)*1.7;
+    d+=" L"+x.toFixed(1)+","+y.toFixed(1);
+  }
+  const g=[];
+  for(let i=1;i<10;i++) g.push(`<line x1="${i*W/10}" y1="0" x2="${i*W/10}" y2="${H}"/>`);
+  for(let i=1;i<6;i++)  g.push(`<line x1="0" y1="${i*H/6}" x2="${W}" y2="${i*H/6}"/>`);
+  svg.innerHTML=
+    `<g stroke="var(--hair)" stroke-width="1" opacity=".5" vector-effect="non-scaling-stroke">${g.join("")}</g>`+
+    `<line x1="0" y1="${base}" x2="${W}" y2="${base}" stroke="var(--faint)" stroke-width="1"
+       stroke-dasharray="3 5" vector-effect="non-scaling-stroke"/>`+
+    `<line x1="${t0}" y1="0" x2="${t0}" y2="${H}" stroke="var(--armed)" stroke-width="1"
+       stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`+
+    `<path d="${d} L${W},${base} Z" fill="var(--accent)" opacity=".13"/>`+
+    `<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.7"
+       vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`;
+
+  /* --- the ceremony: 3 acknowledgements + a 2 s hold. Fails closed. ------- */
+  const scrim=document.getElementById("scrim"), hold=document.getElementById("cerHold"),
+        fill=hold.querySelector("i"), label=hold.querySelector("span"),
+        checks=[...document.querySelectorAll(".ck")];
+  function openCeremony(){ shell.setAttribute("data-ceremony","true"); }
+  function closeCeremony(){
+    shell.setAttribute("data-ceremony","false"); abortHold();
+    checks.forEach(c=>{c.checked=false}); refresh();
+    [...document.querySelectorAll("#segMode button")].forEach(b=>
+      b.setAttribute("aria-pressed", String(b.dataset.v===(shell.dataset.mode==="run"?"run":"idle"))));
+  }
+  document.getElementById("openCeremony").addEventListener("click",openCeremony);
+  document.getElementById("cerCancel").addEventListener("click",closeCeremony);
+  scrim.addEventListener("click",e=>{ if(e.target===scrim) closeCeremony(); });
+
+  function refresh(){
+    const ready=checks.every(c=>c.checked);
+    hold.dataset.ready=String(ready);
+    if(!ready) label.textContent="Acknowledge all three to continue";
+    else if(hold.dataset.holding!=="true") label.textContent="Hold 2 s to enable HV";
+  }
+  checks.forEach(c=>c.addEventListener("change",refresh)); refresh();
+
+  let raf=null, t=0;
+  function abortHold(){ cancelAnimationFrame(raf); raf=null; t=0; fill.style.width="0";
+    hold.dataset.holding="false"; refresh(); }
+  function startHold(){
+    if(hold.dataset.ready!=="true") return;
+    hold.dataset.holding="true"; const t1=performance.now();
+    (function step(now){
+      t=Math.min(1,(now-t1)/2000); fill.style.width=(t*100)+"%";
+      label.textContent="Hold… "+(2-t*2).toFixed(1)+" s";
+      if(t>=1){ label.textContent="HV enabling — ramping to −400.0 V"; hold.dataset.holding="false";
+        setTimeout(closeCeremony,900); return; }
+      raf=requestAnimationFrame(step);
+    })(t1);
+  }
+  hold.addEventListener("pointerdown",startHold);
+  hold.addEventListener("pointerup",()=>{ if(t<1) abortHold(); });
+  hold.addEventListener("pointerleave",()=>{ if(t<1) abortHold(); });
+  hold.addEventListener("keydown",e=>{ if(e.key===" "||e.key==="Enter"){e.preventDefault();startHold();} });
+  hold.addEventListener("keyup",()=>{ if(t<1) abortHold(); });
+})();
+</script>

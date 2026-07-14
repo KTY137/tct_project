@@ -34,10 +34,13 @@ def _enable_translucent_window_surface() -> None:
     with the opt-in QML shell's OpenGL RHI pin (that sets the graphics API via
     QQuickWindow.setGraphicsApi, not QSurfaceFormat). And it is inert for the
     plot stack: the raster pyqtgraph plots do not use a QSurfaceFormat at all,
-    and the Motor-Stage GLViewWidget neither enables WA_TranslucentBackground
-    nor paints a transparent clear colour (it sits inside an opaque cardPane),
     so the extra buffer is simply unused there — it only matters for the
-    window's own translucent canvas."""
+    window's own translucent canvas.
+
+    (Until 2026-07-13 this note also had to reason about the Motor-Stage
+    GLViewWidget; that render-to-texture child is gone with the 3D stage view,
+    which is exactly what lets the classic window carry a DWM material at all —
+    see tests/test_no_render_to_texture_children_in_gui.py.)"""
     fmt = QSurfaceFormat.defaultFormat()
     if fmt.alphaBufferSize() < 8:
         fmt.setAlphaBufferSize(8)
@@ -48,8 +51,9 @@ def main() -> None:
     _setup_logging()
     # Opt-in QML chrome shell (TCT_QML_SHELL=1): pin the Qt Quick scene-graph to
     # OpenGL BEFORE any QQuickWidget/QApplication-driven Quick window exists, so
-    # the chrome QQuickWidget and the Motor Stage GLViewWidget agree on one RHI
-    # backend (docs/research/qml_hybrid_architecture.md §6). No-op by default.
+    # every accelerated surface in the process agrees on one RHI backend
+    # (docs/research/qml_hybrid_architecture.md §6). No-op by default. The pin's
+    # original second client, the Motor-Stage GLViewWidget, is gone (2026-07-13).
     if os.environ.get("TCT_QML_SHELL") == "1":
         from gui.qml_shell import pin_opengl_rhi
         pin_opengl_rhi()

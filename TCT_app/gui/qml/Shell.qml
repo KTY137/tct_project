@@ -75,7 +75,48 @@ Item {
     readonly property int simCount: simNames.length
     readonly property int totalCount: shell ? shell.devicesModel.length : 0
 
-    Rectangle { anchors.fill: parent; color: Theme.canvas }
+    // ---- GLASS (the frosted chrome strip, for real this time) ---------------
+    // `shell.glass` is the UNDERLAY LAW's own truth, relayed from
+    // gui/backdrop.py::window_has_material — true ONLY while a DWM material is
+    // verifiably attached to this window's CURRENT hwnd. Never "the preference is
+    // acrylic": a preference says nothing about whether THIS window got it, and a
+    // translucent surface over a material that is not there is exactly the black
+    // window Kaya reported (gui/backdrop.py, CANVAS_GLASS_PROPERTY). glass=false
+    // ⇒ every fill below is the OPAQUE token, byte-identical to the pre-glass
+    // build.
+    //
+    // MEASURED (scripts/spikes/qml_overpaint_spike.py, before/after): this island
+    // used to be 100 % opaque — 0.0 % of its 1,402,500 px tracked the backdrop,
+    // while the classic shell's window canvas tracked 32.4 % of its own band. The
+    // material was attached and healthy the whole time; these four fills (plus the
+    // QQuickWidget's clear colour, gui/qml_shell.py) were simply painting over it.
+    // The rail's own header note above already called Theme.chrome "the SOLID
+    // color-mix FALLBACK for the artifact topbar's backdrop blur" — with a real
+    // DWM material behind the window, the fallback is no longer needed: DWM IS the
+    // blur, and the only thing needed from Qt is to stop covering it.
+    readonly property bool glass: !!(shell && shell.glass)
+
+    // How much of its own token colour a chrome surface keeps once it frosts.
+    // NOT a free knob: the window's own canvas fill (gui/style._canvas_fill —
+    // rgba(bg, canvas_alpha), WCAG-clamped to >= 0.80 by Baldr's scrim-floor
+    // contract) already sits UNDER this island in the widget backing store, so
+    // anything painted here MULTIPLIES with it: a tint at alpha t transmits
+    // (1 - t) of the ~18 % the ratified canvas already lets through. Every value
+    // here therefore only ever ADDS opacity over an already-ratified floor — a
+    // frosted surface in this island can never be MORE transparent (or less
+    // legible) than the canvas the same operator already sees in the classic
+    // shell. Surfaces whose token IS the canvas (the pill shelf) paint nothing at
+    // all and simply let that canvas through.
+    readonly property real glassTint: 0.35
+
+    Rectangle {
+        objectName: "islandBase"
+        anchors.fill: parent
+        // The island's base. Transparent under glass so the window's own canvas
+        // fill (and the DWM material behind it) reaches the compositor; the
+        // opaque token otherwise.
+        color: root.glass ? "transparent" : Theme.canvas
+    }
 
     ColumnLayout {
         id: mainColumn
@@ -84,12 +125,20 @@ Item {
 
         // ------------------------------------------------------------- rail
         Rectangle {
+            objectName: "railSurface"
             Layout.fillWidth: true
             implicitHeight: 48
-            // "One frosted chrome strip" (spec §2): Theme.chrome is the
-            // solid color-mix fallback for the artifact topbar's backdrop
-            // blur (translucency over a live camera/plot is banned anyway).
-            color: Theme.chrome
+            // "One frosted chrome strip" (spec §2). Theme.chrome WAS the solid
+            // color-mix fallback for the artifact topbar's backdrop blur; with a
+            // live DWM material the rail carries the chrome hue as a real frosted
+            // tint instead (see root.glass / root.glassTint above), and falls back
+            // to the identical solid token the moment the material is not there.
+            // The ban this note used to invoke is unchanged and untouched:
+            // translucency over a live camera/plot (or any hazard control) stays
+            // forbidden — the rail is chrome, and hosts neither.
+            color: root.glass
+                 ? Qt.rgba(Theme.chrome.r, Theme.chrome.g, Theme.chrome.b, root.glassTint)
+                 : Theme.chrome
 
             Rectangle {  // specular top edge — machined-chrome highlight
                 anchors { left: parent.left; right: parent.right; top: parent.top }
@@ -158,7 +207,7 @@ Item {
                 // 1/6): real-connected (solid MUTED — IDLE-nominal, quiet,
                 // no colour) / simulated (a hatched-cyan RING — never a
                 // solid cyan fill, so it can never be mistaken for "good" at
-                // a glance — law 6) / disconnected (faint hollow ring) /
+                // a glance — law 6) / disconnected (quiet hollow ring) /
                 // fault (solid red — attempted-and-failed, from the last
                 // connect_all() result; distinct from a plain never-attempted
                 // disconnect — see tct_gui._collect_shell_state).
@@ -175,7 +224,7 @@ Item {
                             color: st === "on" ? Theme.muted
                                  : st === "fault" ? Theme.crit : "transparent"
                             border.width: st === "sim" ? 1.6 : (st === "off" ? 1 : 0)
-                            border.color: st === "sim" ? Theme.sim : Theme.faint
+                            border.color: st === "sim" ? Theme.sim : Theme.muted
 
                             HoverHandler { id: deviceHover }
                             ToolTip.visible: deviceHover.hovered
@@ -193,6 +242,13 @@ Item {
                     Layout.alignment: Qt.AlignVCenter
                     spacing: 14
                     StatChip { lab: "HV"; val: shell.hvText; state: shell.hvState }
+                    // Leakage + compliance: these exist in the classic ribbon
+                    // (tct_gui._chip_bias_i / _chip_bias_comp) and were dropped
+                    // when the island was built. Compliance is a FAULT state on
+                    // the HV supply — an island that cannot show it is lying by
+                    // omission (law 7).
+                    StatChip { lab: "I"; val: shell.hvCurrentText; state: shell.hvCurrentState }
+                    StatChip { lab: "Compliance"; val: shell.hvComplianceText; state: shell.hvComplianceState }
                     StatChip { lab: "Motion"; val: shell.motionText; state: shell.motionState }
                     StatChip { lab: "Scan"; val: shell.scanText; state: shell.scanState }
                     StatChip { lab: "Laser"; val: shell.laserText; state: shell.laserState }
@@ -341,9 +397,14 @@ Item {
 
         // ------------------------------------------------------- pill shelf
         Rectangle {
+            objectName: "pillShelfSurface"
             Layout.fillWidth: true
             implicitHeight: 44
-            color: Theme.canvas
+            // This surface's token IS the canvas, and under glass the window's own
+            // canvas fill already paints exactly that (at the ratified alpha) in
+            // the backing store underneath — so painting it again here would just
+            // square the alpha and dim the material for nothing. Paint nothing.
+            color: root.glass ? "transparent" : Theme.canvas
 
             Flickable {
                 anchors.fill: parent
@@ -425,12 +486,19 @@ Item {
         // no-Flickable contract targets (4 tiles fit one row well under that
         // width); binds ONLY, no logic.
         Rectangle {
+            objectName: "statusStripSurface"
             Layout.fillWidth: true
             implicitHeight: statusStrip.implicitHeight + 2 * Theme.spaceSm
             // Recessed wash (artifact `.statusstrip`: color-mix(sunk 55%,
             // panel)) so the tiles read as raised cards sitting IN a tray —
-            // the surface-ladder step round 1 flattened onto plain canvas.
-            color: Theme.strip
+            // the surface-ladder step round 1 flattened onto plain canvas. Under
+            // glass it stays a recessed TRAY (same hue, frosted): the ladder is
+            // what makes the MetricTiles read as raised cards, and those tiles are
+            // Z4 hero readouts — they keep their fully OPAQUE Theme.panel fill
+            // (gui/qml/MetricTile.qml) at every tier, glass or not.
+            color: root.glass
+                 ? Qt.rgba(Theme.strip.r, Theme.strip.g, Theme.strip.b, root.glassTint)
+                 : Theme.strip
 
             ScanStatusStrip {
                 id: statusStrip
@@ -544,7 +612,7 @@ Item {
                  : (state === "warn" || state === "armed") ? Theme.warn
                  : state === "crit" ? Theme.crit
                  : (state === "busy" || state === "info") ? Theme.accent
-                 : state === "simulated" ? Theme.sim : Theme.faint
+                 : state === "simulated" ? Theme.sim : Theme.muted
         }
         Text {
             text: chipRoot.trimmed(); color: Theme.text

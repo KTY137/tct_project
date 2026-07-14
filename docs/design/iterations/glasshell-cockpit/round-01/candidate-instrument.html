@@ -1,0 +1,607 @@
+<title>Candidate A — INSTRUMENT · GlassShell cockpit round 01</title>
+<style>
+/* ============================================================================
+   CANDIDATE A — "INSTRUMENT"
+   Every colour below is a TOKEN from TCT_app/gui/style.py. The ONE new colour
+   (--crit-ink) is named + derived in the .md. No invented hexes.
+   ========================================================================== */
+:root{
+  /* --- palette: LIGHT (style.py LIGHT dict) --- */
+  --canvas:#E6EBF3; --panel:#FFFFFF; --well:#D4D8E0;
+  --ink:#131A28; --muted:#525D72; --faint:#949DB0;
+  --accent:#2A6FE0; --good:#128A63; --armed:#B26F00; --crit:#DE434B;
+  --crit-ink:#C22A33;              /* NEW TOKEN — see .md §Tokens */
+  --sim:#0C9FB0;
+  --hairline:#D9DFEA; --hairline-strong:#BFC9DA;
+  --specular:rgba(255,255,255,.92);
+  --on-crit:#FFFFFF; --on-accent:#FFFFFF;
+  /* glass fg = the colour the material is a wash OF (style.py _GLASS_*_FG) */
+  --glass-panel-fg:255,255,255; --glass-panel-a:.72;
+  --glass-well-fg:0,0,0;        --glass-well-a:.06;
+  --glass-chrome-fg:255,255,255;--glass-chrome-a:.80;
+  --shadow:0 12px 40px rgba(19,26,40,.16), 0 2px 8px rgba(19,26,40,.08);
+  /* --- geometry (style.py RADIUS/SPACE + 2 new, see .md) --- */
+  --r-container:28px; --r-card:16px; --r-tile:12px; --r-ctl:8px; --r-pill:999px;
+  --s-xs:4px; --s-sm:8px; --s-md:12px; --s-lg:16px; --s-xl:24px; --s-xxl:32px;
+  --f-cap:11px; --f-sm:12px; --f-body:13px; --f-title:18px; --f-val:26px; --f-vital:34px;
+  --sans:"Segoe UI Variable Display","Segoe UI Variable Text","Segoe UI",Inter,"Helvetica Neue",Arial,system-ui,sans-serif;
+  --mono:"Cascadia Mono","Cascadia Code",Consolas,"JetBrains Mono","Courier New",monospace;
+  --blur:26px; --sat:1.7;
+}
+@media (prefers-color-scheme:dark){:root{
+  --canvas:#0A0D13; --panel:#0D111A; --well:#070A0F;
+  --ink:#E9EDF5; --muted:#98A1B5; --faint:#5B657A;
+  --accent:#5AA9FF; --good:#3DD68C; --armed:#FFB84D; --crit:#FF5A61;
+  --crit-ink:#FF5A61; --sim:#41D8E4;
+  --hairline:#27344A; --hairline-strong:#334159;
+  --specular:rgba(255,255,255,.14);
+  --on-crit:#0A0D13; --on-accent:#04222C;
+  --glass-panel-fg:16,23,36;  --glass-panel-a:.42;
+  --glass-well-fg:4,7,12;     --glass-well-a:.55;
+  --glass-chrome-fg:27,37,58; --glass-chrome-a:.55;
+  --shadow:0 16px 48px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+}}
+:root[data-theme="dark"]{
+  --canvas:#0A0D13; --panel:#0D111A; --well:#070A0F;
+  --ink:#E9EDF5; --muted:#98A1B5; --faint:#5B657A;
+  --accent:#5AA9FF; --good:#3DD68C; --armed:#FFB84D; --crit:#FF5A61;
+  --crit-ink:#FF5A61; --sim:#41D8E4;
+  --hairline:#27344A; --hairline-strong:#334159;
+  --specular:rgba(255,255,255,.14);
+  --on-crit:#0A0D13; --on-accent:#04222C;
+  --glass-panel-fg:16,23,36;  --glass-panel-a:.42;
+  --glass-well-fg:4,7,12;     --glass-well-a:.55;
+  --glass-chrome-fg:27,37,58; --glass-chrome-a:.55;
+  --shadow:0 16px 48px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+}
+:root[data-theme="light"]{
+  --canvas:#E6EBF3; --panel:#FFFFFF; --well:#D4D8E0;
+  --ink:#131A28; --muted:#525D72; --faint:#949DB0;
+  --accent:#2A6FE0; --good:#128A63; --armed:#B26F00; --crit:#DE434B;
+  --crit-ink:#C22A33; --sim:#0C9FB0;
+  --hairline:#D9DFEA; --hairline-strong:#BFC9DA;
+  --specular:rgba(255,255,255,.92);
+  --on-crit:#FFFFFF; --on-accent:#FFFFFF;
+  --glass-panel-fg:255,255,255; --glass-panel-a:.72;
+  --glass-well-fg:0,0,0;        --glass-well-a:.06;
+  --glass-chrome-fg:255,255,255;--glass-chrome-a:.80;
+  --shadow:0 12px 40px rgba(19,26,40,.16), 0 2px 8px rgba(19,26,40,.08);
+}
+
+/* ---- THE TIER CONTRACT --------------------------------------------------
+   REAL  = translucent + backdrop blur (the QQuickWindow / OpenGL RHI path)
+   TOKEN = the pre-blended opaque token (what style.py already ships)
+   FLAT  = TOKEN, no specular, no shadow, hairlines promoted to _strong
+   Surfaces are painted THROUGH these vars, so a tier swap changes material
+   ONLY — never a glyph, never a number, never a colour that carries meaning.
+--------------------------------------------------------------------------*/
+.shell{ --surf-shell:rgba(var(--glass-panel-fg),.30);
+        --surf-panel:rgba(var(--glass-panel-fg),var(--glass-panel-a));
+        --surf-well:rgba(var(--glass-well-fg),var(--glass-well-a));
+        --surf-chrome:rgba(var(--glass-chrome-fg),var(--glass-chrome-a));
+        --bf:blur(var(--blur)) saturate(var(--sat));
+        --spec:var(--specular); --shad:var(--shadow); --hair:var(--hairline); }
+:root[data-theme="light"] .shell{ --surf-shell:rgba(var(--glass-panel-fg),.55); }
+.shell[data-tier="token"]{ --surf-shell:var(--canvas); --surf-panel:var(--panel);
+        --surf-well:var(--well); --surf-chrome:var(--panel); --bf:none; }
+.shell[data-tier="flat"]{ --surf-shell:var(--canvas); --surf-panel:var(--panel);
+        --surf-well:var(--well); --surf-chrome:var(--panel); --bf:none;
+        --spec:transparent; --shad:none; --hair:var(--hairline-strong); }
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--sans);color:var(--ink);background:var(--canvas);
+  -webkit-font-smoothing:antialiased;font-size:var(--f-body);line-height:1.45}
+h1,h2,h3{font-weight:650;text-wrap:balance}
+
+/* ---- page frame (NOT part of the design — the judging harness) ---------- */
+.harness{max-width:1400px;margin:0 auto;padding:var(--s-xl) var(--s-lg) 64px}
+.harness-head{display:flex;flex-wrap:wrap;gap:var(--s-lg);align-items:baseline;
+  justify-content:space-between;padding-bottom:var(--s-lg);margin-bottom:var(--s-lg);
+  border-bottom:1px solid var(--hairline)}
+.harness-head h1{font-size:20px;letter-spacing:-.01em}
+.harness-head .sub{color:var(--muted);font-size:var(--f-body);max-width:62ch}
+.eyebrow{font-family:var(--mono);font-size:var(--f-cap);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);font-weight:600}
+.controls{display:flex;flex-wrap:wrap;gap:var(--s-sm);align-items:center}
+.seg{display:inline-flex;background:var(--well);border:1px solid var(--hairline);
+  border-radius:var(--r-pill);padding:3px;gap:2px}
+.seg button{font:600 var(--f-sm)/1 var(--sans);color:var(--muted);background:none;
+  border:0;padding:7px 13px;border-radius:var(--r-pill);cursor:pointer}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.seg button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.seg-label{font-family:var(--mono);font-size:var(--f-cap);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--faint);font-weight:600;margin-right:2px}
+
+/* ---- the desktop the shell floats on (so glass has something to refract) - */
+.desk{border-radius:var(--r-container);padding:26px;overflow:hidden;position:relative;
+  background:
+    radial-gradient(900px 500px at 12% 8%, #2b4a7a 0%, transparent 60%),
+    radial-gradient(700px 600px at 88% 90%, #6b3a5e 0%, transparent 58%),
+    linear-gradient(140deg,#101828,#1d2a3d 45%,#0c141f);
+  transition:background .3s}
+.desk[data-back="hostile"]{
+  background:
+    repeating-linear-gradient(52deg,#FFFFFF 0 22px,#0A0D13 22px 44px),
+    linear-gradient(#fff,#fff)}
+.desk[data-back="lab"]{
+  background:
+    radial-gradient(800px 420px at 20% 15%, #d9e2ee 0%, transparent 62%),
+    radial-gradient(600px 520px at 85% 85%, #b9c6d8 0%, transparent 55%),
+    linear-gradient(160deg,#eef2f7,#c9d3e0)}
+
+/* ============================ THE COCKPIT ================================= */
+/* The shell itself is the glass: background + backdrop-filter live HERE, not on
+   a ::before. An `isolation:isolate` wrapper would create a Backdrop Root and
+   every nested backdrop-filter would silently sample nothing (= flat). */
+.shell{border-radius:var(--r-container);overflow:hidden;box-shadow:var(--shad);
+  display:grid;grid-template-columns:auto 1fr;grid-template-rows:auto 1fr auto;
+  grid-template-areas:"vitals vitals" "rail stage" "armed armed";
+  min-height:660px;position:relative;border:1px solid var(--hair);
+  background:var(--surf-shell);
+  backdrop-filter:var(--bf);-webkit-backdrop-filter:var(--bf)}
+
+/* ---- LAYER 1: THE VITALS BAR (replaces titlebar+menubar+toolbar+island) -- */
+.vitals{grid-area:vitals;display:flex;align-items:stretch;gap:0;
+  border-bottom:1px solid var(--hair);position:relative;
+  background:var(--surf-chrome);backdrop-filter:var(--bf);-webkit-backdrop-filter:var(--bf)}
+.vitals::after{content:"";position:absolute;inset:0 0 auto 0;height:1px;background:var(--spec)}
+.brand{display:flex;align-items:center;gap:var(--s-sm);padding:0 var(--s-lg) 0 var(--s-xl);
+  border-right:1px solid var(--hair);flex:none;cursor:default;-webkit-app-region:drag}
+.brand .mark{width:26px;height:26px;border-radius:var(--r-ctl);flex:none;
+  background:linear-gradient(145deg,var(--accent),var(--sim));
+  display:grid;place-items:center;color:var(--on-accent);font:700 13px var(--sans)}
+.brand .name{font:650 var(--f-body)/1 var(--sans);letter-spacing:-.01em;white-space:nowrap}
+.brand .menu{margin-left:var(--s-sm);width:28px;height:28px;border-radius:var(--r-ctl);
+  border:1px solid var(--hair);background:var(--surf-well);color:var(--muted);
+  font:600 15px/1 var(--sans);cursor:pointer;-webkit-app-region:no-drag}
+.brand .menu:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* the hero readouts — visionOS "the number is the hero" */
+.vital{flex:1 1 0;min-width:0;padding:var(--s-md) var(--s-lg) var(--s-md);
+  border-right:1px solid var(--hair);display:flex;flex-direction:column;gap:2px;
+  position:relative;min-height:88px;justify-content:center}
+.vital:last-of-type{border-right:0}
+.vital .cap{font-family:var(--mono);font-size:var(--f-cap);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);font-weight:600;display:flex;
+  align-items:center;gap:6px;white-space:nowrap}
+.vital .val{font-family:var(--mono);font-size:var(--f-vital);font-weight:600;
+  letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1.05;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vital .unit{font-size:var(--f-cap);font-weight:400;color:var(--muted);
+  font-family:var(--mono);margin-left:3px}
+.vital .sub{font-size:var(--f-cap);color:var(--muted);font-family:var(--mono);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* state is carried by SHAPE + GLYPH + TEXT + COLOUR — never colour alone,
+   and never by the material. A filled left stripe survives every tier. */
+.vital[data-state]::before{content:"";position:absolute;left:0;top:12px;bottom:12px;
+  width:3px;border-radius:0 3px 3px 0;background:var(--faint)}
+.vital[data-state="good"]::before{background:var(--good)}
+.vital[data-state="armed"]::before{background:var(--armed)}
+.vital[data-state="crit"]::before{background:var(--crit)}
+.vital[data-state="run"]::before{background:var(--accent)}
+.dot{width:9px;height:9px;border-radius:50%;flex:none;background:var(--faint);
+  box-shadow:0 0 0 2px var(--surf-well)}
+.dot.good{background:var(--good)} .dot.armed{background:var(--armed)}
+.dot.crit{background:var(--crit)} .dot.off{background:transparent;
+  border:1.5px solid var(--faint);width:9px;height:9px}
+.spark{height:16px;width:100%;display:block;overflow:visible}
+.progress{height:4px;border-radius:2px;background:var(--surf-well);overflow:hidden;margin-top:2px;
+  border:1px solid var(--hair)}
+.progress i{display:block;height:100%;background:var(--accent);border-radius:2px}
+
+/* ---- LAYER 2: THE PHASE RAIL (12 flat tabs -> 3 phases) ------------------ */
+.rail{grid-area:rail;width:78px;flex:none;border-right:1px solid var(--hair);
+  display:flex;flex-direction:column;gap:var(--s-xs);padding:var(--s-md) var(--s-sm);
+  background:var(--surf-chrome);backdrop-filter:var(--bf);-webkit-backdrop-filter:var(--bf);
+  overflow:visible}
+.rail-group{font-family:var(--mono);font-size:9px;letter-spacing:.1em;font-weight:700;
+  text-transform:uppercase;color:var(--faint);text-align:center;padding:var(--s-sm) 0 var(--s-xs)}
+.rail-group + .rail-group{margin-top:0}
+.rail hr{border:0;border-top:1px solid var(--hair);margin:var(--s-sm) 6px}
+.rtab{position:relative;display:flex;flex-direction:column;align-items:center;gap:3px;
+  padding:9px 2px;border-radius:var(--r-tile);border:1px solid transparent;
+  background:none;color:var(--muted);cursor:pointer;font-family:var(--sans);width:100%}
+.rtab .ico{font-size:17px;line-height:1;font-family:var(--mono);font-weight:600}
+.rtab .lbl{font-size:9.5px;font-weight:600;letter-spacing:.01em;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.rtab:hover{background:var(--surf-well);color:var(--ink)}
+.rtab:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* selection is a FILLED, OPAQUE surface (visionOS: the committed thing is
+   solid; glass is for the passive). Survives FLAT identically. */
+.rtab[aria-selected="true"]{background:var(--accent);color:var(--on-accent);
+  border-color:var(--accent)}
+.rtab[aria-selected="true"] .lbl{font-weight:700}
+.rtab .badge{position:absolute;top:5px;right:9px;width:7px;height:7px;border-radius:50%}
+.rtab .badge.armed{background:var(--armed)} .rtab .badge.good{background:var(--good)}
+
+/* ---- LAYER 3: THE STAGE (panels live here) ------------------------------ */
+.stage{grid-area:stage;padding:var(--s-lg);display:grid;gap:var(--s-lg);
+  grid-template-columns:1.55fr 1fr;grid-template-rows:1.15fr .85fr;
+  grid-template-areas:"scope scan" "scope refs";min-height:0;overflow:auto}
+.card{background:var(--surf-panel);backdrop-filter:var(--bf);-webkit-backdrop-filter:var(--bf);
+  border:1px solid var(--hair);border-radius:var(--r-card);padding:var(--s-lg);
+  display:flex;flex-direction:column;gap:var(--s-md);min-width:0;min-height:0;
+  position:relative;box-shadow:var(--shad)}
+.card::before{content:"";position:absolute;inset:0 0 auto 0;height:1px;background:var(--spec);
+  border-radius:var(--r-card) var(--r-card) 0 0}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s-md)}
+.card-head h3{font-size:var(--f-title);font-weight:650;letter-spacing:-.01em}
+.card-head .meta{font-family:var(--mono);font-size:var(--f-cap);color:var(--muted);
+  letter-spacing:.06em;text-transform:uppercase;font-weight:600}
+.well{background:var(--surf-well);border:1px solid var(--hair);border-radius:var(--r-tile);
+  flex:1;min-height:0;position:relative;overflow:hidden}
+#c-scope{grid-area:scope} #c-scan{grid-area:scan} #c-refs{grid-area:refs}
+.scope-svg{width:100%;height:100%;display:block}
+.legend{display:flex;gap:var(--s-md);flex-wrap:wrap;font-family:var(--mono);
+  font-size:var(--f-cap);color:var(--muted);letter-spacing:.05em;text-transform:uppercase;font-weight:600}
+.legend b{color:var(--ink);font-weight:600}
+.heat{display:grid;grid-template-columns:repeat(24,1fr);gap:1px;padding:var(--s-sm);
+  width:100%;height:100%}
+.heat i{border-radius:2px;display:block}
+.reftiles{display:grid;grid-template-columns:1fr 1fr;gap:var(--s-md);flex:1;min-height:0}
+.tile{background:var(--surf-well);border:1px solid var(--hair);border-radius:var(--r-tile);
+  padding:var(--s-md);display:flex;flex-direction:column;justify-content:center;gap:2px;min-width:0}
+.tile .cap{font-family:var(--mono);font-size:var(--f-cap);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);font-weight:600;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.tile .val{font-family:var(--mono);font-size:var(--f-val);font-weight:600;
+  font-variant-numeric:tabular-nums;letter-spacing:-.02em;line-height:1.1;white-space:nowrap}
+.tile .val small{font-size:var(--f-cap);font-weight:400;color:var(--muted);margin-left:3px}
+
+/* ---- LAYER 4: THE ARMED RAIL (always visible, always opaque, never glass) -
+   LAW: the hazard surface is TIER-INVARIANT. It paints --panel at every tier,
+   so an operator's muscle memory and the danger affordance are byte-identical
+   on RDP, on high-contrast, and on the full glass build.                     */
+.armed{grid-area:armed;display:flex;align-items:center;gap:var(--s-lg);
+  padding:var(--s-md) var(--s-xl);border-top:1px solid var(--hairline-strong);
+  background:var(--panel);      /* <-- token, NOT --surf-panel. Deliberate. */
+  backdrop-filter:none}
+.armed .ctx{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.armed .ctx .k{font-family:var(--mono);font-size:var(--f-cap);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);font-weight:600}
+.armed .ctx .v{font-family:var(--mono);font-size:var(--f-sm);color:var(--ink);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.arms{display:flex;gap:var(--s-md);align-items:center}
+.arm{display:flex;align-items:center;gap:var(--s-sm);padding:9px var(--s-md);
+  border-radius:var(--r-ctl);border:1.5px solid var(--hairline-strong);
+  background:var(--well);color:var(--ink);cursor:pointer;font-family:var(--sans);
+  font-size:var(--f-body);font-weight:650;white-space:nowrap;position:relative}
+.arm:hover{border-color:var(--armed)}
+.arm:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.arm .k{font-family:var(--mono);font-size:var(--f-cap);letter-spacing:.08em;
+  text-transform:uppercase;color:var(--muted);font-weight:700}
+.arm[data-armed="true"]{background:var(--armed);color:var(--on-crit);border-color:var(--armed)}
+.arm[data-armed="true"] .k{color:var(--on-crit)}
+.exec{display:none;align-items:center;gap:var(--s-sm);padding:9px var(--s-lg);
+  border-radius:var(--r-ctl);border:1.5px solid var(--crit-ink);background:var(--crit-ink);
+  color:var(--on-crit);font:700 var(--f-body) var(--sans);cursor:pointer;white-space:nowrap}
+.exec[data-show="true"]{display:inline-flex}
+.exec:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+.exec .cd{font-family:var(--mono);font-size:var(--f-cap);font-weight:700;opacity:.85}
+.estop{margin-left:var(--s-sm);padding:11px var(--s-lg);border-radius:var(--r-ctl);
+  border:2px solid var(--crit-ink);background:transparent;color:var(--crit-ink);
+  font:800 var(--f-body) var(--sans);letter-spacing:.04em;cursor:pointer;white-space:nowrap}
+.estop:hover{background:var(--crit-ink);color:var(--on-crit)}
+.estop:focus-visible{outline:2px solid var(--ink);outline-offset:2px}
+
+/* ---- annotations (harness only) ---------------------------------------- */
+.notes{margin-top:var(--s-xl);display:grid;gap:var(--s-md);
+  grid-template-columns:repeat(auto-fit,minmax(260px,1fr))}
+.note{border:1px solid var(--hairline);border-radius:var(--r-card);padding:var(--s-lg);
+  background:var(--panel)}
+.note h4{font-size:var(--f-body);font-weight:650;margin-bottom:6px}
+.note p{font-size:var(--f-sm);color:var(--muted)}
+.note code{font-family:var(--mono);font-size:11px;color:var(--ink)}
+table.cr{width:100%;border-collapse:collapse;margin-top:var(--s-sm);font-size:var(--f-sm)}
+table.cr th,table.cr td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--hairline)}
+table.cr th{font-family:var(--mono);font-size:var(--f-cap);letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted);font-weight:600}
+table.cr td.n{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+.pass{color:var(--good);font-weight:700} .fail{color:var(--crit-ink);font-weight:700}
+.scroll{overflow-x:auto}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+@media (max-width:900px){
+  .shell{grid-template-columns:1fr;grid-template-areas:"vitals" "stage" "armed";min-height:0}
+  .rail{display:none} .stage{grid-template-columns:1fr;grid-template-areas:"scope" "scan" "refs"}
+  .vitals{flex-wrap:wrap} .vital{flex:1 1 45%}
+}
+</style>
+
+<div class="harness">
+  <header class="harness-head">
+    <div>
+      <div class="eyebrow">GlassShell cockpit · round 01 · candidate A</div>
+      <h1>INSTRUMENT — the cockpit is an instrument face</h1>
+      <p class="sub">Depth is <b>structural</b>: four fixed layers that each mean something and never move.
+        Vitals never scroll away, the dangerous controls live in the same three pixels forever, and the glass
+        is a finish on a machine that already works without it.</p>
+    </div>
+    <div class="controls">
+      <span class="seg-label">Theme</span>
+      <div class="seg" id="segTheme" role="group" aria-label="Theme">
+        <button data-v="light" aria-pressed="false">Light</button>
+        <button data-v="dark" aria-pressed="true">Dark</button>
+      </div>
+      <span class="seg-label">Tier</span>
+      <div class="seg" id="segTier" role="group" aria-label="Glass tier">
+        <button data-v="real" aria-pressed="true">Real glass</button>
+        <button data-v="token" aria-pressed="false">Token</button>
+        <button data-v="flat" aria-pressed="false">Flat</button>
+      </div>
+      <span class="seg-label">Backdrop</span>
+      <div class="seg" id="segBack" role="group" aria-label="Backdrop">
+        <button data-v="desk" aria-pressed="true">Desk</button>
+        <button data-v="lab" aria-pressed="false">Lab light</button>
+        <button data-v="hostile" aria-pressed="false">Worst case</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="desk" id="desk" data-back="desk">
+    <div class="shell" id="shell" data-tier="real">
+
+      <!-- ===================== 1. VITALS BAR ===================== -->
+      <div class="vitals">
+        <div class="brand">
+          <div class="mark">T</div>
+          <div class="name">TCT Control</div>
+          <button class="menu" title="File · View · Devices · Help" aria-label="Menu">⋯</button>
+        </div>
+
+        <div class="vital" data-state="crit">
+          <div class="cap"><span class="dot crit" aria-hidden="true"></span>Bias · HV ON</div>
+          <div class="val">−400.0<span class="unit">V</span></div>
+          <div class="sub">setpoint −400.0 · ramping ✓</div>
+        </div>
+
+        <div class="vital" data-state="good">
+          <div class="cap"><span class="dot good" aria-hidden="true"></span>Leakage</div>
+          <div class="val">12.4<span class="unit">nA</span></div>
+          <svg class="spark" viewBox="0 0 120 16" preserveAspectRatio="none" aria-hidden="true">
+            <polyline id="sparkPts" fill="none" stroke="var(--good)" stroke-width="1.5"
+              vector-effect="non-scaling-stroke" points=""></polyline>
+          </svg>
+        </div>
+
+        <div class="vital" data-state="good">
+          <div class="cap"><span class="dot good" aria-hidden="true"></span>Stage · Idle</div>
+          <div class="val">112.500<span class="unit">mm</span></div>
+          <div class="sub">X 112.500 · Y 48.250 · Z 9.000</div>
+        </div>
+
+        <div class="vital" data-state="armed">
+          <div class="cap"><span class="dot armed" aria-hidden="true"></span>Laser · ARMED</div>
+          <div class="val">1064<span class="unit">nm</span></div>
+          <div class="sub">int 42 % · rep 1.0 kHz · ext trig</div>
+        </div>
+
+        <div class="vital" data-state="run">
+          <div class="cap"><span class="dot" style="background:var(--accent)" aria-hidden="true"></span>Scan · RUNNING</div>
+          <div class="val">047<span class="unit">/ 400</span></div>
+          <div class="progress" role="progressbar" aria-valuenow="12" aria-valuemin="0" aria-valuemax="100">
+            <i style="width:11.75%"></i></div>
+          <div class="sub">ETA 07:12 · elapsed 00:58</div>
+        </div>
+      </div>
+
+      <!-- ===================== 2. PHASE RAIL ===================== -->
+      <div class="rail" role="tablist" aria-orientation="vertical" aria-label="Panels by phase">
+        <div class="rail-group" role="presentation">Set up</div>
+        <button type="button" class="rtab" role="tab" aria-selected="false"><span class="ico">⌗</span><span class="lbl">Stage</span></button>
+        <button type="button" class="rtab" role="tab" aria-selected="false"><span class="ico">⚡</span><span class="lbl">Bias</span>
+          <span class="badge armed" aria-hidden="true"></span></button>
+        <button type="button" class="rtab" role="tab" aria-selected="false"><span class="ico">✳</span><span class="lbl">Laser</span>
+          <span class="badge armed" aria-hidden="true"></span></button>
+        <button type="button" class="rtab" role="tab" aria-selected="true"><span class="ico">∿</span><span class="lbl">Scope</span></button>
+        <button type="button" class="rtab" role="tab" aria-selected="false"><span class="ico">▣</span><span class="lbl">Camera</span></button>
+        <button type="button" class="rtab" role="tab" aria-selected="false"><span class="ico">⊞</span><span class="lbl">Devices</span></button>
+        <hr role="presentation">
+        <div class="rail-group" role="presentation">Run</div>
+        <button type="button" class="rtab" role="tab" aria-selected="false"><span class="ico">◫</span><span class="lbl">Planner</span></button>
+        <button type="button" class="rtab" role="tab" aria-selected="false"><span class="ico">≣</span><span class="lbl">Sequence</span></button>
+        <button type="button" class="rtab" role="tab" aria-selected="false"><span class="ico">▦</span><span class="lbl">Scan</span>
+          <span class="badge good" aria-hidden="true"></span></button>
+        <button type="button" class="rtab" role="tab" aria-selected="false"><span class="ico">◉</span><span class="lbl">Monitor</span></button>
+        <hr role="presentation">
+        <div class="rail-group" role="presentation">Study</div>
+        <button type="button" class="rtab" role="tab" aria-selected="false"><span class="ico">⌁</span><span class="lbl">Analysis</span></button>
+        <button type="button" class="rtab" role="tab" aria-selected="false"><span class="ico">⚖</span><span class="lbl">Calib.</span></button>
+      </div>
+
+      <!-- ===================== 3. STAGE ===================== -->
+      <main class="stage">
+        <section class="card" id="c-scope">
+          <div class="card-head">
+            <h3>Oscilloscope</h3>
+            <span class="meta">CH1 · 2 GS/s · 50 Ω</span>
+          </div>
+          <div class="well"><svg class="scope-svg" id="scopeSvg" viewBox="0 0 600 260"
+            preserveAspectRatio="none" role="img" aria-label="TCT transient: rise 1.1 ns, decay 8.4 ns, peak 1.86 mA"></svg></div>
+          <div class="legend">
+            <span>Peak <b>1.86 mA</b></span><span>Rise <b>1.1 ns</b></span>
+            <span>τ <b>8.4 ns</b></span><span>Charge <b>24.7 fC</b></span>
+          </div>
+        </section>
+
+        <section class="card" id="c-scan">
+          <div class="card-head"><h3>Scan map</h3><span class="meta">Charge · fC</span></div>
+          <div class="well"><div class="heat" id="heat"></div></div>
+        </section>
+
+        <section class="card" id="c-refs">
+          <div class="card-head"><h3>Reference monitor</h3><span class="meta">Live</span></div>
+          <div class="reftiles">
+            <div class="tile"><div class="cap">Laser ref</div><div class="val">0.982<small>norm</small></div></div>
+            <div class="tile"><div class="cap">Temp</div><div class="val">21.4<small>°C</small></div></div>
+            <div class="tile"><div class="cap">Humidity</div><div class="val">38<small>%</small></div></div>
+            <div class="tile"><div class="cap">Trig rate</div><div class="val">1.000<small>kHz</small></div></div>
+          </div>
+        </section>
+      </main>
+
+      <!-- ===================== 4. ARMED RAIL ===================== -->
+      <div class="armed">
+        <div class="ctx">
+          <div class="k">Next action envelope</div>
+          <div class="v" id="envelope">Scan · 400 pts · X 100→140 mm, Y 40→60 mm · HV −400 V held · est. 08:10</div>
+        </div>
+        <div class="arms">
+          <button class="arm" data-arm="hv" data-armed="false">
+            <span class="k">HV</span><span class="t">Arm</span></button>
+          <button class="exec" data-exec="hv" data-show="false">
+            Enable HV <span class="cd">10 s</span></button>
+
+          <button class="arm" data-arm="motion" data-armed="false">
+            <span class="k">Motion</span><span class="t">Arm</span></button>
+          <button class="exec" data-exec="motion" data-show="false">
+            Move stage <span class="cd">10 s</span></button>
+
+          <button class="arm" data-arm="scan" data-armed="false">
+            <span class="k">Scan</span><span class="t">Arm</span></button>
+          <button class="exec" data-exec="scan" data-show="false">
+            Start scan <span class="cd">10 s</span></button>
+
+          <button class="estop">ABORT</button>
+        </div>
+      </div>
+
+    </div><!-- /shell -->
+  </div><!-- /desk -->
+
+  <div class="notes">
+    <div class="note">
+      <h4>What the tier switch proves</h4>
+      <p>Flip <b>Tier → Flat</b>. Nothing disappears: every number, glyph, stripe, dot and label is
+      painted on the token layer. Glass only removes blur and the specular hairline. The armed rail
+      does not change <i>at all</i> — it is painted with <code>panel</code>, never a material.</p>
+    </div>
+    <div class="note">
+      <h4>What the backdrop switch proves</h4>
+      <p><b>Backdrop → Worst case</b> is a 100 %-contrast black/white stripe field — the pathological
+      backdrop for translucency. Contrast holds because the panel material's alpha
+      (<code>0.42</code> dark / <code>0.72</code> light) is opaque enough to floor the backdrop.
+      Anything thinner is where legibility dies.</p>
+    </div>
+    <div class="note">
+      <h4>Chrome budget</h4>
+      <p>Today: title bar + menu bar + toolbar + status island + tab shelf = <b>5 bands, ~13 % of
+      screen height</b>, with the island clipping <i>“Motion”</i> off the right edge. Here:
+      <b>1 band</b> (88 px), and it is the only thing you must read from across the room.</p>
+    </div>
+    <div class="note">
+      <h4>Measured contrast (dark, on <code>panel</code> #0D111A)</h4>
+      <div class="scroll"><table class="cr">
+        <tr><th>Pair</th><th>Ratio</th><th>AA</th></tr>
+        <tr><td>ink #E9EDF5</td><td class="n">15.9</td><td class="pass">PASS</td></tr>
+        <tr><td>muted #98A1B5</td><td class="n">7.2</td><td class="pass">PASS</td></tr>
+        <tr><td>faint #5B657A</td><td class="n">3.2</td><td class="fail">LARGE / NON-TEXT ONLY</td></tr>
+        <tr><td>accent #5AA9FF</td><td class="n">7.6</td><td class="pass">PASS</td></tr>
+        <tr><td>crit #FF5A61</td><td class="n">6.1</td><td class="pass">PASS</td></tr>
+        <tr><td>armed #FFB84D</td><td class="n">10.9</td><td class="pass">PASS</td></tr>
+      </table></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  const root=document.documentElement, shell=document.getElementById("shell"), desk=document.getElementById("desk");
+  root.setAttribute("data-theme","dark");
+
+  function wire(id,fn){
+    const g=document.getElementById(id);
+    g.addEventListener("click",e=>{
+      const b=e.target.closest("button"); if(!b) return;
+      [...g.querySelectorAll("button")].forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
+      fn(b.dataset.v);
+    });
+  }
+  wire("segTheme",v=>root.setAttribute("data-theme",v));
+  wire("segTier", v=>shell.setAttribute("data-tier",v));
+  wire("segBack", v=>desk.setAttribute("data-back",v));
+
+  /* phase rail selection */
+  const rtabs=[...document.querySelectorAll(".rtab")];
+  rtabs.forEach(t=>t.addEventListener("click",()=>{
+    rtabs.forEach(x=>x.setAttribute("aria-selected",String(x===t)));
+    document.querySelector("#c-scope .card-head h3").textContent=t.querySelector(".lbl").textContent;
+  }));
+
+  /* --- the TCT transient: fast rise, exponential decay, a little ringing --- */
+  const svg=document.getElementById("scopeSvg"), W=600,H=260, t0=90;
+  const ns=t=>t0+t*11.2;                       // 1 ns ≈ 11.2 px
+  const base=H*0.78;
+  let d="M0,"+base.toFixed(1), pts=[];
+  for(let x=0;x<=W;x+=1.5){
+    const t=(x-t0)/11.2;                       // ns since trigger
+    let y=base;
+    if(t>0){
+      const rise=1-Math.exp(-t/0.42), decay=Math.exp(-t/8.4);
+      const ring=Math.exp(-t/3.1)*Math.sin(t*1.55)*0.06;
+      y=base-(rise*decay+ring)*(base-26)*1.02;
+    }
+    y+=(Math.random()-0.5)*1.6;                // scope noise floor
+    pts.push([x,y]); d+=" L"+x.toFixed(1)+","+y.toFixed(1);
+  }
+  const grid=[];
+  for(let i=1;i<8;i++) grid.push(`<line x1="${i*W/8}" y1="0" x2="${i*W/8}" y2="${H}"/>`);
+  for(let i=1;i<5;i++) grid.push(`<line x1="0" y1="${i*H/5}" x2="${W}" y2="${i*H/5}"/>`);
+  svg.innerHTML=
+    `<g stroke="var(--hair)" stroke-width="1" opacity=".55" vector-effect="non-scaling-stroke">${grid.join("")}</g>`+
+    `<line x1="0" y1="${base}" x2="${W}" y2="${base}" stroke="var(--faint)" stroke-width="1"
+        stroke-dasharray="3 4" vector-effect="non-scaling-stroke"/>`+
+    `<line x1="${t0}" y1="0" x2="${t0}" y2="${H}" stroke="var(--armed)" stroke-width="1"
+        stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`+
+    `<path d="${d} L${W},${base} Z" fill="var(--accent)" opacity=".12"/>`+
+    `<path d="${d}" fill="none" stroke="var(--accent)" stroke-width="1.6"
+        vector-effect="non-scaling-stroke" stroke-linejoin="round"/>`+
+    `<circle cx="${ns(0.42).toFixed(1)}" cy="26" r="3" fill="var(--accent)"/>`;
+
+  /* --- leakage sparkline --- */
+  let sp=[]; for(let i=0;i<40;i++){ sp.push(i*3+","+(9+Math.sin(i/3)*2.6+Math.random()*1.8).toFixed(1)); }
+  document.getElementById("sparkPts").setAttribute("points",sp.join(" "));
+
+  /* --- scan heatmap: a real-looking charge map, 24 x 10, with a live edge --- */
+  const heat=document.getElementById("heat"), COLS=24, ROWS=10, DONE=47, TOTAL=COLS*ROWS;
+  for(let i=0;i<TOTAL;i++){
+    const c=i%COLS, r=(i/COLS)|0, el=document.createElement("i");
+    if(i<DONE){
+      const q=Math.exp(-((c-9)**2/48+(r-4)**2/9))*0.85+Math.random()*0.12;
+      el.style.background=`color-mix(in srgb, var(--accent) ${(q*100).toFixed(0)}%, var(--well))`;
+      el.title=`X ${(100+c*1.67).toFixed(2)} mm · Y ${(40+r*2).toFixed(2)} mm · ${(q*29).toFixed(1)} fC`;
+    }else if(i===DONE){
+      el.style.background="var(--armed)";
+    }else{
+      el.style.background="transparent";
+      el.style.boxShadow="inset 0 0 0 1px var(--hair)";
+    }
+    heat.appendChild(el);
+  }
+
+  /* --- the danger ceremony: arm -> reveal execute -> 10 s auto-disarm ------
+     Redesigned housing, NOT a redesigned gate. Two distinct controls, two
+     distinct clicks, a countdown that expires closed. Nothing here is faster
+     than gui/arm_latch.py today; the Execute button does not exist until you
+     have armed, and it evaporates if you hesitate.                          */
+  const timers={};
+  document.querySelectorAll(".arm").forEach(arm=>{
+    const key=arm.dataset.arm;
+    const exec=document.querySelector(`.exec[data-exec="${key}"]`);
+    const cd=exec.querySelector(".cd");
+    function disarm(){
+      clearInterval(timers[key]); arm.dataset.armed="false";
+      arm.querySelector(".t").textContent="Arm"; exec.dataset.show="false";
+    }
+    arm.addEventListener("click",()=>{
+      if(arm.dataset.armed==="true"){ disarm(); return; }
+      document.querySelectorAll('.arm[data-armed="true"]').forEach(a=>a.click()); // one at a time
+      arm.dataset.armed="true"; arm.querySelector(".t").textContent="Armed";
+      exec.dataset.show="true";
+      let left=10; cd.textContent=left+" s";
+      timers[key]=setInterval(()=>{ left--; cd.textContent=left+" s"; if(left<=0) disarm(); },1000);
+    });
+    exec.addEventListener("click",()=>{ disarm(); });
+  });
+})();
+</script>

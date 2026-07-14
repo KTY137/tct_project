@@ -30,12 +30,10 @@ except ImportError:
     _HAS_PG = False
 
 # Optional prettification libs — the panel degrades gracefully without them.
-try:
-    import qtawesome as qta
-    _HAS_QTA = True
-except ImportError:
-    _HAS_QTA = False
-
+# (qtawesome is NOT imported here anymore: every icon in this panel goes through
+# gui.status_widgets.set_button_icon, which owns the optional-import fallback,
+# the palette-token default, and the theme re-tint. A second, local icon helper
+# was exactly how the colourless-icon bug survived here — see that module.)
 try:
     from superqt import QToggleSwitch, QLabeledDoubleRangeSlider
     _HAS_SUPERQT = True
@@ -49,7 +47,7 @@ from gui.app_settings import theme_mode
 from gui.panel_kit import Card, CheckableCard, panel_header
 from gui.scope_measurements import MeasurementPanel
 from gui.status_bus import notify
-from gui.status_widgets import ReadoutCell, StatusChip, StatusLamp
+from gui.status_widgets import ReadoutCell, StatusChip, StatusLamp, set_button_icon
 from gui.style import DARK, LIGHT, SPACE_MD, SPACE_SM, WARN_AMBER, axis_color
 
 logger = logging.getLogger(__name__)
@@ -68,16 +66,6 @@ _CHAN_DEFAULTS: dict[int, tuple[tuple[int, int, int], str, bool, str]] = {
     4: ((0,   230, 118), "—",         False, "CH4"),
 }
 _ROLES = ("—", "DUT", "Reference")
-
-
-def _icon(name: str, color: str | None = None):
-    """qtawesome icon or None when the lib is missing (buttons fall back to text)."""
-    if not _HAS_QTA:
-        return None
-    try:
-        return qta.icon(name, color=color) if color else qta.icon(name)
-    except Exception:
-        return None
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -687,9 +675,9 @@ class ScopePanel(QWidget):
 
         # Trigger badge
         self._btn_trigger = QPushButton()
-        ico = _icon("mdi.flash", WARN_AMBER)
-        if ico is not None:
-            self._btn_trigger.setIcon(ico)
+        # Amber is a FIXED safety token (identical in both palettes), so this
+        # icon is caller-coloured on purpose and needs no theme re-tint.
+        set_button_icon(self._btn_trigger, "mdi.flash", color=WARN_AMBER)
         self._btn_trigger.setToolTip("Open the trigger settings (source / level / slope)")
         self._btn_trigger.clicked.connect(self._open_trigger)
         self._refresh_trigger_badge()
@@ -824,17 +812,13 @@ class ScopePanel(QWidget):
 
         self._btn_live = QPushButton("Live")
         self._btn_live.setObjectName("segBtn")
-        ico = _icon("mdi.play")
-        if ico is not None:
-            self._btn_live.setIcon(ico)
+        set_button_icon(self._btn_live, "mdi.play")
         self._btn_live.setCheckable(True)
         self._btn_live.toggled.connect(self._toggle_live)
 
         self._btn_single = QPushButton("Single")
         self._btn_single.setObjectName("segBtn")
-        ico = _icon("mdi.camera")
-        if ico is not None:
-            self._btn_single.setIcon(ico)
+        set_button_icon(self._btn_single, "mdi.camera")
         self._btn_single.clicked.connect(self._acquire_requested)
 
         seg_lay.addWidget(self._btn_live)
@@ -858,16 +842,12 @@ class ScopePanel(QWidget):
         self._avg_combo.currentIndexChanged.connect(self._on_avg_changed)
 
         btn_export = QPushButton("Export CSV")
-        ico = _icon("mdi.content-save")
-        if ico is not None:
-            btn_export.setIcon(ico)
+        set_button_icon(btn_export, "mdi.content-save")
         btn_export.setToolTip("Save the currently displayed waveforms to a CSV file")
         btn_export.clicked.connect(self._export_csv)
 
         btn_test = QPushButton("Test")
-        ico = _icon("mdi.lan-connect")
-        if ico is not None:
-            btn_test.setIcon(ico)
+        set_button_icon(btn_test, "mdi.lan-connect")
         btn_test.setToolTip("Query *IDN? and show the reply — confirms the VISA/USB link")
         btn_test.clicked.connect(self._test_connection)
 
@@ -1468,10 +1448,9 @@ class ScopePanel(QWidget):
         else:
             self._live_stop_requested.emit()
         self._btn_live.setText("Stop" if checked else "Live")
-        if _HAS_QTA:
-            ico = _icon("mdi.stop" if checked else "mdi.play")
-            if ico is not None:
-                self._btn_live.setIcon(ico)
+        # Re-registers the new glyph under the same palette token, so the live/
+        # stop icon keeps following the theme after this swap.
+        set_button_icon(self._btn_live, "mdi.stop" if checked else "mdi.play")
         self._refresh_status_chips()
 
     def _on_test_done(self, msg: str) -> None:

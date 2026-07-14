@@ -271,7 +271,11 @@ def test_laser_panel_construct_and_theme_switch():
 
 def test_motor_panel_stage_view_refreshes_theme_tokens():
     """MotorPanel owns StageView, so its refresh hook must fan the live theme
-    into the cached stage-plot colors."""
+    into the cached stage-plot colors.
+
+    (The former ``_v3d`` GL page was removed 2026-07-13 — see
+    tests/test_no_render_to_texture_children_in_gui.py; only the 2D view is
+    themed now.)"""
     app = _app()
     from devices.motor_simulated import SimulatedMotorStage
     from gui.motor_panel import MotorPanel
@@ -283,7 +287,6 @@ def test_motor_panel_stage_view_refreshes_theme_tokens():
         panel.refresh_theme("light")
         assert panel._stage_view._theme_mode == "light"
         assert panel._stage_view._v2d._theme_mode == "light"
-        assert panel._stage_view._v3d._theme_mode == "light"
         if _HAS_PG:
             bg = panel._stage_view._v2d._top["w"].backgroundBrush().color().name()
             assert bg.lower() == palette("light")["sunk"].lower()
@@ -291,7 +294,6 @@ def test_motor_panel_stage_view_refreshes_theme_tokens():
         panel.refresh_theme("dark")
         assert panel._stage_view._theme_mode == "dark"
         assert panel._stage_view._v2d._theme_mode == "dark"
-        assert panel._stage_view._v3d._theme_mode == "dark"
         if _HAS_PG:
             bg = panel._stage_view._v2d._top["w"].backgroundBrush().color().name()
             assert bg.lower() == palette("dark")["sunk"].lower()

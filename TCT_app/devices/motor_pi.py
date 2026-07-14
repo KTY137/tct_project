@@ -254,7 +254,7 @@ class PIMotorStage(MotorStageBase):
             # it cannot be sliced per exchange the way _wait_on_target is.  Cost:
             # a concurrent get_position() blocks until homing finishes (the
             # position display freezes, it does not garble).  stop() is unaffected
-            # (bounded acquire + fall-through), which is the property that matters.
+            # (it is lock-free #24), which is the property that matters.
             with self.io_lock:
                 # startup() enables the servo where applicable and runs the
                 # reference move (FRF/FNL/FPL) for each axis, then waits until

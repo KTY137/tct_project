@@ -32,7 +32,7 @@ from analysis.waveform_analysis import analyse_waveform
 from controller.danger_gate import DangerGate
 from controller.repeatability import RepeatabilityTester
 from gui.app_settings import theme_mode
-from gui.panel_kit import panel_header
+from gui.panel_kit import panel_header, register_glass_pane
 from gui.status_widgets import ReadoutCell, StatusChip, flash_button, set_button_busy, set_button_icon
 from gui.style import FONT_SM, MONO_FAMILIES, palette
 
@@ -159,6 +159,13 @@ class CalibrationPanel(QWidget):
         self._units.addItems(["pC", "MIP", "e"])
         mform.addRow("Output units:", self._units)
         root.addWidget(method_box)
+        # Panel glass (opt-in, Baldr Z-ladder): the Method + Electronics-gain
+        # groups are pure parameter chrome (selectors / gain fields), no live
+        # readout, no motion/danger control — eligible. The Reference-diode
+        # group is DENIED below (it carries Q_ref/k_factor readout cells,
+        # Baldr Z4) and so is the Stage-Repeatability group (it hosts the
+        # #dangerBtn Stop button — Völundr G2 / Baldr §5.2).
+        register_glass_pane(method_box)
 
         # Electronics group
         self._elec_box = QGroupBox("Electronics gain")
@@ -171,6 +178,7 @@ class CalibrationPanel(QWidget):
         eform.addRow("Amplifier gain (V/V):", self._amp_gain)
         eform.addRow("Transimpedance (V/A):", self._transimpedance)
         root.addWidget(self._elec_box)
+        register_glass_pane(self._elec_box)
 
         # Reference-diode group
         self._ref_box = QGroupBox("Reference diode (MIP calibration)")
@@ -224,15 +232,29 @@ class CalibrationPanel(QWidget):
             self._rep_n, self._rep_approach, self._rep_settle,
             self._rep_cal, self._rep_cal_axis, self._rep_cal_dist,
         )
+        # ``self._mark_dirty`` is a BOUND METHOD, never a lambda: PySide6 holds
+        # bound-method slots weakly, so these connections do not keep the panel
+        # alive. A ``lambda *_: self._set_dirty(True)`` (what these were) is
+        # stored STRONGLY by the child widget's C++ connection list and closes
+        # the cycle child -> connection -> closure -> panel -> child, one hop of
+        # which gc cannot see. See tests/test_no_immortal_panels.py.
         for widget in widgets:
             if isinstance(widget, QComboBox):
-                widget.currentTextChanged.connect(lambda *_: self._set_dirty(True))
+                widget.currentTextChanged.connect(self._mark_dirty)
             elif isinstance(widget, (QDoubleSpinBox, QSpinBox)):
-                widget.valueChanged.connect(lambda *_: self._set_dirty(True))
+                widget.valueChanged.connect(self._mark_dirty)
             elif isinstance(widget, QLineEdit):
-                widget.textChanged.connect(lambda *_: self._set_dirty(True))
+                widget.textChanged.connect(self._mark_dirty)
             elif isinstance(widget, QCheckBox):
-                widget.toggled.connect(lambda *_: self._set_dirty(True))
+                widget.toggled.connect(self._mark_dirty)
+
+    def _mark_dirty(self, *_) -> None:
+        """Any edit to a tracked field marks the calibration unsaved.
+
+        Takes ``*_`` because the four signals wired above deliver different
+        payloads (str / float / str / bool) and none of them is used.
+        """
+        self._set_dirty(True)
 
     def _set_dirty(self, dirty: bool) -> None:
         if getattr(self, "_loading", False):

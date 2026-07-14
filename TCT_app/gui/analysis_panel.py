@@ -327,14 +327,26 @@ class AnalysisPanel(QWidget):
         self._modes.addWidget(self._build_map_mode())      # index 0
         self._modes.addWidget(self._build_cce_mode())      # index 1
         self._modes.addWidget(self._build_survey_mode())   # index 2
-        # fade_swap (gui/motion_kit.py): a static QPixmap snapshot cross-fade,
-        # never a QGraphicsEffect on this stack or its pages — 2/3 of them
-        # host a pyqtgraph plot (ScanMapView/CCE), which the hot-path law
-        # bans an effect on. See fade_swap's own docstring for the mechanism.
-        self._segmented.selection_changed.connect(
-            lambda key: fade_swap(self._modes, _SURVEY_MODE_INDEX.get(key, 0)))
+        # A BOUND METHOD, never a lambda: PySide6 holds bound-method slots
+        # weakly, so this connection does not keep the panel alive. A lambda
+        # capturing ``self`` and connected to a CHILD's signal (as this once
+        # was) forms panel -> child -> C++ connection -> closure -> panel — a
+        # cycle with one hop inside Qt that Python's gc cannot traverse, so the
+        # whole panel tree (~835 widgets) becomes immortal. See
+        # tests/test_no_immortal_panels.py.
+        self._segmented.selection_changed.connect(self._on_survey_mode_selected)
         lay.addWidget(self._modes, 1)
         return page
+
+    def _on_survey_mode_selected(self, key: str) -> None:
+        """Cross-fade the mode stack to the segment the user picked.
+
+        fade_swap (gui/motion_kit.py): a static QPixmap snapshot cross-fade,
+        never a QGraphicsEffect on this stack or its pages — 2/3 of them host a
+        pyqtgraph plot (ScanMapView/CCE), which the hot-path law bans an effect
+        on. See fade_swap's own docstring for the mechanism.
+        """
+        fade_swap(self._modes, _SURVEY_MODE_INDEX.get(key, 0))
 
     def _build_map_mode(self) -> QWidget:
         page = QWidget()

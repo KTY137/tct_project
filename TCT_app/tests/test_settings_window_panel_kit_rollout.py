@@ -26,7 +26,7 @@ import yaml
 from PySide6.QtWidgets import QApplication, QFrame, QLabel
 
 from devices.camera_blackfly import BlackflyCamera
-from gui import style
+from gui import backdrop, style
 from gui.camera_panel import CameraPanel
 from gui.settings_window import SettingsWindow
 from gui.style import apply_theme
@@ -105,30 +105,27 @@ def test_settings_window_construction_applies_current_backdrop_and_opacity(monke
     """Beat C3-mini: SettingsWindow must inherit the cockpit's window
     backdrop material and real window opacity at ITS OWN construction —
     same apply-order contract (backdrop before opacity) as
-    gui.detachable_tabs._DetachedWindow / gui.theme_editor.ThemeEditorDialog
-    (see tests/test_theme_editor.py::
-    test_dialog_construction_applies_current_backdrop_and_opacity)."""
+    gui.detachable_tabs._DetachedWindow / gui.theme_editor.ThemeEditorDialog.
+
+    Beat G-B1: both now come from the ONE entry point
+    (style.reassert_window_backdrop), which enforces the order internally, applies
+    the WS_EX_LAYERED opacity pin, and installs the event spine's guard — so the
+    assertion moved from "it calls these two style functions in this order" to
+    "it goes through the one function, which every satellite window shares"."""
     _app()
     calls: list[str] = []
-    orig_backdrop = style.apply_window_backdrop_to
-    orig_opacity = style.get_window_opacity
+    orig = style.reassert_window_backdrop
 
-    def recording_backdrop(window, kind=None):
-        calls.append("backdrop")
-        return orig_backdrop(window, kind)
+    def recording(window, **kwargs):
+        calls.append(type(window).__name__)
+        return orig(window, **kwargs)
 
-    def recording_opacity():
-        calls.append("opacity")
-        return orig_opacity()
-
-    monkeypatch.setattr(style, "apply_window_backdrop_to", recording_backdrop)
-    monkeypatch.setattr(style, "get_window_opacity", recording_opacity)
+    monkeypatch.setattr(style, "reassert_window_backdrop", recording)
 
     win = SettingsWindow()
     try:
-        # Unlike ThemeEditorDialog, SettingsWindow has no separate opacity
-        # "draft" to seed — this construction call is the only one.
-        assert calls == ["backdrop", "opacity"]
+        assert calls == ["SettingsWindow"]
+        assert win in backdrop._guarded_windows
     finally:
         win.close()
 

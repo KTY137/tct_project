@@ -28,11 +28,13 @@ from __future__ import annotations
 
 import logging
 import os
+import weakref
 from pathlib import Path
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
+from PySide6.QtCore import Property, QObject, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QColor
 
+from gui import backdrop
 from gui.style import palette
 
 logger = logging.getLogger(__name__)
@@ -80,6 +82,21 @@ def pin_opengl_rhi() -> None:
 def rhi_pinned() -> bool:
     """Whether pin_opengl_rhi() has been applied this process."""
     return _RHI_PINNED
+
+
+def chrome_clear_color(chrome) -> QColor:
+    """The QQuickWidget's CURRENT clear colour — the colour every pixel of its
+    scene composites onto before the widget compositor blends the texture over the
+    window's backing store.
+
+    PySide6 ships ``setClearColor`` with no matching getter, and this value is the
+    difference between a frosted chrome strip and an opaque lid over the DWM
+    material (see ``build_qml_chrome``'s ``_sync_chrome_glass``), so it must be
+    READABLE — by the sync itself (to stay a no-op when nothing changed) and by the
+    tests. ``setClearColor`` writes straight through to the widget's offscreen
+    ``QQuickWindow``'s colour, so that window IS the read-back; nothing is cached
+    in Python where it could drift from what Qt actually holds."""
+    return QColor(chrome.quickWindow().color())
 
 
 # --------------------------------------------------------------------------- #
@@ -186,10 +203,14 @@ class _ShellBridge(QObject):
         on_toggle_debug=None,
         scope_vm=None,
         tab_adapter=None,
+        window=None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self._provider = state_provider
+        # Weak: the bridge is kept alive by the chrome widget, which is a CHILD of
+        # this window — a strong ref here would be a cycle through the parent.
+        self._window_ref = weakref.ref(window) if window is not None else None
         self._on_connect = on_connect
         self._on_disconnect = on_disconnect
         self._on_toggle_theme = on_toggle_theme
@@ -203,6 +224,16 @@ class _ShellBridge(QObject):
         self._devices: list[list[str]] = []
         self._readouts: dict[str, list[str]] = {
             "hv": ["HV --", "neutral"],
+            # Leakage current + compliance. These EXIST in the classic ribbon
+            # (tct_gui's _chip_bias_i / _chip_bias_comp) and were simply DROPPED
+            # on the way into the QML island — so an operator running the QML
+            # shell could not see that the HV channel had gone into compliance,
+            # or watch a leakage current climb. Compliance is a fault state on
+            # the HV supply; losing it in a shell rewrite is a law-7 regression
+            # ("never lie about hardware" — including by omission).
+            # Guard: tests/test_qml_shell.py::test_island_shows_leakage_and_compliance.
+            "hv_i": ["I --", "neutral"],
+            "hv_comp": ["Compliance --", "neutral"],
             "motion": ["Motion offline", "neutral"],
             "scan": ["Scan --", "neutral"],
             "laser": ["Laser --", "neutral"],
@@ -213,6 +244,12 @@ class _ShellBridge(QObject):
         self._app_readiness = ""
         self._log_visible = False
         self._debug_visible = False
+        # THE UNDERLAY LAW, as the island sees it (gui/backdrop.py's
+        # CANVAS_GLASS_PROPERTY comment): False until a DWM material is VERIFIABLY
+        # attached to the window's CURRENT HWND. Nothing in Shell.qml may go
+        # translucent while this is False — a translucent island over no material
+        # is the black-window bug, one layer up.
+        self._glass = False
 
     def start(self) -> None:
         """Seed the QML properties once. No owned timer — see the class docstring;
@@ -233,7 +270,7 @@ class _ShellBridge(QObject):
         try:
             state = self._provider() or {}
             self._devices = list(state.get("devices", []))
-            for key in ("hv", "motion", "scan", "laser", "app"):
+            for key in ("hv", "hv_i", "hv_comp", "motion", "scan", "laser", "app"):
                 val = state.get(key)
                 if val:
                     self._readouts[key] = list(val)
@@ -244,6 +281,15 @@ class _ShellBridge(QObject):
             self._app_readiness = str(state.get("app_readiness", "") or "")
             self._log_visible = bool(state.get("log_visible", False))
             self._debug_visible = bool(state.get("debug_visible", False))
+            # Re-read the underlay-law truth from gui.backdrop — the ONLY authority
+            # on "is a material attached to THIS window's CURRENT hwnd". Deliberately
+            # polled on the shared 1 Hz tick rather than cached at build time: at
+            # build_qml_chrome() the window has not run its final reassert yet, and
+            # the material can come and go afterwards (the theme editor's backdrop
+            # combo, a Fenrir-K9 HWND recreation, an OS transparency-setting flip).
+            # Cheap: a WeakSet membership test, no DWM call, no I/O.
+            win = self._window_ref() if self._window_ref is not None else None
+            self._glass = bool(win is not None and backdrop.window_has_material(win))
             scope = state.get("scope")
             if scope is not None and self._scope_vm is not None:
                 try:
@@ -313,6 +359,18 @@ class _ShellBridge(QObject):
     def hvState(self) -> str: return self._readouts["hv"][1]
 
     @Property(str, notify=changed)
+    def hvCurrentText(self) -> str: return self._readouts["hv_i"][0]
+
+    @Property(str, notify=changed)
+    def hvCurrentState(self) -> str: return self._readouts["hv_i"][1]
+
+    @Property(str, notify=changed)
+    def hvComplianceText(self) -> str: return self._readouts["hv_comp"][0]
+
+    @Property(str, notify=changed)
+    def hvComplianceState(self) -> str: return self._readouts["hv_comp"][1]
+
+    @Property(str, notify=changed)
     def motionText(self) -> str: return self._readouts["motion"][0]
 
     @Property(str, notify=changed)
@@ -344,6 +402,18 @@ class _ShellBridge(QObject):
 
     @Property(bool, notify=changed)
     def debugVisible(self) -> bool: return self._debug_visible
+
+    @Property(bool, notify=changed)
+    def glass(self) -> bool:
+        """True only while a real OS material is verifiably attached to this
+        window's CURRENT HWND (``gui.backdrop.window_has_material``) — NOT merely
+        "the operator's backdrop preference is acrylic".
+
+        Shell.qml gates every translucent fill on this one flag (the underlay law
+        at the island tier). False ⇒ the island paints the OPAQUE token surfaces,
+        byte-identical to the pre-glass build; never a translucent hole over
+        nothing."""
+        return self._glass
 
 
 # --------------------------------------------------------------------------- #
@@ -412,11 +482,16 @@ def build_qml_chrome(
         on_toggle_debug=on_toggle_debug,
         scope_vm=scope_vm,
         tab_adapter=tab_adapter,
+        window=window,
     )
 
     chrome = QQuickWidget(window)
     chrome.setObjectName("qmlShellChrome")
     chrome.setResizeMode(QQuickWidget.ResizeMode.SizeRootObjectToView)
+    # Clear colour: see _sync_chrome_glass below. It starts OPAQUE — the material
+    # is not attached yet at this point in TCTMainWindow.__init__ (the window runs
+    # its reassert last), and the underlay law forbids opening an alpha hole before
+    # the material is verified.
     chrome.setClearColor(QColor(palette(theme_mode)["canvas"]))
     ctx = chrome.rootContext()
     ctx.setContextProperty("shell", bridge)
@@ -464,9 +539,52 @@ def build_qml_chrome(
 
     bridge.changed.connect(_sync_chrome_height)
 
+    # ---------------- the island's clear colour (THE overpaint fix) ---------- #
+    # MEASURED (scripts/spikes/qml_overpaint_spike.py, 20260714T022030Z): with the
+    # QML shell, 0.0 % of the chrome island's 1,402,500 px tracked the backdrop —
+    # exactly zero, over the LARGEST band in the window — while the classic shell's
+    # own canvas tracked 32.4 %. The window state was healthy the whole time
+    # (alpha=8, material attached, glassCanvas="true"): the glass was never lost,
+    # it was PAINTED OVER, and this line was one of the two painters.
+    #
+    # A QQuickWidget renders its scene into a texture and the widget compositor
+    # blends that texture over the window's backing store — which, under a live
+    # material, carries the translucent canvas fill (gui/style._canvas_fill's
+    # rgba(bg, canvas_alpha), gated by the SAME underlay law). An OPAQUE clear
+    # colour makes every pixel of that texture opaque, so the canvas underneath —
+    # material and all — is simply covered. Shell.qml's own root/rail/shelf/strip
+    # fills were the second painter (see its `glass` bindings).
+    #
+    # UNDERLAY LAW: transparent ONLY while the material is verifiably attached to
+    # the window's CURRENT hwnd. Otherwise the island falls back to the OPAQUE
+    # token canvas — never a translucent hole over nothing (Kaya's black window).
+    # Driven by ``bridge.changed`` (the shared 1 Hz cached-state tick, same as
+    # _sync_chrome_height) plus a one-shot on the next event-loop turn, because
+    # TCTMainWindow runs its final reassert_window_backdrop AFTER _build_central
+    # returns — at this point in construction there is no material yet, by design.
+    def _sync_chrome_glass() -> None:
+        try:
+            want = (QColor(Qt.GlobalColor.transparent) if bridge.glass
+                    else QColor(palette(qml_theme.current_mode())["canvas"]))
+            # PySide6 exposes no ``QQuickWidget.clearColor()`` getter; the value
+            # lives on the widget's offscreen QQuickWindow, which IS the real
+            # read-back (setClearColor writes exactly that). Comparing against it
+            # keeps this a no-op on the ~1 Hz ticks where nothing changed.
+            if chrome_clear_color(chrome) != want:
+                chrome.setClearColor(want)
+                chrome.update()
+        except RuntimeError:            # widget's C++ side already gone
+            pass
+
+    bridge.changed.connect(_sync_chrome_glass)
+    # Bound method of a QObject ⇒ Qt drops the pending call if the bridge dies
+    # first (teardown safety), and pull() is fully exception-guarded anyway.
+    QTimer.singleShot(0, bridge.pull)
+
     # Keep adapters alive with the widget and expose them for teardown/tests.
     chrome._shell_bridge = bridge
     chrome._tab_adapter = tab_adapter
+    chrome._sync_glass = _sync_chrome_glass     # tests / an eager caller
 
     # DetachableTabWidget stays the engine; hide only its native tab bar so the
     # QML pill shelf is the visible tab surface. Pages/detach are unchanged.

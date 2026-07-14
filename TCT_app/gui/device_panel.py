@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from controller.device_manager import DeviceManager
+from gui import style
 from gui.panel_kit import Card
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_button_icon
@@ -23,6 +24,11 @@ _STATUS_STYLE = {
     "disconnected": ("DISCONNECTED", WARN_RED),      # red
     "error":        ("ERROR",        ERROR_ORANGE),  # orange
 }
+
+#: Qt property carrying a row button's table row, so its ``clicked`` slot can be
+#: a plain bound method instead of a row-capturing lambda (which leaks the whole
+#: window — see the connect/disconnect buttons in ``_build`` below).
+_ROW_PROPERTY = "tctDeviceRow"
 
 
 def device_state(dev) -> str:
@@ -68,6 +74,10 @@ class DeviceManagerWindow(QMainWindow):
 
     def __init__(self, devices: DeviceManager, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        # Alpha-capable surface BEFORE any child exists (a child that realizes
+        # the HWND first would lock this window out of per-pixel alpha for good —
+        # see gui.style.prepare_window_surface). No-op with the "none" default.
+        style.prepare_window_surface(self)
         self.setWindowTitle("Device Manager")
         self.resize(620, 380)
         self._devices = devices
@@ -75,6 +85,13 @@ class DeviceManagerWindow(QMainWindow):
         self._bg_thread: QThread | None = None
         self._bg_task: _DeviceTask | None = None
         self._build_ui()
+        # Same cockpit material + opacity + event-spine guard as every other
+        # satellite window (theme editor, settings, torn-off panels) — through
+        # the one entry point, AFTER _build_ui() so the central widget exists:
+        # a QMainWindow's client is painted by that child, and it has to go
+        # translucent too or no alpha ever reaches DWM (see
+        # gui.backdrop._canvas_widgets). A true no-op headless / pre-Win11 22H2.
+        style.reassert_window_backdrop(self)
 
         self._refresh_timer = QTimer(self)
         self._refresh_timer.timeout.connect(self._refresh)
@@ -160,21 +177,49 @@ class DeviceManagerWindow(QMainWindow):
             lbl_sim.setAlignment(Qt.AlignCenter)
             self._table.setCellWidget(row, 2, lbl_sim)
 
-            # Connect button
+            # Connect / Disconnect buttons.
+            #
+            # The row travels on the BUTTON (a Qt property), not in a lambda's
+            # closure. ``lambda _, r=row: self._connect_one(r)`` captured
+            # ``self`` and was stored strongly inside the button's C++
+            # connection list — panel -> table -> button -> connection ->
+            # closure -> panel, a cycle whose Qt hop gc cannot traverse, so the
+            # whole window leaked. A bound-method slot is held weakly.
+            # See tests/test_no_immortal_panels.py.
             btn_conn = QPushButton("Connect")
             set_button_icon(btn_conn, "mdi.lan-connect")
-            btn_conn.clicked.connect(lambda _, r=row: self._connect_one(r))
+            btn_conn.setProperty(_ROW_PROPERTY, row)
+            btn_conn.clicked.connect(self._on_connect_clicked)
             self._table.setCellWidget(row, 3, btn_conn)
             self._row_buttons.append(btn_conn)
 
             # Disconnect button
             btn_disc = QPushButton("Disconnect")
             set_button_icon(btn_disc, "mdi.lan-disconnect")
-            btn_disc.clicked.connect(lambda _, r=row: self._disconnect_one(r))
+            btn_disc.setProperty(_ROW_PROPERTY, row)
+            btn_disc.clicked.connect(self._on_disconnect_clicked)
             self._table.setCellWidget(row, 4, btn_disc)
             self._row_buttons.append(btn_disc)
 
         self._table.resizeRowsToContents()
+
+    def _sender_row(self) -> int | None:
+        """The table row of the button that emitted the signal being handled."""
+        button = self.sender()
+        if button is None:
+            return None
+        row = button.property(_ROW_PROPERTY)
+        return None if row is None else int(row)
+
+    def _on_connect_clicked(self) -> None:
+        row = self._sender_row()
+        if row is not None:
+            self._connect_one(row)
+
+    def _on_disconnect_clicked(self) -> None:
+        row = self._sender_row()
+        if row is not None:
+            self._disconnect_one(row)
 
     # ------------------------------------------------------------------ #
     # Refresh                                                             #

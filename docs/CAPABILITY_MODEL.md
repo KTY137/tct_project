@@ -104,6 +104,15 @@ is a review-blocking defect.
   warned about. The sorted-tuple form keeps the auto-generated `__hash__`
   working and makes snapshot ordering deterministic. `snapshot()` re-renders
   the pairs as plain dicts for JSON.
+- As built in D1a (`capabilities/model.py::_canonicalise_json`, commit
+  `208207e`, Mary-APPROVED), the canonical form forces a fail-closed
+  ambiguity rule with a deliberate asymmetry: a user-supplied metadata tuple
+  whose every element is a `(str, value)` 2-tuple — including the empty tuple
+  `()` — is REJECTED at construction as indistinguishable from the
+  encoded-mapping form, while a tuple of non-string-keyed pairs (e.g.
+  `((1, 2), (3, 4))`) passes as plain data; the acceptance side is a
+  consequence of the encoding, not a promise — pass a mapping (or reshape the
+  tuple), never rely on a pair-shaped tuple staying accepted.
 - `snapshot() -> dict` returns a plain dict that `json.dumps` serialises with
   **no custom encoder**. It MUST include:
   - every descriptor field,

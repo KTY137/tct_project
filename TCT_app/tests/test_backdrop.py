@@ -127,6 +127,50 @@ def test_apply_acrylic_records_dwmsbt_transientwindow(monkeypatch):
     assert backdrop.DWMSBT_TRANSIENTWINDOW == 3
 
 
+# --------------------------------------------------------------------------- #
+# Immersive-dark-mode tint (the "komplett weiss" fix): Mica/Acrylic composes  #
+# LIGHT by default unless DWMWA_USE_IMMERSIVE_DARK_MODE(20) is asserted. The   #
+# backdrop path must set it explicitly from the caller's theme, BEFORE the     #
+# material attach, and must NOT touch it when the caller passes no tint.       #
+# --------------------------------------------------------------------------- #
+
+def test_dark_true_asserts_immersive_dark_before_backdrop(monkeypatch):
+    _force_supported(monkeypatch)
+    calls = _recording_dwm(monkeypatch)
+    w = _make_window()
+
+    assert backdrop.apply_backdrop(w, "mica", dark=True) is True
+    # value 1 = dark tint, on attribute 20
+    assert ("set_attr", backdrop.DWMWA_USE_IMMERSIVE_DARK_MODE, 1) in calls
+    assert backdrop.DWMWA_USE_IMMERSIVE_DARK_MODE == 20
+    # ORDER: immersive-dark (20) is set before the material (38) per the
+    # documented recipe — some builds ignore a post-attach flip.
+    set_attrs = [c for c in calls if c[0] == "set_attr"]
+    idx20 = next(i for i, c in enumerate(set_attrs) if c[1] == 20)
+    idx38 = next(i for i, c in enumerate(set_attrs) if c[1] == 38)
+    assert idx20 < idx38
+
+
+def test_dark_false_asserts_immersive_light(monkeypatch):
+    _force_supported(monkeypatch)
+    calls = _recording_dwm(monkeypatch)
+    w = _make_window()
+
+    assert backdrop.apply_backdrop(w, "acrylic", dark=False) is True
+    assert ("set_attr", backdrop.DWMWA_USE_IMMERSIVE_DARK_MODE, 0) in calls
+
+
+def test_dark_none_default_never_touches_immersive_flag(monkeypatch):
+    """The default (and every non-theme caller/test) must be byte-identical to
+    the pre-fix behaviour: attribute 20 is never written."""
+    _force_supported(monkeypatch)
+    calls = _recording_dwm(monkeypatch)
+    w = _make_window()
+
+    assert backdrop.apply_backdrop(w, "mica") is True
+    assert not any(c[0] == "set_attr" and c[1] == 20 for c in calls)
+
+
 def test_extend_frame_called_before_set_attribute(monkeypatch):
     _force_supported(monkeypatch)
     calls = _recording_dwm(monkeypatch)
@@ -139,13 +183,29 @@ def test_extend_frame_called_before_set_attribute(monkeypatch):
 
 
 def test_translucent_attribute_set_only_after_both_dwm_calls_succeed(monkeypatch):
+    """The fail-safe pairing, restated after the GL-island spike (2026-07-13):
+
+    The old contract was "WA_TranslucentBackground is set only after both DWM
+    calls succeed". That is now known to be self-defeating — Qt fixes a
+    top-level's surface alpha in QWidgetPrivate::create(), so an attribute set
+    after the HWND exists yields alphaBufferSize == -1 and the material composites
+    NOTHING (measured; see tests/test_backdrop_event_spine.py's order tests).
+
+    The invariant that actually guards the hole therefore moved to the glass
+    PIXELS (the glassCanvas property, which is what makes the QSS paint an rgba
+    canvas): surface early, pixels only on S_OK. This test pins both halves for
+    the success path; the failure path is pinned by the fail-safe tests below."""
     _force_supported(monkeypatch)
     _recording_dwm(monkeypatch)
     w = _make_window()
 
     assert w.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+    assert not w.property(backdrop.CANVAS_GLASS_PROPERTY)
     assert backdrop.apply_backdrop(w, "mica") is True
     assert w.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+    assert w.property(backdrop.CANVAS_GLASS_PROPERTY) == "true"
+    # ...and the surface really did get an alpha channel (the whole point).
+    assert w.windowHandle().format().alphaBufferSize() >= 8
 
 
 # --------------------------------------------------------------------------- #
@@ -679,7 +739,17 @@ def test_backdrop_none_repaint_behaviour_is_unchanged(monkeypatch):
 def test_detached_window_construction_applies_current_backdrop(monkeypatch):
     """gui/detachable_tabs._DetachedWindow is created AFTER the setting is
     applied, so -- mirroring window opacity's existing contract -- it must
-    pick the backdrop kind up at construction, backdrop before opacity."""
+    pick the backdrop kind up at construction, backdrop before opacity.
+
+    The opacity assertion changed in beat G-B1 and the change IS the fix: the
+    constructor used to push the RAW stored opacity (0.85 here) onto a window it
+    had just attached a material to, which layers it (WS_EX_LAYERED) and
+    suppresses that material outright -- so a torn-off panel could never show
+    glass. It now goes through style.reassert_window_backdrop, which applies the
+    same pin apply_window_opacity has always applied app-wide (see
+    test_apply_window_opacity_pinned_to_full_while_backdrop_active). The stored
+    preference is untouched and returns when the backdrop goes back to "none"
+    (asserted below)."""
     from PySide6.QtWidgets import QLabel
     from gui.detachable_tabs import _DetachedWindow
 
@@ -693,6 +763,29 @@ def test_detached_window_construction_applies_current_backdrop(monkeypatch):
     try:
         assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
         assert ("set_attr", 38, backdrop.DWMSBT_TRANSIENTWINDOW) in calls
+        # Layered-window pin: fully opaque while the material is live...
+        assert win.windowOpacity() == pytest.approx(1.0, abs=1.0 / 255.0)
+        # ...and the stored preference survives untouched.
+        assert style.get_window_opacity() == pytest.approx(0.85)
+    finally:
+        win.deleteLater()
+
+
+def test_detached_window_without_material_keeps_the_stored_opacity(monkeypatch):
+    """The pin is ONLY for a live material: with the shipped "none" backdrop a
+    torn-off panel still inherits the cockpit's translucency exactly as before
+    (byte-identical-when-off guard for the G-B1 opacity change above)."""
+    from PySide6.QtWidgets import QLabel
+    from gui.detachable_tabs import _DetachedWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    _app()
+
+    style.set_window_opacity(0.85)
+    win = _DetachedWindow(QLabel("panel"), "Motor Stage")
+    try:
+        assert style.get_window_backdrop() == "none"
         assert win.windowOpacity() == pytest.approx(0.85, abs=1.0 / 255.0)
     finally:
         win.deleteLater()
@@ -700,7 +793,20 @@ def test_detached_window_construction_applies_current_backdrop(monkeypatch):
 
 def test_detached_window_construction_skips_backdrop_when_none(monkeypatch):
     """Ship default: a detached window built with the shipped "none" kind
-    never touches DWM at all."""
+    never touches DWM at all — and never claims the glass canvas.
+
+    CHANGED in G-B1b (Mary's BUG 2 fix), and the change IS the fix: on a
+    material-capable host the window now DOES get WA_TranslucentBackground at
+    construction (``style.prepare_window_surface`` no longer gates the SURFACE on
+    the backdrop preference), because Qt grants a top-level per-pixel alpha
+    exactly once — when its native window is created. Gating that on "none" meant
+    every window in the shipped default was born without alpha and could never
+    gain it while visible, so the live "switch glass on" toggle was unreachable
+    by construction. The PIXELS stay gated on DWM success, which is what keeps
+    this window visually identical to before: no DWM call, no glassCanvas
+    property, and the QSS canvas rule paints the opaque token pre-blend. See
+    test_default_backdrop_stays_visually_inert_even_though_the_surface_has_alpha
+    for the full inertness pin."""
     from PySide6.QtWidgets import QLabel
     from gui.detachable_tabs import _DetachedWindow
 
@@ -710,9 +816,113 @@ def test_detached_window_construction_skips_backdrop_when_none(monkeypatch):
 
     win = _DetachedWindow(QLabel("panel"), "Motor Stage")
     try:
+        assert calls == []                       # DWM never touched
+        assert backdrop.window_has_material(win) is False
+        assert not win.property(backdrop.CANVAS_GLASS_PROPERTY)
+        assert not win.centralWidget().property(backdrop.CANVAS_GLASS_PROPERTY)
+    finally:
+        win.deleteLater()
+
+
+# --------------------------------------------------------------------------- #
+# G-B1b / BUG 2 — the surface is negotiated for every material-capable window, #
+# the PIXELS stay gated on DWM. The shipped default must remain visually inert #
+# even though its windows can now carry alpha. If this ever fails, the fix has  #
+# started leaking glass into a build that never asked for it.                  #
+# --------------------------------------------------------------------------- #
+
+def test_default_backdrop_stays_visually_inert_even_though_the_surface_has_alpha(monkeypatch):
+    """THE regression pin for BUG 2. With backdrop == "none" (shipped default),
+    on a fully material-capable host:
+
+    * no DWM call is ever made,
+    * no window carries the ``glassCanvas`` property (the underlay law's carrier),
+    * the QSS contains NO ``[glassCanvas="true"]`` rule at all, and
+    * the canvas rules paint the OPAQUE ``p['bg']`` token pre-blend.
+
+    Only the invisible half changed: the native surface can now carry alpha, and
+    "a translucent-capable surface painted with an opaque fill is simply an
+    opaque window" (gui/backdrop.py's own underlay law)."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    calls = _recording_dwm(monkeypatch)
+    app = _app()
+    win = QMainWindow()
+    central = QWidget()
+    central.setObjectName("mainShell")
+    win.setCentralWidget(central)
+    try:
+        assert style.get_window_backdrop() == "none"
+
+        assert style.prepare_window_surface(win) is True   # surface: prepared...
+        style.apply_theme(app, "dark")
+        style.reassert_window_backdrop(win)
+
+        # ...pixels: nothing. Not one DWM call, not one glass property.
         assert calls == []
+        assert backdrop.window_has_material(win) is False
+        assert not win.property(backdrop.CANVAS_GLASS_PROPERTY)
+        assert not central.property(backdrop.CANVAS_GLASS_PROPERTY)
+
+        # The stylesheet has no glass rule to apply even if something DID set the
+        # property, and the canvas is the opaque token pre-blend.
+        qss = app.styleSheet()
+        assert 'glassCanvas' not in qss
+        p = style.palette("dark")
+        assert f"QMainWindow, QDialog {{ background: {p['bg']}; }}" in qss
+        assert f"QWidget#mainShell {{ background: {p['bg']}; }}" in qss
+        assert style._canvas_fill(p) == p["bg"]            # opaque, not rgba()
+        assert "rgba(" not in style._glass_canvas_qss(p)
+        assert style._glass_canvas_qss(p) == ""
+    finally:
+        win.deleteLater()
+
+
+def test_prepare_window_surface_is_still_a_noop_on_an_unsupported_host(monkeypatch):
+    """The host gate is the one that survived: Linux/macOS/pre-22H2 Windows and
+    the offscreen suite never get an alpha surface, glass or no glass."""
+    from PySide6.QtWidgets import QMainWindow
+
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop, "_version_probe", lambda: 22000)   # too old
+    monkeypatch.setattr(backdrop, "_platform_probe", lambda: "windows")
+    _app()
+    win = QMainWindow()
+    try:
+        assert style.prepare_window_surface(win) is False
         assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
     finally:
+        win.deleteLater()
+
+
+def test_a_window_born_under_none_can_still_gain_glass_live(monkeypatch):
+    """BUG 2's user-visible point: the cockpit is built under the shipped "none"
+    default, is SHOWN, and only then does Kaya pick acrylic. Before the fix that
+    window had no alpha surface (born without the attribute) and, being visible,
+    refused to have its HWND re-created — so it could never composite the
+    material. Now it can."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    _app()
+    win = QMainWindow()
+    win.setCentralWidget(QWidget())
+    try:
+        assert style.get_window_backdrop() == "none"
+        style.prepare_window_surface(win)        # ...as TCTMainWindow.__init__ does
+        win.show()                               # realized + visible: no HWND yanking
+        assert win.windowHandle().format().alphaBufferSize() >= 8
+
+        style.set_window_backdrop("acrylic")     # the live toggle
+        style.reassert_window_backdrop(win)
+
+        assert backdrop.window_has_material(win) is True
+        assert win.property(backdrop.CANVAS_GLASS_PROPERTY) == "true"
+        assert win.centralWidget().property(backdrop.CANVAS_GLASS_PROPERTY) == "true"
+    finally:
+        win.close()
         win.deleteLater()
 
 
@@ -777,3 +987,410 @@ def test_default_surface_format_requests_alpha_for_translucency():
         assert QSurfaceFormat.defaultFormat().alphaBufferSize() >= 8
     finally:
         QSurfaceFormat.setDefaultFormat(before)
+
+
+# --------------------------------------------------------------------------- #
+# G-B1b / BUG 1 — the QSS must be rebuilt on a LIVE backdrop change.           #
+#                                                                             #
+# The glass-canvas rules only exist in the stylesheet while a material is      #
+# preferred (_glass_canvas_qss). The theme editor's backdrop combo went        #
+# set_window_backdrop -> persist -> apply_window_backdrop -> apply_window_     #
+# opacity and rebuilt NOTHING — so gui.backdrop set glassCanvas="true" on      #
+# windows whose material had attached while the installed QSS had no rule      #
+# behind that selector. The alpha hole never opened: Kaya saw no glass, while  #
+# scripts/glass_probe.py (which hand-adds an apply_theme call) measured it.    #
+# --------------------------------------------------------------------------- #
+
+def test_live_backdrop_toggle_rebuilds_the_qss_glass_rule(monkeypatch):
+    """The exact _on_backdrop_changed sequence, replayed: after a live
+    none -> acrylic flip the glass rule MUST be in the installed stylesheet."""
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    style.apply_theme(app, "dark")                     # boot: "none" QSS
+    assert '[glassCanvas="true"]' not in app.styleSheet()
+
+    # ── theme_editor._on_backdrop_changed, verbatim (minus the persistence) ──
+    style.set_window_backdrop("acrylic")
+    style.apply_window_backdrop()
+    style.apply_window_opacity()
+
+    assert '[glassCanvas="true"]' in app.styleSheet(), (
+        "the glass rule is missing from the live stylesheet — a window that "
+        "gets glassCanvas=true has nothing to paint and stays opaque")
+    p = style.palette("dark")
+    assert style._canvas_fill(p).startswith("rgba(")
+    assert style._canvas_fill(p) in app.styleSheet()
+
+
+def test_live_backdrop_toggle_back_to_none_removes_the_glass_rule(monkeypatch):
+    """...and the other direction: switching the material off takes the rule
+    with it, so the QSS returns to the pre-glass build byte-for-byte."""
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    style.apply_theme(app, "dark")
+    baseline = app.styleSheet()
+
+    style.set_window_backdrop("mica")
+    style.apply_window_backdrop()
+    assert '[glassCanvas="true"]' in app.styleSheet()
+
+    style.set_window_backdrop("none")
+    style.apply_window_backdrop()
+
+    assert '[glassCanvas="true"]' not in app.styleSheet()
+    assert app.styleSheet() == baseline
+
+
+def test_backdrop_fan_out_does_not_rebuild_the_qss_when_the_kind_is_unchanged(monkeypatch):
+    """The rebuild is a fix, not a new hot path: a same-kind re-apply (every
+    theme toggle re-runs the fan-out) must not re-install the stylesheet — an
+    app-wide setStyleSheet re-polishes the ENTIRE widget tree (~9 s at 13k
+    widgets, Phase-0)."""
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    style.set_window_backdrop("mica")
+    style.apply_theme(app, "dark")                     # QSS now built WITH mica
+
+    sets: list[str] = []
+    real_set = type(app).setStyleSheet
+    monkeypatch.setattr(type(app), "setStyleSheet",
+                        lambda self, qss: (sets.append(qss), real_set(self, qss))[1])
+
+    style.apply_window_backdrop(app)                   # same kind — no rebuild
+    assert sets == []
+
+
+def test_theme_editor_backdrop_combo_lights_up_the_glass_rule(tmp_path, monkeypatch):
+    """The product path itself, through the real dialog widget: picking a
+    material in the Backdrop combo must leave the app stylesheet carrying the
+    glass rule. This is the test that would have caught the bug Kaya reported as
+    "I see no glass"."""
+    from PySide6.QtCore import QSettings
+    from gui.theme_editor import ThemeEditorDialog
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    style.apply_theme(app, "dark")
+    settings = QSettings(str(tmp_path / "theme_test.ini"),
+                         QSettings.Format.IniFormat)
+    dlg = ThemeEditorDialog(mode="dark", settings=settings)
+    try:
+        assert '[glassCanvas="true"]' not in app.styleSheet()
+
+        idx = dlg._backdrop_combo.findData("acrylic")
+        dlg._backdrop_combo.setCurrentIndex(idx)       # -> _on_backdrop_changed
+
+        assert style.get_window_backdrop() == "acrylic"
+        assert '[glassCanvas="true"]' in app.styleSheet()
+    finally:
+        dlg.deleteLater()
+
+
+# --------------------------------------------------------------------------- #
+# G-B1b / NIT 6 — the reset path is a loss path too.                           #
+# --------------------------------------------------------------------------- #
+
+def test_a_failed_reset_falls_back_to_the_opaque_canvas(monkeypatch):
+    """_reset_backdrop was the ONE path that could return False without failing
+    safe: on a non-zero HRESULT the window kept glassCanvas="true", kept
+    WA_TranslucentBackground and stayed in _backdrop_applied_windows — so
+    window_has_material() went on reporting True for a material whose state we no
+    longer know, and the WS_EX_LAYERED opacity pin keys off exactly that. An
+    unknown material is a lost material (underlay law: every loss path clears
+    it)."""
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)                  # the attach succeeds...
+    _app()
+    win = QMainWindow()
+    central = QWidget()
+    win.setCentralWidget(central)
+    try:
+        style.set_window_backdrop("mica")
+        style.reassert_window_backdrop(win)
+        assert backdrop.window_has_material(win) is True
+
+        # ...and now DWM refuses the RESET.
+        _recording_dwm(monkeypatch, attr_hr=-1)
+        assert backdrop.apply_backdrop(win, "none") is False
+
+        assert backdrop.window_has_material(win) is False
+        assert not win.property(backdrop.CANVAS_GLASS_PROPERTY)
+        assert not central.property(backdrop.CANVAS_GLASS_PROPERTY)
+        assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+    finally:
+        win.deleteLater()
+
+
+# --------------------------------------------------------------------------- #
+# G-B1b / RISK 5 — a cosmetic repaint must never preempt a run.                #
+#                                                                             #
+# backdrop.nudge_repaint resizes the top-level by 1 px and back on EVERY       #
+# successful re-assert of a live-material window (Show, WinIdChange,           #
+# WindowStateChange, post-toggle, the deferred theme pass). That relayouts the #
+# dock tree, every pyqtgraph plot and the camera view on the GUI thread of an   #
+# app that is already CPU-bound during acquisition.                            #
+# --------------------------------------------------------------------------- #
+
+def test_repaint_nudge_is_skipped_while_a_scan_is_running(monkeypatch):
+    from PySide6.QtWidgets import QMainWindow
+
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    _app()
+    win = QMainWindow()
+    nudges: list = []
+    monkeypatch.setattr(backdrop, "nudge_repaint", lambda w: nudges.append(w))
+    try:
+        style.set_window_backdrop("mica")
+
+        style.set_scan_active_provider(lambda: True)        # a run is in flight
+        style.reassert_window_backdrop(win, reason="windowstate")
+        assert nudges == [], "a 1-px relayout of the cockpit during a scan"
+
+        style.set_scan_active_provider(lambda: False)       # run over
+        style.reassert_window_backdrop(win, reason="windowstate")
+        assert nudges == [win], "the heal must resume once the run is done"
+    finally:
+        style.set_scan_active_provider(None)
+        win.deleteLater()
+
+
+def test_scan_gate_defaults_to_not_scanning_and_fails_safe(monkeypatch):
+    """Unwired (every test, every script, any embedding without a scan) means
+    "not scanning" — and a provider that RAISES must not suppress the repaint
+    heal forever either: the gate fails towards the cosmetic repair, never
+    towards a permanently stale surface."""
+    assert style.scan_is_active() is False           # unwired
+
+    def boom() -> bool:
+        raise RuntimeError("run-state source is gone")
+
+    style.set_scan_active_provider(boom)
+    try:
+        assert style.scan_is_active() is False
+    finally:
+        style.set_scan_active_provider(None)
+
+
+# --------------------------------------------------------------------------- #
+# G-B2b — the five ENVIRONMENT PROBES the glass contract cannot make itself.   #
+#                                                                             #
+# gui/glass_env.py is pure (no Qt, no ctypes, AST-pinned), so the five Win32   #
+# observations live here, in the quarantine, and it calls them. Every one of   #
+# them must fail SOFT: a missing API, a denied registry key, a non-Windows     #
+# host, an exploding call ⇒ None ("cannot be asked"), never an exception, and  #
+# never a guess — because in the contract False VETOES a tier and True would   #
+# promise a material the host cannot render (the one unacceptable failure).    #
+#                                                                             #
+# The ctypes/winreg PRIMITIVES are monkeypatched in every test below; no test  #
+# in this suite ever calls user32/dwmapi/kernel32 or reads the registry.       #
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("probe", [
+    "dwm_composition_probe", "transparency_probe", "high_contrast_probe",
+    "remote_session_probe", "battery_saver_probe",
+])
+def test_every_probe_is_unknown_on_a_non_windows_host(probe, monkeypatch):
+    monkeypatch.setattr(backdrop.sys, "platform", "linux")
+    assert getattr(backdrop, probe)() is None
+
+
+@pytest.mark.parametrize("probe", [
+    "dwm_composition_probe", "transparency_probe", "high_contrast_probe",
+    "remote_session_probe", "battery_saver_probe",
+])
+def test_every_probe_answers_the_tri_state_on_the_real_host(probe):
+    """Whatever machine this is: True, False or None — never a string, never an
+    int, never a raise. The contract coerces bool|None and DEGRADES on anything
+    else, so a probe that returns 1 instead of True would silently drop the whole
+    app to the safe floor."""
+    value = getattr(backdrop, probe)()
+    assert value is None or isinstance(value, bool), f"{probe}() -> {value!r}"
+
+
+def test_remote_session_probe_reads_sm_remotesession(monkeypatch):
+    seen: list[int] = []
+
+    def fake_metric(index):
+        seen.append(index)
+        return 1
+
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop, "_system_metric", fake_metric)
+
+    assert backdrop.remote_session_probe() is True
+    assert seen == [backdrop.SM_REMOTESESSION]      # 4096, winuser.h
+
+    monkeypatch.setattr(backdrop, "_system_metric", lambda index: 0)
+    assert backdrop.remote_session_probe() is False
+
+
+def test_high_contrast_probe_reads_the_hcf_bit(monkeypatch):
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+
+    # dwFlags carries more than one bit; only HCF_HIGHCONTRASTON means "on".
+    monkeypatch.setattr(backdrop, "_high_contrast_flags",
+                        lambda: backdrop.HCF_HIGHCONTRASTON | 0x02)
+    assert backdrop.high_contrast_probe() is True
+
+    monkeypatch.setattr(backdrop, "_high_contrast_flags", lambda: 0x02)
+    assert backdrop.high_contrast_probe() is False
+
+
+def test_battery_saver_probe_reads_the_power_saving_bit(monkeypatch):
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+
+    monkeypatch.setattr(backdrop, "_power_status_flag",
+                        lambda: backdrop.SYSTEM_STATUS_FLAG_POWER_SAVING_ON)
+    assert backdrop.battery_saver_probe() is True
+
+    monkeypatch.setattr(backdrop, "_power_status_flag", lambda: 0)
+    assert backdrop.battery_saver_probe() is False
+
+
+@pytest.mark.parametrize("raw,expected", [(1, True), (0, False), (None, None)])
+def test_transparency_probe_maps_the_registry_value(raw, expected, monkeypatch):
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop, "_transparency_setting", lambda: raw)
+    assert backdrop.transparency_probe() is expected
+
+
+def _fake_winreg(monkeypatch, *, value=None, error: Exception | None = None):
+    """A stand-in ``winreg`` module, so the REAL registry code path
+    (``backdrop._transparency_setting``) can be exercised on any host — including
+    a Linux runner, where the stdlib module does not exist at all."""
+    import sys as _sys
+    import types
+
+    fake = types.ModuleType("winreg")
+    fake.HKEY_CURRENT_USER = 0
+
+    class _Key:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def open_key(root, path):
+        assert path == backdrop._TRANSPARENCY_KEY
+        if error is not None:
+            raise error
+        return _Key()
+
+    def query(key, name):
+        assert name == backdrop._TRANSPARENCY_VALUE
+        return value, 4                                  # REG_DWORD
+
+    fake.OpenKey = open_key
+    fake.QueryValueEx = query
+    monkeypatch.setitem(_sys.modules, "winreg", fake)
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+
+
+@pytest.mark.parametrize("value,expected", [(1, True), (0, False)])
+def test_transparency_probe_reads_the_personalize_key(value, expected, monkeypatch):
+    _fake_winreg(monkeypatch, value=value)
+    assert backdrop._transparency_setting() == value
+    assert backdrop.transparency_probe() is expected
+
+
+def test_a_missing_registry_value_is_unknown_not_off(monkeypatch):
+    """A fresh profile that never touched Settings ▸ Colors has no
+    EnableTransparency value at all. Reading THAT as OFF would veto the material
+    on a machine whose transparency is, in fact, on — the fail-soft direction is
+    "cannot be asked" (None), never "absent" (False)."""
+    _fake_winreg(monkeypatch, error=FileNotFoundError(2, "no such key"))
+    assert backdrop._transparency_setting() is None
+    assert backdrop.transparency_probe() is None
+
+
+def test_a_denied_registry_key_is_unknown_too(monkeypatch):
+    _fake_winreg(monkeypatch, error=PermissionError(5, "access is denied"))
+    assert backdrop._transparency_setting() is None
+    assert backdrop.transparency_probe() is None
+
+
+@pytest.mark.parametrize("primitive,probe", [
+    ("_system_metric", "remote_session_probe"),
+    ("_high_contrast_flags", "high_contrast_probe"),
+    ("_transparency_setting", "transparency_probe"),
+    ("_dwm_composition_enabled", "dwm_composition_probe"),
+    ("_power_status_flag", "battery_saver_probe"),
+])
+def test_an_unreadable_primitive_is_unknown_never_a_guess(primitive, probe,
+                                                          monkeypatch):
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop, primitive, lambda *args: None)
+    assert getattr(backdrop, probe)() is None
+
+
+def test_the_primitives_never_raise_whatever_ctypes_does(monkeypatch):
+    """The ctypes seam itself. Every primitive swallows the failure and answers
+    None — a probe that throws must not be able to take the GUI down (it runs on
+    the GUI thread, from probe_environment)."""
+    class _Exploding:
+        def __getattr__(self, name):
+            raise OSError(f"{name}.dll is on fire")
+
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop.ctypes, "windll", _Exploding())
+
+    assert backdrop._system_metric(backdrop.SM_REMOTESESSION) is None
+    assert backdrop._high_contrast_flags() is None
+    assert backdrop._dwm_composition_enabled() is None
+    assert backdrop._power_status_flag() is None
+
+    # ...and so do the tri-states built on top of them.
+    assert backdrop.remote_session_probe() is None
+    assert backdrop.high_contrast_probe() is None
+    assert backdrop.dwm_composition_probe() is None
+    assert backdrop.battery_saver_probe() is None
+
+
+def test_the_probes_do_not_gate_on_backdrop_SUPPORT(monkeypatch):
+    """Deliberate: these describe the HOST, not our material support. High
+    contrast matters on Windows 10 (where WINDOW is refused forever) and under
+    the offscreen plugin (where this suite runs) just as much — the FLAT mandate
+    is an accessibility rule, not a glass feature. So the probes must answer even
+    where is_backdrop_supported() is False."""
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop, "_platform_probe", lambda: "offscreen")
+    monkeypatch.setattr(backdrop, "_high_contrast_flags",
+                        lambda: backdrop.HCF_HIGHCONTRASTON)
+
+    assert backdrop.is_backdrop_supported() is False
+    assert backdrop.high_contrast_probe() is True
+
+
+def test_style_never_imports_the_controller():
+    """The decoupling that makes the scan gate legal: presentation may ask "is a
+    scan running" only through an INJECTED predicate — gui/style.py must not
+    import controller/ (composition-root rule,
+    docs/design/gui_architecture_plan.md).
+
+    Parsed, not grepped: every import STATEMENT in the module (including the
+    function-local ones — style.py imports QApplication that way), so a comment
+    that merely mentions the word cannot pass or fail this."""
+    import ast
+    import inspect
+
+    tree = ast.parse(inspect.getsource(style))
+    imported: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported += [a.name for a in node.names]
+        elif isinstance(node, ast.ImportFrom):
+            imported.append(node.module or "")
+
+    offenders = [m for m in imported
+                 if m == "controller" or m.startswith("controller.")]
+    assert offenders == [], (
+        f"gui/style.py imports the controller: {offenders} — the run-state "
+        "source must be INJECTED (set_scan_active_provider), not imported")

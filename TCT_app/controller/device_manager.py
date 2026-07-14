@@ -644,3 +644,29 @@ class DeviceManager:
         except Exception as exc:
             logger.error("Disconnect failed for %s%s: %s", name, self._at(name), exc)
             return f"{exc}{self._at(name)}"
+
+    # ------------------------------------------------------------------ #
+    # Capability spine (docs/CAPABILITY_MODEL.md §11.2 — D1b)             #
+    # ------------------------------------------------------------------ #
+
+    def capability_registry(self) -> "CapabilityRegistry":
+        """Build a ``CapabilityRegistry`` over the CURRENT device instances.
+
+        Additive discovery only (spec §11.2): nothing existing migrates to
+        the registry — panels, scan controller, and tests keep using the
+        direct device attributes above; callers opt in.  Each call builds a
+        fresh registry over the same live instances (never copies), and the
+        registry re-derives descriptors per call (§5.5 freshness — e.g. the
+        GRBL user frame after home/zero, ``bias_channels`` after
+        :meth:`refresh_bias_channels`).  Building performs NO hardware I/O
+        (spec LAW §2.4) and is safe before :meth:`connect_all`; it raises
+        fail-closed (``KeyError``/``ValueError``) on an unmappable transport,
+        a §7.2 law violation, or a slow-control channel name that cannot map
+        to a permanent capability_id (§5.1.1).
+        """
+        # Local import by design: controller → capabilities is layer-legal
+        # (tests/test_layer_contracts.py), but this keeps the capability spine
+        # off device_manager's import-time path for every consumer that never
+        # opts in.
+        from capabilities.registry import CapabilityRegistry
+        return CapabilityRegistry(self)

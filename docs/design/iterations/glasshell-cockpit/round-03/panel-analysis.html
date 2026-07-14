@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TCT Analysis panel — depth by containment</title>
+<style>
+:root{--sans:"Segoe UI Variable Display","Segoe UI",Inter,system-ui,sans-serif;--mono:"Cascadia Mono",Consolas,monospace;
+  --sp-sm:8px;--sp-md:12px;--sp-lg:16px;--sp-xl:24px;--r-sm:8px;--r-md:12px;--r-xl:20px;--r-shelf:24px;}
+.theme-dark{--canvas:#0A0D13;--panel:#0D111A;--raised:#1B253A;--well:#070A0F;--card:#151D2D;--shelf:#0F141F;
+  --text:#E9EDF5;--muted:#98A1B5;--faint:#5B657A;--good:#3DD68C;--warn:#FFB84D;--crit:#FF5A61;--accent:#5AA9FF;--sim:#41D8E4;
+  --hairline:#27344A;--hairline-strong:#334159;--specular:rgba(255,255,255,.14);--edge-shade:rgba(0,0,0,.30);
+  --plot-bg:#0a0b0d;--plot-fg:#c7cfda;--plot-grid:#242a33;--sh-ink:0,0,0;--sh-a:.20;--sh-b:.24;--sh-c:.30;--desktop-worst:#fff;}
+.theme-light{--canvas:#E6EBF3;--panel:#FFFFFF;--raised:#F8FAFD;--well:#D4D8E0;--card:#FFFFFF;--shelf:#F3F5F9;
+  --text:#131A28;--muted:#525D72;--faint:#949DB0;--good:#0f7657;--warn:#915b00;--crit:#ad343a;--accent:#2563c9;--sim:#086f7b;
+  --hairline:#D9DFEA;--hairline-strong:#BFC9DA;--specular:rgba(255,255,255,.92);--edge-shade:rgba(0,0,0,.16);
+  --plot-bg:#0a0b0d;--plot-fg:#c7cfda;--plot-grid:#242a33;--sh-ink:16,24,40;--sh-a:.06;--sh-b:.08;--sh-c:.10;--desktop-worst:#000;}
+.theme-dark,.theme-light{--shadow-card:0 1px 2px rgba(var(--sh-ink),var(--sh-a)),0 8px 24px rgba(var(--sh-ink),var(--sh-b));--shadow-pane:0 12px 40px rgba(var(--sh-ink),var(--sh-c));}
+*{box-sizing:border-box}html,body{margin:0;height:100%}
+body{font-family:var(--sans);color:var(--text);font-size:13px;line-height:1.4;position:relative;overflow-x:hidden;min-height:100%}
+#desktop{position:fixed;inset:0;z-index:0;background:var(--desktop-worst)}
+body[data-desktop="photo"] #desktop{background:linear-gradient(115deg,#1a2a3a,#3a2540 40%,#0a1520 70%,#402a1a)}
+#ground{position:fixed;inset:0;z-index:1;background:radial-gradient(60vw 60vw at 12% 8%,color-mix(in srgb,var(--accent) 4.5%,transparent),transparent 60%),radial-gradient(70vw 70vw at 88% 96%,color-mix(in srgb,var(--accent) 2.5%,transparent),transparent 62%),linear-gradient(180deg,var(--specular),transparent 30%),var(--canvas)}
+body.garnish-on #ground{opacity:.82}
+#stage{position:relative;z-index:2;padding:var(--sp-xl);max-width:1080px;margin:0 auto}
+#bar{position:sticky;top:0;z-index:20;margin-bottom:var(--sp-xl);display:flex;gap:var(--sp-md);align-items:center;flex-wrap:wrap;padding:var(--sp-md) var(--sp-lg);border-radius:var(--r-xl);background:var(--shelf);border:1px solid var(--hairline-strong);box-shadow:var(--shadow-pane)}
+body.tier-scene #bar{background:color-mix(in srgb,var(--card) 55%,transparent);backdrop-filter:blur(40px) saturate(1.3);-webkit-backdrop-filter:blur(40px) saturate(1.3)}
+#bar h1{font-size:15px;margin:0 8px 0 0;font-weight:650}
+#bar .grp{display:flex;gap:2px;padding:3px;background:var(--well);border-radius:var(--r-md);border:1px solid var(--hairline)}
+#bar .cap{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);align-self:center;padding:0 4px}
+#bar button{font-family:var(--sans);font-size:12px;color:var(--muted);background:transparent;border:0;border-radius:var(--r-sm);padding:6px 12px;cursor:pointer;min-height:34px}
+#bar button[aria-pressed="true"]{background:var(--raised);color:var(--text);box-shadow:inset 0 1px 0 var(--specular)}
+#bar button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.pane{border-radius:var(--r-shelf);border:1px solid var(--hairline-strong);background:var(--shelf);box-shadow:var(--shadow-pane),inset 0 1px 0 var(--specular);padding:var(--sp-lg)}
+body.tier-scene .pane{background:color-mix(in srgb,var(--card) 55%,transparent);backdrop-filter:blur(40px) saturate(1.25);-webkit-backdrop-filter:blur(40px) saturate(1.25)}
+body.tier-flat .pane{box-shadow:none}
+.pane-head{display:flex;align-items:center;gap:var(--sp-sm);margin-bottom:var(--sp-lg);flex-wrap:wrap}
+.eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600}
+.ptitle{font-size:18px;font-weight:650;margin:0}
+.card{border-radius:var(--r-xl);border:1px solid var(--hairline-strong);background:var(--card);box-shadow:var(--shadow-card),inset 0 1px 0 var(--specular);padding:var(--sp-md);margin-bottom:var(--sp-md)}
+body.tier-scene .card{background:color-mix(in srgb,var(--raised) 62%,transparent);backdrop-filter:blur(16px) saturate(1.2);-webkit-backdrop-filter:blur(16px) saturate(1.2)}
+body.theme-light.tier-scene .card{background:color-mix(in srgb,var(--panel) 86%,transparent)}
+body.tier-flat .card{box-shadow:none}
+.ctitle{font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;margin:0 0 8px}
+.headbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;background:color-mix(in srgb,var(--muted) 14%,transparent);border:1px solid var(--hairline);color:var(--muted)}
+.chip.good{color:var(--good);border-color:color-mix(in srgb,var(--good) 40%,transparent)}
+.chip .dot{width:8px;height:8px;border-radius:2px;background:currentColor}
+.btn{font-family:var(--sans);font-size:12px;color:var(--text);background:var(--raised);border:1px solid var(--hairline-strong);border-radius:var(--r-md);padding:9px 14px;min-height:40px;cursor:pointer;box-shadow:inset 0 1px 0 var(--specular)}
+.btn.accent{background:var(--accent);color:#fff;border-color:transparent}
+.seg{display:inline-flex;padding:3px;gap:2px;background:var(--well);border:1px solid var(--hairline);border-radius:var(--r-md)}
+.seg button{font-family:var(--sans);font-size:12px;color:var(--muted);background:transparent;border:0;border-radius:var(--r-sm);padding:6px 14px;cursor:pointer;min-height:32px}
+.seg button[aria-pressed="true"]{background:var(--raised);color:var(--text);box-shadow:inset 0 1px 0 var(--specular)}
+.well{background:var(--well);border:1px solid var(--hairline);border-top-color:var(--edge-shade);border-radius:var(--r-md);padding:8px 12px;font-family:var(--mono);color:var(--text);display:flex;justify-content:space-between;align-items:center}
+/* island */
+.island{background:var(--plot-bg);border:1px solid var(--hairline-strong);border-top-color:var(--edge-shade);border-radius:var(--r-md);position:relative;overflow:hidden;color:var(--plot-fg)}
+.island .glabel{position:absolute;top:6px;left:8px;font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;z-index:2}
+.mapwrap{display:grid;grid-template-columns:2fr 1fr;gap:var(--sp-md);margin-top:var(--sp-md)}
+@media(max-width:720px){.mapwrap{grid-template-columns:1fr}}
+.toolrow{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:var(--sp-md)}
+/* survey mosaic: card-in-card-in-card */
+.mosaic{display:grid;grid-template-columns:repeat(4,1fr);gap:var(--sp-md);margin-top:var(--sp-md)}
+@media(max-width:720px){.mosaic{grid-template-columns:repeat(2,1fr)}}
+.cell{border-radius:var(--r-md);border:1px solid var(--hairline-strong);background:var(--card);padding:6px;box-shadow:var(--shadow-card)}
+body.tier-scene .cell{background:color-mix(in srgb,var(--raised) 62%,transparent);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+body.theme-light.tier-scene .cell{background:color-mix(in srgb,var(--panel) 86%,transparent)}
+.cell .mini{height:70px;border-radius:6px;overflow:hidden;position:relative}
+.cell .cap{display:flex;justify-content:space-between;align-items:center;margin-top:5px;font-family:var(--mono);font-size:11px}
+.list{margin-top:8px}
+.lrow{display:flex;justify-content:space-between;padding:9px 12px;background:var(--well);border:1px solid var(--hairline);border-radius:var(--r-md);margin-bottom:6px;font-family:var(--mono);font-size:12px;cursor:pointer}
+.lrow:hover{border-color:var(--accent)}
+.lrow .t{color:var(--muted)}
+.legend{position:relative;z-index:2;max-width:1080px;margin:16px auto 48px;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body class="theme-dark tier-scene garnish-off" data-desktop="worst">
+<div id="desktop"></div><div id="ground"></div>
+<div id="stage">
+  <div id="bar">
+    <h1>Analysis</h1>
+    <span class="cap">Theme</span><div class="grp"><button data-k="theme" data-v="dark" aria-pressed="true">Dark</button><button data-k="theme" data-v="light" aria-pressed="false">Light</button></div>
+    <span class="cap">Tier</span><div class="grp"><button data-k="tier" data-v="flat" aria-pressed="false">FLAT</button><button data-k="tier" data-v="token" aria-pressed="false">TOKEN</button><button data-k="tier" data-v="scene" aria-pressed="true">SCENE</button></div>
+    <span class="cap">Garnish</span><div class="grp"><button data-k="garnish" data-v="off" aria-pressed="true">off</button><button data-k="garnish" data-v="on" aria-pressed="false">DWM on</button></div>
+    <span class="cap">Desktop</span><div class="grp"><button data-k="desktop" data-v="worst" aria-pressed="true">worst</button><button data-k="desktop" data-v="photo" aria-pressed="false">photo</button></div>
+    <span class="cap">Mode</span><div class="grp"><button data-k="mode" data-v="map" aria-pressed="true">2D map</button><button data-k="mode" data-v="survey" aria-pressed="false">Survey</button><button data-k="mode" data-v="empty" aria-pressed="false">Empty</button></div>
+  </div>
+
+  <div class="pane">
+    <div class="pane-head"><span class="eyebrow">TCT CONTROL · ANALYSIS</span><h2 class="ptitle">Run analysis</h2></div>
+
+    <!-- run header card -->
+    <div class="card">
+      <div class="headbar">
+        <button class="btn">⌂ Browse…</button>
+        <span style="flex:1;color:var(--muted)" id="fname">run_2026-07-14_scan07.h5</span>
+        <span class="chip good"><span class="dot"></span>File ok</span>
+        <span class="chip good"><span class="dot"></span>Dataset</span>
+        <span class="chip good"><span class="dot"></span>Map</span>
+        <span class="chip"><span class="dot"></span>No export</span>
+      </div>
+    </div>
+
+    <!-- workspace card -->
+    <div class="card" id="workspace">
+      <div class="headbar"><div class="seg"><button aria-pressed="true">2D map</button><button aria-pressed="false">CCE vs bias</button><button aria-pressed="false">Survey</button></div></div>
+
+      <!-- MAP MODE -->
+      <div id="m-map">
+        <div class="toolrow">
+          <div class="well" style="min-width:180px">QUANTITY <span>DUT_CHARGE_PC ▾</span></div>
+          <button class="btn">↻ Replot</button><button class="btn">⤓ Export CSV</button>
+          <span class="chip"><span class="dot"></span>Freeze levels</span>
+        </div>
+        <div class="mapwrap">
+          <div class="island" style="min-height:260px">
+            <span class="glabel">Map view — DUT charge (pC)</span>
+            <svg viewBox="0 0 400 260" preserveAspectRatio="none" style="width:100%;height:260px;display:block">
+              <defs><linearGradient id="v" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#440154"/><stop offset=".4" stop-color="#31688e"/><stop offset=".7" stop-color="#35b779"/><stop offset="1" stop-color="#fde725"/></linearGradient></defs>
+              <rect x="30" y="10" width="330" height="230" fill="url(#v)" opacity=".85"/>
+              <g fill="none" stroke="#000" stroke-opacity=".25"><rect x="120" y="70" width="90" height="80"/><ellipse cx="200" cy="120" rx="60" ry="50"/></g>
+            </svg>
+          </div>
+          <div class="island" style="min-height:260px">
+            <span class="glabel">1D slice — X cut @ Y = 0</span>
+            <svg viewBox="0 0 200 260" preserveAspectRatio="none" style="width:100%;height:260px;display:block">
+              <g stroke="#242a33"><line x1="0" y1="130" x2="200" y2="130"/><line x1="100" y1="0" x2="100" y2="260"/></g>
+              <polyline fill="none" stroke="#5AA9FF" stroke-width="2" points="10,220 50,180 90,90 110,70 130,95 170,190 190,230"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- SURVEY MODE -->
+      <div id="m-survey" style="display:none">
+        <p class="ctitle" style="margin-top:12px">Survey — 8 runs · card-in-card-in-shelf (the stress test)</p>
+        <div class="mosaic" id="mos"></div>
+      </div>
+
+      <!-- EMPTY MODE -->
+      <div id="m-empty" style="display:none">
+        <p class="ctitle" style="margin-top:12px;font-size:16px;text-transform:none;letter-spacing:0;color:var(--text)">No run loaded</p>
+        <p style="color:var(--muted);margin:0 0 12px">Click a recent run to load it, or browse for any HDF5 file.</p>
+        <div class="list" id="recent"></div>
+        <div style="text-align:right;margin-top:8px"><button class="btn accent">Browse for a run file…</button></div>
+      </div>
+    </div>
+  </div>
+</div>
+<p class="legend"><strong>The proof:</strong> the busiest panel in the app, three levels of nesting, two live plots — and still exactly five surfaces (shelf · card · well · island · chip). Switch <strong>Mode → Survey</strong> for the four-deep stress test; switch <strong>FLAT</strong> to confirm every plot stays an opaque island. Depth is containment, not invention.</p>
+<script>
+const runs=[['scan07','142.7 pC','good'],['scan06','—','warn'],['scan05','98.1 pC','good'],['scan04','131.0 pC','good'],['scan03','—','warn'],['scan02','120.4 pC','good'],['scan01','88.9 pC','good'],['align3','—','muted']];
+const grads=['#440154,#31688e,#35b779,#fde725','#000004,#3b0f70,#8c2981,#fca50a','#0d0887,#7e03a8,#cc4778,#f0f921'];
+document.getElementById('mos').innerHTML=runs.map((r,i)=>`<div class="cell"><div class="mini island"><svg viewBox="0 0 100 70" preserveAspectRatio="none" style="width:100%;height:70px;display:block"><defs><linearGradient id="g${i}" x1="0" y1="1" x2="1" y2="0">${grads[i%3].split(',').map((c,j,a)=>`<stop offset="${j/(a.length-1)}" stop-color="${c}"/>`).join('')}</linearGradient></defs><rect width="100" height="70" fill="url(#g${i})" opacity=".85"/></svg></div><div class="cap"><span>${r[0]}</span><span class="chip ${r[2]}" style="padding:1px 7px"><span class="dot"></span>${r[1]}</span></div></div>`).join('');
+document.getElementById('recent').innerHTML=runs.slice(0,5).map(r=>`<div class="lrow"><span>run_2026-07-14_${r[0]}.h5</span><span class="t">14:0${Math.floor(Math.random()*9)}  ·  ${r[1]}</span></div>`).join('');
+function mode(v){for(const m of ['map','survey','empty'])document.getElementById('m-'+m).style.display=(m===v)?'':'none';}
+document.getElementById('bar').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-k]');if(!b)return;
+  b.parentElement.querySelectorAll('button').forEach(x=>x.setAttribute('aria-pressed',x===b?'true':'false'));
+  const k=b.dataset.k,v=b.dataset.v;const map={theme:['theme-dark','theme-light'],tier:['tier-flat','tier-token','tier-scene'],garnish:['garnish-on','garnish-off']};
+  if(k==='desktop'){document.body.setAttribute('data-desktop',v);return;}
+  if(k==='mode'){mode(v);return;}
+  document.body.classList.remove(...map[k]);document.body.classList.add(k==='theme'?'theme-'+v:(k==='tier'?'tier-'+v:'garnish-'+v));
+});
+</script>
+</body>
+</html>

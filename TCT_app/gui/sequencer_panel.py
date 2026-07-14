@@ -187,10 +187,13 @@ class SequencerPanel(QWidget):
         tool_row.setSpacing(SPACE_SM)
         self._btn_remove = QPushButton("Remove")
         self._btn_remove.clicked.connect(self._remove_selected)
+        # Bound methods, never lambdas — a self-capturing closure on a child
+        # button's signal is held strongly by Qt's connection storage and makes
+        # this panel immortal (tests/test_no_immortal_panels.py).
         self._btn_up = QPushButton("↑ Up")
-        self._btn_up.clicked.connect(lambda: self._move_selected(-1))
+        self._btn_up.clicked.connect(self._move_selected_up)
         self._btn_down = QPushButton("↓ Down")
-        self._btn_down.clicked.connect(lambda: self._move_selected(+1))
+        self._btn_down.clicked.connect(self._move_selected_down)
         self._btn_save = QPushButton("Save queue…")
         self._btn_save.clicked.connect(self._on_save)
         self._btn_load = QPushButton("Load queue…")
@@ -324,6 +327,14 @@ class SequencerPanel(QWidget):
         self._entries[row], self._entries[new] = self._entries[new], self._entries[row]
         self._sync_coordinator()
         self._table.setCurrentCell(new, _COL_ROUTINE)
+
+    @Slot()
+    def _move_selected_up(self) -> None:
+        self._move_selected(-1)
+
+    @Slot()
+    def _move_selected_down(self) -> None:
+        self._move_selected(+1)
 
     # ------------------------------------------------------------------ #
     # Save / load the whole queue                                        #

@@ -33,9 +33,41 @@ flash, wrong redraw on resize), flip ``_CANVAS_MODE`` to
 ``"no_system_background"`` and re-test; nothing else in this module needs to
 change for that swap.
 
-Wiring this into ``gui/style.py`` / ``tct_gui.py`` (settings fan-out, the
-theme-editor toggle) is the next beat — this module only provides the
-mechanism.
+Beat G-B1 (2026-07-13 night, glass council SYNTHESIS §2.4) added the **event
+spine** on top of that mechanism, because a DWM attribute is not a setting — it
+is state on ONE HWND, and it dies with it:
+
+* :func:`reassert_backdrop` is the single ordered chain (ExtendFrame → attr 20 →
+  attr 38 → canvas prep → truth log) that every path goes through.
+* :class:`_BackdropGuard` (via :func:`install_backdrop_guard`) re-runs it on
+  ``WinIdChange`` (Qt re-created the native window — Fenrir K9), ``Show``
+  (close-and-reopen), ``WindowStateChange`` (minimize/restore) and the
+  theme/palette events Windows' ``WM_THEMECHANGED``/``WM_SETTINGCHANGE`` arrive
+  as. Deliberately NOT a ``QAbstractNativeEventFilter``: that would put a Python
+  callback in the raw window-message path of an app that must not jitter a 30 Hz
+  acquisition loop, and Qt already translates the two messages we care about
+  into widget events.
+* :func:`nudge_repaint` heals the stale-surface class after a re-assert.
+* The **underlay law** (:data:`CANVAS_GLASS_PROPERTY`, :func:`_fail_safe_opaque`)
+  makes the failure mode structurally impossible: no window is ever translucent
+  while its material is not verifiably attached to its current HWND.
+
+Beat G-B2b (2026-07-14) added the two things that were still *claims about
+unwritten code*:
+
+* the five **environment probes** the glass contract (``gui/glass_env.py``) needs
+  and cannot make itself, because it is pure and this module owns the ctypes
+  quarantine: :func:`dwm_composition_probe`, :func:`transparency_probe`,
+  :func:`high_contrast_probe`, :func:`remote_session_probe`,
+  :func:`battery_saver_probe`. Without them the RDP ceiling and the
+  high-contrast FLAT mandate never fired on a real machine.
+* the underlay law's **activation clause** (:func:`set_canvas_for_activation`):
+  an INACTIVE window has no live material — DWM paints a fallback solid behind
+  it (measured, ``82ddd2f``) — so the alpha canvas follows the focus.
+
+The theme-aware entry point every caller actually uses is
+``gui.style.reassert_window_backdrop`` (it owns the mode → attr-20 tint and the
+``WS_EX_LAYERED`` opacity pin); this module stays theme-blind.
 """
 from __future__ import annotations
 
@@ -44,9 +76,9 @@ import logging
 import sys
 import weakref
 from ctypes import wintypes
-from typing import Optional
+from typing import Callable, Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer
 from PySide6.QtGui import QGuiApplication, QPalette
 from PySide6.QtWidgets import QMainWindow, QWidget
 
@@ -57,6 +89,26 @@ logger = logging.getLogger(__name__)
 # --------------------------------------------------------------------------- #
 
 BACKDROP_KINDS = ("none", "mica", "acrylic")
+
+# THE UNDERLAY LAW (glass council, SYNTHESIS §4.1, promoted to LAW):
+#
+#   No surface may ever be translucent with nothing behind it.
+#
+# A window only carries the translucent canvas (WA_TranslucentBackground + the
+# rgba QSS canvas fill) while a DWM material is VERIFIABLY attached to its
+# CURRENT HWND. The moment that is not true — attach failed, the HWND was
+# recreated (Fenrir K9), the material was reset, the host cannot do it at all —
+# the window falls back to the opaque TOKEN pre-blend by construction. That is
+# what this dynamic property carries: ``glassCanvas="true"`` is set on the
+# window (and its ``#mainShell`` central widget) by _prepare_window_canvas ONLY
+# after both DWM calls returned S_OK, and cleared by _clear_window_canvas on
+# every failure/reset path. gui/style.py's QSS paints the rgba glass fill only
+# behind that selector; the unqualified canvas rule stays an opaque hex.
+#
+# Consequence (this is the whole point): a lost DWM attribute degrades to
+# "looks like token glass", NEVER to the black hole Kaya saw on 2026-07-13
+# (a translucent canvas over a material that was no longer there).
+CANVAS_GLASS_PROPERTY = "glassCanvas"
 
 # Windows 11 22H2 (build 22621) is the first release with the public
 # DWMWA_SYSTEMBACKDROP_TYPE attribute. Deliberately NO Windows-10
@@ -73,6 +125,19 @@ DWMSBT_TRANSIENTWINDOW = 3  # Acrylic
 # DWMWA_SYSTEMBACKDROP_TYPE attribute id for DwmSetWindowAttribute.
 DWMWA_SYSTEMBACKDROP_TYPE = 38
 
+# DWMWA_USE_IMMERSIVE_DARK_MODE attribute id (dwmapi.h). A per-window BOOL that
+# tells DWM to tint the window's non-client frame AND its Mica/Acrylic material
+# DARK. It is NOT read from the system app-mode automatically: a window that
+# never sets it composes the material in the LIGHT tint by default — a bright,
+# near-white frosted pane regardless of the desktop or the app's own palette
+# ("komplett weiss"). Qt sets this implicitly during a stylesheet-driven
+# repolish when it detects a dark colour scheme, but that is a fragile side
+# effect (a same-QSS apply that skips the repolish — the Phase-0 perf guard in
+# gui.style.apply_theme — never re-triggers it). So the backdrop path asserts it
+# EXPLICITLY from the caller's theme mode (see apply_backdrop's ``dark`` arg),
+# and re-asserts it on every theme switch, instead of trusting the repolish.
+DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+
 _KIND_TO_DWMSBT = {
     "mica": DWMSBT_MAINWINDOW,
     "acrylic": DWMSBT_TRANSIENTWINDOW,
@@ -82,11 +147,38 @@ _KIND_TO_DWMSBT = {
 # constant for the real-display eyeball test; nothing else needs to change.
 _CANVAS_MODE = "translucent_attr"  # or "no_system_background"
 
+# THE ACTIVATION CLAUSE of the underlay law (beat G-B2b, measured in 82ddd2f):
+# DWM paints a fallback SOLID (mid-grey [84,84,84]) behind a system backdrop on
+# a window that is not active, so an inactive window has no live material and its
+# alpha canvas is a hole over nothing. See set_canvas_for_activation.
+#
+# The kill switch is a single constant on purpose: the cure repolishes the window
+# + #mainShell on every focus change, and if that turns out to flicker on a real
+# display worse than the mid-grey it fixes, doing nothing is a legitimate outcome
+# — flip this to False and the whole clause is inert (the canvas then simply
+# stays open, which is exactly the pre-G-B2b behaviour).
+CANVAS_FOLLOWS_ACTIVATION = True
+
 # Per-window bookkeeping of "does this window currently have a real backdrop
 # applied", so apply_backdrop(w, "none") only issues the DWM reset call when
 # there is actually something to reset (true no-op otherwise). WeakSet so a
 # closed/destroyed window is never kept alive by this module.
 _backdrop_applied_windows: "weakref.WeakSet[QWidget]" = weakref.WeakSet()
+
+# Per-window bookkeeping for the event spine (beat G-B1):
+#   _guarded_windows — windows that already carry a _BackdropGuard event filter,
+#       so install_backdrop_guard() is idempotent under the app-wide fan-out.
+#   _window_hwnds — the HWND each window carried at its last successful attach.
+#       DWM attributes (ExtendFrame margins, attr 20, attr 38) live on the HWND
+#       and die with it, silently, S_OK-history and all (Fenrir K9). Comparing
+#       the live handle against this map is the ONLY way to see that happen —
+#       so the truth log calls it out by name (see _log_truth).
+_guarded_windows: "weakref.WeakSet[QWidget]" = weakref.WeakSet()
+_window_hwnds: "weakref.WeakKeyDictionary[QWidget, int]" = weakref.WeakKeyDictionary()
+# Re-entrancy guard: a re-assert touches attributes/palette/properties, which
+# can post the very events (PaletteChange, WinIdChange) the guard listens for.
+# Never recurse — one re-assert per window at a time.
+_reasserting: "weakref.WeakSet[QWidget]" = weakref.WeakSet()
 
 
 # --------------------------------------------------------------------------- #
@@ -197,6 +289,202 @@ def _native_hwnd(window: QWidget) -> Optional[int]:
 
 
 # --------------------------------------------------------------------------- #
+# The five environment probes (beat G-B2b) — the OTHER half of the quarantine  #
+# --------------------------------------------------------------------------- #
+#
+# gui/glass_env.py is THE glass contract, and it is pure: no Qt, no ctypes, no
+# I/O (an AST guard in tests/test_glass_env.py pins that). But five of its
+# environment fields can only be answered by Win32, so they shipped as honest
+# UNKNOWNs (None) and the RDP ceiling, the high-contrast FLAT mandate and the
+# battery rule were, in practice, dead code on a real machine.
+#
+# They live HERE, in the one module allowed to touch ctypes, and glass_env's
+# module-level probes delegate to them (lazily, so it stays importable with no
+# Qt at all). Each one is split in two:
+#
+#   _<api>()          the ctypes/winreg primitive — the ONLY thing that can
+#                     fail, monkeypatchable, and it never raises: it answers
+#                     None for "cannot be asked" (non-Windows, missing API,
+#                     failed call, denied key).
+#   <name>_probe()    the tri-state the contract consumes: True/False/None.
+#
+# FAIL-SOFT, IN ONE DIRECTION. "Cannot be asked" is None, never False and never
+# True, because in glass_env False is a POSITIVE observation of absence (it
+# VETOES a tier) while None does not veto. A probe that guessed False would
+# silently kill glass that works; a probe that guessed True would promise a
+# material the host cannot render — the one unacceptable failure. So: guess
+# NOTHING. A probe that raises would be worse still (it degrades the whole
+# decision), so none of them can.
+
+SM_REMOTESESSION = 0x1000
+"""``GetSystemMetrics`` index: non-zero iff this process runs in a Terminal
+Services / RDP client session (winuser.h)."""
+
+SPI_GETHIGHCONTRAST = 0x0042
+"""``SystemParametersInfoW`` action: fill a ``HIGHCONTRAST`` struct (winuser.h)."""
+
+HCF_HIGHCONTRASTON = 0x00000001
+"""``HIGHCONTRAST.dwFlags`` bit: the high-contrast accessibility feature is ON."""
+
+SYSTEM_STATUS_FLAG_POWER_SAVING_ON = 0x01
+"""``SYSTEM_POWER_STATUS.SystemStatusFlag`` bit: battery saver is engaged
+(winbase.h; the field was ``Reserved1`` before Windows 10)."""
+
+_TRANSPARENCY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+_TRANSPARENCY_VALUE = "EnableTransparency"
+"""HKCU — Settings ▸ Personalization ▸ Colors ▸ "Transparency effects". There is
+no public Win32 API for it; the registry value IS the documented surface."""
+
+
+class _HIGHCONTRAST(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.UINT),
+        ("dwFlags", wintypes.DWORD),
+        ("lpszDefaultScheme", wintypes.LPWSTR),
+    ]
+
+
+class _SYSTEM_POWER_STATUS(ctypes.Structure):
+    _fields_ = [
+        ("ACLineStatus", ctypes.c_ubyte),
+        ("BatteryFlag", ctypes.c_ubyte),
+        ("BatteryLifePercent", ctypes.c_ubyte),
+        ("SystemStatusFlag", ctypes.c_ubyte),
+        ("BatteryLifeTime", wintypes.DWORD),
+        ("BatteryFullLifeTime", wintypes.DWORD),
+    ]
+
+
+def _system_metric(index: int) -> Optional[int]:
+    """``GetSystemMetrics(index)``, or ``None`` if it cannot be asked."""
+    if sys.platform != "win32":
+        return None
+    try:
+        return int(ctypes.windll.user32.GetSystemMetrics(ctypes.c_int(index)))  # type: ignore[attr-defined]
+    except Exception:
+        logger.debug("glass: GetSystemMetrics(%s) is unavailable", index,
+                     exc_info=True)
+        return None
+
+
+def _high_contrast_flags() -> Optional[int]:
+    """``SystemParametersInfoW(SPI_GETHIGHCONTRAST)`` → ``HIGHCONTRAST.dwFlags``.
+
+    ``None`` if it cannot be asked. There is deliberately no Qt equivalent: Qt
+    exposes no high-contrast query, which is exactly why this lives in ctypes."""
+    if sys.platform != "win32":
+        return None
+    try:
+        info = _HIGHCONTRAST()
+        info.cbSize = ctypes.sizeof(_HIGHCONTRAST)
+        ok = ctypes.windll.user32.SystemParametersInfoW(  # type: ignore[attr-defined]
+            wintypes.UINT(SPI_GETHIGHCONTRAST),
+            wintypes.UINT(ctypes.sizeof(_HIGHCONTRAST)),
+            ctypes.byref(info), wintypes.UINT(0))
+        if not ok:
+            logger.debug("glass: SPI_GETHIGHCONTRAST returned FALSE")
+            return None
+        return int(info.dwFlags)
+    except Exception:
+        logger.debug("glass: SPI_GETHIGHCONTRAST is unavailable", exc_info=True)
+        return None
+
+
+def _transparency_setting() -> Optional[int]:
+    """``HKCU\\...\\Themes\\Personalize\\EnableTransparency``, or ``None``.
+
+    ``None`` covers BOTH "not Windows" and "the value is not there" — and the
+    second one is a real, common state (a fresh profile that never touched the
+    setting). Reporting that as ``0`` would VETO the material on a machine whose
+    transparency is, in fact, on: guessing is the failure mode, so we do not."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg                             # local: Windows-only stdlib
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _TRANSPARENCY_KEY) as key:
+            value, _kind = winreg.QueryValueEx(key, _TRANSPARENCY_VALUE)
+        return int(value)
+    except FileNotFoundError:
+        logger.debug("glass: EnableTransparency is not set on this profile")
+        return None
+    except Exception:
+        logger.debug("glass: EnableTransparency could not be read", exc_info=True)
+        return None
+
+
+def _dwm_composition_enabled() -> Optional[bool]:
+    """``DwmIsCompositionEnabled``, or ``None`` if it cannot be asked.
+
+    On Windows 8+ the DWM cannot be turned off and this is always TRUE — which
+    is precisely why a FALSE here is worth having: it is the only thing that can
+    tell us we are somewhere the material genuinely cannot composite."""
+    if sys.platform != "win32":
+        return None
+    try:
+        enabled = wintypes.BOOL()
+        hr = ctypes.windll.dwmapi.DwmIsCompositionEnabled(  # type: ignore[attr-defined]
+            ctypes.byref(enabled))
+        if int(hr) != 0:
+            logger.debug("glass: DwmIsCompositionEnabled failed (hr=%s)", hr)
+            return None
+        return bool(enabled.value)
+    except Exception:
+        logger.debug("glass: DwmIsCompositionEnabled is unavailable", exc_info=True)
+        return None
+
+
+def _power_status_flag() -> Optional[int]:
+    """``GetSystemPowerStatus().SystemStatusFlag``, or ``None``."""
+    if sys.platform != "win32":
+        return None
+    try:
+        status = _SYSTEM_POWER_STATUS()
+        ok = ctypes.windll.kernel32.GetSystemPowerStatus(  # type: ignore[attr-defined]
+            ctypes.byref(status))
+        if not ok:
+            logger.debug("glass: GetSystemPowerStatus returned FALSE")
+            return None
+        return int(status.SystemStatusFlag)
+    except Exception:
+        logger.debug("glass: GetSystemPowerStatus is unavailable", exc_info=True)
+        return None
+
+
+def remote_session_probe() -> Optional[bool]:
+    """True iff this process is being displayed over RDP / Terminal Services.
+
+    The one probe that must never say False on a remote session: glass over a
+    WAN link is bandwidth spent on decoration while the operator waits for a
+    scan point (``glass_env.GlassEnvironment.remote_session`` — ceiling TOKEN)."""
+    raw = _system_metric(SM_REMOTESESSION)
+    return None if raw is None else bool(raw)
+
+
+def high_contrast_probe() -> Optional[bool]:
+    """True iff the high-contrast accessibility feature is on (⇒ FLAT, mandatory)."""
+    flags = _high_contrast_flags()
+    return None if flags is None else bool(flags & HCF_HIGHCONTRASTON)
+
+
+def transparency_probe() -> Optional[bool]:
+    """True/False for the OS "Transparency effects" setting; ``None`` if unset."""
+    raw = _transparency_setting()
+    return None if raw is None else bool(raw)
+
+
+def dwm_composition_probe() -> Optional[bool]:
+    """True iff DWM composition is enabled."""
+    return _dwm_composition_enabled()
+
+
+def battery_saver_probe() -> Optional[bool]:
+    """True iff Windows battery saver is engaged (it suppresses transparency)."""
+    flag = _power_status_flag()
+    return None if flag is None else bool(flag & SYSTEM_STATUS_FLAG_POWER_SAVING_ON)
+
+
+# --------------------------------------------------------------------------- #
 # Qt-side canvas prep — candidate A/B, see module docstring                  #
 # --------------------------------------------------------------------------- #
 
@@ -221,51 +509,156 @@ def _canvas_widgets(window: QWidget) -> list[QWidget]:
     return widgets
 
 
-def _set_canvas_translucent(widget: QWidget, translucent: bool) -> None:
-    """Toggle one widget between the translucent-canvas prep (so a DWM material
-    shows through its own unclaimed background) and the fail-safe opaque state.
-    The ``_CANVAS_MODE`` candidate switch (see the module docstring) applies
-    identically to the window and its central widget."""
+def _repolish(widget: QWidget) -> None:
+    """Re-evaluate the QSS attribute selectors on ONE widget after its
+    ``glassCanvas`` property flipped (Qt does not do it on its own).
+
+    Deliberately NOT ``gui.style.repolish``: that primitive is reserved for the
+    palette RESYNC path (``style._reassert_window_palette``), which
+    ``tests/test_backdrop.py::
+    test_backdrop_reassert_never_runs_while_a_real_material_is_applied`` pins to
+    the ``kind == "none"`` branch only — a live material must never have its
+    transparent Window-role palette painted over. This one only re-runs the
+    style pass so the ``[glassCanvas="true"]`` rule starts/stops applying, and
+    it only ever runs when the property ACTUALLY CHANGED (see
+    :func:`_set_canvas_translucent`), so a same-kind reissue — which the app-wide
+    fan-out performs on every single theme toggle — does exactly nothing."""
+    widget.style().unpolish(widget)
+    widget.style().polish(widget)
+
+
+def _set_surface_translucent(widget: QWidget, translucent: bool) -> None:
+    """The SURFACE half: give one widget the translucency ATTRIBUTE — which is
+    what makes Qt request a per-pixel-alpha native surface for it.
+
+    **This must run BEFORE the native window is created.** Qt decides a
+    top-level's surface alpha exactly once, in ``QWidgetPrivate::create()``, from
+    ``WA_TranslucentBackground``; setting the attribute afterwards only calls
+    ``QWindow::setFormat``, which is documented to have no effect on an
+    already-created window. Measured on this exact stack (Qt 6.11.1 / Win11
+    26200, ``scripts/spikes/gl_island_glass_spike.py``, finding 2): attribute
+    after creation ⇒ ``format().alphaBufferSize() == -1`` ⇒ the canvas renders
+    fully opaque and acrylic-on is PIXEL-IDENTICAL to acrylic-off. The material
+    is attached, DWM says S_OK, and nothing composites. The old code called
+    ``winId()`` (which creates the HWND) before its canvas prep, so the
+    "turn the backdrop on for a live window" path could not work by construction
+    — the spike's words.
+
+    IDEMPOTENT: a no-op when the widget is already in the requested state, so the
+    event spine (which re-asserts on WinIdChange/Show/theme events) never churns
+    the attribute.
+    """
     if _CANVAS_MODE == "no_system_background":
-        widget.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, translucent)
+        if widget.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground) != translucent:
+            widget.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, translucent)
         return
     if translucent:
-        widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        palette = widget.palette()
-        palette.setColor(QPalette.ColorRole.Window, Qt.GlobalColor.transparent)
-        widget.setPalette(palette)
-        widget.setAutoFillBackground(False)
+        if not widget.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground):
+            widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            palette = widget.palette()
+            palette.setColor(QPalette.ColorRole.Window, Qt.GlobalColor.transparent)
+            widget.setPalette(palette)
+            widget.setAutoFillBackground(False)
     else:
-        widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
-        widget.setPalette(QPalette())
-        widget.setAutoFillBackground(True)
+        if widget.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground):
+            widget.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+            widget.setPalette(QPalette())
+            widget.setAutoFillBackground(True)
+
+
+def _set_glass_canvas(widget: QWidget, glass: bool) -> None:
+    """The PIXEL half: the ``glassCanvas`` dynamic property — the UNDERLAY LAW's
+    carrier.
+
+    The QSS canvas rule paints the rgba (alpha) fill only behind
+    ``[glassCanvas="true"]``; without it the canvas is the opaque token
+    pre-blend. So this — and ONLY this — is what actually opens an alpha hole in
+    the window, and it is set only after both DWM calls returned S_OK on the
+    window's CURRENT HWND.
+
+    Splitting the surface (above) from the pixels (here) is what lets us obey
+    both laws at once: the alpha SURFACE must be negotiated *before* the HWND
+    exists (or the material can never composite), while the alpha PIXELS must
+    appear only *after* the material is verified (or a lost material shows as a
+    black hole). A translucent-capable surface painted with an opaque fill is
+    simply an opaque window — harmless."""
+    want = "true" if glass else None
+    if widget.property(CANVAS_GLASS_PROPERTY) == want:
+        return
+    widget.setProperty(CANVAS_GLASS_PROPERTY, want)
+    _repolish(widget)
+
+
+def _prepare_window_surface(window: QWidget) -> None:
+    """Give the window (and, for a ``QMainWindow``, its central ``#mainShell``
+    child) an alpha-capable surface — BEFORE anything realizes the HWND.
+
+    The central widget matters as much as the top-level: a ``QMainWindow``'s
+    client area is painted by that child, so an opaque child over a translucent
+    window carries no alpha down to DWM (see :func:`_canvas_widgets`)."""
+    for w in _canvas_widgets(window):
+        _set_surface_translucent(w, True)
 
 
 def _prepare_window_canvas(window: QWidget) -> None:
-    """Let the backdrop paint through the window's own unclaimed background.
+    """Open the alpha hole: glass pixels on the window + its central widget.
 
-    Touches the top-level widget AND (for a ``QMainWindow``) its central
-    ``#mainShell`` child — but NOT the panels/plots/camera inside, which keep
-    their own opaque QSS untouched (design law). The child that actually covers
-    a ``QMainWindow`` client must be translucent too, or the top-level's
-    translucency never reaches DWM (see :func:`_canvas_widgets`).
-    """
+    Callers MUST have verified the material is attached to the window's CURRENT
+    HWND first — the underlay law says an alpha hole may never exist without a
+    material behind it."""
     for w in _canvas_widgets(window):
-        _set_canvas_translucent(w, True)
+        _set_glass_canvas(w, True)
+
+
+def _close_glass_canvas(window: QWidget) -> None:
+    """Close the alpha hole (glass pixels off) but KEEP the translucency
+    attribute — the state for "the material is attached but this surface has no
+    alpha channel to carry it".
+
+    Keeping the attribute is what lets the window heal itself: the next time Qt
+    re-creates its native handle, ``QWidgetPrivate::create()`` sees
+    ``WA_TranslucentBackground`` and grants a real alpha surface, and the very
+    next re-assert (the WinIdChange one) turns the glass on for real."""
+    for w in _canvas_widgets(window):
+        _set_glass_canvas(w, False)
 
 
 def _clear_window_canvas(window: QWidget) -> None:
-    """Undo :func:`_prepare_window_canvas` (window + central widget) when a
-    backdrop is reset to "none" — symmetric with the prep above."""
+    """The fail-safe opaque state: no glass pixels, no translucency attribute.
+
+    The enforcement arm of the underlay law — called on a reset to "none" AND on
+    every failure path. Dropping the attribute does not un-do the surface's alpha
+    capability (that was baked in at HWND creation and outlives the attribute),
+    so a later successful re-attach still composites: this is a paint-time
+    fallback, not a one-way door."""
     for w in _canvas_widgets(window):
-        _set_canvas_translucent(w, False)
+        _set_glass_canvas(w, False)
+        _set_surface_translucent(w, False)
+
+
+def _fail_safe_opaque(window: QWidget) -> None:
+    """Underlay law, enforcement arm: drop ``window`` back to the opaque TOKEN
+    canvas because its material is not (or no longer) verifiably attached.
+
+    A window that never had a material is left alone (nothing to undo — the
+    setters are no-ops for it). A window that DID have one — and whose re-assert
+    has just failed, e.g. because DWM rejected the call on a freshly recreated
+    HWND — loses its glass pixels and its translucency attribute in the same
+    breath, so the QSS falls back to the opaque pre-blend instead of painting an
+    alpha hole over nothing (the BLACK bug)."""
+    if window in _backdrop_applied_windows:
+        logger.warning(
+            "backdrop: material lost on %s — falling back to the opaque token "
+            "canvas (underlay law)", type(window).__name__)
+    _clear_window_canvas(window)
+    _backdrop_applied_windows.discard(window)
 
 
 # --------------------------------------------------------------------------- #
 # Public API                                                                  #
 # --------------------------------------------------------------------------- #
 
-def apply_backdrop(window: QWidget, kind: str) -> bool:
+def apply_backdrop(window: QWidget, kind: str, *, dark: bool | None = None) -> bool:
     """Apply (or reset) a DWM system backdrop material on ``window``.
 
     ``kind`` must be one of :data:`BACKDROP_KINDS` — anything else raises
@@ -276,6 +669,62 @@ def apply_backdrop(window: QWidget, kind: str) -> bool:
 
     ``kind == "none"`` resets a previously-applied backdrop; on a window that
     never had one applied, it is a true no-op (no DWM calls at all).
+
+    ``dark`` — when not ``None``, asserts ``DWMWA_USE_IMMERSIVE_DARK_MODE``
+    (True → dark tint, False → light tint) on the HWND *before* the material
+    is attached, so Mica/Acrylic composes in the tint that matches the app
+    theme instead of DWM's light default ("komplett weiss" — see that
+    constant's comment). Set BEFORE the ``SYSTEMBACKDROP_TYPE`` attribute per
+    the documented recipes (order matters on some builds). ``None`` (the
+    default, and what every non-theme caller/test uses) leaves the flag
+    untouched — byte-identical to the pre-fix behaviour. The theme layer
+    (``gui.style.apply_window_backdrop_to``) passes the live mode; this module
+    stays theme-blind and only relays the boolean. A non-zero HRESULT here is
+    logged but does NOT abort the material (it is a tint refinement, not the
+    material itself).
+    """
+    return reassert_backdrop(window, kind, dark=dark, reason="apply")
+
+
+def reassert_backdrop(window: QWidget, kind: str, *, dark: bool | None = None,
+                      reason: str = "reassert") -> bool:
+    """THE ordered DWM chain — the single re-assert every path goes through.
+
+    Order (glass council SYNTHESIS §2.3 / Fenrir rider 1, amended by the
+    GL-island spike's finding 2 — the surface step now comes FIRST, and it is the
+    highest-value line in this module):
+
+        translucency ATTRIBUTE (alpha surface)   ← BEFORE the HWND exists
+          → realize the native window (winId)
+          → DwmExtendFrameIntoClientArea(-1)
+          → attr 20  DWMWA_USE_IMMERSIVE_DARK_MODE   (tint, from the live theme)
+          → attr 38  DWMWA_SYSTEMBACKDROP_TYPE        (the material itself)
+          → ``glassCanvas`` glass PIXELS             (underlay law: only on S_OK)
+          → one-line truth log (incl. the surface's real alphaBufferSize)
+
+    Why the surface step leads: Qt fixes a top-level's surface alpha once, in
+    ``QWidgetPrivate::create()``. Set ``WA_TranslucentBackground`` after the HWND
+    exists and the window never gets an alpha channel — DWM reports S_OK,
+    attaches the material, and nothing composites (acrylic-on is pixel-identical
+    to acrylic-off; measured, ``scripts/spikes/gl_island_glass_spike.py``).
+    Splitting surface from pixels (see :func:`_set_glass_canvas`) is what lets
+    this run early WITHOUT violating the underlay law.
+
+    (The caller pins window opacity afterwards — ``gui.style
+    .reassert_window_backdrop`` — because ``WS_EX_LAYERED`` suppresses the
+    material outright, and style.py is the layer that owns that knob.)
+
+    IDEMPOTENT, CHEAP, and it NEVER RAISES: it is called from an event filter
+    on WinIdChange / Show / theme events, so a throw here would take down an
+    unrelated Qt event delivery. Every native call is already exception-guarded;
+    the Qt-side prep is a no-op when nothing changed.
+
+    ``reason`` is a free-text tag for the truth log ("apply", "show",
+    "winidchange", "theme", ...) — the greppable evidence of WHY the chain ran.
+
+    Returns True iff the material is now verifiably attached to ``window``'s
+    CURRENT HWND. On False, the window is left fail-safe opaque (underlay law:
+    never a translucent canvas with nothing behind it).
     """
     if kind not in BACKDROP_KINDS:
         raise ValueError(
@@ -284,13 +733,164 @@ def apply_backdrop(window: QWidget, kind: str) -> bool:
     if not is_backdrop_supported():
         return False
 
-    if kind == "none":
-        return _reset_backdrop(window)
+    if window in _reasserting:          # see _reasserting's comment
+        return window in _backdrop_applied_windows
 
-    hwnd = _native_hwnd(window)
-    if hwnd is None:
-        return False
+    _reasserting.add(window)
+    try:
+        if kind == "none":
+            return _reset_backdrop(window)
 
+        # STEP 0 — the alpha SURFACE, before anything realizes the HWND. This is
+        # the line the GL-island spike says is worth more than the rest of the
+        # module: after creation it is unfixable, and its absence is invisible
+        # (S_OK everywhere, zero pixels). Safe to do up front because the glass
+        # PIXELS are still gated on the DWM calls below (underlay law).
+        was_realized = window.windowHandle() is not None
+        _prepare_window_surface(window)
+
+        hwnd = _native_hwnd(window)
+        if hwnd is None:
+            _fail_safe_opaque(window)
+            return False
+
+        # Read back what Qt actually negotiated. A window realized BEFORE the
+        # attribute was set reports alpha < 8 here, and can never composite the
+        # material until its native handle is re-created.
+        alpha = _surface_alpha(window)
+        if alpha < 8 and was_realized:
+            alpha = _renegotiate_alpha_surface(window, alpha)
+            hwnd = _native_hwnd(window) or hwnd
+
+        previous_hwnd = _window_hwnds.get(window)
+        if previous_hwnd is not None and previous_hwnd != hwnd:
+            # Fenrir K9, caught in the act: Qt destroyed and re-created the
+            # native window (re-parenting, some setWindowFlags paths, a
+            # WA_NativeWindow toggle, certain screen migrations). Every DWM
+            # attribute we ever set died with the old HWND — silently, with a
+            # full history of S_OK. This log line is the ONLY evidence that
+            # exists; nothing "failed".
+            logger.warning(
+                "backdrop: HWND recreated for %s (0x%X -> 0x%X) — all DWM "
+                "attributes were lost with it; re-asserting the full chain "
+                "(reason=%s)", type(window).__name__, previous_hwnd, hwnd, reason)
+
+        ok, hrs = _attach_material(hwnd, kind, dark)
+        if not ok:
+            _fail_safe_opaque(window)
+            return False
+
+        if alpha < 8:
+            # THE BLACK BUG, closed at its root. The material is attached (S_OK)
+            # but the surface has no alpha channel, so nothing can composite
+            # through it. Painting the rgba canvas here is precisely what turns
+            # the window BLACK: the alpha fill blends against a zeroed backing
+            # store instead of a material. Underlay law ⇒ keep the OPAQUE token
+            # canvas, report no material, say so out loud. (The translucency
+            # attribute stays set, so the next HWND recreation gets a real alpha
+            # surface and the glass simply appears.)
+            logger.warning(
+                "glass: %s attached kind=%s on hwnd=0x%X but its surface has NO "
+                "alpha (alphaBufferSize=%s) — the material cannot composite. "
+                "Canvas stays the opaque token pre-blend (underlay law); this "
+                "window was realized before its translucency attribute.",
+                type(window).__name__, kind, hwnd, alpha)
+            _close_glass_canvas(window)
+            _backdrop_applied_windows.discard(window)
+            _window_hwnds[window] = hwnd
+            return False
+
+        # Both native calls succeeded on THIS hwnd AND the surface can carry
+        # alpha — only now is it safe to open the alpha hole (underlay law).
+        _prepare_window_canvas(window)
+        _backdrop_applied_windows.add(window)
+        _window_hwnds[window] = hwnd
+
+        # The truth log (Ymir I5 format): one greppable INFO line per
+        # (re-)assert. HRESULTs included because the DWM path can return S_OK and
+        # still not composite the material — a *silent* rejection is only ever
+        # visible as "we said S_OK, Kaya says black". ``alpha`` is the other half
+        # of that story: alpha<8 means the material is attached to a window that
+        # physically cannot show it.
+        # INFO for windows the operator can actually see; DEBUG for the long tail
+        # of hidden/never-shown top-levels the app-wide fan-out also touches (Qt
+        # keeps a surprising number of them around — a live run logged ~20). The
+        # greppable truth line stays, without burying it.
+        emit = logger.info if window.isVisible() else logger.debug
+        emit(
+            "glass: %s window=%s hwnd=0x%X kind=%s tint=%s alpha=%s canvas=glass "
+            "(extend hr=%s, attr20 hr=%s, attr38=%s hr=%s)",
+            reason, type(window).__name__, hwnd, kind,
+            ("dark" if dark else "light") if dark is not None else "system",
+            alpha, hrs[0], hrs[1], _KIND_TO_DWMSBT[kind], hrs[2])
+        return True
+    finally:
+        _reasserting.discard(window)
+
+
+def _surface_alpha(window: QWidget) -> int:
+    """The per-pixel alpha the window's REALIZED native surface actually has.
+
+    ``-1``/``0`` means DWM can attach whatever it likes and nothing will ever
+    composite through this window (GL-island spike, finding 2). Cheap read; the
+    only honest way to tell a live material from a dead one without a screenshot.
+    """
+    handle = window.windowHandle()
+    if handle is None:
+        return -1
+    try:
+        return int(handle.format().alphaBufferSize())
+    except Exception:
+        return -1
+
+
+def _renegotiate_alpha_surface(window: QWidget, alpha: int) -> int:
+    """Try to give an ALREADY-REALIZED window the alpha surface it never got.
+
+    ``QWindow::setFormat`` is documented to have no effect after creation, so the
+    only way is to destroy and re-create the native window with
+    ``WA_TranslucentBackground`` already set (which :func:`_prepare_window_surface`
+    has just done). That is safe on a window that is not on screen yet — the
+    normal case, because every material-capable window now runs the chain in its
+    constructor.
+
+    On a VISIBLE window we refuse and log instead: yanking the HWND out from
+    under a live cockpit would take its native children (the GL view, any QQuick
+    island) with it, and a cosmetic material is never worth that. The warning is
+    the actionable bit — it names the window whose material is attached but
+    physically cannot render, which is exactly the class of bug that has cost
+    this project two nights."""
+    if window.isVisible():
+        logger.warning(
+            "glass: %s has NO alpha surface (alphaBufferSize=%s) — it was "
+            "realized before the translucency attribute was set, so the DWM "
+            "material is attached but CANNOT composite (S_OK, zero pixels). Not "
+            "re-creating the native window of a visible window; the canvas stays "
+            "the opaque token pre-blend. Fix the call order at the window's "
+            "construction site.", type(window).__name__, alpha)
+        return alpha
+
+    logger.info(
+        "glass: %s was realized without an alpha surface (alphaBufferSize=%s); "
+        "re-creating its native window with the translucency attribute set",
+        type(window).__name__, alpha)
+    try:
+        window.destroy()
+        window.create()
+    except Exception:
+        logger.exception("glass: alpha-surface renegotiation failed")
+        return alpha
+    return _surface_alpha(window)
+
+
+def _attach_material(hwnd: int, kind: str,
+                     dark: bool | None) -> tuple[bool, tuple]:
+    """The three native calls, in the ratified order, on ONE hwnd.
+
+    ExtendFrame → attr 20 (tint) → attr 38 (material). Returns
+    ``(ok, (extend_hr, immersive_hr, attr_hr))``; ``ok`` is False if the
+    material is not attached (a bad tint HRESULT is logged but does not abort —
+    it is a refinement, not the material)."""
     try:
         extend_hr = _dwm_extend_frame(hwnd)
     except Exception:
@@ -300,7 +900,24 @@ def apply_backdrop(window: QWidget, kind: str) -> bool:
         logger.warning(
             "backdrop: DwmExtendFrameIntoClientArea failed (hr=%s, kind=%s)",
             extend_hr, kind)
-        return False
+        return False, (extend_hr, None, None)
+
+    # Immersive-dark tint BEFORE the material attach (see the
+    # DWMWA_USE_IMMERSIVE_DARK_MODE comment: some builds ignore a post-attach
+    # flip, and the light default is the "komplett weiss").
+    immersive_hr: int | None = None
+    if dark is not None:
+        try:
+            immersive_hr = _dwm_set_window_attribute(
+                hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, 1 if dark else 0)
+        except Exception:
+            logger.exception("backdrop: immersive-dark-mode set raised")
+            immersive_hr = -1
+        if immersive_hr != 0:
+            logger.warning(
+                "backdrop: DwmSetWindowAttribute USE_IMMERSIVE_DARK_MODE=%s "
+                "failed (hr=%s) — material may render in the wrong tint",
+                1 if dark else 0, immersive_hr)
 
     try:
         attr_hr = _dwm_set_window_attribute(
@@ -312,20 +929,87 @@ def apply_backdrop(window: QWidget, kind: str) -> bool:
         logger.warning(
             "backdrop: DwmSetWindowAttribute failed (hr=%s, kind=%s)",
             attr_hr, kind)
-        return False
+        return False, (extend_hr, immersive_hr, attr_hr)
 
-    # Both native calls succeeded — only now is it safe to make the Qt side
-    # translucent (fail-safe ordering: never a translucent window with no
-    # backdrop material actually behind it). Log the HRESULTs at INFO so a
-    # *silent* rejection (S_OK returned but nothing renders) is still visible
-    # in the log — the DWM path can return S_OK yet not composite the material.
-    logger.info(
-        "backdrop: applied kind=%s (DwmExtendFrameIntoClientArea hr=%s, "
-        "DwmSetWindowAttribute SYSTEMBACKDROP_TYPE=%s hr=%s)",
-        kind, extend_hr, _KIND_TO_DWMSBT[kind], attr_hr)
-    _prepare_window_canvas(window)
-    _backdrop_applied_windows.add(window)
+    return True, (extend_hr, immersive_hr, attr_hr)
+
+
+def prepare_surface(window: QWidget) -> bool:
+    """Give ``window`` an alpha-capable native surface — call this as the FIRST
+    line of a material-capable top-level's ``__init__``, before it builds any
+    children.
+
+    Qt negotiates a top-level's surface alpha exactly once, when the native
+    window is created, from ``WA_TranslucentBackground`` (GL-island spike,
+    finding 2). Anything that realizes the HWND early — a child that calls
+    ``winId()``, a QQuickWidget, a ``show()`` — locks the window out of ever
+    carrying alpha, and then the material attaches with S_OK and composites
+    nothing. Setting the attribute up front makes that unreachable.
+
+    Gated on the HOST (:func:`is_backdrop_supported`), NOT on the user's current
+    backdrop preference — see ``gui.style.prepare_window_surface`` for why that
+    preference gate had to go (it made the live "turn glass on now" toggle
+    unreachable: a window realized under the shipped "none" default can never
+    gain alpha afterwards, and a VISIBLE window's HWND must not be yanked to fix
+    that). Opening the alpha hole is still gated on the DWM calls succeeding
+    (underlay law) — this only negotiates the SURFACE, it does not make a single
+    pixel translucent, and a translucent-capable surface painted with an opaque
+    fill is simply an opaque window."""
+    if not is_backdrop_supported():
+        return False
+    _prepare_window_surface(window)
     return True
+
+
+def window_has_material(window: QWidget) -> bool:
+    """True iff a DWM material is currently attached to ``window``'s HWND (i.e.
+    the last :func:`reassert_backdrop` on it succeeded and nothing has reset it
+    since).
+
+    The per-window truth the underlay law and the ``WS_EX_LAYERED`` opacity pin
+    both key off — deliberately NOT "the user's backdrop preference is not
+    none", which says nothing about whether THIS window actually got it."""
+    return window in _backdrop_applied_windows
+
+
+def set_canvas_for_activation(window: QWidget, active: bool) -> None:
+    """The underlay law's missing loss path: **an INACTIVE window has no live
+    material** (beat G-B2b; measured in ``82ddd2f``).
+
+    DWM does not composite a system backdrop on a non-active window. It paints a
+    **fallback solid** — ``[84, 84, 84]``, mid-grey — behind it instead. That is
+    not damage and not a bug in this code: it is what the OS does, reproduced on
+    a live, never-minimized window simply by stealing its focus (the spike's
+    ``d_behind`` collapsed 63.99 → 0.0 and came back EXACTLY on re-activation),
+    and it happens on the shipped QWidget cockpit and on a ``QQuickWindow`` root
+    alike.
+
+    So "inactive" is a loss path like any other, and the underlay law already
+    says what to do with those: **no alpha hole without a material behind it.**
+    An unfocused cockpit that keeps its rgba canvas is painting alpha over a flat
+    ``#545454`` — precisely the class of defect the law exists to prevent. This
+    closes the canvas on deactivation and reopens it on activation.
+
+    NOT a re-assert. The DWM attributes are still attached and still S_OK on this
+    HWND — they were never the problem, and a full :func:`reassert_backdrop` is
+    *measured* to do nothing here (it failed 3/3 in the spike). The window
+    therefore stays in :data:`_backdrop_applied_windows`
+    (:func:`window_has_material` keeps reporting True, so style.py's
+    ``WS_EX_LAYERED`` opacity pin does not drop out from under a focus change),
+    and only the glass PIXELS follow the focus.
+
+    A window with no verified material is left completely alone — which makes
+    this a true no-op in the shipped ``"none"`` default, where no window is ever
+    in that set.
+    """
+    if not CANVAS_FOLLOWS_ACTIVATION:
+        return
+    if window not in _backdrop_applied_windows:
+        return
+    if active:
+        _prepare_window_canvas(window)
+    else:
+        _close_glass_canvas(window)
 
 
 def _reset_backdrop(window: QWidget) -> bool:
@@ -334,6 +1018,10 @@ def _reset_backdrop(window: QWidget) -> bool:
 
     hwnd = _native_hwnd(window)
     if hwnd is None:
+        # No handle to reset — but the Qt side must not stay translucent over
+        # nothing (underlay law).
+        _fail_safe_opaque(window)
+        _window_hwnds.pop(window, None)
         return False
 
     try:
@@ -342,9 +1030,212 @@ def _reset_backdrop(window: QWidget) -> bool:
         logger.exception("backdrop: _dwm_set_window_attribute raised while resetting")
         hr = -1
     if hr != 0:
+        # Underlay law, every-loss-path clause (Mary, G-B1 review, NIT 6). This
+        # used to be the ONE path that returned False without failing safe: the
+        # window kept its glassCanvas property, kept WA_TranslucentBackground,
+        # and stayed in _backdrop_applied_windows — so window_has_material() went
+        # on reporting True for a material whose state we no longer know, and it
+        # is exactly that function the WS_EX_LAYERED opacity pin keys off. An
+        # unknown material is a LOST material: drop to the opaque token canvas.
         logger.warning("backdrop: failed to reset backdrop to DWMSBT_NONE (hr=%s)", hr)
+        _fail_safe_opaque(window)
+        _window_hwnds.pop(window, None)
         return False
 
     _clear_window_canvas(window)
     _backdrop_applied_windows.discard(window)
+    _window_hwnds.pop(window, None)
     return True
+
+
+# --------------------------------------------------------------------------- #
+# The event spine (beat G-B1) — every event that can silently lose the attrs  #
+# --------------------------------------------------------------------------- #
+
+class _BackdropGuard(QObject):
+    """Event filter that re-asserts the DWM chain whenever the window's native
+    state can have dropped it. One per material-capable top-level, parented to
+    it (so it dies with the window), installed by :func:`install_backdrop_guard`.
+
+    The events, and what each one is here for:
+
+    * ``WinIdChange`` — **the K9 fix.** Qt destroyed and re-created the native
+      window (re-parenting, some ``setWindowFlags`` paths, ``WA_NativeWindow``
+      toggles, screen migration). Every per-HWND DWM attribute died with it,
+      silently. This is the single cheapest life-saver in the whole design; it
+      had ZERO hits in the codebase before this beat.
+    * ``Show`` — a window that was hidden and is shown again (Kaya's
+      close-and-reopen of the theme editor). Covers the HWND-recreation path
+      even when Qt does not deliver ``WinIdChange``, and it covers a stale
+      redirection surface: the re-assert ends in a forced full repaint.
+    * ``WindowStateChange`` — minimize → restore, the other surface-recreation
+      path (and the documented trigger of the stale white/black box).
+    The theme-class events are handled DIFFERENTLY, and the difference is not
+    cosmetic — it is a crash fix:
+
+    * ``ThemeChange`` / ``ApplicationPaletteChange`` — the OS flipped its
+      app-mode or its accent/transparency settings. Qt delivers Windows'
+      ``WM_THEMECHANGED``/``WM_SETTINGCHANGE`` to widgets as these events, so
+      attr 20 (the tint) follows the OS without this app installing a native
+      event filter in the message hot path (a per-message Python callback would
+      tax the acquisition loop for no gain — see the module docstring).
+      **These are delivered while Qt is iterating every widget in the
+      application** (an app-palette fan-out). Re-asserting inline from inside
+      that iteration — creating native handles, re-polishing widgets, writing
+      palettes, on windows that may already be pending deletion — corrupts the
+      very list Qt is walking: an access violation, reproduced in the suite.
+      So they NEVER do work inline; they schedule ONE coalesced app-wide
+      re-assert for the next event-loop turn (which is also exactly Fenrir's
+      rider-2 "post-toggle re-assert one turn later", beating Qt's own palette
+      heuristic to the last write of attr 20).
+
+    The ACTIVATION pair is a third class again, and it is NOT a re-assert:
+
+    * ``WindowActivate`` / ``WindowDeactivate`` — the window gained/lost focus.
+      An inactive window HAS NO LIVE MATERIAL (DWM paints a fallback solid behind
+      it — measured, ``82ddd2f``), so its alpha canvas would be a hole over
+      nothing. These route to :func:`set_canvas_for_activation`, which flips only
+      the glass PIXELS. They must NOT route to :func:`reassert_backdrop`: the DWM
+      attributes never died, re-asserting them is measured to change nothing
+      (0/3 in the spike), and it would cost a full native chain + a repaint nudge
+      on every alt-tab.
+
+    NOT watched, deliberately: ``QEvent.PaletteChange``. Every ``setPalette`` and
+    every stylesheet repolish in the app emits it — including the ones the
+    re-assert itself performs — so hooking it is a feedback source with no
+    unique signal.
+
+    The filter NEVER consumes an event (always returns False) and never raises.
+    """
+
+    # Per-window events — safe to handle inline, and the promptness matters
+    # (the first frame after a Show/WinIdChange must already have the material).
+    _IMMEDIATE = {
+        QEvent.Type.WinIdChange: "winidchange",
+        QEvent.Type.Show: "show",
+        QEvent.Type.WindowStateChange: "windowstate",
+    }
+    # App-wide fan-out events — schedule only, NEVER inline (see above).
+    _DEFERRED = frozenset({
+        QEvent.Type.ThemeChange,
+        QEvent.Type.ApplicationPaletteChange,
+    })
+    # Focus events — canvas only, never the DWM chain (see the class docstring).
+    _ACTIVATION = {
+        QEvent.Type.WindowActivate: True,
+        QEvent.Type.WindowDeactivate: False,
+    }
+    _WATCHED = frozenset(_IMMEDIATE) | _DEFERRED | frozenset(_ACTIVATION)
+
+    def __init__(self, window: QWidget,
+                 reapply: Callable[[QWidget, str], None],
+                 schedule: Callable[[], None],
+                 activation: Optional[Callable[[QWidget, bool], None]] = None) -> None:
+        super().__init__(window)
+        self._reapply = reapply
+        self._schedule = schedule
+        self._activation = activation or set_canvas_for_activation
+
+    def eventFilter(self, obj, event) -> bool:      # noqa: N802 (Qt override)
+        try:
+            etype = event.type()
+            if etype in self._DEFERRED:
+                self._schedule()
+            elif etype in self._IMMEDIATE:
+                self._reapply(obj, self._IMMEDIATE[etype])
+            elif etype in self._ACTIVATION:
+                self._activation(obj, self._ACTIVATION[etype])
+        except Exception:
+            # An exception here would abort an unrelated Qt event delivery.
+            logger.exception("backdrop: guard re-assert failed")
+        return False
+
+
+def install_backdrop_guard(window: QWidget,
+                           reapply: Callable[[QWidget, str], None],
+                           schedule: Callable[[], None],
+                           activation: Optional[Callable[[QWidget, bool], None]] = None
+                           ) -> bool:
+    """Install the :class:`_BackdropGuard` event filter on ``window`` once.
+
+    ``reapply(window, reason)`` and ``schedule()`` are injected by the theme
+    layer (``gui.style``) — this module stays theme-blind and never imports
+    style.py (that dependency only runs one way).
+
+    ``activation(window, active)`` is the third injection seam (beat G-B2b), and
+    it exists for exactly one reason: the RUN-STATE GATE. Re-opening the glass
+    canvas repolishes the window + ``#mainShell`` (a QSS pass on the GUI thread),
+    and a cosmetic repaint must never preempt a run — so ``gui.style`` passes a
+    wrapper that consults ``scan_is_active()`` (the same predicate that gates
+    :func:`nudge_repaint`), keeping this module run-state-blind exactly as it is
+    theme-blind. Unset ⇒ :func:`set_canvas_for_activation` directly, i.e. the
+    ungated repair; that is the right default for a module whose whole activation
+    clause is a no-op unless a material is actually attached.
+
+    Returns True if a guard was installed by this call, False if the window was
+    already guarded (idempotent — the app-wide fan-out calls this on every
+    theme toggle). Installed on EVERY material-capable top-level, including
+    while the shipped "none" kind is active, so that switching a material on
+    later needs no second wiring pass."""
+    if window in _guarded_windows:
+        return False
+    window.installEventFilter(_BackdropGuard(window, reapply, schedule, activation))
+    _guarded_windows.add(window)
+    return True
+
+
+def nudge_repaint(window: QWidget) -> None:
+    """Force a FULL repaint of a live-material window after a re-assert.
+
+    ``QWidget.update()`` alone is not enough for the failure class Frigg
+    documented (and Ymir calls W4): after a surface/HWND recreation the window
+    can keep compositing a STALE backing store — the white (or, over a lost
+    material, black) box that sits there until the user resizes the window by
+    hand. The documented heal is a real resize, so this schedules a 1-px
+    resize-and-restore on the next event-loop turn (never inline: it must not
+    re-enter the paint/event handler that triggered the re-assert).
+
+    Deliberately inert unless a real compositor is in play
+    (:func:`is_backdrop_supported`) and the window is actually on screen — so
+    the headless test suite and every non-Windows host never resize anything.
+    Never raises (the window may be gone by the time the timer fires).
+
+    A resize is NOT free: it relayouts the dock tree, every pyqtgraph plot and
+    the camera view on the GUI thread. The caller therefore skips this while a
+    scan is running (``gui.style.scan_is_active`` — a cosmetic repair must never
+    preempt a run); this module stays run-state-blind, as it stays theme-blind."""
+    if not is_backdrop_supported():
+        return
+    try:
+        if not window.isVisible() or window.isMinimized():
+            return
+    except RuntimeError:                    # C++ side already gone
+        return
+
+    window.update()
+    ref = weakref.ref(window)
+
+    def _resize_nudge() -> None:
+        w = ref()
+        if w is None:
+            return
+        try:
+            if not w.isVisible() or w.isMinimized():
+                return
+            size = w.size()
+            w.resize(size.width(), size.height() + 1)
+            QTimer.singleShot(0, lambda: _restore(ref, size))
+        except RuntimeError:
+            return
+
+    def _restore(win_ref, size) -> None:
+        w = win_ref()
+        if w is None:
+            return
+        try:
+            w.resize(size)
+            w.update()
+        except RuntimeError:
+            return
+
+    QTimer.singleShot(0, _resize_nudge)

@@ -137,6 +137,235 @@ def _flush_qt_deferred_deletes():
 
 
 # --------------------------------------------------------------------------- #
+# Widget-pile reaper (2026-07-14) — the fix for the RED bench gate.            #
+#                                                                              #
+# THE BUG. A panel that a test merely drops is NEVER freed, even though the    #
+# fixture above already runs gc.collect(). Measured: one `AnalysisPanel()`     #
+# constructed and dropped leaves **835 live QWidgets and 102 top-levels**      #
+# behind, every single time. Across the ~75 analysis-panel tests the pile      #
+# reached 62,625 widgets / 7,650 top-levels by test 97 of 2600.                #
+#                                                                              #
+# WHY gc CANNOT SEE IT. gui/analysis_panel.py:334 connects a *lambda* that     #
+# captures ``self`` to a signal owned by ``self._segmented`` — a CHILD:        #
+#                                                                              #
+#     self._segmented.selection_changed.connect(                               #
+#         lambda key: fade_swap(self._modes, ...))          # captures self    #
+#                                                                              #
+# panel -> child -> (C++ connection storage) -> lambda -> cell -> panel. The   #
+# cycle is real, but one hop of it lives inside PySide6's C++ connection list, #
+# which Python's garbage collector cannot traverse. So gc never sees a cycle   #
+# to break, and the whole 835-widget tree is immortal. A bound-method slot     #
+# does NOT do this (PySide6 holds those weakly) — only a lambda/closure. The   #
+# pattern appears in 14 gui/ modules, so this is a CLASS of leak, not one bug. #
+#                                                                              #
+# WHY IT KILLED THE BENCH. ``apply_theme`` ends in ``QApplication.setStyleSheet``,#
+# which repolishes EVERY live widget: measured O(N) at ~0.3-0.5 ms per widget. #
+# At 3.3k widgets (the real app) that is 1.7 s; at 62k it is ~17 s; and a      #
+# theme-switch test that toggles a few times then blows through the 60 s       #
+# pytest-timeout. ``timeout_method = thread`` aborts with ``os._exit`` — while #
+# Qt is mid-repolish and a camera poll thread is live — and THAT race is the   #
+# 0xC0000005 access violation. The AV is the symptom; the pile is the disease. #
+# (Proven: the same tests pass under ``--timeout=300``.)                       #
+#                                                                              #
+# THE FIX. ``deleteLater()`` destroys the C++ object, which tears down the     #
+# connection, which releases the lambda, which breaks the cycle — so the tree  #
+# is reclaimed in full (measured: delta 0 widgets over repeated construct/     #
+# destroy cycles). Rather than retrofit ~75 call sites (and re-break on the    #
+# next panel test someone writes), destroy, after every test, the top-level    #
+# widgets that test created and nobody still holds.                            #
+#                                                                              #
+# WHAT IS PROTECTED. Widgets a still-live fixture legitimately holds ACROSS    #
+# tests (13 module/session-scoped fixtures do this on purpose — e.g.           #
+# tests/test_ribbon_never_clips.py's one-window-per-module ``win``) and        #
+# widgets parked in a test module's globals. Those are read out of pytest's    #
+# own fixture cache, so a fixture that is still active can never be reaped.    #
+# Popups (QMenu/QDialog, e.g. pyqtgraph's parentless ViewBoxMenu/QColorDialog) #
+# are deliberately NOT touched: they are owned by Python refs inside the panel #
+# and die with it. Deleting them out from under a half-destroyed pyqtgraph     #
+# item is exactly the dangling-wrapper hazard gui/style.py already warns about.#
+# --------------------------------------------------------------------------- #
+def _is_app_owned(widget) -> bool:
+    """True for a widget class THIS APP defines (``gui.*`` / ``tct_gui``).
+
+    Only these are reaped. A panel keeps strong Python references to parentless
+    helper widgets that pyqtgraph creates for it — a ``ViewBoxMenu``, a
+    ``ColorMapMenu`` and its ``QWidgetAction``'s bare ``QWidget``/``QFrame``,
+    a ``QColorDialog`` — and *those* are top-level too. Deleting one of them
+    directly rips it out from under the pyqtgraph item that still holds it and
+    aborts Qt in the DeferredDelete drain (measured, not theorised: the first
+    cut of this reaper did exactly that). Destroying the PANEL instead tears
+    down its connections, drops those references, and gc reclaims every one of
+    them — the full 835-widget tree, delta 0. Own the root; the leaves follow."""
+    module = type(widget).__module__ or ""
+    return module == "tct_gui" or module.startswith("gui.")
+
+
+def _protected_widget_ids(session):
+    """Every QWidget a still-live pytest fixture — or a test module global —
+    legitimately holds. Read from pytest's own fixture cache, so a
+    module/session-scoped fixture's widget can never be reaped while it is
+    still in use; its own finalizer stays responsible for it."""
+    from PySide6.QtWidgets import QWidget
+
+    protected: set[int] = set()
+
+    def add(value, depth=0):
+        if value is None or depth > 2:
+            return
+        if isinstance(value, QWidget):
+            protected.add(id(value))
+            return
+        if isinstance(value, (list, tuple, set, frozenset)):
+            for item in value:
+                add(item, depth + 1)
+        elif isinstance(value, dict):
+            for item in value.values():
+                add(item, depth + 1)
+        elif depth < 2 and hasattr(value, "__dict__"):
+            try:                       # a fixture may yield a holder object
+                members = list(vars(value).values())
+            except (RuntimeError, ReferenceError, TypeError):
+                return
+            for item in members:
+                add(item, depth + 1)
+
+    manager = getattr(session, "_fixturemanager", None)
+    for fixturedefs in getattr(manager, "_arg2fixturedefs", {}).values():
+        for fixturedef in fixturedefs:
+            cached = getattr(fixturedef, "cached_result", None)
+            if cached:                 # (value, cache_key, exc) — None when torn down
+                add(cached[0])
+
+    for name, module in list(sys.modules.items()):
+        if not (name.startswith("test_") or ".test_" in name):
+            continue
+        try:
+            members = list(vars(module).values())
+        except (RuntimeError, ReferenceError):
+            continue
+        for item in members:
+            if isinstance(item, QWidget):
+                protected.add(id(item))
+    return protected
+
+
+@pytest.fixture(autouse=True)
+def _reap_leaked_toplevel_widgets(request):
+    """Destroy the top-level widgets a test created and then abandoned.
+
+    Defined AFTER ``_flush_qt_deferred_deletes`` so that (same scope, same
+    file) its teardown runs FIRST: it reaps, then the flush above drains what
+    the reaping scheduled.
+
+    Escape hatch: ``TCT_DISABLE_WIDGET_REAPER=1`` turns it off, so a suspected
+    reaper-induced failure can be bisected against the un-reaped suite without
+    editing this file."""
+    from PySide6.QtWidgets import QApplication
+
+    if os.environ.get("TCT_DISABLE_WIDGET_REAPER") == "1":
+        yield
+        return
+
+    app = QApplication.instance()
+    before = {id(w) for w in app.topLevelWidgets()} if app is not None else set()
+    yield
+
+    from PySide6.QtCore import QEvent
+
+    app = QApplication.instance()
+    if app is None:
+        return
+
+    # Let Python free whatever it CAN first; only the C++-cycle leaks survive.
+    gc.collect()
+    app.sendPostedEvents(None, QEvent.DeferredDelete)
+
+    protected = _protected_widget_ids(request.session)
+    doomed = [
+        w for w in app.topLevelWidgets()
+        if id(w) not in before and id(w) not in protected
+        and _is_app_owned(w)
+    ]
+    if not doomed:
+        return
+
+    for widget in doomed:
+        # ---- 1. shutdown(): the app's own thread-teardown contract ---------- #
+        # A panel parks its poller/worker QThread on the long-lived QApplication
+        # (see the thread-guard note below) and relies on shutdown() to quit it;
+        # TCTMainWindow._teardown_panels calls it for exactly this reason.
+        #
+        # THE RULE, and it is a safety rule, not a convenience: if we could not
+        # complete a panel's shutdown, we do NOT destroy it. Tearing a panel's
+        # C++ object out from under a worker thread that is still running is an
+        # access violation — measured twice: reaping MotorPanel with no shutdown
+        # at all segfaulted tests/test_motor_icon_theming.py, and destroying one
+        # whose shutdown() had raised crashed tests/test_motor_panel_reload.py
+        # (its fakes deliberately leave a stuck worker that ignores stop()).
+        # Leaking such a panel is the strictly safer failure: it costs widgets,
+        # not a dead process, and the session-end thread guard still catches it.
+        shutdown = getattr(widget, "shutdown", None)
+        if callable(shutdown):
+            try:
+                shutdown()
+            except (RuntimeError, ReferenceError):
+                continue        # C++ gone, or teardown half-done — leave it be
+            except Exception:
+                continue        # unknown thread state -> do NOT destroy
+
+        # ---- 2. close(): a WINDOW's closeEvent runs the real teardown -------- #
+        # Unlike shutdown(), a raising close() does NOT mean "threads may still
+        # be running". These tests tear their own window down first
+        # (tests/test_qml_shell.py::_destroy calls _teardown_panels(), then
+        # deleteLater()), so our close() drives a SECOND _teardown_panels() and
+        # trips over an already-deleted QTimer. The threads are, by then,
+        # provably stopped — by the test's own successful teardown. Skipping the
+        # destroy on that exception is what stranded a whole TCTMainWindow
+        # (~3,259 widgets) per test and left 14,760 widgets sitting in
+        # test_qml_shell.py alone — inflating the very pile whose repolish cost
+        # blows that file's own theme test through the 60 s timeout. So: try to
+        # close, and destroy either way.
+        try:
+            widget.close()
+        except Exception:
+            pass
+        try:
+            widget.deleteLater()
+        except (RuntimeError, ReferenceError):
+            continue                # C++ side already gone — nothing to reap
+
+    gc.collect()
+    for _ in range(3):
+        app.processEvents()
+        app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
+
+    # NOT REAPED, DELIBERATELY: pyqtgraph's parentless orphans. A panel's plots
+    # each build helper widgets with no parent — ViewBoxMenu, ColorMapMenu and
+    # its QWidgetAction's bare QWidget/QFrame, a QColorDialog. They are
+    # top-level, they are not ours, and they are owned by Python references held
+    # by pyqtgraph items inside the panel. They are also the whole residual pile:
+    # one TCTMainWindow leaves ~984 of them behind per test, which is where
+    # test_qml_shell.py's ~14,760 widgets come from.
+    #
+    # Three separate attempts to reclaim them ALL ended in a native crash or in
+    # corrupting a live panel, and they are on the record so nobody pays for this
+    # lesson twice:
+    #   1. deleting them alongside the panel      -> Qt "Fatal Python error: Aborted"
+    #      (a live pyqtgraph item still held them mid-DeferredDelete)
+    #   2. deleting them after the panel died, gated on "the panels I made this
+    #      test are gone"                          -> RuntimeError in
+    #      tests/test_panel_glass_rollout.py, whose module fixtures keep panels
+    #      alive ACROSS tests and still owned some
+    #   3. gated on total quiescence (no app-owned widget alive anywhere)
+    #                                              -> access violation anyway
+    # Their ownership is not something the test tier can reason about safely.
+    # They stay. Slow is always better than corrupt, and the durable fix is on
+    # the product side (see the lambda note above): a panel that gc can actually
+    # collect frees its own orphans, and none of this is needed.
+
+
+# --------------------------------------------------------------------------- #
 # Thread-leak reaper + guard (D4, 2026-07-13).                                 #
 #                                                                              #
 # Some panels deliberately parent a worker thread to the long-lived            #

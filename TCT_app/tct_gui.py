@@ -10,9 +10,10 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import weakref
 
-from PySide6.QtCore import Qt, Slot, Signal, QObject, QThread, QTimer, QUrl
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import Qt, Slot, Signal, QMargins, QObject, QThread, QTimer, QUrl
+from PySide6.QtGui import QAction, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QTabWidget, QApplication, QStyle,
     QVBoxLayout, QHBoxLayout, QStatusBar, QToolBar, QSizePolicy,
@@ -21,9 +22,10 @@ from PySide6.QtWidgets import (
 )
 
 from gui import app_settings
+from gui import style
 from gui.style import (
-    apply_theme, apply_window_backdrop, apply_window_backdrop_to,
-    apply_window_opacity, get_window_opacity, load_theme_customization,
+    apply_theme, apply_window_backdrop, apply_window_opacity,
+    load_theme_customization, prepare_window_surface, reassert_window_backdrop,
 )
 from gui.detachable_tabs import DetachableTabWidget
 
@@ -42,6 +44,7 @@ from gui.monitor_panel import MonitorPanel
 from gui.analysis_panel import AnalysisPanel
 from gui.calibration_panel import CalibrationPanel
 from gui.device_panel import DeviceManagerWindow, device_state
+from gui.flow_layout import make_wrapping_strip
 from gui.liveness import LivenessMonitor
 from gui.motion import ActivityRing, set_pulse
 from gui.settings_window import SettingsWindow
@@ -195,6 +198,41 @@ class TCTMainWindow(QMainWindow):
 
     def __init__(self, config_path: str = "configs/devices.yaml") -> None:
         super().__init__()
+        # ORDER LAW (Mary, G-B1 review, RISK 4): the persisted theme is loaded
+        # FIRST, before anything in this constructor reads it. It used to be
+        # loaded 39 lines *below* the prepare_window_surface() call that consults
+        # gui.style's backdrop state, and only worked because main.py happens to
+        # pre-load the theme for an unrelated reason — while
+        # scripts/capture_onscreen.py (the harness used to verify glass!) calls
+        # style.reset_theme_customization() right before constructing this
+        # window, so the very check meant to prove glass built the cockpit with
+        # the surface prep disabled. Loading here makes the constructor
+        # self-sufficient; it is a pure reorder (these three lines used to run
+        # below, and re-loading is what they always did).
+        self._settings = app_settings.settings()
+        self._theme_mode = app_settings.theme_mode(self._settings)
+        # Theme-editor customization (gui/theme_editor.py): palette overrides,
+        # glass amount, typography, radius — loaded from theme/* right where
+        # the saved dark/light choice is, so the apply_theme() re-assert in
+        # _build_central styles with the user's theme from the first paint.
+        # (main.py additionally pre-loads before its early apply_theme so a
+        # normal launch never flashes the un-customized look.)
+        load_theme_customization(self._settings)
+        # THEN, before a single child exists: on a material-capable host, claim an
+        # alpha-capable native surface now. Qt fixes a top-level's surface alpha
+        # when its native window is created, and this window builds a large child
+        # tree (including a QQuickWidget chrome island) that can realize the HWND
+        # long before the backdrop chain runs below — after which the material
+        # attaches with S_OK and composites NOTHING (GL-island spike, finding 2:
+        # the cockpit looked glass-less while a freshly-built dialog looked fine).
+        # Deliberately NOT gated on the current backdrop preference (see
+        # gui.style.prepare_window_surface): a window realized without alpha can
+        # never gain it while it is visible, so gating this on "none" made the
+        # live "switch glass on now" toggle impossible for the already-open
+        # cockpit. The window stays visually identical in the shipped default —
+        # opening the alpha hole still happens only after DWM confirms the
+        # material (underlay law).
+        prepare_window_surface(self)
         self.setWindowTitle("TCT Setup Control")
         self.resize(1400, 900)
         self._config_path = config_path
@@ -223,18 +261,12 @@ class TCTMainWindow(QMainWindow):
         self._bg_task: _BgTask | None = None
 
         # Aux windows (created lazily) + one-time wiring
+        # (self._settings / self._theme_mode / load_theme_customization now run
+        # at the TOP of this constructor — see the order law there.)
         self._device_manager_window: DeviceManagerWindow | None = None
         self._settings_window: SettingsWindow | None = None
-        self._settings = app_settings.settings()
-        self._theme_mode = app_settings.theme_mode(self._settings)
-        # Theme-editor customization (gui/theme_editor.py): palette overrides,
-        # glass amount, typography, radius — loaded from theme/* right where
-        # the saved dark/light choice is, so the apply_theme() re-assert in
-        # _build_central styles with the user's theme from the first paint.
-        # (main.py additionally pre-loads before its early apply_theme so a
-        # normal launch never flashes the un-customized look.)
-        load_theme_customization(self._settings)
         self._theme_editor = None
+        self._wire_scan_active_provider()
         self._state_changed_sig.connect(self._on_state_change)
         self._sm.add_callback(
             lambda old, new: self._state_changed_sig.emit(old, new))
@@ -243,24 +275,88 @@ class TCTMainWindow(QMainWindow):
         self._build_menu_and_toolbar()
         self._build_central()
         self._restore_window_state()
-        # Windows 11 DWM system backdrop material (Mica/Acrylic), from the
-        # persisted theme/window_backdrop — applied to THIS window BEFORE
-        # window opacity (apply-order contract: backdrop first, then
-        # setWindowOpacity — see gui.style.apply_window_backdrop) so a launch
-        # with a saved backdrop comes up with the material already painting
-        # instead of snapping in on the next theme touch. A true no-op pre-
-        # Win11 22H2 / non-Windows / headless (offscreen has no DWM) — ships
-        # "none" by default, so this changes nothing until Kaya opts in.
-        apply_window_backdrop_to(self)
-        # Real (compositor) window translucency, from the persisted
-        # theme/window_opacity — applied to THIS window here so a launch with a
-        # saved opacity comes up translucent instead of snapping when the theme
-        # is next touched. Already clamped to the 0.80 safety floor by
-        # load_theme_customization.
-        self.setWindowOpacity(get_window_opacity())
+        # Windows 11 DWM system backdrop material (Mica/Acrylic) from the
+        # persisted theme/window_backdrop, THEN the window opacity from
+        # theme/window_opacity — both through the ONE entry point every
+        # material-capable top-level uses (gui.style.reassert_window_backdrop:
+        # DWM chain, then the WS_EX_LAYERED opacity pin, in that order), which
+        # also installs the event spine's guard so this window re-asserts its
+        # DWM attributes whenever Qt re-creates its native handle. A true no-op
+        # pre-Win11 22H2 / non-Windows / headless (offscreen has no DWM) —
+        # ships "none" by default, so this changes nothing until Kaya opts in.
+        reassert_window_backdrop(self)
+        self._connect_os_theme_signal()
         # App-wide status/notification bus → status bar (one-time connect).
         from gui.status_bus import STATUS
         STATUS.message.connect(self._on_status_message)
+
+    def _wire_scan_active_provider(self) -> None:
+        """Let the presentation layer ask "is a run in flight?" WITHOUT importing
+        the controller (Mary, G-B1 review, RISK 5).
+
+        ``gui/style.py`` heals a stale glass surface with a real 1-px resize of
+        the top-level (``gui.backdrop.nudge_repaint``), which relayouts the dock
+        tree, every plot and the camera view on the GUI thread. That must never
+        fire during a scan — a minimize/restore or an OS theme flip would stall
+        an already CPU-bound run's UI for a purely cosmetic repair. style.py owns
+        presentation and may not know about ``controller/`` (composition-root
+        rule), so the composition root — this window — injects the predicate.
+
+        The closure holds a WEAK reference: a module-level global in style.py
+        must not keep the main window alive past its own destruction. Once the
+        window is gone the predicate reports "no scan", which is the safe answer
+        for a cosmetic repaint (see ``style.scan_is_active``). The state machine's
+        ``state`` property is lock-guarded, so this is safe to call from any
+        thread that a re-assert might run on."""
+        ref = weakref.ref(self)
+
+        def _scan_active() -> bool:
+            win = ref()
+            if win is None:
+                return False
+            # PAUSED counts: the run is still in flight (devices armed, writer
+            # open), it is merely not stepping — a relayout stall there is just
+            # as unwelcome.
+            return win._sm.state in (AppState.RUNNING, AppState.PAUSED)
+
+        style.set_scan_active_provider(_scan_active)
+
+    def _connect_os_theme_signal(self) -> None:
+        """Re-assert every window's DWM material when the OS flips its app mode
+        (Fenrir K5, the OS half).
+
+        Windows announces this with ``WM_SETTINGCHANGE``/``WM_THEMECHANGED``.
+        We deliberately do NOT install a ``QAbstractNativeEventFilter`` for it:
+        that would run a Python callback for every single window message in an
+        app whose 15–30 Hz acquisition path is already CPU-bound, to catch two
+        messages a day. Qt already translates them — into per-widget
+        ``ThemeChange``/``PaletteChange`` events (which ``gui.backdrop``'s guard
+        hooks on every top-level) and into this app-level signal, which re-runs
+        the fan-out so the immersive-dark tint follows the OS immediately.
+        ``getattr`` because ``colorSchemeChanged`` is Qt 6.5+."""
+        hints = QGuiApplication.styleHints()
+        signal = getattr(hints, "colorSchemeChanged", None)
+        if signal is None:
+            return
+        try:
+            signal.connect(self._on_os_color_scheme_changed)
+        except (RuntimeError, TypeError):
+            logger.debug("os colour-scheme signal unavailable", exc_info=True)
+
+    def _on_os_color_scheme_changed(self, *_args) -> None:
+        # Zero cost until Kaya opts in (Mary, G-B1 review, NIT 7): with the
+        # shipped "none" backdrop there is no material whose immersive-dark tint
+        # could need re-asserting, so an OS app-mode flip must NOT run an app-wide
+        # fan-out that hands every top-level a palette reset + repolish. The app's
+        # own dark/light choice is deliberately independent of the OS one — this
+        # handler exists only to keep a live DWM material's tint in step.
+        if style.get_window_backdrop() == "none":
+            return
+        app = QApplication.instance()
+        if app is None:
+            return
+        apply_window_backdrop(app)
+        apply_window_opacity(app)
 
     def _build_central(self) -> None:
         """Build (or rebuild) all device panels, tabs, wiring and timers.
@@ -322,17 +418,57 @@ class TCTMainWindow(QMainWindow):
         outer.setContentsMargins(12, 12, 12, 12)
         outer.setSpacing(10)
 
+        # ── Layer 0: the app-owned ambient ground (round-03 kit §1) ─────
+        # A child of #mainShell, kept lowered behind every sibling panel and
+        # transparent to input; at paint time it does one cached-pixmap blit of
+        # a bounded (ΔL* ≤ 4.0) wash over the canvas token, showing through every
+        # gutter the opaque panels do not cover.  It self-lowers on ChildAdded,
+        # so the ribbon / tabs / QML chrome added below always paint on top of
+        # it.  Held as a window attribute so the theme fan-out auto-discovers
+        # its refresh_theme (tests/test_theme_fanout_completeness).  The tier is
+        # the ONE glass ladder's real decision (gui/glass_env): today it lands
+        # on TOKEN (offscreen, and the classic shell's own ceiling) — which
+        # paints the wash — and drops to FLAT only under high-contrast / an
+        # operator override, where the ground correctly paints nothing.
+        #
+        # DETACHED WINDOWS (this wave): a torn-off tab (gui/detachable_tabs.py,
+        # not in this beat's scope) deliberately gets the FLAT-canvas ground —
+        # i.e. the plain opaque token canvas, which IS the ground's FLAT form and
+        # is AA-safe by construction.  No AmbientGround is installed into the
+        # _DetachedWindow: wiring the painter there WITHOUT hooking its own
+        # theme-refresh fan-out would leave a stale wash on a theme toggle while
+        # detached.  A docked vs detached panel therefore differs only in the
+        # (subtle, information-free) wash of the room around it; every hazard
+        # surface is opaque either way, so nothing unsafe follows.
+        from gui import glass_env, panel_kit
+        self._ambient_ground = panel_kit.AmbientGround(
+            central, theme_mode=self._theme_mode)
+        self._ambient_ground.set_tier(
+            glass_env.decide_tier(glass_env.probe_environment()))
+
         # (Connect/Disconnect/Settings/Log live on the menu bar + toolbar, built
         #  once in __init__ so they survive a soft-reload.)
 
         # System ribbon: grouped cached status, always visible regardless of
         # active tab. Pure widget composition; device I/O remains in the
         # existing pollers/workers below.
+        # WRAPPING, NOT SCROLLING (safety fix, 2026-07-14). This strip used to
+        # live in a fixed-height QScrollArea whose horizontal policy was left at
+        # Qt's default: at the shipped window width the content overflowed and
+        # the right-hand groups — MOTION among them, the motor/homing state chip
+        # — were simply cut off at the edge, with no usable affordance that
+        # anything was there (see artifacts_claude/ui_onscreen_20260713T202649Z/
+        # acrylic_lablight_A_light.png). A status strip that can silently hide a
+        # hazard chip lies about the machine (law 7). Nobody scrolls a status
+        # readout — they GLANCE at it — so the strip now WRAPS: on a narrow
+        # window it grows a second row and every chip stays on screen. Nothing
+        # safety-relevant can go off-screen, because nothing can go off-screen.
+        # Guard: tests/test_ribbon_never_clips.py.
         ribbon = QFrame()
         ribbon.setObjectName("systemRibbon")
-        status_strip = QHBoxLayout(ribbon)
-        status_strip.setContentsMargins(10, 7, 10, 7)
-        status_strip.setSpacing(8)
+        self._ribbon = ribbon
+        status_strip = make_wrapping_strip(
+            ribbon, margins=QMargins(10, 7, 10, 7), spacing=8)
 
         brand = QFrame()
         brand.setObjectName("ribbonBrand")
@@ -385,16 +521,8 @@ class TCTMainWindow(QMainWindow):
         status_strip.addWidget(_group("Motion", [self._chip_motion]))
         status_strip.addWidget(_group("Scan", [self._ring_scan, self._chip_scan]))
         status_strip.addWidget(_group("Laser", [self._chip_laser]))
-        status_strip.addStretch(1)
-        # Horizontal scroll so the device lights + bias readout never clip on a
-        # narrow window; fixed height keeps it a thin strip.
-        strip_scroll = QScrollArea()
-        strip_scroll.setObjectName("ribbonScroll")
-        strip_scroll.setWidgetResizable(True)
-        strip_scroll.setFrameShape(QFrame.NoFrame)
-        strip_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        strip_scroll.setFixedHeight(54)
-        strip_scroll.setWidget(ribbon)
+        # (No trailing stretch and no scroll area: the FlowLayout above wraps
+        #  instead of clipping — see its comment at the ribbon's construction.)
 
         # Main tabs — detachable (double-click / ⧉ to pop into a window).  Each
         # page is wrapped in a QScrollArea so panels scroll instead of cropping.
@@ -463,8 +591,8 @@ class TCTMainWindow(QMainWindow):
                 self._qml_chrome = chrome
                 self._shell_bridge = bridge
                 self._scope_vm = scope_vm
-                strip_scroll.setParent(central)   # keep chips alive; not shown
-                strip_scroll.hide()
+                ribbon.setParent(central)   # keep chips alive; not shown
+                ribbon.hide()
                 self._toolbar.setVisible(False)
                 # Round-2 composition: the chrome is a full-bleed topbar
                 # (the v4 artifact's rail/shelf/strip run edge-to-edge, like
@@ -487,11 +615,11 @@ class TCTMainWindow(QMainWindow):
                 notify("QML chrome failed to load — using the classic shell. "
                        "See the log for the QML error.", "error")
                 self._toolbar.setVisible(True)
-                outer.addWidget(strip_scroll)
+                outer.addWidget(ribbon)
                 outer.addWidget(self._tabs)
         else:
             self._toolbar.setVisible(True)
-            outer.addWidget(strip_scroll)
+            outer.addWidget(ribbon)
             outer.addWidget(self._tabs)
 
         # Status bar
@@ -583,16 +711,26 @@ class TCTMainWindow(QMainWindow):
         self._planner_panel.start_plan_requested.connect(coord.start_plan)
         self._planner_panel.execute_plan_requested.connect(coord.execute_plan)
         self._planner_panel.abort_requested.connect(coord.abort)
-        # The single-plan envelope carries NO wall-clock expiry (timeout_s=None),
-        # matching the sequencer's overnight-queue philosophy: freshness is a
-        # GUI concern (the arm→Execute latch, design law 5) plus the fail-closed
-        # arm→start check at ScanController.start_plan — never a clock that bounds
-        # the RUN'S duration.  A stamped-at-derivation expiry was the armed-
-        # envelope-expiry bug (Kaya, 2026-07-13): it started counting at the dry-
-        # run preview, survived a completed run, and re-checked at every ramp, so
-        # a slow operator or a 2nd Execute aborted silently mid-run.
+        # The single-plan envelope carries a GENEROUS 180 s expiry that bounds the
+        # arm→START window ONLY — the human's gap between the Arm hold and pressing
+        # Execute (a comfortable superset of the ~10 s Arm→Execute GUI latch, design
+        # law 5).  It NEVER bounds the RUN'S duration.  The clock is derived FRESH at
+        # the arm press (planner_panel._on_latch_armed → _derive_envelope(fresh=True),
+        # 665319e P2a), so the 180 s counts from ARM, and start_plan consumes the
+        # expiry EXACTLY ONCE (arm→start), refusing a stale arm LOUDLY with "re-arm
+        # and start again."  This timer therefore backs up the GUI latch at the
+        # controller boundary: the arm→start check is LIVE in production, not dormant.
+        #
+        # Why not the old 30 s?  It carried TWO independent bugs, BOTH fixed in
+        # 665319e: the 30 s was stamped at envelope DERIVATION (the dry-run preview,
+        # not the arm press) AND re-checked at EVERY ramp — so it counted down from
+        # the wrong moment and could strand a mid-run ramp (Kaya's silent-abort).
+        # With expiry now started at the arm press and checked once at start, a wide
+        # 180 s window bounds only the operator's arm→Start gap and cannot re-open
+        # that failure (pinned by test_kaya_regression_aged_arm_still_finishes /
+        # test_production_timeout_bounds_arm_to_start).
         self._planner_panel.set_envelope_provider(
-            lambda plan: self._scanner.arm_envelope_for(plan)
+            lambda plan: self._scanner.arm_envelope_for(plan, timeout_s=180.0)
         )
 
         # Bias panel → coordinator (voltage scan also starts from the bias panel).
@@ -742,7 +880,11 @@ class TCTMainWindow(QMainWindow):
         btn_clear = QPushButton("Clear")
         hint = QLabel("Binary waveform replies are summarized, not dumped.")
         hint.setStyleSheet("color:#888;")
-        btn_clear.clicked.connect(lambda: self._device_debug_view.clear())
+        # Bound method, never a lambda — a self-capturing closure connected to a
+        # child button's signal is stored strongly by Qt and makes the whole
+        # main window (~3,290 widgets) immortal across a config reload.
+        # See tests/test_no_immortal_panels.py.
+        btn_clear.clicked.connect(self._clear_device_debug)
         bar.addWidget(self._chk_device_debug)
         bar.addWidget(btn_clear)
         bar.addWidget(hint)
@@ -778,6 +920,10 @@ class TCTMainWindow(QMainWindow):
         device_logger.addHandler(handler)
         self._device_debug_handler = handler
 
+    def _clear_device_debug(self) -> None:
+        """Empty the raw device-I/O log view (the dock's Clear button)."""
+        self._device_debug_view.clear()
+
     # ------------------------------------------------------------------ #
     # Menu bar / toolbar / theme / window-state persistence              #
     # ------------------------------------------------------------------ #
@@ -798,7 +944,16 @@ class TCTMainWindow(QMainWindow):
             if checkable:
                 a.toggled.connect(slot)               # passes the bool
             else:
-                a.triggered.connect(lambda *_: slot())  # drop the checked arg
+                # Connect the bound method DIRECTLY, never through
+                # ``lambda *_: slot()``. PySide6 already drops the surplus
+                # ``checked`` arg for a zero-arg slot (verified), so the lambda
+                # bought nothing — but it captured ``slot`` (a bound method of
+                # this window) in a closure that Qt then stored in the QAction's
+                # C++ connection list, one opaque hop of a cycle gc cannot see.
+                # Thirteen menu/toolbar actions => thirteen anchors that made
+                # the whole window immortal across a config reload.
+                # See tests/test_no_immortal_panels.py.
+                a.triggered.connect(slot)
             return a
 
         self._act_connect    = _act("Connect All", self._connect_all,
@@ -903,7 +1058,8 @@ class TCTMainWindow(QMainWindow):
         # apply_theme() repaints every QSS hook globally, but axis_color()-based
         # instance styles (motor axis rails, bias amber, plot pens) are baked at
         # construction — panels expose refresh_theme() to re-resolve them live.
-        for panel in (getattr(self, "_motor_panel", None),
+        for panel in (getattr(self, "_ambient_ground", None),
+                      getattr(self, "_motor_panel", None),
                       getattr(self, "_bias_panel", None),
                       getattr(self, "_planner_panel", None),
                       getattr(self, "_seq_panel", None),
@@ -1071,6 +1227,12 @@ class TCTMainWindow(QMainWindow):
         return {
             "devices": devices,
             "hv": _chip(self._chip_bias_v),
+            # Leakage current + compliance — present in the classic ribbon and
+            # previously DROPPED on the way into the QML island (an operator on
+            # the QML shell could not see the HV channel go into compliance).
+            # Same cached chips, no extra I/O.
+            "hv_i": _chip(self._chip_bias_i),
+            "hv_comp": _chip(self._chip_bias_comp),
             "motion": _chip(self._chip_motion),
             "scan": _chip(self._chip_scan),
             "laser": _chip(self._chip_laser),

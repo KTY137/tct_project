@@ -26,17 +26,21 @@ import weakref
 from collections.abc import Iterable
 
 import pyqtgraph as pg
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QEvent, QRect, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
     QButtonGroup, QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLayout,
     QLabel, QPushButton, QToolButton, QVBoxLayout, QWidget,
 )
 
+# The one tier vocabulary (gui/glass_env.py — the contract, no parallel
+# ladder): AmbientGround takes its FLAT/TOKEN decision in GlassTier terms.
+from gui.glass_env import SAFE_FLOOR, GlassTier
 from gui.status_widgets import ReadoutCell, StatusLamp
 from gui.style import (
     FONT_BODY_PX, FONT_LG, FONT_PANEL_TITLE_PX, PLOT_BG, SPACE_LG,
-    SPACE_SM, SPACE_XS, WEIGHT_BODY, WEIGHT_PANEL_TITLE, axis_color, palette,
-    repolish,
+    SPACE_SM, SPACE_XS, WEIGHT_BODY, WEIGHT_PANEL_TITLE, axis_color,
+    ground_pixmap, palette, prewarm_ground, repolish,
 )
 
 # Default Card body padding — the v4 artifact's own card padding (`.card`
@@ -62,6 +66,10 @@ __all__ = [
     "CollapsibleCard",
     "SegmentedControl",
     "EmptyState",
+    "AmbientGround",
+    "GlassPane",
+    "Well",
+    "HazardSurface",
     "register_glass_pane",
     "registered_glass_panes",
     "set_panel_glass",
@@ -735,6 +743,12 @@ class CollapsibleCard(Card):
 # SegmentedControl — exclusive mode switcher on the shared #segmented QSS     #
 # --------------------------------------------------------------------------- #
 
+#: Qt property carrying each segment button's key, so its ``toggled`` slot can
+#: be a bound method rather than a key-capturing lambda (which leaks the whole
+#: control, and every panel hosting one — see ``_on_segment_toggled``).
+_SEGMENT_KEY_PROPERTY = "tctSegmentKey"
+
+
 class SegmentedControl(QFrame):
     """An exclusive row of mode buttons styled by the pre-existing
     ``QFrame#segmented`` / ``QPushButton#segBtn`` QSS hooks (``gui/style.py``
@@ -772,14 +786,35 @@ class SegmentedControl(QFrame):
             btn = QPushButton(label)
             btn.setObjectName("segBtn")
             btn.setCheckable(True)
-            btn.toggled.connect(
-                lambda on, _key=key: on and self.selection_changed.emit(_key))
+            # The segment key travels on the BUTTON, and the slot is a bound
+            # method. It used to be ``lambda on, _key=key: on and
+            # self.selection_changed.emit(_key)`` — which captured ``self`` and
+            # was stored strongly inside the child button's C++ connection
+            # list, closing the cycle control -> button -> connection ->
+            # closure -> control. gc cannot traverse the Qt hop, so every
+            # SegmentedControl (and, via AnalysisPanel, its entire ~835-widget
+            # host) became immortal. Bound-method slots are held weakly.
+            # See tests/test_no_immortal_panels.py.
+            btn.setProperty(_SEGMENT_KEY_PROPERTY, str(key))
+            btn.toggled.connect(self._on_segment_toggled)
             self._group.addButton(btn)
             self._buttons[str(key)] = btn
             lay.addWidget(btn)
         if self._buttons:
             start = str(current) if current in self._buttons else next(iter(self._buttons))
             self._buttons[start].setChecked(True)
+
+    def _on_segment_toggled(self, checked: bool) -> None:
+        """Re-emit the newly CHECKED segment's key (the un-check half of an
+        exclusive group's toggle is ignored, exactly as before)."""
+        if not checked:
+            return
+        button = self.sender()
+        if button is None:
+            return
+        key = button.property(_SEGMENT_KEY_PROPERTY)
+        if key is not None:
+            self.selection_changed.emit(str(key))
 
     def current_key(self) -> str | None:
         for key, btn in self._buttons.items():
@@ -921,6 +956,267 @@ class EmptyState(QWidget):
 
 
 # --------------------------------------------------------------------------- #
+# Round-03 glass kit — layer 0 + the component surfaces                        #
+# (docs/design/iterations/glasshell-cockpit/round-03/kit.md §1/§4)             #
+# --------------------------------------------------------------------------- #
+
+class AmbientGround(QWidget):
+    """Layer 0 — the app-owned ambient ground wash (kit §1).
+
+    A child of the window's canvas widget (the composition root installs it,
+    e.g. on ``#mainShell``), kept lowered behind every sibling panel and
+    transparent to input. Its ``paintEvent`` blits the cached wash pixmap
+    (``gui.style.ground_pixmap`` — rendered once per size-bucket x theme x
+    DPR, band-clamped to the kit's ΔL* 4.0 ground law) ON TOP of whatever the
+    canvas painted below it: the opaque token fill, or the rgba underlay-law
+    fill while a DWM material is live. It never paints the canvas itself, so
+    it coexists with the ``glassCanvas`` garnish mechanics by construction.
+
+    Cost discipline (the 15-30 Hz scan path): no timer, no animation, no
+    procedural painting per frame — the only work at paint time is one
+    pixmap blit, and the widget is only ever dirtied by expose/resize, never
+    by the plots repainting on top of it.
+
+    Tier wiring: FLAT form is NOTHING — at :class:`~gui.glass_env.GlassTier`
+    ``FLAT`` the widget paints nothing and the canvas below shows its plain
+    opaque token (the kit's accessibility escape hatch). Any tier >= TOKEN
+    paints the wash. The tier is *told* to this widget (``set_tier``) by
+    whoever ran the real ``glass_env`` decision — this class never decides.
+    """
+
+    def __init__(self, parent: QWidget, *, theme_mode: str = "dark") -> None:
+        super().__init__(parent)
+        self.setObjectName("ambientGround")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setAutoFillBackground(False)
+        self._theme_mode = "dark" if str(theme_mode).lower() == "dark" else "light"
+        self._tier: GlassTier = GlassTier.TOKEN
+        # RISK 1 (Mary's pilot review): prime the band clamp OFF the paint path.
+        # The clamp's measurement probe is the only heavy step in
+        # ``ground_pixmap``; warming it here (and in ``refresh_theme``) keeps the
+        # first ``paintEvent`` a cheap capped render + cache hit instead of a
+        # tens-to-hundreds-of-ms GUI stall.
+        prewarm_ground(self._theme_mode)
+        if parent is not None:
+            parent.installEventFilter(self)
+            self.setGeometry(parent.rect())
+            if parent.isVisible():
+                # A child created AFTER its parent is already visible stays
+                # hidden until shown explicitly (Qt rule) — without this, a
+                # ground installed into a live window silently never paints.
+                self.show()
+        self.lower()
+
+    # Bound-method event filter — never a lambda (the immortal-panel lesson).
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt naming
+        if obj is self.parentWidget():
+            t = event.type()
+            if t == QEvent.Type.Resize:
+                self.setGeometry(self.parentWidget().rect())
+            elif t == QEvent.Type.ChildAdded:
+                # A late-built sibling must never end up UNDER the ground.
+                self.lower()
+        return False
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        self.lower()
+        super().showEvent(event)
+
+    def set_tier(self, tier) -> None:
+        """Adopt a :class:`~gui.glass_env.GlassTier` (the ONE ladder). Garbage
+        coerces to the contract's SAFE_FLOOR (TOKEN) — fail-safe direction is
+        down, and TOKEN still paints the (bounded, information-free) wash."""
+        try:
+            self._tier = GlassTier(int(tier))
+        except Exception:
+            self._tier = SAFE_FLOOR
+        self.update()
+
+    def tier(self) -> GlassTier:
+        return self._tier
+
+    def refresh_theme(self, mode: str) -> None:
+        self._theme_mode = "dark" if str(mode).lower() == "dark" else "light"
+        # Warm the new theme's clamp before the repaint the update() below
+        # schedules — keep the theme-switch repaint off the probe path (RISK 1).
+        prewarm_ground(self._theme_mode)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        if self._tier == GlassTier.FLAT:
+            return          # FLAT form: nothing — the plain canvas shows
+        if self.width() <= 0 or self.height() <= 0:
+            return
+        painter = QPainter(self)
+        painter.drawPixmap(self.rect(), ground_pixmap(
+            self.width(), self.height(), self._theme_mode,
+            self.devicePixelRatioF()))
+        painter.end()
+
+
+class GlassPane(Card):
+    """Kit §4.1 ``Pane`` — the shelf/chrome container slab.
+
+    Ink law: **chrome and labels only** — ``text``/``muted`` are the only
+    legal inks on a pane (the enforced whitelist is
+    ``tests/test_glass_text_contract.GLASS_SAFE_TEXT_TOKENS``; extending it
+    once Kaya relaxes the law is a one-line change there, never a rebuild
+    here). No value ever lives on a pane, and a pane never hosts a plot,
+    camera view or hazard control.
+
+    FLAT/TOKEN form: the opaque ``shelf`` token (``QFrame#shelfPane`` in
+    gui/style.py, with the mandatory ``hairline_strong`` outline + specular
+    top edge). Glass form — resolved through the EXISTING registry + panel-
+    glass switch, never a parallel ladder: ``card`` at the pane alpha
+    (kit §2.1 "paint one rung up, at your rung's alpha"; 0.55 shipped,
+    clamped >= MIN_PANEL_GLASS_ALPHA), so the composite over the bounded
+    ground lands back on the shelf tone.
+
+    Note: a pane carries no axis rail (rails mark parameter axes on cards);
+    :meth:`Card.set_rail` targets the ``cardPane`` objectName and is
+    intentionally inert on this class.
+    """
+
+    def __init__(
+        self,
+        title: str | None = None,
+        subtitle: str | None = None,
+        *,
+        margins: tuple[int, int, int, int] = CARD_MARGINS,
+        spacing: int = SPACE_SM,
+        register: bool = True,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(title, subtitle, margins=margins, spacing=spacing,
+                         parent=parent)
+        self.setObjectName("shelfPane")
+        if register:
+            register_glass_pane(self)
+
+
+class Well(QFrame):
+    """Kit §4.4 ``Well`` — the recess (inputs, troughs, list rows).
+
+    OPAQUE ALWAYS, at every tier: its FLAT form is its only form, it never
+    composites, and :func:`register_glass_pane` refuses it outright. Two kit
+    laws travel with it: a well only ever sits on a card, never directly on
+    the ground (§2 — dark ``well`` sits BELOW dark ``canvas``; on the ground
+    it is invisible, on a card it is a real ΔL* 8 recess), and **no
+    semantic-coloured text in a well** (§4.4 — every semantic ink fails AA on
+    the light well; values in wells are ``text``-inked, state goes in a
+    chip/glyph beside the value, on the card, where it passes).
+    """
+
+    def __init__(
+        self,
+        *,
+        margins: tuple[int, int, int, int] = (SPACE_SM, SPACE_SM, SPACE_SM, SPACE_SM),
+        spacing: int = SPACE_XS,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("wellPane")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.body = QVBoxLayout(self)
+        self.body.setContentsMargins(*margins)
+        self.body.setSpacing(spacing)
+
+    def add_widget(self, widget: QWidget) -> None:
+        self.body.addWidget(widget)
+
+    def add_layout(self, layout: QLayout) -> None:
+        self.body.addLayout(layout)
+
+
+class HazardSurface(Card):
+    """Kit §4.6 ``HazardSurface`` — the stone in the glass room.
+
+    **OPAQUE AT EVERY TIER** (consequence rule): the ``#hazardSurface`` QSS
+    has no glass variant, :func:`register_glass_pane` refuses this class
+    outright, and :meth:`refresh_theme` pins an opaque instance fill as the
+    last belt (a widget's own sheet outranks any app-wide attribute rule —
+    the laser-banner idiom). Its legibility may never depend on anything.
+
+    This class paints two of the kit's redundant hazard channels itself —
+    the 4 px ``danger``/``armed`` left stripe (colour) and its 45° hatch
+    (texture, survives greyscale and a monochrome projector); the eyebrow
+    WORD, glyph and position channels are the caller's content. All tokens,
+    re-resolved on :meth:`refresh_theme`; static painting only (repaints only
+    with the frame itself — never a hot-path cost, and hosting a plot on a
+    hazard surface is forbidden anyway).
+
+    *stripe* is ``"danger"`` (the HV/abort class) or ``"armed"`` (the motion
+    class, kit §4.6). Purely presentational — actual dangerous actions keep
+    their explicit confirmation paths; this container gates nothing.
+    """
+
+    _STRIPE_W = 4
+    _HATCH_STEP = 5
+
+    def __init__(
+        self,
+        title: str | None = None,
+        subtitle: str | None = None,
+        *,
+        stripe: str = "danger",
+        theme_mode: str = "dark",
+        margins: tuple[int, int, int, int] = CARD_MARGINS,
+        spacing: int = SPACE_SM,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(title, subtitle, margins=margins, spacing=spacing,
+                         parent=parent)
+        self.setObjectName("hazardSurface")
+        self._stripe_kind = "armed" if str(stripe).lower() == "armed" else "danger"
+        self._theme_mode = "dark" if str(theme_mode).lower() == "dark" else "light"
+        self._stripe_color: QColor | None = None
+        self._hatch_color: QColor | None = None
+        self.refresh_theme(self._theme_mode)
+
+    def stripe_kind(self) -> str:
+        return self._stripe_kind
+
+    def refresh_theme(self, mode: str | None = None) -> None:
+        if mode:
+            self._theme_mode = "dark" if str(mode).lower() == "dark" else "light"
+        p = palette(self._theme_mode)
+        self._stripe_color = QColor(p[self._stripe_kind])
+        # Hatch ink: the canvas token — near-black on dark / near-white on
+        # light, i.e. maximal texture contrast against the saturated stripe in
+        # both themes, and never a second hazard hue (one danger language).
+        self._hatch_color = QColor(p["canvas"])
+        # The opacity pin (belt #3): background only, so the app-wide border/
+        # radius rules keep cascading; an accidental future registration can
+        # never composite this surface against anything.
+        self.setStyleSheet(f"QFrame#hazardSurface {{ background: {p['panel']}; }}")
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().paintEvent(event)
+        if self._stripe_color is None or self._hatch_color is None:
+            return
+        # Inset vertically past the corner radius so the stripe never pokes
+        # out of the rounded outline; 1 px in from the border.
+        stripe = QRect(1, SPACE_SM + 2, self._STRIPE_W,
+                       max(0, self.height() - 2 * (SPACE_SM + 2)))
+        if stripe.height() <= 0:
+            return
+        painter = QPainter(self)
+        painter.setClipRect(stripe)
+        painter.fillRect(stripe, self._stripe_color)
+        pen = QPen(self._hatch_color)
+        pen.setWidthF(1.0)
+        painter.setPen(pen)
+        # 45° hatch, clipped to the stripe.
+        for y in range(stripe.top() - stripe.width(),
+                       stripe.bottom() + 1, self._HATCH_STEP):
+            painter.drawLine(stripe.left(), y,
+                             stripe.right() + 1, y + stripe.width() + 1)
+        painter.end()
+
+
+# --------------------------------------------------------------------------- #
 # Panel-glass opt-in registry (experimental) — the one user-facing switch      #
 # lives in the theme editor; panes must OPT IN here to ever go glass.          #
 # --------------------------------------------------------------------------- #
@@ -934,35 +1230,65 @@ _GLASS_PANE_REGISTRY: "weakref.WeakSet[QWidget]" = weakref.WeakSet()
 # instead of waiting for the next toggle (late-joiner consistency).
 _GLASS_ENABLED = False
 
+# Round-03 kit: a registered surface declares WHICH glass fill it takes —
+# "pane" (the shelf mechanics: `card` @ the tunable pane alpha, the
+# pre-existing glassPane QSS hook) or "card" (kit §2.1/§4.2: one rung up at
+# the fixed card-rung alpha, the glassCard QSS hook). Stored as a dynamic
+# property on the widget itself so the WeakSet registry stays a plain set
+# and a dead widget takes its role with it.
+_GLASS_ROLE_PROPERTY = "tctGlassRole"
+_GLASS_ROLE_FLAGS = {"pane": "glassPane", "card": "glassCard"}
 
-def register_glass_pane(widget: QWidget) -> None:
-    """Opt *widget* (a ``Card`` / ``QGroupBox`` / ``#cardPane`` frame) INTO the
-    experimental "Panel glass" switch: only panes registered here get
-    ``glassPane=true`` (the rgba tint in ``gui/style.py``, ``PANEL_GLASS_ALPHA``)
-    when :func:`set_panel_glass` turns the switch on.
 
-    HARD exclusion (cockpit_style_overhaul.md §1 rule 3 / design law 8 — "no
-    translucency over a live camera/plot"): a pane hosting a pyqtgraph plot, the
-    camera live view, or a danger-well surface must NEVER be registered. A
-    :class:`FigureCard` (the kit's plot container) is refused outright as a
-    construction-time guard; every other plot/camera/danger pane is excluded by
-    simply never being registered — the property is opt-in per instance, there
-    is no blanket selector — and a guard test pins that those never carry the
-    property (``tests/test_panel_kit_cockpit.py``).
+def _apply_glass_flag(widget: QWidget, enabled: bool) -> None:
+    role = str(widget.property(_GLASS_ROLE_PROPERTY) or "pane")
+    prop = _GLASS_ROLE_FLAGS.get(role, "glassPane")
+    widget.setProperty(prop, "true" if enabled else "")
+    repolish(widget)
+
+
+def register_glass_pane(widget: QWidget, *, role: str = "pane") -> None:
+    """Opt *widget* (a ``Card`` / ``QGroupBox`` / ``#cardPane`` frame /
+    :class:`GlassPane`) INTO the experimental "Panel glass" switch: only
+    surfaces registered here get ``glassPane=true`` (*role* ``"pane"`` — the
+    ``card``-fill rgba tint at the tunable pane alpha) or ``glassCard=true``
+    (*role* ``"card"`` — kit §2.1's fixed card-rung fill) when
+    :func:`set_panel_glass` turns the switch on.
+
+    HARD exclusions (cockpit_style_overhaul.md §1 rule 3 / design law 8 / the
+    kit's consequence rule): a pane hosting a pyqtgraph plot, the camera live
+    view, or a hazard surface must NEVER be registered. A :class:`FigureCard`
+    (the kit's plot container) and a :class:`HazardSurface`/:class:`Well`
+    (opaque at every tier, by kit law §4.4/§4.6) are refused outright as
+    construction-time guards; every other plot/camera/danger pane is excluded
+    by simply never being registered — the property is opt-in per instance,
+    there is no blanket selector — and guard tests pin that those never carry
+    the property (``tests/test_panel_kit_cockpit.py``,
+    ``tests/test_material_contract.py``).
 
     Late-joiner consistency: if the switch is already ON when *widget*
     registers (e.g. a lazily-built tab/panel constructed after the user
-    flipped "Panel glass"), the pane picks up ``glassPane=true`` right away
-    instead of staying flat until the next toggle.
+    flipped "Panel glass"), the pane picks up its flag right away instead of
+    staying flat until the next toggle.
     """
     if isinstance(widget, FigureCard):
         raise ValueError(
             "panel glass is banned on plot/figure containers "
             "(cockpit hard rule 3 — no translucency over a live plot/camera)")
+    if isinstance(widget, (HazardSurface, Well)):
+        raise ValueError(
+            "hazard and well surfaces are opaque at every tier "
+            "(round-03 kit consequence rule §4.4/§4.6) — they may never "
+            "register for glass")
+    role = str(role).lower()
+    if role not in _GLASS_ROLE_FLAGS:
+        raise ValueError(
+            f"unknown glass role {role!r} — expected one of "
+            f"{sorted(_GLASS_ROLE_FLAGS)}")
+    widget.setProperty(_GLASS_ROLE_PROPERTY, role)
     _GLASS_PANE_REGISTRY.add(widget)
     if _GLASS_ENABLED:
-        widget.setProperty("glassPane", "true")
-        repolish(widget)
+        _apply_glass_flag(widget, True)
 
 
 def registered_glass_panes() -> list[QWidget]:
@@ -972,11 +1298,12 @@ def registered_glass_panes() -> list[QWidget]:
 
 def set_panel_glass(enabled: bool) -> None:
     """Turn the experimental panel-glass tint ON/OFF for every REGISTERED safe
-    pane (and only those), repolishing each so the ``glassPane`` QSS selector
-    re-evaluates immediately. Defensive against a pane whose C++ object was
-    already destroyed (registered then torn down while the switch toggles).
-    Also records the state module-wide so a pane registered later (see
-    :func:`register_glass_pane`) adopts it immediately."""
+    pane (and only those), repolishing each so its ``glassPane``/``glassCard``
+    QSS selector (per its registered role) re-evaluates immediately. Defensive
+    against a pane whose C++ object was already destroyed (registered then
+    torn down while the switch toggles). Also records the state module-wide so
+    a pane registered later (see :func:`register_glass_pane`) adopts it
+    immediately."""
     global _GLASS_ENABLED
     _GLASS_ENABLED = bool(enabled)
     try:
@@ -984,9 +1311,7 @@ def set_panel_glass(enabled: bool) -> None:
     except Exception:                       # pragma: no cover - shiboken always present
         def isValid(_w):  # type: ignore[misc]
             return True
-    flag = "true" if _GLASS_ENABLED else ""
     for w in list(_GLASS_PANE_REGISTRY):
         if not isValid(w):
             continue
-        w.setProperty("glassPane", flag)
-        repolish(w)
+        _apply_glass_flag(w, _GLASS_ENABLED)

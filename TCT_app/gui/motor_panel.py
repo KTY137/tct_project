@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import math
+import weakref
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -68,6 +69,39 @@ def _apply_icon(button: QPushButton, name: str, color: str | None = None) -> Non
     icon = _icon(name, color=color)
     if icon is not None:
         button.setIcon(icon)
+
+
+def _join_worker_thread(thread: "QThread | None") -> None:
+    """Quit and join a worker QThread — module-level BY DESIGN.
+
+    Registered as a ``weakref.finalize`` callback on the panel (see
+    ``MotorPanel.__init__``); it must therefore not close over the panel, or it
+    would keep it alive and resurrect the immortal-panel leak this change fixed.
+    It takes only the thread.
+
+    WHY IT EXISTS. ``_PositionPoller`` and its poll ``QTimer`` run continuously
+    on ``thread``. The poller QObject is held by a plain Python attribute on the
+    panel, so once the panel became collectable (the bound-method jog-slot fix),
+    dropping the panel — by ``del``, refcount zero, or a gc sweep — deallocated
+    the poller FROM THE GUI THREAD while it was mid-``_poll`` on the worker
+    thread: a cross-thread QObject destruction, i.e. heap corruption (access
+    violation on the worker thread, ``<no Python frame>``). The self-capturing
+    jog lambdas used to keep the panel immortal, so gc never ran this teardown
+    and the hazard stayed masked — a latent crash, racier than the camera one
+    only because a simulated ``get_position()`` is lighter than a frame grab.
+
+    A ``weakref.finalize`` callback runs while the panel's members are still
+    alive (before ``tp_clear`` decrefs the poller), so quitting+joining the
+    thread here guarantees the worker thread is STOPPED before the poller is
+    freed. Bounded wait; idempotent with ``shutdown()``; a dangling wrapper
+    after the thread already self-deleted just raises and is ignored."""
+    if thread is None:
+        return
+    try:
+        thread.quit()
+        thread.wait(3000)
+    except (RuntimeError, ReferenceError):
+        pass
 
 
 class _PositionPoller(QObject):
@@ -184,6 +218,13 @@ class MotorPanel(QWidget):
         self._readout_caps: dict[str, QLabel] = {}
         self._jog_axis_btns: dict[str, list[QPushButton]] = {"x": [], "y": [], "z": []}
         self._abs_captions: dict[str, QLabel] = {}
+        # (button, qtawesome name, palette token) for every icon this panel
+        # paints — see _register_icon(). A qtawesome icon is a rasterized
+        # PIXMAP, not QSS-styled text: it is tinted ONCE, at the moment it is
+        # built, and never re-tinted by a stylesheet reapply. So an icon whose
+        # colour is not tracked here is frozen at its construction-time colour
+        # for the life of the widget, through every theme toggle.
+        self._themed_icons: list[tuple[QPushButton, str, str]] = []
         # Last position seen from the poller — lets the connection/homed chip
         # refresh (below) repaint without needing a live poll of its own; see
         # _refresh_connection_state().  It is also the "current position" the
@@ -237,6 +278,15 @@ class MotorPanel(QWidget):
         self._poll_thread.finished.connect(self._poll_thread.deleteLater)
         self._poller.position_updated.connect(self._on_position_updated)
         self._poll_thread.start()
+        # Stop+join the poll thread whenever the panel is finalized, even if
+        # nobody called shutdown() first (a test that just drops the panel, or a
+        # gc sweep). The finalize holds only a WEAK ref to the panel, so it does
+        # not keep it alive; it holds the thread so it can quit+join it BEFORE
+        # the poller QObject is freed. See _join_worker_thread. (The transient
+        # _task_thread, present only during an in-flight move, is joined by
+        # shutdown()/the reaper; a construct+drop never starts one.)
+        self._thread_finalizer = weakref.finalize(
+            self, _join_worker_thread, self._poll_thread)
 
         # Connection/homed chip refresh — a *separate*, GUI-thread-only timer
         # that reads only plain ``connected``/``homed`` attributes (no device
@@ -316,7 +366,7 @@ class MotorPanel(QWidget):
         pos_v.addLayout(status_row)
 
         btn_test = QPushButton("Test connection")
-        _apply_icon(btn_test, "fa5s.plug")
+        self._register_icon(btn_test, "fa5s.plug")
         btn_test.setToolTip("Send a firmware-identity G-code (M115 / $I) and show the reply — "
                             "confirms the serial link without moving the stage")
         btn_test.clicked.connect(self._test_connection)
@@ -365,10 +415,10 @@ class MotorPanel(QWidget):
         for b in (btn_y_pos, btn_y_neg, btn_x_pos, btn_x_neg):
             b.setObjectName("jogBtn")
             b.setMinimumSize(48, 48)   # compact cluster (design system §7)
-        _apply_icon(btn_y_pos, "fa5s.arrow-up")
-        _apply_icon(btn_y_neg, "fa5s.arrow-down")
-        _apply_icon(btn_x_neg, "fa5s.arrow-left")
-        _apply_icon(btn_x_pos, "fa5s.arrow-right")
+        self._register_icon(btn_y_pos, "fa5s.arrow-up")
+        self._register_icon(btn_y_neg, "fa5s.arrow-down")
+        self._register_icon(btn_x_neg, "fa5s.arrow-left")
+        self._register_icon(btn_x_pos, "fa5s.arrow-right")
         btn_y_pos.setToolTip("Jog +Y by the selected step")
         btn_y_neg.setToolTip("Jog −Y by the selected step")
         btn_x_pos.setToolTip("Jog +X by the selected step")
@@ -386,10 +436,12 @@ class MotorPanel(QWidget):
         cross.addWidget(center_decor, 1, 1)
         cross.addWidget(btn_x_pos, 1, 2)
         cross.addWidget(btn_y_neg, 2, 1)
-        btn_y_pos.clicked.connect(lambda: self._jog("y", +1))
-        btn_y_neg.clicked.connect(lambda: self._jog("y", -1))
-        btn_x_pos.clicked.connect(lambda: self._jog("x", +1))
-        btn_x_neg.clicked.connect(lambda: self._jog("x", -1))
+        # Bound methods, never lambdas — see the _jog_* block below for why the
+        # six one-liners exist. Behaviour is unchanged: same axis, same sign.
+        btn_y_pos.clicked.connect(self._jog_y_pos)
+        btn_y_neg.clicked.connect(self._jog_y_neg)
+        btn_x_pos.clicked.connect(self._jog_x_pos)
+        btn_x_neg.clicked.connect(self._jog_x_neg)
         self._motion_widgets.extend([btn_y_pos, btn_y_neg, btn_x_pos, btn_x_neg])
         self._jog_axis_btns["x"].extend([btn_x_pos, btn_x_neg])
         self._jog_axis_btns["y"].extend([btn_y_pos, btn_y_neg])
@@ -413,15 +465,15 @@ class MotorPanel(QWidget):
         for b in (btn_z_pos, btn_z_neg):
             b.setObjectName("jogBtn")
             b.setMinimumSize(48, 48)
-        _apply_icon(btn_z_pos, "fa5s.arrow-up")
-        _apply_icon(btn_z_neg, "fa5s.arrow-down")
+        self._register_icon(btn_z_pos, "fa5s.arrow-up")
+        self._register_icon(btn_z_neg, "fa5s.arrow-down")
         btn_z_pos.setToolTip("Jog +Z by the selected step")
         btn_z_neg.setToolTip("Jog −Z by the selected step")
         z_col.addWidget(btn_z_pos)
         z_col.addStretch(1)
         z_col.addWidget(btn_z_neg)
-        btn_z_pos.clicked.connect(lambda: self._jog("z", +1))
-        btn_z_neg.clicked.connect(lambda: self._jog("z", -1))
+        btn_z_pos.clicked.connect(self._jog_z_pos)
+        btn_z_neg.clicked.connect(self._jog_z_neg)
         self._motion_widgets.extend([btn_z_pos, btn_z_neg])
         self._jog_axis_btns["z"].extend([btn_z_pos, btn_z_neg])
         z_col_outer.addLayout(z_col)
@@ -518,7 +570,7 @@ class MotorPanel(QWidget):
         # red — red stays reserved for HV/trips/STOP.
         btn_move.setProperty("state", "motion")
         repolish(btn_move)
-        _apply_icon(btn_move, "fa5s.location-arrow")
+        self._register_icon(btn_move, "fa5s.location-arrow")
         btn_move.clicked.connect(self._move_abs)
         abs_layout.addWidget(btn_move, 2, 0, 1, 3)
         self._motion_widgets.extend([self._spin_x, self._spin_y, self._spin_z, btn_move])
@@ -537,14 +589,14 @@ class MotorPanel(QWidget):
         secondary_row = QHBoxLayout()
         secondary_row.setSpacing(8)
         self._btn_home = QPushButton("Home all")
-        _apply_icon(self._btn_home, "fa5s.home")
+        self._register_icon(self._btn_home, "fa5s.home")
         self._btn_home.clicked.connect(self._home)
         btn_center = QPushButton("Center")
-        _apply_icon(btn_center, "fa5s.crosshairs")
+        self._register_icon(btn_center, "fa5s.crosshairs")
         btn_center.setToolTip("Move to the centre of the soft-limit envelope")
         btn_center.clicked.connect(self._move_center)
         btn_zero = QPushButton("Zero here")
-        _apply_icon(btn_zero, "fa5s.dot-circle")
+        self._register_icon(btn_zero, "fa5s.dot-circle")
         btn_zero.setToolTip("Declare the current position as (0, 0, 0) without moving "
                             "(software display offset — does not touch GRBL's G54/G92)")
         btn_zero.clicked.connect(self._zero_position)
@@ -556,7 +608,10 @@ class MotorPanel(QWidget):
 
         btn_stop = QPushButton("STOP")
         btn_stop.setObjectName("dangerBtn")
-        _apply_icon(btn_stop, "fa5s.hand-paper", color="white")
+        # The STOP glyph sits on the danger fill -> it wears that fill's own
+        # label ink (gui.style ON_DANGER), not a hardcoded "white" that no test
+        # could ever measure. Same token the QSS puts on #dangerBtn.
+        self._register_icon(btn_stop, "fa5s.hand-paper", token="on_danger")
         btn_stop.setMinimumHeight(44)
         btn_stop.setToolTip("Emergency stop — immediately halts all axes, "
                             "ahead of any queued motion")
@@ -569,11 +624,11 @@ class MotorPanel(QWidget):
         helper_layout = QHBoxLayout()
         helper_layout.setSpacing(8)
         btn_use_pos = QPushButton("Use current position")
-        _apply_icon(btn_use_pos, "fa5s.clipboard-list")
+        self._register_icon(btn_use_pos, "fa5s.clipboard-list")
         btn_use_pos.setToolTip("Copy current stage position into the Absolute-move spinboxes")
         btn_use_pos.clicked.connect(self._use_current_pos)
         self._btn_set_start = QPushButton("Set as scan start")
-        _apply_icon(self._btn_set_start, "fa5s.thumbtack")
+        self._register_icon(self._btn_set_start, "fa5s.thumbtack")
         self._btn_set_start.setToolTip("Copy current X/Y/Z into the Scan panel start position")
         self._btn_set_start.clicked.connect(self._emit_set_as_start)
         helper_layout.addWidget(btn_use_pos)
@@ -642,6 +697,37 @@ class MotorPanel(QWidget):
                     f"#readoutValue {{ border-left: 3px solid {color}; padding-left: 8px; }}"
                 )
 
+    def _register_icon(self, button: QPushButton, name: str,
+                       token: str = "text") -> None:
+        """Attach a qtawesome icon AND bind it to a palette *token*, so
+        :meth:`_restyle_icons` can re-tint it on a theme switch.
+
+        THE BUG THIS EXISTS TO KILL (audit 2026-07-14). Every icon in this panel
+        was attached with a bare ``_apply_icon(btn, "fa5s.arrow-up")`` — no
+        ``color=``. qtawesome then falls back to its OWN hardcoded default,
+        which is BLACK, and that black is baked into a pixmap at construction
+        time: never read from ``palette(mode)``, never re-applied by
+        ``refresh_theme`` (``_restyle_jog_buttons`` only ever recoloured the 3 px
+        axis stripe). So the jog arrows — the controls that MOVE THE STAGE —
+        were black-on-dark-slate in the dark theme, i.e. effectively invisible,
+        and stayed that way through every light/dark toggle for the life of the
+        window. (The dark theme is the shipped default and the one the cockpit is
+        designed around, so this was the live case, not the theoretical one.)
+
+        The two-arg contract makes the token explicit at every call site, which
+        is what stops the next icon from being added colourless: ``token`` names
+        the ink the icon must MATCH — normally "text" (the button's own label
+        ink), or "on_danger" for a glyph sitting on the danger fill.
+        """
+        self._themed_icons.append((button, name, token))
+        _apply_icon(button, name, color=palette(self._theme_mode)[token])
+
+    def _restyle_icons(self) -> None:
+        """Rebuild every registered icon pixmap against the live palette."""
+        p = palette(self._theme_mode)
+        for button, name, token in self._themed_icons:
+            _apply_icon(button, name, color=p[token])
+
     def _restyle_jog_buttons(self) -> None:
         """Give each jog button a quiet axis-coloured left-edge rail — the
         same idiom gui/scope_panel.py uses for its per-channel ``channelCard``
@@ -690,6 +776,7 @@ class MotorPanel(QWidget):
             self._theme_mode = str(mode)
         self._restyle_axis_readouts()
         self._restyle_jog_buttons()
+        self._restyle_icons()      # qtawesome pixmaps are NOT re-tinted by QSS
         self._restyle_abs_move_captions()
         stage_view = getattr(self, "_stage_view", None)
         if stage_view is not None:
@@ -724,6 +811,37 @@ class MotorPanel(QWidget):
             dy_mm=step if axis == "y" else 0.0,
             dz_mm=step if axis == "z" else 0.0,
         ))
+
+    # -- jog-pad slots ---------------------------------------------------- #
+    #
+    # Six one-line BOUND METHODS instead of six ``lambda: self._jog("x", +1)``.
+    # They are not decoration: a lambda capturing ``self`` and connected to a
+    # child button's ``clicked`` is stored STRONGLY inside that button's C++
+    # connection list, closing the cycle panel -> button -> connection ->
+    # closure -> panel. One hop of it lives in Qt, so Python's gc can never see
+    # it, and the whole MotorPanel (~296 widgets, plus its poller thread) is
+    # immortal — measured. PySide6 holds bound-method slots WEAKLY, so these do
+    # not. ``functools.partial(self._jog, "x", +1)`` would NOT fix it: a partial
+    # holds ``self`` strongly and is stored strongly, exactly like the lambda.
+    # See tests/test_no_immortal_panels.py.
+
+    def _jog_x_pos(self) -> None:
+        self._jog("x", +1)
+
+    def _jog_x_neg(self) -> None:
+        self._jog("x", -1)
+
+    def _jog_y_pos(self) -> None:
+        self._jog("y", +1)
+
+    def _jog_y_neg(self) -> None:
+        self._jog("y", -1)
+
+    def _jog_z_pos(self) -> None:
+        self._jog("z", +1)
+
+    def _jog_z_neg(self) -> None:
+        self._jog("z", -1)
 
     def _move_abs(self) -> None:
         x, y, z = self._spin_x.value(), self._spin_y.value(), self._spin_z.value()
@@ -1146,6 +1264,11 @@ class MotorPanel(QWidget):
         self._poll_stop_requested.emit()
         self._poll_thread.quit()
         self._poll_thread.wait(3000)
+        # The poll thread is stopped; the finalize would only repeat this no-op
+        # (or trip on the now-deleted wrapper). Retire it.
+        finalizer = getattr(self, "_thread_finalizer", None)
+        if finalizer is not None:
+            finalizer.detach()
 
     def closeEvent(self, event) -> None:
         self.shutdown()

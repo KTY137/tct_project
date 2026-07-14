@@ -750,6 +750,58 @@ def test_qml_rail_readiness_reaches_bridge_and_tracks_state(monkeypatch):
         app.processEvents()
 
 
+def test_island_shows_leakage_and_compliance(monkeypatch):
+    """The two chips the QML island DROPPED (audit 2026-07-14).
+
+    Leakage current (``_chip_bias_i``) and compliance (``_chip_bias_comp``) both
+    exist in the classic ribbon and were simply not carried across when the
+    island was built — so an operator on the QML shell could not see the HV
+    channel go into COMPLIANCE, which is a fault state on the supply. Losing a
+    hardware fault indicator in a shell rewrite is a law-7 regression ("never lie
+    about hardware") by omission.
+
+    End-to-end, the same path every other readout takes: the cached ribbon chip
+    -> _collect_shell_state() -> _ShellBridge property -> the QML StatChip.
+    """
+    app = _app()
+    win = _make_window(monkeypatch, qml=True)
+    try:
+        bridge = win._shell_bridge
+
+        state = win._collect_shell_state()
+        assert "hv_i" in state, "leakage current missing from the shell state"
+        assert "hv_comp" in state, "compliance missing from the shell state"
+
+        # Drive the real ribbon chips, then tick the shared light timer that
+        # feeds the bridge — no extra poll, no hardware I/O.
+        win._chip_bias_i.set_status("I +1.234 uA", "warn")
+        win._chip_bias_comp.set_status("Compliance TRIPPED", "crit")
+        win._light_timer.timeout.emit()
+        _pump()
+
+        assert bridge.hvCurrentText == "I +1.234 uA"
+        assert bridge.hvCurrentState == "warn"
+        assert bridge.hvComplianceText == "Compliance TRIPPED"
+        assert bridge.hvComplianceState == "crit"
+    finally:
+        _destroy(win)
+        app.processEvents()
+
+
+def test_island_binds_the_leakage_and_compliance_chips(monkeypatch):
+    """The Python side can carry the values, but the ISLAND has to render them:
+    pin that Shell.qml actually binds both new bridge properties, so a future
+    edit cannot quietly drop the chips again while the bridge keeps feeding
+    them."""
+    from pathlib import Path
+
+    qml = (Path(__file__).resolve().parent.parent
+           / "gui" / "qml" / "Shell.qml").read_text(encoding="utf-8")
+    for prop in ("shell.hvCurrentText", "shell.hvCurrentState",
+                 "shell.hvComplianceText", "shell.hvComplianceState"):
+        assert prop in qml, f"the status island does not render {prop}"
+
+
 # --------------------------------------------------------------------------- #
 # 8. D2 — device-dot fault state (attempted-and-failed connect)                 #
 # --------------------------------------------------------------------------- #
@@ -832,6 +884,190 @@ def test_sim_ribbon_visible_after_connecting_simulated_devices(monkeypatch):
         assert win._qml_chrome.height() > base_height
 
         win._devices.disconnect_all()
+    finally:
+        _destroy(win)
+        app.processEvents()
+
+
+# --------------------------------------------------------------------------- #
+# 16. The island's glass — the UNDERLAY LAW at the QQuickWidget tier            #
+#                                                                              #
+# Backstory, because a green test here proves less than usual: this is the      #
+# invisible-headless bug class. ``QT_QPA_PLATFORM=offscreen`` has no compositor,#
+# so NOTHING below can tell you whether the material actually shows — that was  #
+# MEASURED on the real desktop (scripts/spikes/qml_overpaint_spike.py: the      #
+# island tracked the backdrop on 0.0 % of its 1,402,500 px BEFORE this fix).    #
+# What these tests CAN pin, and what regressions actually look like, is the LAW:#
+# a surface may go translucent ONLY while a material is verifiably attached to  #
+# the window's current HWND, and it must fall straight back to the opaque token #
+# the moment it is not — in either theme. That is the rule whose violation      #
+# turned Kaya's window black once already.                                      #
+# --------------------------------------------------------------------------- #
+_ISLAND_SURFACES = ("islandBase", "railSurface", "pillShelfSurface",
+                    "statusStripSurface")
+
+
+def _clear_color(win):
+    """The island's REAL clear colour (gui.qml_shell.chrome_clear_color — PySide6
+    has no QQuickWidget.clearColor() getter; the widget's offscreen QQuickWindow
+    holds it)."""
+    from gui.qml_shell import chrome_clear_color
+
+    return chrome_clear_color(win._qml_chrome)
+
+
+def _island(win):
+    from PySide6.QtCore import QObject
+
+    root = win._qml_chrome.rootObject()
+    return {name: root.findChild(QObject, name) for name in _ISLAND_SURFACES}
+
+
+def test_island_is_opaque_while_no_material_is_attached(monkeypatch):
+    """The shipped default: no DWM material (offscreen has no compositor at all).
+    Every island surface — and the QQuickWidget's own clear colour — must be the
+    fully OPAQUE token. This is the state the black-window bug came from, one
+    layer down: a translucent surface over a material that is not there."""
+    app = _app()
+    win = _make_window(monkeypatch, qml=True)
+    try:
+        bridge = win._shell_bridge
+        assert bridge.glass is False
+
+        root = win._qml_chrome.rootObject()
+        assert root.property("glass") is False
+
+        assert _clear_color(win).alpha() == 255
+        for name, item in _island(win).items():
+            assert item is not None, name
+            assert item.property("color").alpha() == 255, name
+    finally:
+        _destroy(win)
+        app.processEvents()
+
+
+def test_island_frosts_only_when_the_material_is_verifiably_attached(monkeypatch):
+    """With a material attached to THIS window's current hwnd, the island stops
+    painting over it: the clear colour goes transparent, the base + pill shelf
+    paint nothing (the window's own ratified canvas fill shows through), and the
+    rail/strip keep their token hue as a real tint.
+
+    And the fail-safe half, which is the one that matters: the moment the material
+    is gone, every one of them is opaque again on the very next cached-state tick.
+    """
+    from gui import backdrop, style
+
+    app = _app()
+    win = _make_window(monkeypatch, qml=True)
+    try:
+        bridge = win._shell_bridge
+        monkeypatch.setattr(backdrop, "window_has_material", lambda w: True)
+        bridge.pull()                       # the shared 1 Hz tick
+        _pump()
+
+        assert bridge.glass is True
+        assert win._qml_chrome.rootObject().property("glass") is True
+        assert _clear_color(win).alpha() == 0
+
+        surfaces = _island(win)
+        # Surfaces whose token IS the canvas paint nothing — the window's own
+        # canvas fill (already alpha, already WCAG-clamped) is what shows.
+        for name in ("islandBase", "pillShelfSurface"):
+            assert surfaces[name].property("color").alpha() == 0, name
+        # The rail/strip keep their hue, frosted.
+        tint = win._qml_chrome.rootObject().property("glassTint")
+        assert 0.0 < tint < 1.0
+        for name in ("railSurface", "statusStripSurface"):
+            alpha = surfaces[name].property("color").alpha()
+            assert 0 < alpha < 255, name
+            assert abs(alpha / 255.0 - tint) < 0.02, name
+
+        # THE SCRIM FLOOR, inherited rather than re-litigated (Baldr §1.2, the
+        # contract tests/test_panel_glass_rollout.py pins): the window's own canvas
+        # fill sits UNDER every one of these surfaces, so each of them composites
+        # ON TOP of an alpha that is already WCAG-cleared. A frosted island surface
+        # is therefore ALWAYS at least as opaque — never less legible — than the
+        # canvas the same operator already reads in the classic shell. Anything
+        # that ever made one of them *more* transparent than that canvas would be
+        # a new, unratified glass floor, and this is where it gets caught.
+        canvas_alpha = style.get_backdrop_canvas_alpha()
+        for extra in (0.0, tint):               # base/shelf paint nothing; rail/strip tint
+            effective = 1.0 - (1.0 - extra) * (1.0 - canvas_alpha)
+            assert effective >= canvas_alpha >= style.MIN_BACKDROP_CANVAS_ALPHA
+
+        # ---- the underlay law's enforcement arm --------------------------- #
+        monkeypatch.setattr(backdrop, "window_has_material", lambda w: False)
+        bridge.pull()
+        _pump()
+
+        assert bridge.glass is False
+        assert _clear_color(win).alpha() == 255
+        for name, item in _island(win).items():
+            assert item.property("color").alpha() == 255, name
+    finally:
+        _destroy(win)
+        app.processEvents()
+
+
+def test_island_renders_from_tokens_in_both_themes_glass_on_and_off(monkeypatch):
+    """Theme-switch smoke, both glass states: every island surface re-resolves
+    from the Theme singleton (zero cached/inline colour), and the clear colour's
+    opaque fallback follows the new palette's canvas token."""
+    from PySide6.QtGui import QColor
+
+    from gui import backdrop
+    from gui.style import palette
+
+    app = _app()
+    win = _make_window(monkeypatch, qml=True)
+    try:
+        bridge = win._shell_bridge
+        for glass in (False, True):
+            monkeypatch.setattr(backdrop, "window_has_material", lambda w, g=glass: g)
+            for mode in ("dark", "light", "dark"):
+                win._toggle_theme(mode == "dark")
+                bridge.pull()
+                _pump()
+
+                surfaces = _island(win)
+                rail = surfaces["railSurface"].property("color")
+                strip = surfaces["statusStripSurface"].property("color")
+                base = surfaces["islandBase"].property("color")
+                chrome_token = QColor(palette(mode)["chrome"])
+                strip_token = QColor(palette(mode)["strip"])
+                canvas_token = QColor(palette(mode)["canvas"])
+
+                # Hue always comes from the live token, in both glass states.
+                assert (rail.red(), rail.green(), rail.blue()) == (
+                    chrome_token.red(), chrome_token.green(), chrome_token.blue())
+                assert (strip.red(), strip.green(), strip.blue()) == (
+                    strip_token.red(), strip_token.green(), strip_token.blue())
+
+                if glass:
+                    assert base.alpha() == 0
+                    assert _clear_color(win).alpha() == 0
+                else:
+                    assert base.rgb() == canvas_token.rgb()
+                    assert base.alpha() == 255
+                    # The opaque fallback tracks the theme (it is what the island
+                    # clears to whenever the material is not there).
+                    assert _clear_color(win).rgb() == canvas_token.rgb()
+    finally:
+        _destroy(win)
+        app.processEvents()
+
+
+def test_classic_shell_builds_no_glass_island(monkeypatch):
+    """The classic shell must not be touched by any of this: no QQuickWidget, no
+    bridge, and therefore no island whose clear colour could ever paint over the
+    window canvas that MEASURES 32.4 % backdrop-tracking today."""
+    from PySide6.QtQuickWidgets import QQuickWidget
+
+    app = _app()
+    win = _make_window(monkeypatch, qml=False)
+    try:
+        assert win.findChildren(QQuickWidget) == []
+        assert win._shell_bridge is None
     finally:
         _destroy(win)
         app.processEvents()

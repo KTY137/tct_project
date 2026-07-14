@@ -21,7 +21,15 @@ from its own entry in ``_ALLOWED_TARGETS`` below, plus its own layer):
                   voltage, ... — see CLAUDE.md "analysis/" row.)
     devices    -- drivers: stdlib/third-party only (PyVISA, pyserial, the
                   vendored e4control transports, ...), no project imports
-                  above it (not controller/data/analysis/gui/tct_gui/main).
+                  above it (not controller/data/analysis/gui/tct_gui/main —
+                  and not capabilities: the driver floor never depends on the
+                  spine that wraps it, docs/CAPABILITY_MODEL.md §2).
+    capabilities -- the capability spine (docs/CAPABILITY_MODEL.md §2):
+                  model.py is stdlib-only (dedicated pin in
+                  tests/test_capability_model.py, relative imports included);
+                  adapters.py/registry.py may import devices (they wrap
+                  drivers) but never controller/data/gui.  controller may
+                  import capabilities, NEVER the reverse (§2.3).
     vision     -- pure leaf, optional-dependency sibling of analysis/: numpy
                   + a lazily-imported cv2 (never at module scope — see
                   vision/__init__.py), no project imports above it. ArUco
@@ -57,7 +65,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 _APP_ROOT = Path(__file__).resolve().parent.parent
 
-_PROJECT_LAYERS = ("analysis", "devices", "vision", "controller", "data", "gui")
+_PROJECT_LAYERS = ("analysis", "devices", "capabilities", "vision", "controller",
+                   "data", "gui")
 _ROOT_MODULES = ("tct_gui", "main")
 
 # Every project-internal name an import root could resolve to (layers +
@@ -72,8 +81,13 @@ _PROJECT_NAMES = set(_PROJECT_LAYERS) | set(_ROOT_MODULES)
 _ALLOWED_TARGETS: dict[str, set[str]] = {
     "analysis":   set(),                                   # pure leaf
     "devices":    set(),                                    # driver floor
+    # Capability spine (docs/CAPABILITY_MODEL.md §2.2): adapters wrap drivers,
+    # so devices is the ONLY project layer it may reach; controller/gui never.
+    "capabilities": {"devices"},
     "vision":     set(),                                    # pure leaf (E7b/E7c)
-    "controller": {"devices", "analysis", "data"},
+    # controller → capabilities is §2.3-legal (device_manager.capability_registry,
+    # config_validator's shared slow_control_capability_id); the REVERSE is not.
+    "controller": {"devices", "analysis", "data", "capabilities"},
     "data":       {"devices", "analysis"},
     "gui":        {"devices", "analysis", "controller", "data", "vision"},
     "tct_gui":    {"gui", "controller", "devices", "analysis", "data"},
@@ -181,7 +195,9 @@ def test_layer_contract_holds():
 
 def test_devices_import_nothing_above():
     """devices/ (layer 3, drivers) must not import controller/data/analysis/
-    gui/tct_gui/main -- the driver floor never reaches upward."""
+    gui/tct_gui/main -- the driver floor never reaches upward.  This includes
+    capabilities/ (docs/CAPABILITY_MODEL.md §2): the spine wraps drivers,
+    drivers never know about the spine."""
     for path in _layer_files()["devices"]:
         roots = _import_roots(path)
         upward = roots & (_PROJECT_NAMES - {"devices"})
@@ -227,6 +243,25 @@ def test_analysis_is_stdlib_and_numpy_pure():
         f"analysis/*.py must be stdlib+numpy-pure; non-stdlib/non-numpy "
         f"import(s) found: {violations}"
     )
+
+
+def test_controller_may_depend_on_capabilities_but_never_the_reverse():
+    """docs/CAPABILITY_MODEL.md §2.3: ``controller/`` may import
+    ``capabilities/``, NEVER the reverse.  Same two-part proof shape as
+    test_gui_may_depend_on_analysis below: (1) the allow-list grants exactly
+    the forward direction (a future tightening cannot silently break the
+    registry accessor / shared validator helper without this test catching
+    it) and forbids the reverse; (2) real controller/ code exercises the
+    allowance today (config_validator's slow_control_capability_id import and
+    device_manager.capability_registry's local import — _import_roots walks
+    function bodies too), so the rule is load-bearing, not just declared."""
+    assert "capabilities" in _ALLOWED_TARGETS["controller"]
+    assert "controller" not in _ALLOWED_TARGETS["capabilities"]
+    importers = [
+        path.name for path in _layer_files()["controller"]
+        if "capabilities" in _import_roots(path)
+    ]
+    assert importers, "expected at least one controller/*.py file to import capabilities"
 
 
 def test_gui_may_depend_on_analysis():

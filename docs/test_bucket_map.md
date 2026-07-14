@@ -9,8 +9,8 @@
 
 The A/B/C/D classification is the ratified ground truth from the coupling
 analysis. Every file listed here was verified to exist in `TCT_app/tests/` on
-2026-07-13 — **no drift, no missing files, nothing invented.** Counts:
-**A = 48, B = 20, C = 40, D = 5 (113 total test files).**
+2026-07-13 (updated 2026-07-13 night) — **no drift, no missing files, nothing invented.** Counts:
+**A = 49, B = 21, C = 42, D = 5 (117 total test files).**
 
 | Bucket | Meaning | Migration behavior | Gate |
 |---|---|---|---|
@@ -79,6 +79,7 @@ do not remove them). One file per row; the filename cell is the parse target.
 | 46 | `test_oscilloscope_wedge_recovery.py` | scope CURVE? wedge recovery |
 | 47 | `test_camera_blackfly.py` | FLIR Blackfly simulated backend |
 | 48 | `test_routine_corpus.py` | routine corpus freeze gate (P2-entry) |
+| 49 | `test_capability_model.py` | capability spine data model (D1a, stdlib-only) |
 <!-- BUCKET_A_END -->
 
 ### The exact [A-green] run command
@@ -94,12 +95,7 @@ The bash/CI twin (from `TCT_app/`):
 
 ### Target branch and where the green tail is recorded
 
-- **Trunk = `design/cockpit-v5` until Phase 0.5 merges it to `main`.** Per the
-  roadmap, `origin/main` is a stale pre-restructure state; the live codebase
-  lives only on `design/cockpit-v5`. After Phase 0 is bench-green,
-  `design/cockpit-v5 -> main` becomes THE trunk and all `[A-green]` references
-  resolve to `main@post-merge`. Until then, run Bucket A against
-  `design/cockpit-v5`.
+- **Trunk = `main @ a7dca3f` (Phase 0.5 executed, 2026-07-13, merge bench-green with `polish-freeze` tag).** The live codebase is now on `main`. `design/cockpit-v5` retires after in-flight work lands (D1b adapters/registry, gate #4 bench run).
 - **The green tail is recorded in `.claude/session_state.md`** (the beat
   ledger — the "HEAD / TRUTH" section carries the last green bench set + pass
   count). Each `[A-green]` invocation appends its pytest output tail (pass
@@ -146,10 +142,11 @@ into `SAFETY_NORMATIVE_TESTS.md`).
 | 18 | `test_bias_all_off.py` | bias all-off contract |
 | 19 | `test_motor_transport_lock.py` | motor transport-lock contract (GRBL + PI serialization) |
 | 20 | `test_drs4_lock.py` | DRS4 board-transport lock contract |
+| 21 | `test_guarded_exchange_base.py` | guarded-exchange base machinery (G0, devices/base.py) |
 
 ---
 
-## Bucket C — QWIDGET-PINNED (40 files)
+## Bucket C — QWIDGET-PINNED (42 files)
 
 Enumerated from disk = every remaining `tests/test_*.py` not in A/B/D. Bound to
 the classic QWidget panels / theme engine / shell; U1 reclaims the high-value
@@ -197,6 +194,8 @@ third into viewmodel contract tests, the rest retire or port as panels migrate.
 | 38 | `test_ui_monkey.py` | UI monkey denial ruleset (QTest harness; ~20% portable to QML walker) |
 | 39 | `test_worker_primitive.py` | `WorkerThread` primitive (Qt teardown) |
 | 40 | `test_bias_section_sim_channel_count.py` | bias settings widget sim-channel config |
+| 41 | `test_no_render_to_texture_children_in_gui.py` | RTT-widget child tree guard (AST + dynamic) |
+| 42 | `test_panel_glass_rollout.py` | glass Z-ladder role census + hazard-exclusion gates (builds real panels) |
 
 ---
 

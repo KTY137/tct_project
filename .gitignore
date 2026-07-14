@@ -55,6 +55,7 @@ config.local.*
 # Third-party/reference material kept locally, not versioned
 reference/
 lab_assets/
+sources/sources/chat_export_2026-07-04.txt
 sources/git_history/
 sources/.pioenv/
 sources/Marlin-2.1.2.8/

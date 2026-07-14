@@ -277,6 +277,9 @@ Persisted via `QSettings("TCT", "TCTSetup")` — application state, theme/window
 |-----|------|---------|--------------|-------------|
 | `theme/window_opacity` | int (0–100) | 100 | — | `style.py`, `theme_editor.py` (slider) |
 | `theme/window_backdrop` | str (none\|mica\|acrylic) | none | garbage → none | `backdrop.py`, `style.py` (C2 integration) |
+| `theme/canvas_alpha` | float | 0.82 | clamped ≥0.80 | `style.py` (glass-amount token), `theme_editor.py` (slider) |
+| `theme/panel_glass_alpha` | float | 0.55 | clamped ≥0.50 | `style.py` (glass-amount token), `theme_editor.py` (slider) |
+| `theme/glass_tier` | str (auto\|mica\|acrylic\|token\|flat) | auto | — | `gui/glass_env.py` (Ymir detection ladder override), `style.py` |
 | `theme/presets` | JSON dict | {} | — | `theme_editor.py` (user preset browser) |
 | `planner/arm_latch` | bool | False | — | `gui/arm_latch.py` (persist armed state) |
 | (other) | — | — | — | — |

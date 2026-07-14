@@ -288,3 +288,67 @@ Phase-0.5 merge authorized on next bench-green evidence; stale worktrees
 platform BASE only — LabControl construction is explicitly out of scope
 here. Kaya: "ja darfste alles machen hast mein GO." Affects: phase gates,
 branch hygiene, merge readiness. Status: APPROVED — blockers cleared.
+
+## 2026-07-14 — Danger topology RATIFIED
+
+**A dangerous action belongs to the PANEL that owns the hardware, NOT to the shell.**
+The shell may *display* hazard state (HV live, voltage, leakage, motion, scan) permanently and prominently, but it must **never trigger** a dangerous action. No presentation-layer mediator holding the bias supply / motor / scan controller is to be built.
+Rationale: moving danger into the shell forces a mediator, makes muscle memory a safety mechanism, and produces candidates like A's HV-on-double-click defect; it is also the single cost driver (25–34 beats vs ~10 for a panel-owned design).
+Consequence: `bias_panel.py` keeps gating its own ramps through the injected `QtDangerGate`; the planner/sequencer keep their own `ArmLatch`. Candidate A's "always-visible armed rail" is **not** adopted; its vitals strip is (display only).
+Affects: `gui/bias_panel.py`, `gui/scan_planner_panel.py`, `controller/scan_controller.py`, `controller/arm_envelope.py`.
+Status: **LOCKED** — safety-first design law, no reimplementation of danger mediators.
+
+## 2026-07-14 — Detachable panels RATIFIED
+
+> "Naja wir wollen ja aufjedenfall unsere panels behalten also das die detachable sind" (Kaya)
+
+**`gui/detachable_tabs.py` stays the detach ENGINE.** QML is a *view* over it (the `_TabShelfAdapter` pattern in `gui/qml_shell.py`) — the detach mechanism is never reimplemented in QML. Any design that removes, degrades, or reimplements panel detachment is rejected on arrival.
+Consequence for the GlassShell: every detached panel is its own top-level window ⇒ its own DWM material and its own per-window tier resolution (already supported: G-B1's `_BackdropGuard` installs on every material-capable top-level; `gui/glass_env.py`'s `decide_tier` is per-environment and `shell` is an env field).
+Affects: `gui/detachable_tabs.py`, `gui/qml_shell.py`, `gui/glass_env.py`, `gui/backdrop.py`.
+Status: **LOCKED** — permanent operator workflow feature, no removal or reimplementation.
+
+## 2026-07-14 — Owned glass is the foundation; the OS is the garnish (Kaya)
+
+Verbatim: *"das windows glass sollte immer nur ein fallback bleiben wenn überhaupt — unser eigenes Glass wäre robuster für mehrere Systeme und könnte man schöner machen, so dass es näher an den Designs ist die vorgeschlagen wurden von unserem Schmied"*
+
+**We render the glass ourselves** (in-scene, over an app-owned ambient ground). The DWM window material is a garnish and a fallback, not the foundation.
+
+Rationale, and why it OVERTURNS round 02's premise: Round 02 killed glass for a *derived* reason — "an in-scene pane has nothing to blur, because the workspace is a QWidget tree in a different scene graph, and DWM only frosts the desktop". Logically correct; aesthetically dead. **The mockups Kaya liked never used DWM glass.** CSS `backdrop-filter` blurs what is beneath the pane *in the page* — i.e. **the app's own content**. The look was always app-owned glass over an app-owned ground. Measured and available (`bbe3b10`): in-scene `MultiEffect` frosts app content **live, 59–60 fps, 8× edge reduction, 0 crashes in 80 launches**. What it cannot do is blur the desktop — and we no longer need it to.
+
+Consequences: **identical on Windows, Linux and RDP** (no compositor contract), **deterministic and CI-testable** (golden pixels), and **ours to make beautiful**. This RESTORES the Glass Council's original convergent verdict — *"self-composited baked-blur glass as foundation (identical on RDP/Linux, CI-testable), DWM material as garnish"* — which the spikes had appeared to overturn but in fact support. The night's DWM work is NOT wasted: it is the WINDOW rung of the `GlassTier` contract and the garnish tier.
+
+Affects: `docs/design/glass_council/SYNTHESIS.md` (§2.2 ratification), `gui/glass_env.py`, `gui/qml_shell.py`, glass-system shell selection.
+Status: **RATIFIED** — foundation-tier decision, part of the GlassShell path.
+
+## 2026-07-14 — Candidate C's spirit, not C's mechanic (Kaya)
+
+Verbatim: *"Kandidat C ist bis jetzt am besten von round 1, round 2 verschluckt zu viel glass feeling mit den ganzen opaquen panels"* · *"lass den Schmied jedes Panel nach Kandidat Cs philosophy designen"* · *"alles, dass Kandidat Cs spirit umgesetzt wird, auch wenn wir Regeln biegen und brechen müssen"*
+
+**Adopted: candidate C's visual LANGUAGE** — glass cards, real translucency, structural depth, and the three-tone ladder (the only one in round 01 that survived the tier it promised to survive).
+**NOT adopted: candidate C's board MECHANIC** — the freely-composable board, "situations" instead of tabs, three densities per panel. That is what cost **47–64 beats** and created C's one real safety hole (a draggable Safety card makes HV legibility an operator *preference*).
+
+Tabs + detachable panels stay (ratified). Round 03 is briefed on exactly this split. If Brokkr believes the board mechanic is essential to the spirit, he must argue and price it, not smuggle it.
+
+Adam's standing rule (from Kaya: *"too many rules restrict your thinking"*):
+> **A rule that encodes a BELIEF gets attacked. A rule that encodes a CONSEQUENCE does not.**
+> "Glass cannot do X" is a belief — measure it and overturn it (four such rules died on 2026-07-14). "HV requires confirmation" is a consequence — a human is standing at a probe station.
+
+Note for the record: **candidate C never violated a consequence rule.** Loki verified C honoured the hazard-opacity law byte-for-byte. C was never unsafe; C was expensive.
+
+Affects: `docs/design/cockpit_design_system.md`, panel-kit specs, round-03 design briefs.
+Status: **RATIFIED** — design-system guiding principle, encoded for future panel work.
+
+## 2026-07-14 — Semantic state ink may live on OWN-ground glass (Kaya)
+
+Verbatim: *"ja drop die regel wir sind designer und designen geile Sachen"*
+
+**Extends the glass INK law.** The old rule pinned only neutral ink (`text`/`muted`) as legal TEXT on a registered glass surface (`tests/test_glass_text_contract.GLASS_SAFE_TEXT_TOKENS`). That rule encoded the **unknown-desktop belief** — a glass pane could be composited over any wallpaper, so a coloured state word could not be guaranteed legible. That belief **died with the owned-glass ratification** (`23aea87`, above): the ground beneath every in-scene pane is now the app's own **band-clamped ambient wash** (ΔL* ≤ 4.0, kit §1.1, measured 3.58 and pinned by `tests/test_ambient_ground.py`), not a wallpaper. Per the standing rule directly above — *a rule that encodes a belief gets attacked* — the belief was measured and overturned.
+
+**Measured basis.** `scripts/kit_contrast_check.py` (arbitrated `28e6dec`) walks the exact shipped compositing model — the glass fill one rung up, at the surface's alpha, over the **worst legal ground** (the ΔL* 4.0 band edge). Result: every semantic ink (`good`/`warn`/`crit`/`accent`/`sim`) clears WCAG AA on DARK glass at **every** alpha; on LIGHT glass the binding pair is `good`, which needs **α ≥ 0.24** (`crit` needs no floor; `warn`/`accent`/`sim` 0.18–0.21). The kit ships 0.55 (pane) / 0.86 (light card) / 0.62 (dark card) — 2–3× the floor. `tests/test_glass_text_contract.py` now (a) carries the semantic tokens in the whitelist and (b) **derives** that floor live and asserts every shipped/clamp glass alpha stays ≥ floor + a 0.10 buffer, naming the binding token pair on failure — so a future alpha tweak below the floor fails the suite rather than silently shipping unreadable state text. Render proof (dark + light, ratios printed): `artifacts_claude/semantic_ink_on_glass/`.
+
+**What did NOT change.** Hazard surfaces stay **opaque at every tier** with their existing ink rules (the laser banner idiom; `danger_fill`/`on_danger`/`on_armed` stay off glass); **wells still refuse semantic ink** (kit §4.4 — measured failure on the light well, `tests/test_material_contract.py`); **hot-path islands** (camera view, pyqtgraph plots) are untouched. The decoupling on OPAQUE chips (`4ca8331` — ink-on-a-wash-of-itself) stays; that was a different bug and its guard remains.
+
+**PROTECTED-region note:** the glass ink law is PROTECTED. This change was made with Kaya's **explicit per-change approval** (verbatim above), not autonomously.
+
+Affects: `tests/test_glass_text_contract.py`, `docs/DECISIONS.md`, `artifacts_claude/semantic_ink_on_glass/`. (No QSS gate existed — the law lived only in the test; `gui/style.py` untouched.)
+Status: **RATIFIED** — glass ink law extended; enforced by the derived-floor test.
