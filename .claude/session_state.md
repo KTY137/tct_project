@@ -123,6 +123,28 @@ Against the OWNED ambient ground (kit §1.1: dark L* ∈ [0, 7.61], light
   really produce ΔL*4.0 in BOTH themes?); kit §2.1 is missing the light-shelf
   SCENE row (inference `panel`@0.55 reproduces kit's own 5.86 within 0.2%).
 
+## 🟡 THE GATE FINISHED (@ `21d2b17` = leak fix + finalizers): 2 failed, 2590 passed, 8:31
+
+**THE NATIVE-CRASH CLASS IS DEAD.** No 0xC0000005, no 0xc0000374 — the leak fix
++ thread finalizers hold under the full suite. Suite grew 1995 → 2590.
+
+**The 2 failures are the UI MONKEY, both seeds, same assertion:**
+`DANGER PATH REACHED: QtDangerGate._show_dialog(move)` (test_ui_monkey.py:668).
+Systematic (2 seeds), not a race. Two hypotheses under investigation (Noah):
+(A) the lambda conversion mis-wired a jog connect in motor_panel → an ungated
+control routes into the gated move path = PRODUCT BUG; (B) the night's styling
+(neutral chip ink, token icons, ribbon wrap) blinded the monkey's danger
+CLASSIFICATION → it clicked a genuinely dangerous button and the gate correctly
+stopped it = the invariant works, the allowlist is blind. Verdict pending —
+**merge stays blocked until both seeds are green.**
+
+**HOW THE GATE FINALLY RAN: detached from SSH.** Three runs in a row died at the
+same wall — the Tailscale stream freezes after ~25 min and Windows OpenSSH kills
+the session's children (runs died at 23%, 83%, 88%). The gate now runs under the
+bench's own Task Scheduler (`C:\bench\gate.bat` → `C:\bench\gate_out.txt`,
+`schtasks /run /tn tct_gate`) and a local poller reads the result over
+short-lived connections. **Use this path for all future gates.**
+
 ## 🟡 BENCH RUN 3 (@ `cc14db7`, leak fix + thread finalizers): DIED OF NETWORK, NOT OF TESTS
 
 **83 % clean, zero failures, then `client_loop: send disconnect: Connection
