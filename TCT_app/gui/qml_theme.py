@@ -115,6 +115,8 @@ TOKEN_MAP: dict[str, str] = {
     "raised": "raised",     # cockpit v5 (docs/design/cockpit_design_system.md
     "sunk": "sunk",         # §2) surface-ladder additions — same hex as the
     "well": "well",         # matching gui/style.py LIGHT/DARK dict key.
+    "card": "card",         # round-03 glass-kit elevation rungs (kit.md §2) —
+    "shelf": "shelf",       # derived in gui/style.py, never hand-picked here.
     "field": "field",
     "chrome": "chrome",     # round-2 material: frosted rail strip (solid
     "strip": "strip",       # color-mix fallback) + recessed status-strip wash.
@@ -213,6 +215,13 @@ class Theme(QObject):
 
     @Property(QColor, notify=changed)
     def well(self) -> QColor: return self._c("well")
+
+    # -- round-03 glass-kit elevation rungs (kit.md §2; derived in style.py) #
+    @Property(QColor, notify=changed)
+    def card(self) -> QColor: return self._c("card")
+
+    @Property(QColor, notify=changed)
+    def shelf(self) -> QColor: return self._c("shelf")
 
     @Property(QColor, notify=changed)
     def field(self) -> QColor: return self._c("field")

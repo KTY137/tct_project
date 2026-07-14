@@ -469,17 +469,19 @@ def test_alphas_round_trip_through_qsettings_and_a_hand_edited_store(tmp_path):
 
 
 def test_panel_glass_alpha_drives_the_glass_qss_rule():
-    """The tuning knob actually reaches the paint."""
+    """The tuning knob actually reaches the paint. (Round-03 kit: the pane
+    tint paints the `card` rung now — kit §2.1 "one rung up, at your rung's
+    alpha"; in light card == panel byte-for-byte.)"""
     from gui import style
 
     p = style.palette("dark")
     style.set_panel_glass_alpha(0.90)
     qss = style.build_qss(p)
-    assert style._rgba(p["panel"], 0.90) in qss
+    assert style._rgba(p["card"], 0.90) in qss
 
     style.set_panel_glass_alpha(style.MIN_PANEL_GLASS_ALPHA)
     qss = style.build_qss(p)
-    assert style._rgba(p["panel"], style.MIN_PANEL_GLASS_ALPHA) in qss
+    assert style._rgba(p["card"], style.MIN_PANEL_GLASS_ALPHA) in qss
     style.reset_theme_customization()
 
 

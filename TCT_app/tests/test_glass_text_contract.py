@@ -50,9 +50,14 @@ WORST_CASE_DESKTOPS = ("#FFFFFF", "#000000")
 def glass_backdrop(palette: dict, desktop: str,
                    canvas_alpha: float = MIN_BACKDROP_CANVAS_ALPHA,
                    panel_alpha: float = MIN_PANEL_GLASS_ALPHA) -> str:
-    """The effective pixel behind text on a registered glass pane."""
+    """The effective pixel behind text on a registered glass pane.
+
+    Round-03 kit: the pane fill is the `card` rung (kit §2.1 — gui/style.py's
+    glassPane rules paint ``_rgba(p['card'], alpha)`` since the card-token
+    beat), so THAT is what this model composites. Light card == panel byte
+    for byte, so Baldr's published light-theme numbers reproduce unchanged."""
     canvas = _blend(palette["bg"], desktop, canvas_alpha)
-    return _blend(palette["panel"], canvas, panel_alpha)
+    return _blend(palette["card"], canvas, panel_alpha)
 
 
 @pytest.mark.parametrize("mode", ["light", "dark"])

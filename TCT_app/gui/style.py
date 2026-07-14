@@ -40,12 +40,16 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import weakref
 from typing import Callable
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QFont, QPalette
+from PySide6.QtCore import QRect, Qt, QTimer
+from PySide6.QtGui import (
+    QBrush, QColor, QFont, QImage, QLinearGradient, QPainter, QPalette,
+    QPixmap, QRadialGradient,
+)
 
 from gui import backdrop
 
@@ -90,9 +94,17 @@ RADIUS_LG = 16
 # only ever covered sm/md/lg) — a fixed constant, consistent with how
 # RADIUS_XS/RADIUS_PILL already sit outside that preset system too.
 RADIUS_XL = 20
+# Round-03 glass kit (docs/design/iterations/glasshell-cockpit/round-03/kit.md
+# §3.2, the concentric-radius law): nested rounded rects only read as nested
+# when r_outer = r_inner + gap. RADIUS_SHELF is therefore DERIVED, not picked:
+# a card (RADIUS_XL) sitting SPACE_XS inside a shelf needs 20 + 4 = 24. Like
+# RADIUS_XS/RADIUS_PILL it sits outside the theme editor's s/m/l density
+# preset (that scale only ever covered sm/md/lg).
+RADIUS_SHELF = RADIUS_XL + SPACE_XS
 RADIUS_PILL = 999
 RADIUS = {"xs": RADIUS_XS, "sm": RADIUS_SM, "md": RADIUS_MD,
-          "lg": RADIUS_LG, "xl": RADIUS_XL, "pill": RADIUS_PILL}
+          "lg": RADIUS_LG, "xl": RADIUS_XL, "shelf": RADIUS_SHELF,
+          "pill": RADIUS_PILL}
 
 # Type scale (px). Roles (see build_qss() call sites for where each lands):
 #   xs/sm  = caption / small label (eyebrows, table headers, chip text).
@@ -513,6 +525,49 @@ _LIGHT_WELL_ALPHA = 0.08
 _LIGHT_PANEL_V6 = "#FFFFFF"
 _LIGHT_WELL_V6 = _blend("#000000", "#E6EBF3", _LIGHT_WELL_ALPHA)
 
+# ---------------------------------------------------------------------------
+# Round-03 glass kit — the `card`/`shelf` elevation rungs
+# (docs/design/iterations/glasshell-cockpit/round-03/kit.md §2, implemented
+# 2026-07-14 on Kaya's implement-today order; arbitrated by
+# scripts/kit_contrast_check.py).
+#
+# The measured defect these fix: dark ``canvas -> panel`` is ΔL* 1.46 — the
+# dark theme HAS no elevation ladder today (a card is invisible across the
+# room). Both rungs are DERIVED, never picked:
+#
+#   card  (dark)  = _blend(raised, panel, 0.60)   -> #151D2D (L* 10.77)
+#                   0.60 is the smallest step from panel toward raised that
+#                   gives dark the same canvas->card separation light already
+#                   ships (ΔL* 7.16 vs 7.11 — a match, not a taste).
+#   card  (light) = panel — light's ceiling is already white; no new value.
+#   shelf (dark)  = _blend(card, panel, 0.30)     -> #0F141F (the container
+#   shelf (light) = _blend(panel, canvas, 0.50)   -> #F3F5F9  slab BELOW the
+#                   card in both themes; chrome + labels only).
+#
+# GOVERNANCE: the dark `card` partially reverses the ratified v6 "cards
+# recede toward the canvas" pass — landed on Kaya's explicit implement-today
+# order for the round-03 kit; the before/after render for his one-look veto
+# lives in artifacts_claude/card_token_delta/. Both rungs re-derive from the
+# live (possibly user-overridden) panel/raised/canvas in _recompute_palettes,
+# so a theme-editor "panel" override moves the whole ladder coherently.
+# ---------------------------------------------------------------------------
+_KIT_CARD_BLEND_DARK = 0.60      # kit.md §2 "card = _blend(raised, panel, .60)"
+_KIT_SHELF_BLEND_DARK = 0.30     # kit.md §2 "shelf = _blend(card, panel, .30)"
+_KIT_SHELF_BLEND_LIGHT = 0.50    # kit.md §2 "_blend(panel, canvas, .50)" (light)
+_DARK_RAISED = "#1B253A"         # the shipped dark "raised" token (spec §2)
+_DARK_CARD = _blend(_DARK_RAISED, _DARK_PANEL_V6, _KIT_CARD_BLEND_DARK)
+_DARK_SHELF = _blend(_DARK_CARD, _DARK_PANEL_V6, _KIT_SHELF_BLEND_DARK)
+_LIGHT_CARD = _LIGHT_PANEL_V6    # kit.md §2: light card IS panel, byte for byte
+_LIGHT_SHELF = _blend(_LIGHT_PANEL_V6, "#E6EBF3", _KIT_SHELF_BLEND_LIGHT)
+
+# SCENE-tier glass-card alphas (kit.md §8 GLASS_CARD_ALPHA): a translucent
+# Card paints "one rung up, at its rung's alpha" (§2.1 tier invariance) —
+# `raised` @ 0.62 in dark / `panel` @ 0.86 in light — so its COMPOSITE over
+# the bounded ground lands back on the opaque `card` tone (within ΔL* 1.0).
+# Both sit above MIN_PANEL_GLASS_ALPHA (0.50), the ratified scrim floor.
+GLASS_CARD_ALPHA_DARK = 0.62
+GLASS_CARD_ALPHA_LIGHT = 0.86
+
 LIGHT = {
     "accent": ACCENT_LIGHT, "accent_strong": ACCENT_LIGHT_STRONG,
     "amber": AMBER_LIGHT,
@@ -542,6 +597,10 @@ LIGHT = {
     # faint canvas-tinted glass reveal.
     "material": _LIGHT_PANEL_V6, "material_strong": "#E6EBF3",
     "panel": _LIGHT_PANEL_V6,
+    # Round-03 kit elevation rungs (see the _KIT_* block above): light `card`
+    # IS panel (kit.md §2 — light's ceiling is white); `shelf` is the container
+    # slab below it. Derived, non-editable; re-derived in _recompute_palettes.
+    "card": _LIGHT_CARD, "shelf": _LIGHT_SHELF,
     # border/border_strong: kept as their own keys for existing call sites,
     # synced 1:1 to hairline/hairline_strong (the two concepts were already
     # near-identical pre-v5; DARK even had them byte-equal).
@@ -675,6 +734,11 @@ DARK = {
     # instead of the flat opaque #121824 slate tone.
     "material": _DARK_PANEL_V6, "material_strong": "#0A0D13",
     "panel": _DARK_PANEL_V6,
+    # Round-03 kit elevation rungs (see the _KIT_* block above LIGHT): the
+    # dark ladder's missing card/shelf steps — canvas->card ΔL* 7.16 where
+    # canvas->panel was 1.46. Derived, non-editable; re-derived in
+    # _recompute_palettes so a user "panel" override moves the ladder with it.
+    "card": _DARK_CARD, "shelf": _DARK_SHELF,
     # Codex S1 audit item 2: dark hairline/border nudged lighter for material
     # separation against panel; hairline_strong unchanged.
     "border": "#27344A", "border_strong": "#334159",
@@ -909,6 +973,15 @@ QWidget#mainShell[glassCanvas="true"] {{ background: {fill}; }}
 
 def build_qss(p: dict) -> str:
     glass_canvas = _glass_canvas_qss(p)
+    # Round-03 kit: the SCENE glass-card fill paints "one rung up at the card
+    # rung's alpha" (kit.md §2.1) — raised@0.62 dark / panel@0.86 light. The
+    # mode is resolved by dict identity, the same ``palette is DARK`` idiom
+    # apply_theme already uses (overrides mutate the dicts IN PLACE, so
+    # identity always holds for the live palettes every caller passes).
+    _is_dark = p is DARK
+    glass_card_fill = _rgba(
+        p["raised"] if _is_dark else p["panel"],
+        GLASS_CARD_ALPHA_DARK if _is_dark else GLASS_CARD_ALPHA_LIGHT)
     return f"""
 * {{
     font-family: {SANS_FAMILY};
@@ -998,9 +1071,16 @@ QLabel#ribbonLabel {{
    segments, dock titles, control clusters). */
 /* v6 "Glass" material pass: card radius 16 -> 20px (RADIUS_XL, see its own
    comment near RADIUS_LG) — QGroupBox IS the app's "card" surface. */
+/* Round-03 glass kit (kit.md S2/S3) — QGroupBox is the app's CARD surface,
+   so it paints the new `card` rung (dark, the elevation ladder finally
+   exists, canvas->card dL* 7.16 where canvas->panel was 1.46 / light, card
+   == panel byte-identical, zero change) with the kit's mandatory
+   `hairline_strong` outline (S8, plain hairline measures 1.16 to 1 on a
+   light glass canvas, the card edge dissolves). Uniform border still (hard
+   rule 3, see above). */
 QGroupBox {{
-    background: {p['panel']};
-    border: 1px solid {p['hairline']};
+    background: {p['card']};
+    border: 1px solid {p['hairline_strong']};
     border-radius: {RADIUS_XL}px;
     margin-top: {SPACE_LG - 2}px;
     padding: {SPACE_LG - 1}px {SPACE_LG + 1}px {SPACE_LG - 1}px {SPACE_LG + 1}px;
@@ -1650,8 +1730,10 @@ QPushButton#segBtn:focus {{ outline: 2px solid {_rgba(p['accent'], 0.30)}; outli
 /* v6 "Glass" material pass: card radius 16 -> 20px (RADIUS_XL) — cardPane is
    a Card's own surface (gui/panel_kit.py), the same "card" concept as
    QGroupBox above. */
+/* Round-03 glass kit: same `card` rung + `hairline_strong` outline as
+   QGroupBox above — the two rules ARE one "card" concept (kit.md §4.2). */
 QFrame#cardPane {{
-    background: {p['panel']}; border: 1px solid {p['hairline']};
+    background: {p['card']}; border: 1px solid {p['hairline_strong']};
     border-radius: {RADIUS_XL}px;
 }}
 
@@ -1672,9 +1754,68 @@ QFrame#channelCard {{
    carries it) otherwise. HARD exclusion by construction: nothing registers a
    plot/camera/danger-well pane (a FigureCard is refused outright), so those
    never get the property — guard: tests/test_panel_kit_cockpit.py. See
-   PANEL_GLASS_ALPHA / docs/design/glass_gap_findings.md §6. */
-QFrame#cardPane[glassPane="true"] {{ background: {_rgba(p['panel'], _panel_glass_alpha)}; }}
-QGroupBox[glassPane="true"] {{ background: {_rgba(p['panel'], _panel_glass_alpha)}; }}
+   PANEL_GLASS_ALPHA / docs/design/glass_gap_findings.md §6.
+   Round-03 glass kit (kit.md §2.1 "paint one rung up, at your rung's alpha"):
+   the glass PANE tint now paints `card` (not `panel`) at the pane alpha, so
+   its composite over the bounded ground lands back on the shelf tone. Light
+   is byte-identical (card == panel there); dark panes pick up the new rung.
+   Worst-corner contrast stays certified: tests/test_glass_text_contract.py
+   models exactly this fill at the legal alpha floors. */
+QFrame#cardPane[glassPane="true"] {{ background: {_rgba(p['card'], _panel_glass_alpha)}; }}
+QGroupBox[glassPane="true"] {{ background: {_rgba(p['card'], _panel_glass_alpha)}; }}
+QFrame#shelfPane[glassPane="true"] {{ background: {_rgba(p['card'], _panel_glass_alpha)}; }}
+
+/* Round-03 glass kit component surfaces (kit.md §4; gui/panel_kit.py builds
+   the widgets). Every component has a stated FLAT/TOKEN form — the opaque
+   rule below — and resolves any glass form through the SAME per-instance
+   property mechanics as glassPane above (never a parallel tier ladder).
+
+   shelfPane (kit §4.1 `Pane`/GlassPane): the container slab. Chrome + labels
+   only (ink law: text/muted — no value ever lives on a pane). FLAT form:
+   opaque `shelf` token. Carries the kit's machined edge: hairline_strong
+   outline + specular top edge (the same border-top-color idiom the ribbon/
+   buttons already use — a shelf is static chrome, never a plot host, so hard
+   rule 3's four-edge-border repaint concern does not apply to it). */
+QFrame#shelfPane {{
+    background: {p['shelf']};
+    border: 1px solid {p['hairline_strong']};
+    border-top-color: {p['edge']};
+    border-radius: {RADIUS_SHELF}px;
+}}
+
+/* wellPane (kit §4.4 `Well`): the recess — inputs/troughs/list rows. OPAQUE
+   ALWAYS, at every tier; it never composites (its FLAT form is its only
+   form) and it may only ever sit on a card, never on the ground (§2). The
+   edge_shade top edge is the inverse machined cue for sunken surfaces. */
+QFrame#wellPane {{
+    background: {p['well']};
+    border: 1px solid {p['hairline']};
+    border-top-color: {p['edge_shade']};
+    border-radius: {RADIUS_MD}px;
+}}
+
+/* hazardSurface (kit §4.6 `HazardSurface`): the stone in the glass room.
+   OPAQUE AT EVERY TIER (consequence rule) — deliberately NO [glassPane]/
+   [glassCard] variant exists for this selector, gui.panel_kit's registry
+   refuses the class outright, and the widget pins an opaque instance fill
+   as the last belt. The 4px danger/armed stripe + 45° hatch (the texture
+   channel that survives greyscale) are painted by the widget itself from
+   tokens — QSS cannot hatch. */
+QFrame#hazardSurface {{
+    background: {p['panel']};
+    border: 1px solid {p['hairline_strong']};
+    border-radius: {RADIUS_XL}px;
+}}
+
+/* Glass CARD (kit §2.1/§4.2): a card whose fill goes translucent paints one
+   rung up at the card-rung alpha — `raised` @ {GLASS_CARD_ALPHA_DARK} dark /
+   `panel` @ {GLASS_CARD_ALPHA_LIGHT} light — so the composite lands back on
+   the opaque `card` tone (measured ΔL* <= 1.0, tests/test_material_contract).
+   Driven by the same opt-in registry as glassPane (role="card"); inert until
+   a pane registered with that role AND the panel-glass switch set it. */
+QFrame#cardPane[glassCard="true"], QGroupBox[glassCard="true"] {{
+    background: {glass_card_fill};
+}}
 
 /* Eyebrow — a small caption label above a heading/value.  QSS cannot
    uppercase text, so the panel should pass already-uppercased text; letter-
@@ -1989,6 +2130,200 @@ for _p in (LIGHT, DARK):
     _p["plot_overlay"] = PLOT_OVERLAY
     _p["plot_accent"] = PLOT_ACCENT
 del _p
+
+
+# ---------------------------------------------------------------------------
+# AMBIENT GROUND — round-03 glass kit §1 (layer 0).
+#
+# The app-owned procedural backdrop wash: two faint accent radials (top-left
+# 60% / bottom-right 70%) plus a specular white toplight over the top 30%,
+# rendered ONCE per (size-bucket x theme x DPR) into a cached QPixmap and
+# painted by gui.panel_kit.AmbientGround UNDER the panels, ON TOP of the
+# window's canvas fill (opaque token, or the rgba underlay-law fill while a
+# DWM material is live) — never instead of it. Zero per-frame procedural
+# painting: during a scan the cockpit repaints plots at 15-30 Hz and the
+# ground costs nothing on that path (a cached blit at most, and only when Qt
+# dirties the wash widget itself).
+#
+# THE GROUND BAND LAW (kit §1.1): no pixel of the ground may deviate from
+# `canvas` by more than ΔL* 4.0. GROUND_TINT_ALPHA_MAX bounds the SUMMED wash
+# alpha at any pixel by construction (main radial peaks at the top-left
+# corner where the toplight also peaks: 0.045 + 0.025 == 0.07; the soft
+# radial peaks in the opposite corner where both are ~0). But Baldr proved
+# the "0.07 -> ΔL* 4.0" arithmetic UNPROVEN — and it is in fact FALSE on the
+# dark canvas (accent at 0.07 over #0A0D13 measures ΔL* 4.45; the corner
+# stack measures 5.5) — so the budget alone is NOT trusted: the wash is
+# additionally CLAMPED by measurement (_ground_clamp_scale renders a probe,
+# measures the real ΔL* band against the live canvas, and scales every wash
+# alpha down until the band holds, with margin). The wash is clamped, never
+# the law. Guard: tests/test_ambient_ground.py re-measures the shipped
+# pixmap with its own independent L* math.
+#
+# The ground carries NO information (kit §1.2): it is tinted only with
+# `accent` and neutral white — never a semantic token — and it never
+# animates (no timer, no repaint source of its own).
+# ---------------------------------------------------------------------------
+GROUND_TINT_ALPHA_MAX = 0.07            # kit §1.1 — summed wash alpha budget
+GROUND_BAND_MAX_DELTA_LSTAR = 4.0       # kit §1.1 — the band law itself
+_GROUND_RADIAL_MAIN_ALPHA = 0.045       # kit §1 — top-left accent radial
+_GROUND_RADIAL_SOFT_ALPHA = 0.025       # kit §1 — bottom-right accent radial
+_GROUND_TOPLIGHT_ALPHA = GROUND_TINT_ALPHA_MAX - _GROUND_RADIAL_MAIN_ALPHA
+_GROUND_CLAMP_TARGET_LSTAR = GROUND_BAND_MAX_DELTA_LSTAR - 0.1   # clamp margin
+_GROUND_BUCKET_PX = 256                 # size-bucket step for the pixmap cache
+_GROUND_CACHE_MAX = 12
+_GROUND_PROBE_SIZE = (96, 72)           # clamp-measurement render (build-time only)
+
+_ground_pixmaps: "dict[tuple, QPixmap]" = {}
+_ground_clamp_cache: dict[tuple, float] = {}
+
+
+def _srgb8_to_linear(c8: int) -> float:
+    c = c8 / 255.0
+    return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
+
+def _lstar_of_rgb(r: int, g: int, b: int) -> float:
+    """CIE L* of an sRGB pixel (D65, Yn=1 — the same Y the WCAG relative-
+    luminance formula uses, so the band law and the contrast contracts live
+    on one scale)."""
+    y = (0.2126 * _srgb8_to_linear(r) + 0.7152 * _srgb8_to_linear(g)
+         + 0.0722 * _srgb8_to_linear(b))
+    if y > (6 / 29) ** 3:
+        return 116.0 * (y ** (1.0 / 3.0)) - 16.0
+    return y * (29 / 3) ** 3
+
+
+def _ground_wash_image(width_px: int, height_px: int, mode: str,
+                       scale: float = 1.0) -> QImage:
+    """The wash ALONE — transparent base + the kit §1 gradients at *scale*
+    times their base alphas. The caller composites it over the canvas fill;
+    painting the canvas into the pixmap itself would cover a live DWM
+    material (the wash sits ON the canvas fill, not instead of it)."""
+    w, h = max(1, int(width_px)), max(1, int(height_px))
+    img = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+    img.fill(0)
+    p = palette(mode)
+    accent = QColor(p["accent"])
+    painter = QPainter(img)
+    try:
+        # Main accent radial — top-left, 60% (kit §1).
+        g1 = QRadialGradient(0.12 * w, 0.10 * h, 0.60 * max(w, h))
+        c0 = QColor(accent)
+        c0.setAlphaF(min(1.0, _GROUND_RADIAL_MAIN_ALPHA * scale))
+        c1 = QColor(accent)
+        c1.setAlphaF(0.0)
+        g1.setColorAt(0.0, c0)
+        g1.setColorAt(1.0, c1)
+        painter.fillRect(img.rect(), QBrush(g1))
+        # Soft accent radial — bottom-right, 70% (kit §1).
+        g2 = QRadialGradient(0.88 * w, 0.90 * h, 0.70 * max(w, h))
+        c0 = QColor(accent)
+        c0.setAlphaF(min(1.0, _GROUND_RADIAL_SOFT_ALPHA * scale))
+        g2.setColorAt(0.0, c0)
+        g2.setColorAt(1.0, c1)
+        painter.fillRect(img.rect(), QBrush(g2))
+        # Specular toplight — white linear over the top 30% (kit §1:
+        # "dark: lifts; light: a white toplight").
+        top_h = max(1, int(0.30 * h))
+        g3 = QLinearGradient(0.0, 0.0, 0.0, float(top_h))
+        w0 = QColor(255, 255, 255)
+        w0.setAlphaF(min(1.0, _GROUND_TOPLIGHT_ALPHA * scale))
+        w1 = QColor(255, 255, 255)
+        w1.setAlphaF(0.0)
+        g3.setColorAt(0.0, w0)
+        g3.setColorAt(1.0, w1)
+        painter.fillRect(QRect(0, 0, w, top_h), QBrush(g3))
+    finally:
+        painter.end()
+    return img
+
+
+def _ground_band_probe(mode: str, scale: float) -> float:
+    """Max |ΔL*| of the wash composited over the live canvas token — measured
+    on a small probe render (build-time only, never on a paint path)."""
+    p = palette(mode)
+    canvas = QColor(p["canvas"])
+    pw, ph = _GROUND_PROBE_SIZE
+    probe = QImage(pw, ph, QImage.Format.Format_ARGB32_Premultiplied)
+    probe.fill(canvas)
+    wash = _ground_wash_image(pw, ph, mode, scale)
+    painter = QPainter(probe)
+    painter.drawImage(0, 0, wash)
+    painter.end()
+    canvas_l = _lstar_of_rgb(canvas.red(), canvas.green(), canvas.blue())
+    worst = 0.0
+    for y in range(ph):
+        for x in range(pw):
+            c = probe.pixelColor(x, y)
+            d = abs(_lstar_of_rgb(c.red(), c.green(), c.blue()) - canvas_l)
+            if d > worst:
+                worst = d
+    return worst
+
+
+def _ground_clamp_scale(mode: str) -> float:
+    """The measured clamp (see the module comment above): the largest wash
+    scale (<= 1.0) whose real rendered band stays inside the ΔL* 4.0 law with
+    margin. Cached per (mode, canvas, accent) so presets/overrides re-derive
+    their own clamp; L* is monotone in the wash alpha at these magnitudes, so
+    a couple of proportional steps converge."""
+    p = palette(mode)
+    key = (mode, p["canvas"], p["accent"])
+    cached = _ground_clamp_cache.get(key)
+    if cached is not None:
+        return cached
+    scale = 1.0
+    for _ in range(6):
+        worst = _ground_band_probe(mode, scale)
+        if worst <= _GROUND_CLAMP_TARGET_LSTAR:
+            break
+        scale *= (_GROUND_CLAMP_TARGET_LSTAR / worst) * 0.97
+    _ground_clamp_cache[key] = scale
+    return scale
+
+
+def ground_band_measured(mode: str) -> float:
+    """The real, clamped ΔL* band of the shipped wash for *mode* — the number
+    the kit's §1.1 claims must be checked against (dev/report helper; the
+    guard test measures the pixmap independently)."""
+    return _ground_band_probe(mode, _ground_clamp_scale(mode))
+
+
+def _ground_bucket(size_px: int) -> int:
+    return max(_GROUND_BUCKET_PX,
+               int(math.ceil(size_px / _GROUND_BUCKET_PX)) * _GROUND_BUCKET_PX)
+
+
+def ground_pixmap(width: int, height: int, mode: str, dpr: float = 1.0) -> QPixmap:
+    """The cached ambient-ground wash pixmap covering *width* x *height*
+    logical px (bucketed to _GROUND_BUCKET_PX steps so a resize storm
+    re-renders nothing; the caller scales it to its rect — the wash is
+    defined proportionally, so scaling is exact up to the bucket's aspect
+    error). Keyed by (bucket, mode, DPR, canvas, accent): a theme switch,
+    preset or accent override resolves to its own entry and its own
+    measured clamp."""
+    mode = "dark" if str(mode).lower() == "dark" else "light"
+    try:
+        dpr = float(dpr)
+    except (TypeError, ValueError):
+        dpr = 1.0
+    if dpr != dpr or dpr <= 0:          # NaN / garbage — render at 1:1
+        dpr = 1.0
+    bw = _ground_bucket(max(1, int(width)))
+    bh = _ground_bucket(max(1, int(height)))
+    p = palette(mode)
+    key = (bw, bh, mode, round(dpr * 100), p["canvas"], p["accent"])
+    pm = _ground_pixmaps.get(key)
+    if pm is not None:
+        return pm
+    scale = _ground_clamp_scale(mode)
+    img = _ground_wash_image(int(bw * dpr), int(bh * dpr), mode, scale)
+    pm = QPixmap.fromImage(img)
+    pm.setDevicePixelRatio(dpr)
+    while len(_ground_pixmaps) >= _GROUND_CACHE_MAX:
+        _ground_pixmaps.pop(next(iter(_ground_pixmaps)))
+    _ground_pixmaps[key] = pm
+    return pm
 
 
 # ---------------------------------------------------------------------------
@@ -2379,6 +2714,21 @@ def _recompute_palettes() -> None:
         merged["accent_strong"] = _darken(merged["accent"], 0.15)
         merged["tint"] = merged["active"] = _blend(
             merged["accent"], merged["panel"], tint_alpha)
+        # Round-03 kit elevation rungs — ALWAYS re-derived from the (possibly
+        # overridden) panel/raised/canvas, same formulas as the inline dict
+        # definitions (byte-identical at the defaults, guarded by
+        # test_recompute_at_defaults_is_byte_identical). This is the whole
+        # "card is derived, not editable" plumbing: a user "panel" override
+        # fans into card/shelf here rather than via _OVERRIDE_FANOUT.
+        if mode == "dark":
+            merged["card"] = _blend(merged["raised"], merged["panel"],
+                                    _KIT_CARD_BLEND_DARK)
+            merged["shelf"] = _blend(merged["card"], merged["panel"],
+                                     _KIT_SHELF_BLEND_DARK)
+        else:
+            merged["card"] = merged["panel"]
+            merged["shelf"] = _blend(merged["panel"], merged["canvas"],
+                                     _KIT_SHELF_BLEND_LIGHT)
         if "hairline" in ov:
             # Approximate "strong" as a wash of text over the picked hairline
             # (only when overridden — the shipped strong values stay exact).

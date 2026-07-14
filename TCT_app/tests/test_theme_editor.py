@@ -1116,14 +1116,16 @@ def test_canvas_fill_never_touches_panel_or_readout_surfaces():
     panel-kit Card, including ones hosting a pyqtgraph plot or the camera
     view) must stay a fully opaque hex regardless of backdrop state -- a QSS
     selector cannot tell a plot-hosting card from a plain one, so the "content
-    stays opaque" hard rule requires leaving the panel role alone entirely."""
+    stays opaque" hard rule requires leaving the panel role alone entirely.
+    (Round-03 kit: the card surface paints the `card` elevation rung now --
+    still a fully opaque hex, which is what this guard actually pins.)"""
     style.set_window_backdrop("acrylic")
     for mode in ("dark", "light"):
         p = style.palette(mode)
         qss = style.build_qss(p)
         idx = qss.index("QFrame#cardPane")
         block = qss[idx: idx + 200]
-        assert f"background: {p['panel']};" in block
+        assert f"background: {p['card']};" in block
         assert "rgba(" not in block
     style.reset_theme_customization()
 
@@ -1287,10 +1289,12 @@ def test_panel_glass_switch_flags_registered_dialog_cards_and_persists(tmp_path)
 
 
 def test_panel_glass_qss_uses_rgba_panel_tint():
+    """(Round-03 kit: the pane tint paints the `card` rung — kit §2.1 "one
+    rung up, at your rung's alpha"; light card == panel byte for byte.)"""
     p = style.palette("dark")
     qss = style.build_qss(p)
     assert 'QFrame#cardPane[glassPane="true"]' in qss
     assert 'QGroupBox[glassPane="true"]' in qss
     assert 0.0 < style.PANEL_GLASS_ALPHA < 1.0
-    tint = style._rgba(p["panel"], style.PANEL_GLASS_ALPHA)
+    tint = style._rgba(p["card"], style.PANEL_GLASS_ALPHA)
     assert tint in qss
