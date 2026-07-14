@@ -82,18 +82,39 @@ ROADMAP_MASTERPLAN.md U1.5 per his ask). Artifact deploy service 503ing
   now sources from _draft_window_opacity, not the display-forced
   slider; 85%→Acrylic→Apply→preference intact. 199 targeted green.
 
-**🟢🟢 GATE #4 GREEN ON THE FINAL HEAD `df81d62`: 2856 passed, 0
-failed, 2 skipped, 1 xfailed, 10:03. THE BRANCH IS MERGE-READY WITH
-EVIDENCE.** No code beats in flight anywhere. Roadmap artifact
-published + current:
+**✅ MERGED + PUSHED (Kaya's order 2026-07-15): `main@45781fa`**, gate
+#4 evidence in the merge message. **polish-freeze tag MOVED** (Kaya's
+order) from the premature a7dca3f to 45781fa, force-pushed, move
+documented in the tag annotation. Roadmap artifact (current):
 https://claude.ai/code/artifact/fa02f118-9ade-44dc-b58c-6bbd59bcd3f1
 
-Everything remaining is Kaya's: merge design/glass-wave-1 → main
-(evidence: this gate) → polish-freeze tag → laser-gate decision →
-SCENE appetite → roadmap entry (P0' first). NOTE for Kaya's live app:
-restart required to pick up the theme-editor fixes (eaa2425+729841f);
-if glass STILL breaks after a fresh start, capture the minimal repro +
-"glass: resolve" log lines — that would be a NEW init-path sibling.
+**KAYA'S COURSE SETTINGS (2026-07-15, binding):**
+- Design programme FROZEN; the full glass/SCENE design round runs
+  AFTER the full QML migration (U1.5 stays lean — kit spec only).
+- QML migration = "fast DAQ, zero capability loss" (his words) — the
+  existing U-track gates already encode this; treat as ratified intent.
+- **Glass bugs DEFERRED to post-migration** ("maybe they are gone
+  then" — correct: the backdrop/activation plumbing is deleted by U6).
+  The second-top-level irrecoverable glass loss: Noah stopped mid-
+  trace, findings note pending → TECH_DEBT. Rule of thumb ratified in
+  chat: defer what the revamp DELETES, never what it INHERITS
+  (safety, controller, state-ownership root causes).
+
+**P0' CORRECTION (Adam desync, caught by Abel):** P0' wavegen
+per-point apply was ALREADY LANDED 2026-07-13 (`5c75696` + Mary riders
+`ad38db5`, ancestors of main) — per-point apply in scan_controller
+:1447, HDF5 wavegen_command_trace, validator key/range checks. Abel
+verified conformance vs planner_routines_v2.md §1, 179 green, zero
+changes. Adam claimed it unstarted without checking git — session
+hygiene rule 4 violation, corrected here. Masterplan Part VI beat #4
+is DONE.
+
+**IN FLIGHT:** noah-laser-danger-gate (Opus — laser 'Output on' joins
+rule-2, Kaya-approved via re-anchor plan; LOCKS gui/laser_panel.py,
+tct_gui.py, laser tests) → Mary immediately. Noah-glass findings note
+pending (read-only). **NEXT after laser gate lands: U0** (branch cut
+at polish-freeze@45781fa + bench GPU RHI probe) — the migration is
+now the priority track.
 
 **KAYA LIVE FEEDBACK (2026-07-14 night):** he saw the QML preview's
 in-scene blur ("kit panel") and calls it "the most awesome" — the SCENE
