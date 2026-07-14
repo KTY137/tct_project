@@ -13,17 +13,85 @@ refreshing it — HEAD was stale by 7 commits. Reconstructed from `git log`
 
 ## HEAD / TRUTH
 
-- Local `design/cockpit-v5 @ 8299381`. NOT pushed, NOT benched yet.
-- **The night's chain (2026-07-14):** `58df585` Odin crew ported (Brokkr/Loki/
-  Baldr, adapted; Nordlys landmine defused) + path-D doc drift killed ·
-  `b702a85` Brokkr round-01 (3 candidates, openable HTML) · `801f2ab` **G-B2a
-  the glass contract** (GlassTier FLAT<TOKEN<WINDOW<SCENE<COMPOSED, pure
-  decide_tier, 6912-env matrix, 149 tests) · `636ce78` **G-B1b — the reason
-  Kaya never saw glass** (the QSS was never rebuilt on a live backdrop change;
-  windows were born without an alpha surface) · `beddc37` round-01 verdict +
-  2 ratifications + 6 live defects · `8299381` **the alarm with no home**
-  (slow-control ALARM was invisible outside the Monitor tab).
+- Local `design/cockpit-v5 @ aa6cfbb`. **NOT pushed, NOT merged, NOT benched.**
+  Nothing touched real hardware. The branch is Kaya's to review.
 - **origin/main @ `a7dca3f` = THE TRUNK** (unchanged).
+- **Night briefing (open this first):**
+  https://claude.ai/code/artifact/8dfa85d2-692f-4603-b69f-4087d31b9d9f
+  (copy in `artifacts_claude/nachtschicht_20260714/`)
+
+## ▶ RUN THIS FIRST (Kaya's ask: "grob die full qml migration mit glass shell sehen")
+
+```
+cd TCT_app
+.venv/Scripts/python.exe scripts/glass_shell_preview.py --dark
+```
+A REAL translucent QQuickWindow, real DWM acrylic (measured: gutter [84,84,84]
+on vs [36,34,41] off, delta 140.3), a REAL BiasPanel island on a simulated
+supply, real detach, leakage+compliance restored. Everything unwired wears a
+visible STUB badge. `--probe` prints the measurement and exits.
+**And in the real app: Theme editor → Material → Acrylic.** His persisted
+`theme/window_backdrop` is `none`, and until `636ce78` turning it on did
+nothing — that is very likely the whole story of "I never see glass".
+
+## 🔑 THE DECISION WAITING FOR HIM
+
+**Does SCENE earn its keep?** The spike proved in-scene MultiEffect works (60 fps,
+0 crashes / 80 launches) — and Loki then asked what there is in THIS app that it
+is architecturally permitted to blur. Answer: **nothing.** The workspace is a
+QWidget tree; the chrome is a non-interop QQuickWidget island (different scene
+graph). The 9 pyqtgraph/GL islands **never migrate** (ratified) and paint OVER the
+QML scene via airspace, not under it. What a legal pane could still frost —
+`canvas`/`card`/`well` — are flat colour fields, whose blur is themselves.
+⇒ **The free DWM window material is the entire realized return of the glass
+programme.** AMBIENT (0 pp CPU) vs STRUCTURAL (+13 pp/pane, needs THREE ratified
+reversals and a rewrite of the 9 plots on a scene-graph API our own spike saw
+segfault in ~50% of Python runs). Loki: ≥10× beats, unbounded risk, in exchange
+for blurred card borders.
+
+## ✅ THE NIGHT — 15 commits
+
+`58df585` Odin crew ported (Brokkr/Loki/Baldr, adapted; Nordlys landmine
+defused; path-D doc drift killed) · `801f2ab` **the glass contract**
+(FLAT<TOKEN<WINDOW<SCENE<COMPOSED, pure decide_tier, 6912-env matrix) ·
+`b702a85` round 01 · `636ce78` **G-B1b — why Kaya never saw glass** (the QSS was
+never rebuilt on a live backdrop change; windows born without an alpha surface) ·
+`beddc37` round-01 verdict + 2 ratifications + 6 live defects · `8299381` **the
+alarm with no home** · `bbe3b10` **the shader ban is unearned — but Qt cannot
+blur behind a window at all** · `c071f28` QML live-preview (first consumer of the
+contract) · `f9a73bc` round 02 · `c37cac8` **the elevation ladder does not
+exist** (dark canvas→panel ΔL* 1.46; light is inverted — verified by Adam) ·
+`1d9eee1` **the GlassShell skeleton runs and measures its own glass** ·
+`4ca8331` **71 WCAG failures, and the cause was not the colours** (19 QSS blocks
+painted ink on an rgba wash of itself) · `82ddd2f` **the minimize blocker does
+not exist** ([84,84,84] is DWM's inactive-window fallback) · `aa6cfbb` briefing.
+
+## 🔥 IN FLIGHT
+
+| Beat | Agent | Locks |
+|---|---|---|
+| **Mary — review of `4ca8331`** (safety-class: hazard tokens, the abort-button label, the motion command class). Her hardest question: after decoupling ink from fill, does EVERY chip still carry state in a non-colour channel? | Mary (Opus) | read-only |
+| **The default shell paints over its own glass** — `TCT_QML_SHELL=1` shows 0.05% backdrop-tracking pixels vs 9.9% classic, with a HEALTHY window (alpha 8, material attached, attr38=3). The glass is not lost, it is painted over. | Noah (Opus) | `gui/qml_shell.py`, `gui/qml/*.qml`, tests |
+
+## NEXT (queue)
+
+1. **Wire the five glass_env probes** (`glass_env.py:972-991` are all
+   `return None  # TODO(G-B2b wiring)`). Until then the RDP ceiling, the
+   high-contrast → FLAT mandate and the battery rule are **inert**, and every
+   "it degrades safely on RDP" claim is about unwritten code. Loki: worth more
+   than either round-02 candidate.
+2. **The inactive-window cosmetic fix** — extend the underlay law to ACTIVATION
+   (an inactive window's material is not there; the canvas must fall back to the
+   opaque pre-blend). Exact patch is in `82ddd2f`'s report. `gui/backdrop.py`.
+3. **A ΔL\* surface-separation test** — nothing asserts a card is visible against
+   its canvas. That is how a 1.03:1 dark ladder shipped. Land it regardless of
+   who wins the round.
+4. **`panel_kit.registered_glass_panes()` hands out DEAD C++ objects** after a
+   window teardown (the pane registry never prunes) — found by the preview beat,
+   reproduced without it.
+5. Round 03 / the kit → then ONE pilot panel (Bias) → then the wave. **The kit
+   BEFORE the panels**, or 13 panels become 13 dialects.
+6. Bench: full suite at the wave boundary (sophonone verified UP).
 
 ## 🚨 KAYA'S ORDERS (2026-07-14, all NEW tonight)
 
@@ -51,65 +119,6 @@ refreshing it — HEAD was stale by 7 commits. Reconstructed from `git log`
 |---|---|---|
 | **A11Y palette fix** — light mode fails AA systemically (sim/warn/crit/faint/good); white-on-crit fails in DARK too; `faint` on glass = 2.0:1; the laser SAFETY BANNER = 3.0:1; ribbon clips MOTION; jog icons bypass the token system | Noah (Opus) | `gui/style.py`, `gui/motor_panel.py`, `gui/laser_panel.py`, `tct_gui.py`, tests |
 | **MultiEffect spike** — is the shader ban earned? Can we blur BEHIND the window? Crash rate over N≥20 | Noah (Opus) | `scripts/spikes/qml_multieffect_glass_spike.py` (NEW) |
-
-## ⚠️ VERIFIED DEFECT — the elevation ladder does not exist (2026-07-14, Adam recomputed)
-
-Brokkr claimed it by hand (no execution tool); Adam verified computationally
-against the real `gui.style.palette()`. **Confirmed to the second decimal**, and
-the recomputation found MORE than he claimed — the two themes have **INVERTED
-ladders**:
-
-| | canvas → panel | panel → raised |
-|---|---|---|
-| **dark** | ΔL* **1.46** (invisible, 1.03:1) | ΔL* 9.68 |
-| **light** | ΔL* 7.11 | ΔL* **1.80** (invisible) |
-
-**Neither theme has a continuous three-tone ladder.** Each has exactly ONE
-visible step, and it is the OTHER one. So candidate C's "salvaged three-tone
-FLAT ladder" — the thing round 01 declared the best in the round — **does not
-exist in the code**. We would have built both round-02 candidates on it and
-wondered why the result looked flat.
-Brokkr's proposed fix (derived, not chosen): `card = _blend(raised, panel, 0.60)`
-→ `#151D2D` in dark (ΔL* 7.16, a match to light's 7.11), `= panel` in light.
-**Needs Kaya's nod: it partially reverses the v6 "cards recede toward the canvas"
-pass, ratified two days ago.**
-BLOCKED: `gui/style.py` is held by the a11y palette beat. Land after it.
-
-## NEXT (Adam's queue)
-
-1. **3 lines at the composition root** for the sticky alarm chip
-   (`STATUS.alarm` is emitted but unrendered — the exact lines are in the
-   alarm beat's report). BLOCKED until the palette beat releases `tct_gui.py`.
-2. **Mary re-review** of G-B1b (she asked for it: the QSS rebuild + the fan-out
-   now routing through `reassert_window_backdrop` — check for a double-pin or an
-   `apply_theme` re-entrancy path) and of the alarm beat's asymmetric hold.
-3. **The glass_env WIRING beat** — the contract has ZERO consumers today.
-   `GlassEnvironment.high_contrast` / `.remote_session` are populated by NOTHING
-   outside the tests, so every "it degrades safely on RDP" claim currently rests
-   on a detector that does not exist. Handoff is written in `801f2ab`.
-4. **Round 02** (Brokkr): revised A = spine + phase rail + vitals strip (display
-   only, NO armed rail), inheriting C's three-tone FLAT ladder. MANDATE: raise
-   the glass alphas to the repo's own 0.50 floor — A's `.42`/`.06` put muted
-   text at **1.04:1** at worst case, i.e. the across-the-room readout that IS
-   candidate A washes out in exactly the environment its own switch was built to
-   probe.
-5. **The kit BEFORE the panel wave** (else 12 panels = 12 dialects), then ONE
-   pilot panel with Kaya's eyes on it. Pilot candidate: **Bias** (hazard surface
-   + detached + live readouts).
-6. Bench: full suite at the wave boundary (sophonone is UP, verified).
-
-## 📋 THE PANEL CENSUS (Shiori, 2026-07-14) — the wave's foundation
-
-- **Programs wearing a panel costume** (own beat each): `planner` 2524 ·
-  `analysis` 2203 · `scope` 1655 · `motor` 1212 · `camera` 958.
-- **Simple compositions** (one wave): intensity 224 · device 348 · sequencer 456
-  · calibration 578 · scan_map_view 615 · laser 703 · stage_view 255.
-- **Hazard surfaces (opaque at EVERY tier, keep their own gate):** bias,
-  multi_bias, motor, calibration, planner, sequencer.
-- **Three panels own EXTRA top-level windows** ⇒ three more glass surfaces:
-  `device_panel` IS a QMainWindow · `scope` has a floating `_TriggerDialog` ·
-  `camera` has a modal `_ROIDialog`.
-- `multi_bias` is tabbed per HV channel — you cannot see two channels at once.
 
 ## 🧑‍🔬 NEEDS KAYA (at 10:00)
 
