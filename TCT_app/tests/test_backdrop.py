@@ -1178,6 +1178,197 @@ def test_scan_gate_defaults_to_not_scanning_and_fails_safe(monkeypatch):
         style.set_scan_active_provider(None)
 
 
+# --------------------------------------------------------------------------- #
+# G-B2b — the five ENVIRONMENT PROBES the glass contract cannot make itself.   #
+#                                                                             #
+# gui/glass_env.py is pure (no Qt, no ctypes, AST-pinned), so the five Win32   #
+# observations live here, in the quarantine, and it calls them. Every one of   #
+# them must fail SOFT: a missing API, a denied registry key, a non-Windows     #
+# host, an exploding call ⇒ None ("cannot be asked"), never an exception, and  #
+# never a guess — because in the contract False VETOES a tier and True would   #
+# promise a material the host cannot render (the one unacceptable failure).    #
+#                                                                             #
+# The ctypes/winreg PRIMITIVES are monkeypatched in every test below; no test  #
+# in this suite ever calls user32/dwmapi/kernel32 or reads the registry.       #
+# --------------------------------------------------------------------------- #
+
+@pytest.mark.parametrize("probe", [
+    "dwm_composition_probe", "transparency_probe", "high_contrast_probe",
+    "remote_session_probe", "battery_saver_probe",
+])
+def test_every_probe_is_unknown_on_a_non_windows_host(probe, monkeypatch):
+    monkeypatch.setattr(backdrop.sys, "platform", "linux")
+    assert getattr(backdrop, probe)() is None
+
+
+@pytest.mark.parametrize("probe", [
+    "dwm_composition_probe", "transparency_probe", "high_contrast_probe",
+    "remote_session_probe", "battery_saver_probe",
+])
+def test_every_probe_answers_the_tri_state_on_the_real_host(probe):
+    """Whatever machine this is: True, False or None — never a string, never an
+    int, never a raise. The contract coerces bool|None and DEGRADES on anything
+    else, so a probe that returns 1 instead of True would silently drop the whole
+    app to the safe floor."""
+    value = getattr(backdrop, probe)()
+    assert value is None or isinstance(value, bool), f"{probe}() -> {value!r}"
+
+
+def test_remote_session_probe_reads_sm_remotesession(monkeypatch):
+    seen: list[int] = []
+
+    def fake_metric(index):
+        seen.append(index)
+        return 1
+
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop, "_system_metric", fake_metric)
+
+    assert backdrop.remote_session_probe() is True
+    assert seen == [backdrop.SM_REMOTESESSION]      # 4096, winuser.h
+
+    monkeypatch.setattr(backdrop, "_system_metric", lambda index: 0)
+    assert backdrop.remote_session_probe() is False
+
+
+def test_high_contrast_probe_reads_the_hcf_bit(monkeypatch):
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+
+    # dwFlags carries more than one bit; only HCF_HIGHCONTRASTON means "on".
+    monkeypatch.setattr(backdrop, "_high_contrast_flags",
+                        lambda: backdrop.HCF_HIGHCONTRASTON | 0x02)
+    assert backdrop.high_contrast_probe() is True
+
+    monkeypatch.setattr(backdrop, "_high_contrast_flags", lambda: 0x02)
+    assert backdrop.high_contrast_probe() is False
+
+
+def test_battery_saver_probe_reads_the_power_saving_bit(monkeypatch):
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+
+    monkeypatch.setattr(backdrop, "_power_status_flag",
+                        lambda: backdrop.SYSTEM_STATUS_FLAG_POWER_SAVING_ON)
+    assert backdrop.battery_saver_probe() is True
+
+    monkeypatch.setattr(backdrop, "_power_status_flag", lambda: 0)
+    assert backdrop.battery_saver_probe() is False
+
+
+@pytest.mark.parametrize("raw,expected", [(1, True), (0, False), (None, None)])
+def test_transparency_probe_maps_the_registry_value(raw, expected, monkeypatch):
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop, "_transparency_setting", lambda: raw)
+    assert backdrop.transparency_probe() is expected
+
+
+def _fake_winreg(monkeypatch, *, value=None, error: Exception | None = None):
+    """A stand-in ``winreg`` module, so the REAL registry code path
+    (``backdrop._transparency_setting``) can be exercised on any host — including
+    a Linux runner, where the stdlib module does not exist at all."""
+    import sys as _sys
+    import types
+
+    fake = types.ModuleType("winreg")
+    fake.HKEY_CURRENT_USER = 0
+
+    class _Key:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def open_key(root, path):
+        assert path == backdrop._TRANSPARENCY_KEY
+        if error is not None:
+            raise error
+        return _Key()
+
+    def query(key, name):
+        assert name == backdrop._TRANSPARENCY_VALUE
+        return value, 4                                  # REG_DWORD
+
+    fake.OpenKey = open_key
+    fake.QueryValueEx = query
+    monkeypatch.setitem(_sys.modules, "winreg", fake)
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+
+
+@pytest.mark.parametrize("value,expected", [(1, True), (0, False)])
+def test_transparency_probe_reads_the_personalize_key(value, expected, monkeypatch):
+    _fake_winreg(monkeypatch, value=value)
+    assert backdrop._transparency_setting() == value
+    assert backdrop.transparency_probe() is expected
+
+
+def test_a_missing_registry_value_is_unknown_not_off(monkeypatch):
+    """A fresh profile that never touched Settings ▸ Colors has no
+    EnableTransparency value at all. Reading THAT as OFF would veto the material
+    on a machine whose transparency is, in fact, on — the fail-soft direction is
+    "cannot be asked" (None), never "absent" (False)."""
+    _fake_winreg(monkeypatch, error=FileNotFoundError(2, "no such key"))
+    assert backdrop._transparency_setting() is None
+    assert backdrop.transparency_probe() is None
+
+
+def test_a_denied_registry_key_is_unknown_too(monkeypatch):
+    _fake_winreg(monkeypatch, error=PermissionError(5, "access is denied"))
+    assert backdrop._transparency_setting() is None
+    assert backdrop.transparency_probe() is None
+
+
+@pytest.mark.parametrize("primitive,probe", [
+    ("_system_metric", "remote_session_probe"),
+    ("_high_contrast_flags", "high_contrast_probe"),
+    ("_transparency_setting", "transparency_probe"),
+    ("_dwm_composition_enabled", "dwm_composition_probe"),
+    ("_power_status_flag", "battery_saver_probe"),
+])
+def test_an_unreadable_primitive_is_unknown_never_a_guess(primitive, probe,
+                                                          monkeypatch):
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop, primitive, lambda *args: None)
+    assert getattr(backdrop, probe)() is None
+
+
+def test_the_primitives_never_raise_whatever_ctypes_does(monkeypatch):
+    """The ctypes seam itself. Every primitive swallows the failure and answers
+    None — a probe that throws must not be able to take the GUI down (it runs on
+    the GUI thread, from probe_environment)."""
+    class _Exploding:
+        def __getattr__(self, name):
+            raise OSError(f"{name}.dll is on fire")
+
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop.ctypes, "windll", _Exploding())
+
+    assert backdrop._system_metric(backdrop.SM_REMOTESESSION) is None
+    assert backdrop._high_contrast_flags() is None
+    assert backdrop._dwm_composition_enabled() is None
+    assert backdrop._power_status_flag() is None
+
+    # ...and so do the tri-states built on top of them.
+    assert backdrop.remote_session_probe() is None
+    assert backdrop.high_contrast_probe() is None
+    assert backdrop.dwm_composition_probe() is None
+    assert backdrop.battery_saver_probe() is None
+
+
+def test_the_probes_do_not_gate_on_backdrop_SUPPORT(monkeypatch):
+    """Deliberate: these describe the HOST, not our material support. High
+    contrast matters on Windows 10 (where WINDOW is refused forever) and under
+    the offscreen plugin (where this suite runs) just as much — the FLAT mandate
+    is an accessibility rule, not a glass feature. So the probes must answer even
+    where is_backdrop_supported() is False."""
+    monkeypatch.setattr(backdrop.sys, "platform", "win32")
+    monkeypatch.setattr(backdrop, "_platform_probe", lambda: "offscreen")
+    monkeypatch.setattr(backdrop, "_high_contrast_flags",
+                        lambda: backdrop.HCF_HIGHCONTRASTON)
+
+    assert backdrop.is_backdrop_supported() is False
+    assert backdrop.high_contrast_probe() is True
+
+
 def test_style_never_imports_the_controller():
     """The decoupling that makes the scan gate legal: presentation may ask "is a
     scan running" only through an INJECTED predicate — gui/style.py must not

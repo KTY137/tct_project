@@ -719,3 +719,229 @@ def test_detached_window_reasserts_on_show(monkeypatch):
     finally:
         win.close()
         win.deleteLater()
+
+
+# =========================================================================== #
+# 5. THE ACTIVATION CLAUSE (beat G-B2b) — an inactive window has no material   #
+#                                                                             #
+# Measured (82ddd2f): DWM does not composite a system backdrop on a window     #
+# that is not active. It paints a fallback SOLID — mid-grey [84,84,84] —       #
+# behind it instead. Reproduced on a live, never-minimized window simply by    #
+# stealing focus (d_behind 63.99 -> 0.0) and reversed exactly by re-activating; #
+# on the shipped QWidget cockpit AND on a QQuickWindow root.                    #
+#                                                                             #
+# So "inactive" is a LOSS PATH, and the underlay law never knew about it: an   #
+# unfocused cockpit kept its rgba canvas and painted alpha over a flat         #
+# #545454. The canvas now follows the focus.                                    #
+#                                                                             #
+# What these tests CANNOT prove: that DWM really re-composites after           #
+# re-activation (offscreen has no compositor). That is the spike's             #
+# measurement, and the pixels stay Kaya's eyeball.                             #
+# =========================================================================== #
+
+def _material_window(monkeypatch, kind: str = "mica") -> QMainWindow:
+    win = QMainWindow()
+    win.setCentralWidget(QWidget())
+    style.set_window_backdrop(kind)
+    style.reassert_window_backdrop(win)
+    assert backdrop.window_has_material(win) is True
+    assert win.property(backdrop.CANVAS_GLASS_PROPERTY) == "true"
+    return win
+
+
+def test_deactivation_closes_the_alpha_hole(monkeypatch):
+    """THE fix. Focus goes elsewhere ⇒ no live material ⇒ no alpha hole; the QSS
+    falls back to the opaque token pre-blend on the window AND on #mainShell (the
+    child that actually paints a QMainWindow's client)."""
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    win = _material_window(monkeypatch)
+    central = win.centralWidget()
+    try:
+        app.sendEvent(win, QEvent(QEvent.Type.WindowDeactivate))
+
+        assert not win.property(backdrop.CANVAS_GLASS_PROPERTY)
+        assert not central.property(backdrop.CANVAS_GLASS_PROPERTY)
+    finally:
+        win.deleteLater()
+
+
+def test_reactivation_reopens_it(monkeypatch):
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    win = _material_window(monkeypatch)
+    central = win.centralWidget()
+    try:
+        app.sendEvent(win, QEvent(QEvent.Type.WindowDeactivate))
+        app.sendEvent(win, QEvent(QEvent.Type.WindowActivate))
+
+        assert win.property(backdrop.CANVAS_GLASS_PROPERTY) == "true"
+        assert central.property(backdrop.CANVAS_GLASS_PROPERTY) == "true"
+    finally:
+        win.deleteLater()
+
+
+def test_deactivation_keeps_the_surface_and_the_material(monkeypatch):
+    """The two things a focus change must NOT disturb.
+
+    * ``WA_TranslucentBackground`` stays — Qt fixes a window's surface alpha once,
+      at HWND creation (GL-island spike, finding 2). Dropping the attribute on an
+      alt-tab would be irreversible for a VISIBLE window: the material could never
+      composite again.
+    * ``window_has_material`` stays True — the DWM attributes never died, and
+      style.py's WS_EX_LAYERED opacity pin keys off exactly this. If a focus change
+      flipped it, an alt-tab would silently layer the window and kill the material
+      for real."""
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    win = _material_window(monkeypatch, "acrylic")
+    try:
+        app.sendEvent(win, QEvent(QEvent.Type.WindowDeactivate))
+
+        assert win.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+        assert backdrop.window_has_material(win) is True
+    finally:
+        win.deleteLater()
+
+
+def test_a_focus_change_never_touches_dwm(monkeypatch):
+    """It is a CANVAS event, not a re-assert. The attributes were never the
+    problem — a full re-assert is measured to fix nothing here (0/3 in the spike)
+    — and routing alt-tab into reassert_backdrop would buy a native chain plus a
+    1-px relayout nudge of the whole dock tree on every focus change."""
+    _force_supported(monkeypatch)
+    calls = _recording_dwm(monkeypatch)
+    app = _app()
+    win = _material_window(monkeypatch)
+    nudges: list = []
+    monkeypatch.setattr(backdrop, "nudge_repaint", lambda w: nudges.append(w))
+    try:
+        calls.clear()
+
+        app.sendEvent(win, QEvent(QEvent.Type.WindowDeactivate))
+        app.sendEvent(win, QEvent(QEvent.Type.WindowActivate))
+
+        assert calls == [], f"a focus change went to DWM: {calls}"
+        assert nudges == [], "a focus change resized the cockpit"
+    finally:
+        win.deleteLater()
+
+
+def test_activation_is_a_true_noop_in_the_shipped_default(monkeypatch):
+    """Backdrop "none": no window is ever in _backdrop_applied_windows, so the
+    whole clause is unreachable — zero property writes, zero repolish churn on
+    every alt-tab. The glass machinery costs exactly nothing until Kaya opts in."""
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    win = QMainWindow()
+    win.setCentralWidget(QWidget())
+    try:
+        assert style.get_window_backdrop() == "none"
+        style.reassert_window_backdrop(win)          # installs the guard
+        repolished: list = []
+        monkeypatch.setattr(backdrop, "_repolish", lambda w: repolished.append(w))
+
+        app.sendEvent(win, QEvent(QEvent.Type.WindowDeactivate))
+        app.sendEvent(win, QEvent(QEvent.Type.WindowActivate))
+
+        assert repolished == []
+        assert not win.property(backdrop.CANVAS_GLASS_PROPERTY)
+    finally:
+        win.deleteLater()
+
+
+def test_the_activation_clause_has_a_kill_switch(monkeypatch):
+    """The cure repolishes the window + #mainShell on every focus change. If that
+    flickers worse on a real display than the mid-grey it fixes, doing nothing is
+    a legitimate outcome — and it must be ONE constant, not an archaeology
+    expedition."""
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    monkeypatch.setattr(backdrop, "CANVAS_FOLLOWS_ACTIVATION", False)
+    win = _material_window(monkeypatch)
+    try:
+        app.sendEvent(win, QEvent(QEvent.Type.WindowDeactivate))
+
+        assert win.property(backdrop.CANVAS_GLASS_PROPERTY) == "true"   # inert
+    finally:
+        win.deleteLater()
+
+
+def test_the_activation_repair_can_be_scan_gated(monkeypatch):
+    """The RUN-STATE GATE, on the seam gui/style.py must use (that file is another
+    beat's lock — the exact patch is in this beat's handoff).
+
+    Re-opening the canvas repolishes the window + #mainShell (a QSS pass on the
+    GUI thread), and a cosmetic repaint must never preempt a run — the same law
+    that gates nudge_repaint. But the gate is ASYMMETRIC, and deliberately so: it
+    is the glass contract's own transition law (glass_env.plan_transition —
+    "downgrades are NEVER queued, upgrades wait for scan-idle"). Closing the
+    canvas is the DOWNGRADE (glass ⇒ opaque token) and applies mid-scan; reopening
+    it is the UPGRADE and waits. Gating both directions would leave an alpha hole
+    open over a material that is not there — precisely the defect being fixed."""
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    win = QMainWindow()
+    win.setCentralWidget(QWidget())
+    scanning = {"now": False}
+
+    def gated(window, active: bool) -> None:
+        if active and scanning["now"]:
+            return
+        backdrop.set_canvas_for_activation(window, active)
+
+    try:
+        # Install OUR guard first; style's own install is idempotent per window.
+        assert backdrop.install_backdrop_guard(
+            win, style._guard_reassert, style._schedule_post_toggle_reassert,
+            gated) is True
+        style.set_window_backdrop("mica")
+        style.reassert_window_backdrop(win)
+        assert win.property(backdrop.CANVAS_GLASS_PROPERTY) == "true"
+
+        scanning["now"] = True
+        app.sendEvent(win, QEvent(QEvent.Type.WindowDeactivate))
+        assert not win.property(backdrop.CANVAS_GLASS_PROPERTY), (
+            "the DOWNGRADE was queued behind a scan — an alpha hole was left "
+            "open over a material DWM is not painting")
+
+        app.sendEvent(win, QEvent(QEvent.Type.WindowActivate))
+        assert not win.property(backdrop.CANVAS_GLASS_PROPERTY), (
+            "the cosmetic UPGRADE preempted a running scan")
+
+        scanning["now"] = False
+        app.sendEvent(win, QEvent(QEvent.Type.WindowActivate))
+        assert win.property(backdrop.CANVAS_GLASS_PROPERTY) == "true"
+    finally:
+        win.deleteLater()
+
+
+def test_a_broken_activation_callback_cannot_abort_qt_event_delivery(monkeypatch):
+    _force_supported(monkeypatch)
+    _recording_dwm(monkeypatch)
+    app = _app()
+    win = QMainWindow()
+    try:
+        def boom(window, active):
+            raise RuntimeError("activation handler exploded")
+
+        backdrop.install_backdrop_guard(
+            win, style._guard_reassert, style._schedule_post_toggle_reassert, boom)
+
+        app.sendEvent(win, QEvent(QEvent.Type.WindowActivate))    # must not raise
+    finally:
+        win.deleteLater()
+
+
+def test_the_activation_events_are_watched_and_are_not_reasserts():
+    assert QEvent.Type.WindowActivate in backdrop._BackdropGuard._WATCHED
+    assert QEvent.Type.WindowDeactivate in backdrop._BackdropGuard._WATCHED
+    assert QEvent.Type.WindowActivate not in backdrop._BackdropGuard._IMMEDIATE
+    assert QEvent.Type.WindowDeactivate not in backdrop._BackdropGuard._IMMEDIATE
+    assert QEvent.Type.WindowActivate not in backdrop._BackdropGuard._DEFERRED

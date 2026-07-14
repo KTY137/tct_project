@@ -777,9 +777,14 @@ class TestProbeEnvironment:
     def test_the_test_host_itself_resolves_to_the_offscreen_floor(self):
         # The suite runs offscreen. Whatever machine this is, the honest answer
         # is TOKEN — and that is what makes rungs 0-3 compositor-independent.
+        #
+        # ``<=``, not ``is``, since G-B2b wired the probes: this suite now reads
+        # the REAL host, and a developer running it on a high-contrast Windows
+        # desktop legitimately decides FLAT (which is LOWER, so the invariant that
+        # actually matters — never above the floor — still holds exactly).
         env = probe_environment(user_override="auto")
         assert env.degraded is False
-        assert decide_tier(env) is SAFE_FLOOR
+        assert decide_tier(env) <= SAFE_FLOOR
 
     def test_the_caller_supplies_what_only_it_knows(self):
         env = probe_environment(shell=SHELL_GLASS, scan_active=True,
@@ -790,21 +795,61 @@ class TestProbeEnvironment:
         assert env.rtt_children == ("GLViewWidget",)
         assert env.user_override == "token"
 
-    def test_the_native_probes_are_honest_unknowns_until_they_are_wired(self):
-        # They are None, not False: "not observable from this module" (the
-        # ctypes quarantine), NOT "observed to be absent". The wiring beat
-        # injects the real implementations from gui/backdrop.py.
+    def test_the_native_probes_are_tri_state_and_never_lie(self):
+        """G-B2b: the five native probes are WIRED (``gui.backdrop``, the ctypes
+        quarantine) — they used to be a hardcoded ``None``.
+
+        This runs on whatever host the suite is on, so it cannot assert a VALUE.
+        What it asserts is the type contract the whole fail-safe story rests on:
+        each one is ``True``, ``False`` or ``None`` — never a string, never an
+        int, never an exception — and ``None`` (Linux, a missing API, a denied
+        key) is preserved as the legal "cannot be asked" rather than being
+        guessed into a ``False`` that would veto, or a ``True`` that would lie
+        upward."""
         env = probe_environment(user_override="auto")
+        for field in ("dwm_composition", "transparency_enabled", "high_contrast",
+                      "remote_session", "battery_saver"):
+            value = getattr(env, field)
+            assert value is None or isinstance(value, bool), f"{field}={value!r}"
+        assert env.degraded is False
+        # COMPOSED stays unbuilt and therefore unreachable, wiring or not.
+        assert env.composition_interop is False
+
+    def test_the_probes_are_all_unknown_on_a_non_windows_host(self, monkeypatch):
+        """All five observations are Win32-only. On Linux the contract must not
+        even pay the ``gui.backdrop`` import to learn that — and it must not
+        invent a ``False`` (which would veto the material) either."""
+        monkeypatch.setattr(glass_env.sys, "platform", "linux")
+
+        env = probe_environment(user_override="auto")
+
         assert env.dwm_composition is None
         assert env.transparency_enabled is None
         assert env.high_contrast is None
         assert env.remote_session is None
         assert env.battery_saver is None
-        assert env.composition_interop is False
+        assert env.degraded is False           # unknown is NOT broken
+
+    def test_a_native_probe_that_explodes_is_an_unknown_not_a_crash(self, monkeypatch):
+        """``gui.backdrop``'s probes are written never to raise — but this pins
+        the belt UNDER them: if one ever does (a future ctypes signature change,
+        a hostile mock), the contract answers ``None`` and the GUI keeps running.
+        A probe that throws must not be able to take the app down."""
+        from gui import backdrop
+
+        def boom():
+            raise OSError("user32 went to lunch")
+
+        monkeypatch.setattr(glass_env.sys, "platform", "win32")
+        monkeypatch.setattr(backdrop, "high_contrast_probe", boom)
+        monkeypatch.setattr(backdrop, "remote_session_probe", boom)
+
+        assert glass_env._high_contrast_probe() is None
+        assert glass_env._remote_session_probe() is None
 
     def test_an_injected_probe_set_reaches_the_window_tier(self, monkeypatch):
-        """The full injectable path, end to end: the environment the wiring beat
-        will produce on Kaya's actual machine."""
+        """The full injectable path, end to end: the environment on Kaya's actual
+        machine."""
         monkeypatch.setattr(glass_env, "_platform_probe", lambda: "win32")
         monkeypatch.setattr(glass_env, "_windows_build_probe", lambda: 26200)
         monkeypatch.setattr(glass_env, "_qt_platform_probe", lambda: "windows")
@@ -818,3 +863,146 @@ class TestProbeEnvironment:
         assert env.degraded is False
         assert decide_tier(env) is GlassTier.WINDOW
         assert "tier=window" in format_truth_log(explain_tier(env))
+
+
+# --------------------------------------------------------------------------- #
+# 10. THE LADDER ACTUALLY MOVES (beat G-B2b)                                   #
+#                                                                              #
+# Section 3's matrix proves the DECISION honours the RDP ceiling and the        #
+# high-contrast mandate. It proves nothing about the machine, because until      #
+# G-B2b the five native probes returned a hardcoded None: on a real host the     #
+# tier was decided by build + RHI + shell ALONE, so both rules were inert.       #
+#                                                                               #
+# These tests drive the WHOLE wired path — glass_env's delegating probe → the    #
+# lazy import → gui.backdrop's real probe code — and fake only the five ctypes/   #
+# winreg PRIMITIVES at the very bottom. Nothing here touches DWM, user32 or the  #
+# registry; everything above the primitive is the shipping code.                 #
+# --------------------------------------------------------------------------- #
+
+def _wire_win11(monkeypatch, *, remote=0, high_contrast=0, transparency=1,
+                composition=True, power_flag=0):
+    """A Win11 26H1 host that would otherwise reach WINDOW, with the five native
+    primitives under our control. (``glass_env.sys`` and ``backdrop.sys`` are the
+    same module object — one patch covers both, and it keeps the test honest on a
+    Linux runner too.)"""
+    from gui import backdrop
+
+    monkeypatch.setattr(glass_env.sys, "platform", "win32")
+    monkeypatch.setattr(glass_env, "_platform_probe", lambda: "win32")
+    monkeypatch.setattr(glass_env, "_windows_build_probe", lambda: 26200)
+    monkeypatch.setattr(glass_env, "_qt_platform_probe", lambda: "windows")
+
+    monkeypatch.setattr(backdrop, "_system_metric",
+                        lambda index: remote if index == backdrop.SM_REMOTESESSION else 0)
+    monkeypatch.setattr(backdrop, "_high_contrast_flags", lambda: high_contrast)
+    monkeypatch.setattr(backdrop, "_transparency_setting", lambda: transparency)
+    monkeypatch.setattr(backdrop, "_dwm_composition_enabled", lambda: composition)
+    monkeypatch.setattr(backdrop, "_power_status_flag", lambda: power_flag)
+    return backdrop
+
+
+class TestTheLadderActuallyMoves:
+
+    def test_the_control_a_healthy_win11_host_reaches_window(self, monkeypatch):
+        # Without this, the two proofs below could pass vacuously (everything
+        # lands on TOKEN when nothing works).
+        _wire_win11(monkeypatch)
+        env = probe_environment(user_override="auto")
+
+        assert env.remote_session is False
+        assert env.high_contrast is False
+        assert env.transparency_enabled is True
+        assert env.dwm_composition is True
+        assert env.battery_saver is False
+        assert decide_tier(env) is GlassTier.WINDOW
+
+    def test_a_remote_session_caps_the_tier_at_token(self, monkeypatch):
+        """PROOF 1 — the RDP ceiling, executed. ``GetSystemMetrics`` reports a
+        Terminal Services session; the same host that just reached WINDOW must
+        now cap at TOKEN, and the truth log must NAME the reason."""
+        _wire_win11(monkeypatch, remote=1)
+
+        env = probe_environment(user_override="auto")
+        decision = explain_tier(env)
+
+        assert env.remote_session is True
+        assert decision.tier is GlassTier.TOKEN
+        assert "remote_session" in decision.binding
+        assert "remote=1" in format_truth_log(decision)
+
+    def test_high_contrast_forces_flat(self, monkeypatch):
+        """PROOF 2 — the accessibility mandate, executed. ``SPI_GETHIGHCONTRAST``
+        reports the feature ON; the tier must be FLAT, which outranks every other
+        ceiling (it is the bottom of the ladder, so ``min()`` does the
+        outranking)."""
+        _wire_win11(monkeypatch, high_contrast=1)
+
+        env = probe_environment(user_override="auto")
+        decision = explain_tier(env)
+
+        assert env.high_contrast is True
+        assert decision.tier is GlassTier.FLAT
+        assert "high_contrast" in decision.binding
+        assert "hc=1" in format_truth_log(decision)
+
+    def test_high_contrast_outranks_even_an_operator_who_asked_for_glass(
+            self, monkeypatch):
+        _wire_win11(monkeypatch, high_contrast=1)
+        assert decide_tier(probe_environment(user_override="real")) is GlassTier.FLAT
+
+    def test_high_contrast_beats_rdp_because_flat_is_lower_than_token(
+            self, monkeypatch):
+        _wire_win11(monkeypatch, high_contrast=1, remote=1)
+        assert decide_tier(probe_environment(user_override="auto")) is GlassTier.FLAT
+
+    @pytest.mark.parametrize("kwargs,field", [
+        ({"transparency": 0}, "transparency_enabled"),
+        ({"composition": False}, "dwm_composition"),
+        ({"power_flag": 1}, "battery_saver"),
+    ])
+    def test_every_other_wired_veto_also_lands(self, monkeypatch, kwargs, field):
+        """The OS turned transparency off / DWM says it is not compositing /
+        battery saver is engaged. Each is a POSITIVE observation of absence, so
+        each vetoes the OS material — the same host drops from WINDOW to TOKEN."""
+        _wire_win11(monkeypatch, **kwargs)
+        env = probe_environment(user_override="auto")
+
+        expected = False if field != "battery_saver" else True
+        assert getattr(env, field) is expected
+        assert decide_tier(env) is SAFE_FLOOR
+
+    def test_an_unreadable_primitive_is_unknown_and_does_not_veto(self, monkeypatch):
+        """The fail-soft direction, at the bottom of the real stack: every
+        primitive answers "cannot be asked". None of them vetoes (that is the
+        ratified tri-state law), nothing degrades, and the host keeps the material
+        it demonstrably renders today."""
+        _wire_win11(monkeypatch, remote=None, high_contrast=None,
+                    transparency=None, composition=None, power_flag=None)
+
+        env = probe_environment(user_override="auto")
+
+        assert (env.remote_session, env.high_contrast, env.transparency_enabled,
+                env.dwm_composition, env.battery_saver) == (None,) * 5
+        assert env.degraded is False           # unknown is not broken
+        assert decide_tier(env) is GlassTier.WINDOW
+
+    def test_the_probes_never_take_the_gui_down(self, monkeypatch):
+        """A primitive that RAISES (rather than returning None) must not escape
+        either: the contract's own belt (``_ask_backdrop``) answers it as unknown
+        and the decision stands. ``probe_environment`` runs on the GUI thread — a
+        probe that throws must not be able to take the app down."""
+        backdrop = _wire_win11(monkeypatch)
+
+        def boom(*_args):
+            raise OSError("user32.dll is on fire")
+
+        for primitive in ("_system_metric", "_high_contrast_flags",
+                          "_transparency_setting", "_dwm_composition_enabled",
+                          "_power_status_flag"):
+            monkeypatch.setattr(backdrop, primitive, boom)
+
+        env = probe_environment(user_override="auto")     # must NOT raise
+
+        assert env.remote_session is None
+        assert env.high_contrast is None
+        assert decide_tier(env) <= GlassTier.WINDOW

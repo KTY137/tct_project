@@ -924,10 +924,13 @@ def format_truth_log(decision: TierDecision, *, window: str = "main",
 #
 # THE CTYPES QUARANTINE: gui/backdrop.py is the only module in the GUI package
 # that may import ctypes or touch DWM. The five native observations below
-# (composition, transparency, high contrast, remote session, battery saver)
-# therefore ship as honest UNKNOWNs (None) here, and the wiring beat injects
-# real implementations from backdrop.py. `None` does not veto anything (see
-# GlassEnvironment), so the shipped behaviour is unchanged until they are wired.
+# (composition, transparency, high contrast, remote session, battery saver) are
+# therefore IMPLEMENTED THERE and merely CALLED here, through a local, failure-
+# proof, Windows-gated import (see _ask_backdrop). Beat G-B2b, and it is not a
+# formality: while these five returned a hardcoded None, the tier on a real
+# machine was decided by build + RHI + shell alone — the RDP ceiling was inert,
+# the high-contrast FLAT mandate never fired, and every "it degrades safely on
+# RDP / high contrast" claim in this project was a claim about unwritten code.
 
 def _platform_probe() -> str:
     return sys.platform
@@ -969,25 +972,81 @@ def _software_rasterizer_probe() -> bool | None:
     return None
 
 
+def _ask_backdrop(probe: str) -> bool | None:
+    """Ask ``gui.backdrop`` — the ctypes quarantine — for ONE native observation
+    (beat G-B2b).
+
+    The import is deliberately LOCAL and deliberately Windows-gated:
+
+    * local, because this module must stay importable with no Qt and no ctypes
+      at all (the seed inherits it, and ``tests/test_glass_env.py`` pins the
+      module-level import list with an AST guard). This is the same pattern
+      ``_qt_platform_probe`` and ``_override_probe`` already use — the contract
+      never *contains* the mechanism, it *calls* it;
+    * Windows-gated, because all five observations are Win32-only. On Linux we do
+      not even pay the Qt import to learn that the answer is ``None``.
+
+    Returns ``None`` on any failure at all — a missing API, a denied registry
+    key, a ``gui.backdrop`` that will not import, a probe that was monkeypatched
+    into something broken. ``None`` is the legal "cannot be asked" (it vetoes
+    nothing); it is NOT ``False`` (a positive observation of absence, which
+    vetoes) and it is never a guess in the UP direction. This function therefore
+    cannot raise — which matters, because :func:`probe_environment` runs from the
+    GUI thread and an exception here would degrade the whole decision (and, in
+    the worst case, take an unrelated Qt event delivery with it).
+
+    The return value is passed through UNCOERCED on purpose: if a future
+    ``gui.backdrop`` returns something that is not ``bool | None``,
+    :func:`normalize` sees the garbage and degrades to :data:`SAFE_FLOOR`, which
+    is the honest answer and the safe direction. Silently mapping it to ``None``
+    here would hide a broken probe behind a legal-looking "unknown".
+    """
+    if sys.platform != "win32":
+        return None
+    try:
+        from gui import backdrop        # local: ctypes stays quarantined THERE
+
+        return getattr(backdrop, probe)()
+    except Exception:
+        logger.debug("glass: native probe backdrop.%s is unavailable — the "
+                     "observation stays unknown (None)", probe, exc_info=True)
+        return None
+
+
 def _dwm_composition_probe() -> bool | None:
-    return None     # TODO(G-B2b wiring): DwmIsCompositionEnabled, from backdrop.py
+    """``DwmIsCompositionEnabled``. ``False`` ⇒ no ``WINDOW``."""
+    return _ask_backdrop("dwm_composition_probe")
 
 
 def _transparency_probe() -> bool | None:
-    return None     # TODO(G-B2b wiring): HKCU\...\Themes\Personalize\EnableTransparency
+    """``HKCU\\...\\Themes\\Personalize\\EnableTransparency``. ``False`` ⇒ no
+    ``WINDOW`` (the material composes as a flat tint). Absent from the registry
+    ⇒ ``None``: a fresh profile that never touched the setting is "cannot be
+    asked", and reading it as OFF would kill glass that works."""
+    return _ask_backdrop("transparency_probe")
 
 
 def _high_contrast_probe() -> bool | None:
-    return None     # TODO(G-B2b wiring): SPI_GETHIGHCONTRAST. No Qt API; none on Linux
-                    # (research §9.5) — the operator override covers that row.
+    """``SystemParametersInfoW(SPI_GETHIGHCONTRAST)``. ``True`` ⇒ ``FLAT``,
+    mandatory, outranking everything. There is no Qt API for this and no Linux
+    mechanism at all (research §9.5) — on Linux it stays ``None`` and the
+    operator override covers that row."""
+    return _ask_backdrop("high_contrast_probe")
 
 
 def _remote_session_probe() -> bool | None:
-    return None     # TODO(G-B2b wiring): GetSystemMetrics(SM_REMOTESESSION)
+    """``GetSystemMetrics(SM_REMOTESESSION)``. ``True`` ⇒ ceiling ``TOKEN``.
+
+    The probe that turns SYNTHESIS §7.3 P4's "instant downgrade on RDP" from a
+    sentence into a function of the environment. X-forwarding / VNC on Linux is
+    not observable this way and stays ``None`` (research §7)."""
+    return _ask_backdrop("remote_session_probe")
 
 
 def _battery_saver_probe() -> bool | None:
-    return None     # TODO(G-B2b wiring): GetSystemPowerStatus().SystemStatusFlag
+    """``GetSystemPowerStatus().SystemStatusFlag``. ``True`` ⇒ no ``WINDOW``
+    (Windows battery saver suppresses transparency effects outright)."""
+    return _ask_backdrop("battery_saver_probe")
 
 
 def _composition_interop_probe() -> bool:

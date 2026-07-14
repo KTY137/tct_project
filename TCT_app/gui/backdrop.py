@@ -52,6 +52,19 @@ is state on ONE HWND, and it dies with it:
   makes the failure mode structurally impossible: no window is ever translucent
   while its material is not verifiably attached to its current HWND.
 
+Beat G-B2b (2026-07-14) added the two things that were still *claims about
+unwritten code*:
+
+* the five **environment probes** the glass contract (``gui/glass_env.py``) needs
+  and cannot make itself, because it is pure and this module owns the ctypes
+  quarantine: :func:`dwm_composition_probe`, :func:`transparency_probe`,
+  :func:`high_contrast_probe`, :func:`remote_session_probe`,
+  :func:`battery_saver_probe`. Without them the RDP ceiling and the
+  high-contrast FLAT mandate never fired on a real machine.
+* the underlay law's **activation clause** (:func:`set_canvas_for_activation`):
+  an INACTIVE window has no live material — DWM paints a fallback solid behind
+  it (measured, ``82ddd2f``) — so the alpha canvas follows the focus.
+
 The theme-aware entry point every caller actually uses is
 ``gui.style.reassert_window_backdrop`` (it owns the mode → attr-20 tint and the
 ``WS_EX_LAYERED`` opacity pin); this module stays theme-blind.
@@ -133,6 +146,18 @@ _KIND_TO_DWMSBT = {
 # Candidate Qt-side canvas strategy — see module docstring. Flip this ONE
 # constant for the real-display eyeball test; nothing else needs to change.
 _CANVAS_MODE = "translucent_attr"  # or "no_system_background"
+
+# THE ACTIVATION CLAUSE of the underlay law (beat G-B2b, measured in 82ddd2f):
+# DWM paints a fallback SOLID (mid-grey [84,84,84]) behind a system backdrop on
+# a window that is not active, so an inactive window has no live material and its
+# alpha canvas is a hole over nothing. See set_canvas_for_activation.
+#
+# The kill switch is a single constant on purpose: the cure repolishes the window
+# + #mainShell on every focus change, and if that turns out to flicker on a real
+# display worse than the mid-grey it fixes, doing nothing is a legitimate outcome
+# — flip this to False and the whole clause is inert (the canvas then simply
+# stays open, which is exactly the pre-G-B2b behaviour).
+CANVAS_FOLLOWS_ACTIVATION = True
 
 # Per-window bookkeeping of "does this window currently have a real backdrop
 # applied", so apply_backdrop(w, "none") only issues the DWM reset call when
@@ -261,6 +286,202 @@ def _native_hwnd(window: QWidget) -> Optional[int]:
     if window.windowHandle() is None:
         return None
     return int(window.winId())
+
+
+# --------------------------------------------------------------------------- #
+# The five environment probes (beat G-B2b) — the OTHER half of the quarantine  #
+# --------------------------------------------------------------------------- #
+#
+# gui/glass_env.py is THE glass contract, and it is pure: no Qt, no ctypes, no
+# I/O (an AST guard in tests/test_glass_env.py pins that). But five of its
+# environment fields can only be answered by Win32, so they shipped as honest
+# UNKNOWNs (None) and the RDP ceiling, the high-contrast FLAT mandate and the
+# battery rule were, in practice, dead code on a real machine.
+#
+# They live HERE, in the one module allowed to touch ctypes, and glass_env's
+# module-level probes delegate to them (lazily, so it stays importable with no
+# Qt at all). Each one is split in two:
+#
+#   _<api>()          the ctypes/winreg primitive — the ONLY thing that can
+#                     fail, monkeypatchable, and it never raises: it answers
+#                     None for "cannot be asked" (non-Windows, missing API,
+#                     failed call, denied key).
+#   <name>_probe()    the tri-state the contract consumes: True/False/None.
+#
+# FAIL-SOFT, IN ONE DIRECTION. "Cannot be asked" is None, never False and never
+# True, because in glass_env False is a POSITIVE observation of absence (it
+# VETOES a tier) while None does not veto. A probe that guessed False would
+# silently kill glass that works; a probe that guessed True would promise a
+# material the host cannot render — the one unacceptable failure. So: guess
+# NOTHING. A probe that raises would be worse still (it degrades the whole
+# decision), so none of them can.
+
+SM_REMOTESESSION = 0x1000
+"""``GetSystemMetrics`` index: non-zero iff this process runs in a Terminal
+Services / RDP client session (winuser.h)."""
+
+SPI_GETHIGHCONTRAST = 0x0042
+"""``SystemParametersInfoW`` action: fill a ``HIGHCONTRAST`` struct (winuser.h)."""
+
+HCF_HIGHCONTRASTON = 0x00000001
+"""``HIGHCONTRAST.dwFlags`` bit: the high-contrast accessibility feature is ON."""
+
+SYSTEM_STATUS_FLAG_POWER_SAVING_ON = 0x01
+"""``SYSTEM_POWER_STATUS.SystemStatusFlag`` bit: battery saver is engaged
+(winbase.h; the field was ``Reserved1`` before Windows 10)."""
+
+_TRANSPARENCY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize"
+_TRANSPARENCY_VALUE = "EnableTransparency"
+"""HKCU — Settings ▸ Personalization ▸ Colors ▸ "Transparency effects". There is
+no public Win32 API for it; the registry value IS the documented surface."""
+
+
+class _HIGHCONTRAST(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", wintypes.UINT),
+        ("dwFlags", wintypes.DWORD),
+        ("lpszDefaultScheme", wintypes.LPWSTR),
+    ]
+
+
+class _SYSTEM_POWER_STATUS(ctypes.Structure):
+    _fields_ = [
+        ("ACLineStatus", ctypes.c_ubyte),
+        ("BatteryFlag", ctypes.c_ubyte),
+        ("BatteryLifePercent", ctypes.c_ubyte),
+        ("SystemStatusFlag", ctypes.c_ubyte),
+        ("BatteryLifeTime", wintypes.DWORD),
+        ("BatteryFullLifeTime", wintypes.DWORD),
+    ]
+
+
+def _system_metric(index: int) -> Optional[int]:
+    """``GetSystemMetrics(index)``, or ``None`` if it cannot be asked."""
+    if sys.platform != "win32":
+        return None
+    try:
+        return int(ctypes.windll.user32.GetSystemMetrics(ctypes.c_int(index)))  # type: ignore[attr-defined]
+    except Exception:
+        logger.debug("glass: GetSystemMetrics(%s) is unavailable", index,
+                     exc_info=True)
+        return None
+
+
+def _high_contrast_flags() -> Optional[int]:
+    """``SystemParametersInfoW(SPI_GETHIGHCONTRAST)`` → ``HIGHCONTRAST.dwFlags``.
+
+    ``None`` if it cannot be asked. There is deliberately no Qt equivalent: Qt
+    exposes no high-contrast query, which is exactly why this lives in ctypes."""
+    if sys.platform != "win32":
+        return None
+    try:
+        info = _HIGHCONTRAST()
+        info.cbSize = ctypes.sizeof(_HIGHCONTRAST)
+        ok = ctypes.windll.user32.SystemParametersInfoW(  # type: ignore[attr-defined]
+            wintypes.UINT(SPI_GETHIGHCONTRAST),
+            wintypes.UINT(ctypes.sizeof(_HIGHCONTRAST)),
+            ctypes.byref(info), wintypes.UINT(0))
+        if not ok:
+            logger.debug("glass: SPI_GETHIGHCONTRAST returned FALSE")
+            return None
+        return int(info.dwFlags)
+    except Exception:
+        logger.debug("glass: SPI_GETHIGHCONTRAST is unavailable", exc_info=True)
+        return None
+
+
+def _transparency_setting() -> Optional[int]:
+    """``HKCU\\...\\Themes\\Personalize\\EnableTransparency``, or ``None``.
+
+    ``None`` covers BOTH "not Windows" and "the value is not there" — and the
+    second one is a real, common state (a fresh profile that never touched the
+    setting). Reporting that as ``0`` would VETO the material on a machine whose
+    transparency is, in fact, on: guessing is the failure mode, so we do not."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import winreg                             # local: Windows-only stdlib
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _TRANSPARENCY_KEY) as key:
+            value, _kind = winreg.QueryValueEx(key, _TRANSPARENCY_VALUE)
+        return int(value)
+    except FileNotFoundError:
+        logger.debug("glass: EnableTransparency is not set on this profile")
+        return None
+    except Exception:
+        logger.debug("glass: EnableTransparency could not be read", exc_info=True)
+        return None
+
+
+def _dwm_composition_enabled() -> Optional[bool]:
+    """``DwmIsCompositionEnabled``, or ``None`` if it cannot be asked.
+
+    On Windows 8+ the DWM cannot be turned off and this is always TRUE — which
+    is precisely why a FALSE here is worth having: it is the only thing that can
+    tell us we are somewhere the material genuinely cannot composite."""
+    if sys.platform != "win32":
+        return None
+    try:
+        enabled = wintypes.BOOL()
+        hr = ctypes.windll.dwmapi.DwmIsCompositionEnabled(  # type: ignore[attr-defined]
+            ctypes.byref(enabled))
+        if int(hr) != 0:
+            logger.debug("glass: DwmIsCompositionEnabled failed (hr=%s)", hr)
+            return None
+        return bool(enabled.value)
+    except Exception:
+        logger.debug("glass: DwmIsCompositionEnabled is unavailable", exc_info=True)
+        return None
+
+
+def _power_status_flag() -> Optional[int]:
+    """``GetSystemPowerStatus().SystemStatusFlag``, or ``None``."""
+    if sys.platform != "win32":
+        return None
+    try:
+        status = _SYSTEM_POWER_STATUS()
+        ok = ctypes.windll.kernel32.GetSystemPowerStatus(  # type: ignore[attr-defined]
+            ctypes.byref(status))
+        if not ok:
+            logger.debug("glass: GetSystemPowerStatus returned FALSE")
+            return None
+        return int(status.SystemStatusFlag)
+    except Exception:
+        logger.debug("glass: GetSystemPowerStatus is unavailable", exc_info=True)
+        return None
+
+
+def remote_session_probe() -> Optional[bool]:
+    """True iff this process is being displayed over RDP / Terminal Services.
+
+    The one probe that must never say False on a remote session: glass over a
+    WAN link is bandwidth spent on decoration while the operator waits for a
+    scan point (``glass_env.GlassEnvironment.remote_session`` — ceiling TOKEN)."""
+    raw = _system_metric(SM_REMOTESESSION)
+    return None if raw is None else bool(raw)
+
+
+def high_contrast_probe() -> Optional[bool]:
+    """True iff the high-contrast accessibility feature is on (⇒ FLAT, mandatory)."""
+    flags = _high_contrast_flags()
+    return None if flags is None else bool(flags & HCF_HIGHCONTRASTON)
+
+
+def transparency_probe() -> Optional[bool]:
+    """True/False for the OS "Transparency effects" setting; ``None`` if unset."""
+    raw = _transparency_setting()
+    return None if raw is None else bool(raw)
+
+
+def dwm_composition_probe() -> Optional[bool]:
+    """True iff DWM composition is enabled."""
+    return _dwm_composition_enabled()
+
+
+def battery_saver_probe() -> Optional[bool]:
+    """True iff Windows battery saver is engaged (it suppresses transparency)."""
+    flag = _power_status_flag()
+    return None if flag is None else bool(flag & SYSTEM_STATUS_FLAG_POWER_SAVING_ON)
 
 
 # --------------------------------------------------------------------------- #
@@ -751,6 +972,46 @@ def window_has_material(window: QWidget) -> bool:
     return window in _backdrop_applied_windows
 
 
+def set_canvas_for_activation(window: QWidget, active: bool) -> None:
+    """The underlay law's missing loss path: **an INACTIVE window has no live
+    material** (beat G-B2b; measured in ``82ddd2f``).
+
+    DWM does not composite a system backdrop on a non-active window. It paints a
+    **fallback solid** — ``[84, 84, 84]``, mid-grey — behind it instead. That is
+    not damage and not a bug in this code: it is what the OS does, reproduced on
+    a live, never-minimized window simply by stealing its focus (the spike's
+    ``d_behind`` collapsed 63.99 → 0.0 and came back EXACTLY on re-activation),
+    and it happens on the shipped QWidget cockpit and on a ``QQuickWindow`` root
+    alike.
+
+    So "inactive" is a loss path like any other, and the underlay law already
+    says what to do with those: **no alpha hole without a material behind it.**
+    An unfocused cockpit that keeps its rgba canvas is painting alpha over a flat
+    ``#545454`` — precisely the class of defect the law exists to prevent. This
+    closes the canvas on deactivation and reopens it on activation.
+
+    NOT a re-assert. The DWM attributes are still attached and still S_OK on this
+    HWND — they were never the problem, and a full :func:`reassert_backdrop` is
+    *measured* to do nothing here (it failed 3/3 in the spike). The window
+    therefore stays in :data:`_backdrop_applied_windows`
+    (:func:`window_has_material` keeps reporting True, so style.py's
+    ``WS_EX_LAYERED`` opacity pin does not drop out from under a focus change),
+    and only the glass PIXELS follow the focus.
+
+    A window with no verified material is left completely alone — which makes
+    this a true no-op in the shipped ``"none"`` default, where no window is ever
+    in that set.
+    """
+    if not CANVAS_FOLLOWS_ACTIVATION:
+        return
+    if window not in _backdrop_applied_windows:
+        return
+    if active:
+        _prepare_window_canvas(window)
+    else:
+        _close_glass_canvas(window)
+
+
 def _reset_backdrop(window: QWidget) -> bool:
     if window not in _backdrop_applied_windows:
         return True  # already opaque with no backdrop -- true no-op
@@ -828,6 +1089,17 @@ class _BackdropGuard(QObject):
       rider-2 "post-toggle re-assert one turn later", beating Qt's own palette
       heuristic to the last write of attr 20).
 
+    The ACTIVATION pair is a third class again, and it is NOT a re-assert:
+
+    * ``WindowActivate`` / ``WindowDeactivate`` — the window gained/lost focus.
+      An inactive window HAS NO LIVE MATERIAL (DWM paints a fallback solid behind
+      it — measured, ``82ddd2f``), so its alpha canvas would be a hole over
+      nothing. These route to :func:`set_canvas_for_activation`, which flips only
+      the glass PIXELS. They must NOT route to :func:`reassert_backdrop`: the DWM
+      attributes never died, re-asserting them is measured to change nothing
+      (0/3 in the spike), and it would cost a full native chain + a repaint nudge
+      on every alt-tab.
+
     NOT watched, deliberately: ``QEvent.PaletteChange``. Every ``setPalette`` and
     every stylesheet repolish in the app emits it — including the ones the
     re-assert itself performs — so hooking it is a feedback source with no
@@ -848,14 +1120,21 @@ class _BackdropGuard(QObject):
         QEvent.Type.ThemeChange,
         QEvent.Type.ApplicationPaletteChange,
     })
-    _WATCHED = frozenset(_IMMEDIATE) | _DEFERRED
+    # Focus events — canvas only, never the DWM chain (see the class docstring).
+    _ACTIVATION = {
+        QEvent.Type.WindowActivate: True,
+        QEvent.Type.WindowDeactivate: False,
+    }
+    _WATCHED = frozenset(_IMMEDIATE) | _DEFERRED | frozenset(_ACTIVATION)
 
     def __init__(self, window: QWidget,
                  reapply: Callable[[QWidget, str], None],
-                 schedule: Callable[[], None]) -> None:
+                 schedule: Callable[[], None],
+                 activation: Optional[Callable[[QWidget, bool], None]] = None) -> None:
         super().__init__(window)
         self._reapply = reapply
         self._schedule = schedule
+        self._activation = activation or set_canvas_for_activation
 
     def eventFilter(self, obj, event) -> bool:      # noqa: N802 (Qt override)
         try:
@@ -864,6 +1143,8 @@ class _BackdropGuard(QObject):
                 self._schedule()
             elif etype in self._IMMEDIATE:
                 self._reapply(obj, self._IMMEDIATE[etype])
+            elif etype in self._ACTIVATION:
+                self._activation(obj, self._ACTIVATION[etype])
         except Exception:
             # An exception here would abort an unrelated Qt event delivery.
             logger.exception("backdrop: guard re-assert failed")
@@ -872,12 +1153,24 @@ class _BackdropGuard(QObject):
 
 def install_backdrop_guard(window: QWidget,
                            reapply: Callable[[QWidget, str], None],
-                           schedule: Callable[[], None]) -> bool:
+                           schedule: Callable[[], None],
+                           activation: Optional[Callable[[QWidget, bool], None]] = None
+                           ) -> bool:
     """Install the :class:`_BackdropGuard` event filter on ``window`` once.
 
     ``reapply(window, reason)`` and ``schedule()`` are injected by the theme
     layer (``gui.style``) — this module stays theme-blind and never imports
     style.py (that dependency only runs one way).
+
+    ``activation(window, active)`` is the third injection seam (beat G-B2b), and
+    it exists for exactly one reason: the RUN-STATE GATE. Re-opening the glass
+    canvas repolishes the window + ``#mainShell`` (a QSS pass on the GUI thread),
+    and a cosmetic repaint must never preempt a run — so ``gui.style`` passes a
+    wrapper that consults ``scan_is_active()`` (the same predicate that gates
+    :func:`nudge_repaint`), keeping this module run-state-blind exactly as it is
+    theme-blind. Unset ⇒ :func:`set_canvas_for_activation` directly, i.e. the
+    ungated repair; that is the right default for a module whose whole activation
+    clause is a no-op unless a material is actually attached.
 
     Returns True if a guard was installed by this call, False if the window was
     already guarded (idempotent — the app-wide fan-out calls this on every
@@ -886,7 +1179,7 @@ def install_backdrop_guard(window: QWidget,
     later needs no second wiring pass."""
     if window in _guarded_windows:
         return False
-    window.installEventFilter(_BackdropGuard(window, reapply, schedule))
+    window.installEventFilter(_BackdropGuard(window, reapply, schedule, activation))
     _guarded_windows.add(window)
     return True
 
