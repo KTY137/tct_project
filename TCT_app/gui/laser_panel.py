@@ -8,6 +8,7 @@ software) and a demoted, collapsed metadata card.
 from __future__ import annotations
 
 import logging
+import weakref
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
@@ -25,6 +26,40 @@ from gui.status_widgets import StatusChip, flash_button, set_button_busy, set_bu
 from gui.style import SPACE_MD, SPACE_SM, WARN_AMBER, palette
 
 logger = logging.getLogger(__name__)
+
+
+def _join_worker_thread(thread: "QThread | None") -> None:
+    """Quit and join a worker QThread — module-level BY DESIGN.
+
+    Registered as a ``weakref.finalize`` callback on the panel (see
+    ``LaserPanel.__init__``); it must not close over the panel or it would keep
+    it alive and resurrect the immortal-panel leak this change fixed. It takes
+    only the thread.
+
+    WHY IT EXISTS. The VISA worker runs on ``thread``, which is parented to the
+    QApplication so it survives a soft config-reload. The worker QObject is held
+    by a plain Python attribute on the panel, so once the panel became
+    collectable (the bound-method slot fix) a drop WITHOUT ``shutdown()`` — a
+    test that just lets the panel go, or the reaper whose gc.collect() pre-empts
+    its own shutdown() — left the thread running with no owner. Unlike the
+    camera/motor poll timers this worker is idle at teardown (its poll ``QTimer``
+    lives on the GUI thread), so it does not corrupt the heap mid-run; instead
+    the orphaned QThread is destroyed by ``~QApplication`` at interpreter exit —
+    the hard Qt6 abort ``QThread: Destroyed while thread is still running``
+    (0xC0000409). The immortal-lambda used to keep the panel from ever being
+    dropped, so this never surfaced.
+
+    A ``weakref.finalize`` callback runs while the panel's members are still
+    alive, so quitting+joining the thread here stops it deterministically when
+    the panel is finalized. Bounded wait; idempotent with ``shutdown()``; a
+    dangling wrapper after the thread self-deleted just raises and is ignored."""
+    if thread is None:
+        return
+    try:
+        thread.quit()
+        thread.wait(3000)
+    except (RuntimeError, ReferenceError):
+        pass
 
 
 class _LaserWorker(QObject):
@@ -105,6 +140,13 @@ class LaserPanel(QWidget):
         self._laser_thread.finished.connect(self._laser_worker.deleteLater)
         self._laser_thread.finished.connect(self._laser_thread.deleteLater)
         self._laser_thread.start()
+        # Stop+join the VISA worker thread whenever the panel is finalized, even
+        # if nobody called shutdown() first. The finalize holds only a WEAK ref
+        # to the panel, so it does not keep it alive; it holds the thread so it
+        # can quit+join it and not leak a running QThread to interpreter exit.
+        # See _join_worker_thread.
+        self._thread_finalizer = weakref.finalize(
+            self, _join_worker_thread, self._laser_thread)
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -172,7 +214,10 @@ class LaserPanel(QWidget):
                        self._ed_atten, self._ed_notes):
             signal = getattr(widget, "valueChanged", None) or getattr(widget, "currentTextChanged", None) or getattr(widget, "textChanged", None)
             if signal is not None:
-                signal.connect(lambda *_: self._chip_meta.set_status("Metadata dirty", "warn"))
+                # Bound method, never a lambda — a self-capturing closure on a
+                # CHILD's signal is held strongly by Qt's connection storage and
+                # makes this panel immortal (tests/test_no_immortal_panels.py).
+                signal.connect(self._mark_metadata_dirty)
 
         form.addRow("Wavelength:", self._ed_wavelength)
         form.addRow("Rep. mode:",  self._ed_rep_mode)
@@ -269,16 +314,17 @@ class LaserPanel(QWidget):
         # "I change it in the GUI but it doesn't send" bench complaint.
         # ``editingFinished`` fires on Enter / focus-out, never per keystroke, so
         # it does not spam the device.  ``.value()`` is read at call time.
-        self._spin_freq.editingFinished.connect(
-            lambda: self._live_apply(self._wfg.set_frequency, self._spin_freq.value()))
-        self._spin_ampl.editingFinished.connect(
-            lambda: self._live_apply(self._wfg.set_amplitude, self._spin_ampl.value()))
-        self._spin_offset.editingFinished.connect(
-            lambda: self._live_apply(self._wfg.set_offset, self._spin_offset.value()))
-        self._spin_width.editingFinished.connect(
-            lambda: self._live_apply(self._wfg.set_pulse_width, self._spin_width.value()))
-        self._spin_duty.editingFinished.connect(
-            lambda: self._live_apply(self._wfg.set_duty_cycle, self._spin_duty.value()))
+        #
+        # Bound methods, never lambdas: a self-capturing closure connected to a
+        # CHILD spin box is stored strongly by that child's C++ connection list,
+        # which makes the panel immortal (tests/test_no_immortal_panels.py).
+        # The device method and ``.value()`` are still both resolved at CALL
+        # time inside each slot, exactly as the lambdas did.
+        self._spin_freq.editingFinished.connect(self._live_apply_frequency)
+        self._spin_ampl.editingFinished.connect(self._live_apply_amplitude)
+        self._spin_offset.editingFinished.connect(self._live_apply_offset)
+        self._spin_width.editingFinished.connect(self._live_apply_pulse_width)
+        self._spin_duty.editingFinished.connect(self._live_apply_duty_cycle)
         _load_label = self._load_combo.currentText()
         self._chip_load.set_status(f"Load {_load_label}",
                                    "good" if _load_label == "50 Ω" else "warn")
@@ -423,6 +469,37 @@ class LaserPanel(QWidget):
                 "Value cached; sent when you Connect the wavegen.")
             return
         self._submit(lambda: setter(value), self._on_live_applied)
+
+    # -- live-apply slots (one per wavegen control) ----------------------- #
+    #
+    # Bound methods, not lambdas and not functools.partial: PySide6 holds a
+    # bound-method slot weakly, so these connections cannot keep the panel
+    # alive; a closure (or a partial, which also holds ``self`` strongly) stored
+    # in a child spin box's connection list would. Each reads ``.value()`` at
+    # call time, exactly as before.
+
+    def _live_apply_frequency(self) -> None:
+        self._live_apply(self._wfg.set_frequency, self._spin_freq.value())
+
+    def _live_apply_amplitude(self) -> None:
+        self._live_apply(self._wfg.set_amplitude, self._spin_ampl.value())
+
+    def _live_apply_offset(self) -> None:
+        self._live_apply(self._wfg.set_offset, self._spin_offset.value())
+
+    def _live_apply_pulse_width(self) -> None:
+        self._live_apply(self._wfg.set_pulse_width, self._spin_width.value())
+
+    def _live_apply_duty_cycle(self) -> None:
+        self._live_apply(self._wfg.set_duty_cycle, self._spin_duty.value())
+
+    def _mark_metadata_dirty(self, *_) -> None:
+        """Any edit to a PDL-800 metadata field marks it unsaved.
+
+        ``*_`` because the three signals wired to it carry different payloads
+        (float / str / str), none of which is used.
+        """
+        self._chip_meta.set_status("Metadata dirty", "warn")
 
     def _on_live_applied(self, result, err: str) -> None:
         if err:
@@ -649,6 +726,11 @@ class LaserPanel(QWidget):
         if thread is not None:
             thread.quit()
             thread.wait(3000)
+        # The worker thread is stopped; retire the finalize so it does not
+        # repeat this no-op (or trip on the now-deleted wrapper).
+        finalizer = getattr(self, "_thread_finalizer", None)
+        if finalizer is not None:
+            finalizer.detach()
 
     def closeEvent(self, event) -> None:
         self.shutdown()

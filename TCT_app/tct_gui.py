@@ -852,7 +852,11 @@ class TCTMainWindow(QMainWindow):
         btn_clear = QPushButton("Clear")
         hint = QLabel("Binary waveform replies are summarized, not dumped.")
         hint.setStyleSheet("color:#888;")
-        btn_clear.clicked.connect(lambda: self._device_debug_view.clear())
+        # Bound method, never a lambda — a self-capturing closure connected to a
+        # child button's signal is stored strongly by Qt and makes the whole
+        # main window (~3,290 widgets) immortal across a config reload.
+        # See tests/test_no_immortal_panels.py.
+        btn_clear.clicked.connect(self._clear_device_debug)
         bar.addWidget(self._chk_device_debug)
         bar.addWidget(btn_clear)
         bar.addWidget(hint)
@@ -888,6 +892,10 @@ class TCTMainWindow(QMainWindow):
         device_logger.addHandler(handler)
         self._device_debug_handler = handler
 
+    def _clear_device_debug(self) -> None:
+        """Empty the raw device-I/O log view (the dock's Clear button)."""
+        self._device_debug_view.clear()
+
     # ------------------------------------------------------------------ #
     # Menu bar / toolbar / theme / window-state persistence              #
     # ------------------------------------------------------------------ #
@@ -908,7 +916,16 @@ class TCTMainWindow(QMainWindow):
             if checkable:
                 a.toggled.connect(slot)               # passes the bool
             else:
-                a.triggered.connect(lambda *_: slot())  # drop the checked arg
+                # Connect the bound method DIRECTLY, never through
+                # ``lambda *_: slot()``. PySide6 already drops the surplus
+                # ``checked`` arg for a zero-arg slot (verified), so the lambda
+                # bought nothing — but it captured ``slot`` (a bound method of
+                # this window) in a closure that Qt then stored in the QAction's
+                # C++ connection list, one opaque hop of a cycle gc cannot see.
+                # Thirteen menu/toolbar actions => thirteen anchors that made
+                # the whole window immortal across a config reload.
+                # See tests/test_no_immortal_panels.py.
+                a.triggered.connect(slot)
             return a
 
         self._act_connect    = _act("Connect All", self._connect_all,

@@ -232,15 +232,29 @@ class CalibrationPanel(QWidget):
             self._rep_n, self._rep_approach, self._rep_settle,
             self._rep_cal, self._rep_cal_axis, self._rep_cal_dist,
         )
+        # ``self._mark_dirty`` is a BOUND METHOD, never a lambda: PySide6 holds
+        # bound-method slots weakly, so these connections do not keep the panel
+        # alive. A ``lambda *_: self._set_dirty(True)`` (what these were) is
+        # stored STRONGLY by the child widget's C++ connection list and closes
+        # the cycle child -> connection -> closure -> panel -> child, one hop of
+        # which gc cannot see. See tests/test_no_immortal_panels.py.
         for widget in widgets:
             if isinstance(widget, QComboBox):
-                widget.currentTextChanged.connect(lambda *_: self._set_dirty(True))
+                widget.currentTextChanged.connect(self._mark_dirty)
             elif isinstance(widget, (QDoubleSpinBox, QSpinBox)):
-                widget.valueChanged.connect(lambda *_: self._set_dirty(True))
+                widget.valueChanged.connect(self._mark_dirty)
             elif isinstance(widget, QLineEdit):
-                widget.textChanged.connect(lambda *_: self._set_dirty(True))
+                widget.textChanged.connect(self._mark_dirty)
             elif isinstance(widget, QCheckBox):
-                widget.toggled.connect(lambda *_: self._set_dirty(True))
+                widget.toggled.connect(self._mark_dirty)
+
+    def _mark_dirty(self, *_) -> None:
+        """Any edit to a tracked field marks the calibration unsaved.
+
+        Takes ``*_`` because the four signals wired above deliver different
+        payloads (str / float / str / bool) and none of them is used.
+        """
+        self._set_dirty(True)
 
     def _set_dirty(self, dirty: bool) -> None:
         if getattr(self, "_loading", False):

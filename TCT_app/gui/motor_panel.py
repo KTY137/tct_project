@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import math
+import weakref
 
 from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
@@ -68,6 +69,39 @@ def _apply_icon(button: QPushButton, name: str, color: str | None = None) -> Non
     icon = _icon(name, color=color)
     if icon is not None:
         button.setIcon(icon)
+
+
+def _join_worker_thread(thread: "QThread | None") -> None:
+    """Quit and join a worker QThread — module-level BY DESIGN.
+
+    Registered as a ``weakref.finalize`` callback on the panel (see
+    ``MotorPanel.__init__``); it must therefore not close over the panel, or it
+    would keep it alive and resurrect the immortal-panel leak this change fixed.
+    It takes only the thread.
+
+    WHY IT EXISTS. ``_PositionPoller`` and its poll ``QTimer`` run continuously
+    on ``thread``. The poller QObject is held by a plain Python attribute on the
+    panel, so once the panel became collectable (the bound-method jog-slot fix),
+    dropping the panel — by ``del``, refcount zero, or a gc sweep — deallocated
+    the poller FROM THE GUI THREAD while it was mid-``_poll`` on the worker
+    thread: a cross-thread QObject destruction, i.e. heap corruption (access
+    violation on the worker thread, ``<no Python frame>``). The self-capturing
+    jog lambdas used to keep the panel immortal, so gc never ran this teardown
+    and the hazard stayed masked — a latent crash, racier than the camera one
+    only because a simulated ``get_position()`` is lighter than a frame grab.
+
+    A ``weakref.finalize`` callback runs while the panel's members are still
+    alive (before ``tp_clear`` decrefs the poller), so quitting+joining the
+    thread here guarantees the worker thread is STOPPED before the poller is
+    freed. Bounded wait; idempotent with ``shutdown()``; a dangling wrapper
+    after the thread already self-deleted just raises and is ignored."""
+    if thread is None:
+        return
+    try:
+        thread.quit()
+        thread.wait(3000)
+    except (RuntimeError, ReferenceError):
+        pass
 
 
 class _PositionPoller(QObject):
@@ -244,6 +278,15 @@ class MotorPanel(QWidget):
         self._poll_thread.finished.connect(self._poll_thread.deleteLater)
         self._poller.position_updated.connect(self._on_position_updated)
         self._poll_thread.start()
+        # Stop+join the poll thread whenever the panel is finalized, even if
+        # nobody called shutdown() first (a test that just drops the panel, or a
+        # gc sweep). The finalize holds only a WEAK ref to the panel, so it does
+        # not keep it alive; it holds the thread so it can quit+join it BEFORE
+        # the poller QObject is freed. See _join_worker_thread. (The transient
+        # _task_thread, present only during an in-flight move, is joined by
+        # shutdown()/the reaper; a construct+drop never starts one.)
+        self._thread_finalizer = weakref.finalize(
+            self, _join_worker_thread, self._poll_thread)
 
         # Connection/homed chip refresh — a *separate*, GUI-thread-only timer
         # that reads only plain ``connected``/``homed`` attributes (no device
@@ -393,10 +436,12 @@ class MotorPanel(QWidget):
         cross.addWidget(center_decor, 1, 1)
         cross.addWidget(btn_x_pos, 1, 2)
         cross.addWidget(btn_y_neg, 2, 1)
-        btn_y_pos.clicked.connect(lambda: self._jog("y", +1))
-        btn_y_neg.clicked.connect(lambda: self._jog("y", -1))
-        btn_x_pos.clicked.connect(lambda: self._jog("x", +1))
-        btn_x_neg.clicked.connect(lambda: self._jog("x", -1))
+        # Bound methods, never lambdas — see the _jog_* block below for why the
+        # six one-liners exist. Behaviour is unchanged: same axis, same sign.
+        btn_y_pos.clicked.connect(self._jog_y_pos)
+        btn_y_neg.clicked.connect(self._jog_y_neg)
+        btn_x_pos.clicked.connect(self._jog_x_pos)
+        btn_x_neg.clicked.connect(self._jog_x_neg)
         self._motion_widgets.extend([btn_y_pos, btn_y_neg, btn_x_pos, btn_x_neg])
         self._jog_axis_btns["x"].extend([btn_x_pos, btn_x_neg])
         self._jog_axis_btns["y"].extend([btn_y_pos, btn_y_neg])
@@ -427,8 +472,8 @@ class MotorPanel(QWidget):
         z_col.addWidget(btn_z_pos)
         z_col.addStretch(1)
         z_col.addWidget(btn_z_neg)
-        btn_z_pos.clicked.connect(lambda: self._jog("z", +1))
-        btn_z_neg.clicked.connect(lambda: self._jog("z", -1))
+        btn_z_pos.clicked.connect(self._jog_z_pos)
+        btn_z_neg.clicked.connect(self._jog_z_neg)
         self._motion_widgets.extend([btn_z_pos, btn_z_neg])
         self._jog_axis_btns["z"].extend([btn_z_pos, btn_z_neg])
         z_col_outer.addLayout(z_col)
@@ -766,6 +811,37 @@ class MotorPanel(QWidget):
             dy_mm=step if axis == "y" else 0.0,
             dz_mm=step if axis == "z" else 0.0,
         ))
+
+    # -- jog-pad slots ---------------------------------------------------- #
+    #
+    # Six one-line BOUND METHODS instead of six ``lambda: self._jog("x", +1)``.
+    # They are not decoration: a lambda capturing ``self`` and connected to a
+    # child button's ``clicked`` is stored STRONGLY inside that button's C++
+    # connection list, closing the cycle panel -> button -> connection ->
+    # closure -> panel. One hop of it lives in Qt, so Python's gc can never see
+    # it, and the whole MotorPanel (~296 widgets, plus its poller thread) is
+    # immortal — measured. PySide6 holds bound-method slots WEAKLY, so these do
+    # not. ``functools.partial(self._jog, "x", +1)`` would NOT fix it: a partial
+    # holds ``self`` strongly and is stored strongly, exactly like the lambda.
+    # See tests/test_no_immortal_panels.py.
+
+    def _jog_x_pos(self) -> None:
+        self._jog("x", +1)
+
+    def _jog_x_neg(self) -> None:
+        self._jog("x", -1)
+
+    def _jog_y_pos(self) -> None:
+        self._jog("y", +1)
+
+    def _jog_y_neg(self) -> None:
+        self._jog("y", -1)
+
+    def _jog_z_pos(self) -> None:
+        self._jog("z", +1)
+
+    def _jog_z_neg(self) -> None:
+        self._jog("z", -1)
 
     def _move_abs(self) -> None:
         x, y, z = self._spin_x.value(), self._spin_y.value(), self._spin_z.value()
@@ -1188,6 +1264,11 @@ class MotorPanel(QWidget):
         self._poll_stop_requested.emit()
         self._poll_thread.quit()
         self._poll_thread.wait(3000)
+        # The poll thread is stopped; the finalize would only repeat this no-op
+        # (or trip on the now-deleted wrapper). Retire it.
+        finalizer = getattr(self, "_thread_finalizer", None)
+        if finalizer is not None:
+            finalizer.detach()
 
     def closeEvent(self, event) -> None:
         self.shutdown()

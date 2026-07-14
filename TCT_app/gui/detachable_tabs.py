@@ -74,10 +74,20 @@ class DetachableTabWidget(QTabWidget):
         btn.setAutoRaise(True)
         btn.setToolTip("Detach the current tab into its own window "
                        "(double-click a tab does the same)")
-        btn.clicked.connect(lambda: self.detach(self.currentIndex()))
+        # A bound method, never ``lambda: self.detach(self.currentIndex())``:
+        # the corner button is a CHILD of this tab widget, and PySide6 stores a
+        # lambda slot strongly in the child's C++ connection list — closing a
+        # cycle (tabs -> button -> connection -> closure -> tabs) that gc cannot
+        # see, so the tab widget and every page in it becomes immortal. Bound
+        # methods are held weakly. See tests/test_no_immortal_panels.py.
+        btn.clicked.connect(self._detach_current)
         self.setCornerWidget(btn, Qt.Corner.TopRightCorner)
 
     # -- detach / redock ------------------------------------------------- #
+
+    def _detach_current(self) -> None:
+        """Detach the currently-visible tab (the ⧉ corner button)."""
+        self.detach(self.currentIndex())
 
     def _on_double_click(self, index: int) -> None:
         if index >= 0:

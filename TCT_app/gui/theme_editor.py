@@ -97,6 +97,12 @@ _LOCKED_ROWS: tuple[tuple[str, str], ...] = (
 
 _SWATCH_W, _SWATCH_H = 44, 22
 
+#: Qt properties carrying a colour swatch's token and display label, so the
+#: swatch's ``clicked`` slot can be a bound method instead of a token-capturing
+#: lambda (which leaks the whole dialog — see ``_on_swatch_clicked``).
+_TOKEN_PROPERTY = "tctColorToken"
+_TOKEN_LABEL_PROPERTY = "tctColorLabel"
+
 
 def builtin_presets() -> list[dict]:
     """The nine shipped presets — Cockpit Dark (default) · Glass · Graphite ·
@@ -584,7 +590,15 @@ class ThemeEditorDialog(QDialog):
             swatch = QPushButton()
             swatch.setFixedSize(_SWATCH_W, _SWATCH_H)
             swatch.setCursor(Qt.CursorShape.PointingHandCursor)
-            swatch.clicked.connect(lambda *_, t=token, l=label: self._pick_color(t, l))
+            # Token + label travel on the BUTTON; the slot is a bound method.
+            # ``lambda *_, t=token, l=label: self._pick_color(t, l)`` captured
+            # ``self`` and was stored strongly in the child swatch's C++
+            # connection list — a cycle gc cannot see, which made every opened
+            # theme editor (~178 widgets) immortal for the life of the process.
+            # See tests/test_no_immortal_panels.py.
+            swatch.setProperty(_TOKEN_PROPERTY, token)
+            swatch.setProperty(_TOKEN_LABEL_PROPERTY, label)
+            swatch.clicked.connect(self._on_swatch_clicked)
             self._swatches[token] = swatch
             card.add_widget(_settings_row(label, swatch))
         for token, label in _LOCKED_ROWS:
@@ -702,6 +716,17 @@ class ThemeEditorDialog(QDialog):
     # ------------------------------------------------------------------ #
     # Color picking                                                      #
     # ------------------------------------------------------------------ #
+
+    def _on_swatch_clicked(self) -> None:
+        """Open the colour picker for the swatch that was clicked."""
+        swatch = self.sender()
+        if swatch is None:
+            return
+        token = swatch.property(_TOKEN_PROPERTY)
+        if token is None:
+            return
+        label = swatch.property(_TOKEN_LABEL_PROPERTY) or str(token)
+        self._pick_color(str(token), str(label))
 
     def _pick_color(self, token: str, label: str) -> None:
         current = self._draft_overrides.get(token, style.palette(self._mode)[token])

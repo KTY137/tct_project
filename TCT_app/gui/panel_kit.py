@@ -735,6 +735,12 @@ class CollapsibleCard(Card):
 # SegmentedControl — exclusive mode switcher on the shared #segmented QSS     #
 # --------------------------------------------------------------------------- #
 
+#: Qt property carrying each segment button's key, so its ``toggled`` slot can
+#: be a bound method rather than a key-capturing lambda (which leaks the whole
+#: control, and every panel hosting one — see ``_on_segment_toggled``).
+_SEGMENT_KEY_PROPERTY = "tctSegmentKey"
+
+
 class SegmentedControl(QFrame):
     """An exclusive row of mode buttons styled by the pre-existing
     ``QFrame#segmented`` / ``QPushButton#segBtn`` QSS hooks (``gui/style.py``
@@ -772,14 +778,35 @@ class SegmentedControl(QFrame):
             btn = QPushButton(label)
             btn.setObjectName("segBtn")
             btn.setCheckable(True)
-            btn.toggled.connect(
-                lambda on, _key=key: on and self.selection_changed.emit(_key))
+            # The segment key travels on the BUTTON, and the slot is a bound
+            # method. It used to be ``lambda on, _key=key: on and
+            # self.selection_changed.emit(_key)`` — which captured ``self`` and
+            # was stored strongly inside the child button's C++ connection
+            # list, closing the cycle control -> button -> connection ->
+            # closure -> control. gc cannot traverse the Qt hop, so every
+            # SegmentedControl (and, via AnalysisPanel, its entire ~835-widget
+            # host) became immortal. Bound-method slots are held weakly.
+            # See tests/test_no_immortal_panels.py.
+            btn.setProperty(_SEGMENT_KEY_PROPERTY, str(key))
+            btn.toggled.connect(self._on_segment_toggled)
             self._group.addButton(btn)
             self._buttons[str(key)] = btn
             lay.addWidget(btn)
         if self._buttons:
             start = str(current) if current in self._buttons else next(iter(self._buttons))
             self._buttons[start].setChecked(True)
+
+    def _on_segment_toggled(self, checked: bool) -> None:
+        """Re-emit the newly CHECKED segment's key (the un-check half of an
+        exclusive group's toggle is ignored, exactly as before)."""
+        if not checked:
+            return
+        button = self.sender()
+        if button is None:
+            return
+        key = button.property(_SEGMENT_KEY_PROPERTY)
+        if key is not None:
+            self.selection_changed.emit(str(key))
 
     def current_key(self) -> str | None:
         for key, btn in self._buttons.items():

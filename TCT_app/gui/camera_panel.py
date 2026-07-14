@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import math
+import weakref
 from pathlib import Path
 from typing import Optional
 
@@ -89,6 +90,39 @@ class _ROIDialog(QDialog):
             self._w.value(),
             self._h.value(),
         )
+
+
+def _join_worker_thread(thread: "QThread | None") -> None:
+    """Quit and join a worker QThread — module-level BY DESIGN.
+
+    Registered as a ``weakref.finalize`` callback on the panel (see
+    ``CameraPanel.__init__``), so it must not close over the panel or it would
+    keep it alive and resurrect the very leak this whole change fixes. It takes
+    only the thread.
+
+    WHY IT EXISTS. The frame worker (and its poll ``QTimer``) live on ``thread``
+    and run continuously. The worker QObject is held by a plain Python attribute
+    on the panel, so once the panel became collectable (the bound-method slot
+    fix), dropping the panel — by ``del``, by refcount reaching zero, or by a gc
+    sweep of a cycle — deallocated that worker FROM THE GUI THREAD while it was
+    still executing a ``_poll`` on the worker thread: a cross-thread QObject
+    destruction, i.e. heap corruption (0xC0000374 / access violation on the
+    worker thread). While the panel was immortal (self-capturing lambda) gc
+    never ran this teardown, so the hazard was masked.
+
+    A ``weakref.finalize`` callback runs while the panel's members are still
+    alive (before ``tp_clear`` decrefs the worker), so quitting+joining the
+    thread here guarantees the worker thread is STOPPED before the worker
+    object is freed. Bounded wait (a ``GetNextImage`` can sit ~2 s in PySpin);
+    idempotent with ``shutdown()``; a dangling wrapper after the thread already
+    self-deleted just raises and is ignored."""
+    if thread is None:
+        return
+    try:
+        thread.quit()
+        thread.wait(3000)
+    except (RuntimeError, ReferenceError):
+        pass
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -210,7 +244,14 @@ class CameraPanel(QWidget):
         # running is a hard Qt6 abort (the MotorPanel crash class).  shutdown()
         # stops it with a bounded wait; it self-deletes on ``finished``.
         self._cam_thread: QThread | None = QThread(QApplication.instance())
-        self._cam_worker = _CameraWorker(lambda: self._camera)
+        # ``lambda cam=camera: cam`` captures the CAMERA, never ``self``. The
+        # original ``lambda: self._camera`` closed a panel<->worker Python cycle
+        # (panel -> worker -> closure -> panel); gc collected that cycle as a
+        # unit and, tearing it down from the GUI thread, freed the still-running
+        # worker on ``_cam_thread`` — the heap corruption. ``self._camera`` is
+        # assigned exactly once, so binding the camera directly is equivalent
+        # and leaves the panel with no strong path back to it from the worker.
+        self._cam_worker = _CameraWorker(lambda cam=camera: cam)
         self._cam_worker.moveToThread(self._cam_thread)
         self._cam_thread.started.connect(self._cam_worker.start)
         self._worker_stop_requested.connect(self._cam_worker.stop)
@@ -222,6 +263,13 @@ class CameraPanel(QWidget):
         self._cam_worker.offline.connect(self._on_offline)
         self._cam_worker.info_ready.connect(self._on_camera_info)
         self._cam_thread.start()
+        # Stop+join the worker thread whenever the panel is finalized, even if
+        # nobody called shutdown() first (a test that just drops the panel, or a
+        # gc sweep). The finalize holds only a WEAK ref to the panel, so it does
+        # not keep it alive; it holds the thread so it can quit+join it BEFORE
+        # the worker QObject is freed. See _join_worker_thread.
+        self._thread_finalizer = weakref.finalize(
+            self, _join_worker_thread, self._cam_thread)
 
     # ──────────────────────────────────────────────────────────────────── #
     # UI construction                                                      #
@@ -376,14 +424,20 @@ class CameraPanel(QWidget):
         # Action buttons
         actions_card = Card("View & capture")
         btn_row = QHBoxLayout()
+        # Every slot below is a BOUND METHOD, never a lambda: PySide6 holds
+        # bound-method slots weakly, so a child widget's connection cannot keep
+        # this panel alive. A self-capturing lambda is stored strongly by the
+        # child's C++ connection list and made the whole panel (~276 widgets,
+        # incl. its camera worker thread) immortal — gc cannot see a cycle whose
+        # hop runs through Qt. See tests/test_no_immortal_panels.py.
         self._chk_crosshair = QCheckBox("Crosshair")
         self._chk_crosshair.setChecked(True)
-        self._chk_crosshair.toggled.connect(lambda v: setattr(self, "_show_crosshair", v))
+        self._chk_crosshair.toggled.connect(self._set_show_crosshair)
         btn_row.addWidget(self._chk_crosshair)
 
         self._chk_overlay = QCheckBox("Beam overlay")
         self._chk_overlay.setChecked(True)
-        self._chk_overlay.toggled.connect(lambda v: setattr(self, "_show_overlay", v))
+        self._chk_overlay.toggled.connect(self._set_show_overlay)
         btn_row.addWidget(self._chk_overlay)
 
         self._btn_save = QPushButton("Save frame…")
@@ -454,17 +508,13 @@ class CameraPanel(QWidget):
         # ── Pixel format ──────────────────────────────────────────────
         self._combo_fmt = QComboBox()
         self._combo_fmt.addItems(["Mono8", "Mono16"])
-        self._combo_fmt.currentTextChanged.connect(
-            lambda t: self._camera.set_pixel_format(t)
-        )
+        self._combo_fmt.currentTextChanged.connect(self._apply_pixel_format)
         acq_form.addRow("Pixel format:", self._combo_fmt)
 
         # ── Binning ───────────────────────────────────────────────────
         self._combo_bin = QComboBox()
         self._combo_bin.addItems(["1", "2", "4"])
-        self._combo_bin.currentTextChanged.connect(
-            lambda t: self._camera.set_binning(int(t))
-        )
+        self._combo_bin.currentTextChanged.connect(self._apply_binning)
         acq_form.addRow("Binning:", self._combo_bin)
 
         # ── Frame rate ────────────────────────────────────────────────
@@ -476,9 +526,7 @@ class CameraPanel(QWidget):
         fps_row = QHBoxLayout()
         fps_row.addWidget(self._spin_fps)
         btn_fps = QPushButton("Set")
-        btn_fps.clicked.connect(
-            lambda: self._camera.set_frame_rate(self._spin_fps.value())
-        )
+        btn_fps.clicked.connect(self._apply_frame_rate)
         fps_row.addWidget(btn_fps)
         acq_form.addRow("Frame rate:", fps_row)
 
@@ -509,9 +557,7 @@ class CameraPanel(QWidget):
         trig_card = Card("Trigger")
         trig_form = QFormLayout()
         self._chk_trigger = QCheckBox("Hardware trigger (Line0 ↓)")
-        self._chk_trigger.toggled.connect(
-            lambda v: self._camera.set_trigger(v)
-        )
+        self._chk_trigger.toggled.connect(self._apply_trigger)
         trig_form.addRow(self._chk_trigger)
         trig_card.add_layout(trig_form)
         right.addWidget(trig_card)
@@ -840,6 +886,26 @@ class CameraPanel(QWidget):
             self._spin_gamma.value(),
         )
 
+    def _apply_pixel_format(self, fmt: str) -> None:
+        self._camera.set_pixel_format(fmt)
+
+    def _apply_binning(self, factor: str) -> None:
+        self._camera.set_binning(int(factor))
+
+    def _apply_frame_rate(self) -> None:
+        self._camera.set_frame_rate(self._spin_fps.value())
+
+    def _apply_trigger(self, enabled: bool) -> None:
+        self._camera.set_trigger(enabled)
+
+    # -- overlay toggles (view-only; no device I/O) ----------------------- #
+
+    def _set_show_crosshair(self, show: bool) -> None:
+        self._show_crosshair = show
+
+    def _set_show_overlay(self, show: bool) -> None:
+        self._show_overlay = show
+
     @Slot(dict)
     def _on_camera_info(self, info: dict) -> None:
         """Populate the static camera-info card from data the worker fetched
@@ -877,6 +943,11 @@ class CameraPanel(QWidget):
         if thread is not None:
             thread.quit()
             thread.wait(3000)
+        # The thread is stopped; the finalize would only repeat this no-op (or
+        # trip on the now-deleted wrapper). Retire it.
+        finalizer = getattr(self, "_thread_finalizer", None)
+        if finalizer is not None:
+            finalizer.detach()
 
     def closeEvent(self, event) -> None:
         self.shutdown()
