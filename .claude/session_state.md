@@ -339,14 +339,19 @@ non-conflicting parallelism dispatched:
   full-backing-store recomposition per island tick, GUI-thread
   CPU-bound; storm_suspected=False). **U2.4 host code does NOT start
   on these numbers** (plan's own stop rule).
-- **noah-spike-mitigation** (opus, background) — mitigation MATRIX in
-  the same harness: M1 opaque-damage-clipping (island/container
-  WA_OpaquePaintEvent), M2 opaque QQuickWidget, M3 blit-area scaling
-  diagnostic, M4 island-rate scaling diagnostic, + his own cells; also
-  fix the dead qml_fps probe. LOCK: scripts/spikes/
-  island_overlay_spike.py + artifacts. Adam runs the windowed matrix
-  on a quiet machine after landing; decision table maps results to
-  IslandHost design vs architect escalation.
+- ✅ **noah-spike-mitigation DONE, landed `ce46074`** — 9-cell matrix
+  (--cells), smoke 9/9; qml_fps probe fixed (afterFrameEnd; frameSwapped
+  never fires on the QQuickWidget FBO path); diagnostics
+  verdict-prefixed. One API-error mid-flight, resumed from transcript,
+  no loss. U2.4 DECISION TABLE in his beat report (this ledger's git
+  history): M1/M2 pass ⇒ IslandHost adds opaque flags, architecture
+  stands · only combined ⇒ both flag sets hard requirement · only M3
+  scales ⇒ blit-area-bound, architect escalation · only M4 recovers ⇒
+  island-rate-paced, throttle-or-pivot · M5-only ⇒ render-loop
+  follow-up spike · ALL fail ⇒ one-window hole-and-frame not viable on
+  this hardware class, design-level pivot (separate windows).
+  **NEXT: Adam runs `--cells all` windowed on quiet machine ONCE
+  noah-u22 lands** (~6-8 min, 2 passes/cell).
 - **noah-u22** (sonnet, background) — U2.2 components (ScanViewer
   subset; independent of island mechanics). LOCKS: gui/qml/kit/*.qml
   NEW component files only (U2.1 files FROZEN) ·
