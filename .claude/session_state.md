@@ -167,16 +167,24 @@ non-conflicting parallelism dispatched:
   A49/B25/C39/D8 = 121** (4 C→B, 3 new D rows), manifest ~465/133,
   planner docstring trimmed, ARCHITECTURE.md indexed 3 new VMs + 4
   changelog lines. Committed below.
-- **noah-conftest** (background, RESUMED with widened task, same lock
-  TCT_app/tests/conftest.py) — phase 1 done: isinstance guard works,
-  4 VM suites solo green. UNCOVERED DEEPER DEFECT: file-local `_app()`
-  Core-pattern poisons the Qt singleton → later widget tests crash
-  natively exit 127 (previously masked by the reaper bug as accidental
-  circuit-breaker; alphabetical collection dodges it in full runs, NOT
-  guaranteed). **Adam ruling (to log): session-scoped autouse
-  QApplication fixture in conftest closes the whole class; staging-doc
-  §7.4a "bare QCoreApplication" letter to be amended by Adam.** Phase 2
-  in flight: implement + re-verify incl. previously-crashing order.
+- ✅ **noah-conftest DONE, landed `9982ce7`** — ruling 9 executed:
+  session-scoped offscreen QApplication fixture + isinstance reaper
+  guard; grep found zero conflicting tests (subprocess-based
+  no_immortal_panels unaffected); ALL verification green incl. the
+  previously-crashing VM-first order (41 passed, exit 0). §7.4a
+  amended + DECISIONS ruling 9 in the same commit. Morning Mary batch:
+  give the conftest diff a light look (test-infra, broad blast
+  radius, verification pasted).
+- ✅ **noah-p1 DONE, landed `2c01e38`** — standing-law consolidation:
+  names + per-file coverage EXACTLY preserved (evidence table in
+  report; sequencer's 2 extra forbidden types kept via extra_types),
+  ScopeViewModel gap backfilled, 76/76 green ×2, negative-proof run.
+  Honest delta: net +47 LOC (Niwashi estimated −60; helper + backfill
+  weigh more) — value = ONE source for the safety-boundary encoding.
+  Morning Mary batch: include (test-only, S2-adjacent encoding).
+  NOTE for the RUNNING BENCH SUITE: it snapshot-bundled @ 40beaa3,
+  BEFORE this commit — the bench evidence covers the pre-P1 tree;
+  P1's own 76/76 tail is its verification (test economy).
 - **brokkr-u15** (Fable, background) — U1.5 kit-spec CONSOLIDATION
   (frozen programme, lean deliverable): one binding doc for Kaya's
   morning [Kaya] gate from lantern+kit.md+rulings 1–8+C13 bridge
@@ -187,19 +195,49 @@ non-conflicting parallelism dispatched:
   2 app_settings keys + retire QML guesses; C13 table = the spec),
   then bench full suite (gate evidence incl. the conftest fix), then
   U2 implementation plan on paper (Fable architect).
-- ⚠️ **reconciliation run DONE: HANG CONFIRMED REAL** (quiet machine,
-  solo): test_qml_shell.py:1028 theme-toggle island test hits the 60 s
-  timeout inside app.setStyleSheet(qss) (style.py:3760 via
-  tct_gui.py:1048), stack bottom pyqtgraph HistogramLUTWidget.sizeHint.
-  24/26 neighbors pass. NOT wave-1-caused per Mary (verify anyway).
-  Blocks TRUST in the bench full suite (it runs this file).
-  (Lesson: never pipe background pytest through tail — exit code was
-  tail's. Write to file, check pytest's own summary.)
-- **noah-hang** (Opus, background) — investigation beat: wedge vs
-  stall, regression archaeology (test age, style.py/tct_gui churn,
-  QSS growth), mechanism, minimal-fix proposal. NO edits unless
-  trivially safe; conftest.py explicitly off-limits (other beat).
-  Bench full suite WAITS for this verdict + conftest fix.
+- ✅ **noah-hang DONE, fix landed `40beaa3`** — verdict: STALL not
+  wedge (test completes 48.9 s solo; ~4 real dark↔light toggles ×
+  full-app QSS re-polish over ~3400 widgets; test born slow in
+  4e54784 on 07-14; wave-1 innocence VERIFIED). Marker fix
+  slow+timeout(180) per house precedent. CRITICAL catch: without it,
+  the 60 s thread-timeout os._exit would have ABORTED the whole bench
+  run. Bench-log reading note: faulthandler dumps a traceback at 90 s
+  on this test — noise, not failure. Morning list: (a) durable test
+  restructure (toggle once per mode, flip glass via bridge.pull);
+  (b) ~95-widget/toggle leak in refresh_theme/apply_window_backdrop
+  path → TECH_DEBT candidate, owner Noah.
+## 🟢 U1 (wave 1) GATE EVIDENCE COMPLETE (masterplan format)
+
+- **gate-id:** U1 wave-1 (viewmodel-first test reclaim; planner tail
+  U1.4 excluded per Q2 proposal, HELD for AxisSpec) · **commits:**
+  8166752 · a88b823 · a5bacf2 · 62cec74 (+ infra 9982ce7, 40beaa3,
+  2c01e38) · **verdict:** PASS pending Kaya Q2 confirm for merge-back ·
+  **date:** 2026-07-16 (night).
+- **[Bench]: SUITE GREEN — 2876 passed, 2 skipped, 1 xfailed,
+  604 s — @ 40beaa3 on sophonone** (bundle sync log + summary in task
+  output; slow-marker held, no faulthandler abort).
+- [A-green] PASS (re-run over 8166752; nothing since touches bucket A).
+- S2 normative suites green inside the full run; safety-class beats
+  U1.0/U1.3 Mary-APPROVED at landing; U1.1/U1.2 thematic APPROVED.
+- VM headless smoke: 5 VM suites solo green post-conftest-hardening
+  (ruling 9); test_qml_shell.py green (island test 49 s under its
+  180 s budget).
+- Reclaim accounting: 38 C→B/D + 2 (d) retired; bucket_map
+  A49/B25/C39/D8=121; manifest ~465/133 (Kiroku b027711).
+- Mamoru standup PASS (all 5 tasks).
+- **NOT done overnight by design:** merge-back to main (Kaya Q2 + gate
+  ④), U1.4 planner tail (AxisSpec), measurement B (operator).
+- **u2-architect** (Fable, background) — U2 hero-slice plan ON PAPER
+  (docs/design/u2_hero_plan.md, only file): beats/locks/exit criteria,
+  island embedding mechanics, (b)-residue test disposition,
+  distillation-balance accounting, [Kaya] sign-off checklist. Header
+  states the Kaya-gate dependency (measurement B + kit-spec sign-off).
+- **noah-bridge** (background) — Theme-bridge beat per kit_spec_v1 §6
+  + Appendix A (42 exposures): style.py additive constants +
+  2 app_settings keys + TOKEN_MAP + retire C13-named QML guesses +
+  new tests/test_qml_theme_bridge.py. LOCKS: qml_theme.py · style.py
+  (additive) · app_settings.py · C13-named QML files ·
+  test_qml_theme_bridge.py (new) + explicitly-listed QML-test edits.
 - **PUSHED:** origin @ 8c19005 (all four wave-1 beats Mary-approved →
   review-then-push satisfied).
 
