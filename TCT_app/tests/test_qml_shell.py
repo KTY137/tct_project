@@ -1009,6 +1009,17 @@ def test_island_frosts_only_when_the_material_is_verifiably_attached(monkeypatch
         app.processEvents()
 
 
+# Heavy full-window smoke: drives win._toggle_theme through ~4 genuine dark<->light
+# transitions, each of which calls apply_theme -> QApplication.setStyleSheet on a
+# ~3400-widget single window (the ONE operation the apply_theme docstring flags as
+# expensive: Qt re-polishes the ENTIRE live tree). Measured solo, offscreen: 48.9 s
+# on a fast dev box (4 sets @ ~4.2-5.3 s + ~5 s construct). On the CPU-bound bench
+# that scales past the 60 s default and — with timeout_method=thread — would abort
+# the WHOLE run, not just this test. So it gets the same slow/timeout treatment the
+# repeated-soft-reload smoke above already carries. NOT a wedge (it terminates);
+# a slow-test budget miss. See also the ~95-widget/toggle leak flagged separately.
+@pytest.mark.slow
+@pytest.mark.timeout(180)
 def test_island_renders_from_tokens_in_both_themes_glass_on_and_off(monkeypatch):
     """Theme-switch smoke, both glass states: every island surface re-resolves
     from the Theme singleton (zero cached/inline colour), and the clear colour's
