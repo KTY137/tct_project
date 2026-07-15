@@ -1,0 +1,150 @@
+{
+  "spike": "island_overlay_spike",
+  "utc": "20260715T111751Z",
+  "windows_build": 26200,
+  "qt_platform": "windows",
+  "pyside": "6.11.1",
+  "panes": 6,
+  "rebake_hz": 12.0,
+  "params": {
+    "seconds": 15.0,
+    "warmup_s": 3.0,
+    "island_nominal_hz": 30,
+    "blur_max_px": 40,
+    "n_passes": 2
+  },
+  "thresholds": {
+    "island_hz_floor": 28.0,
+    "qml_fps_floor": 55.0,
+    "near_floor_frac": 0.1
+  },
+  "screen": {
+    "dip": [
+      1536,
+      864
+    ],
+    "dpr": 2.5
+  },
+  "out_dir": "C:\\Users\\nukei\\Desktop\\project_tct\\artifacts_claude\\island_overlay_spike_20260715T111751Z",
+  "passes": [
+    {
+      "pass": 1,
+      "control": {
+        "cell": "control",
+        "overlay": false,
+        "errors": [],
+        "qml_status": "Status.Ready",
+        "qml_errors": [],
+        "wall_s": 15.003,
+        "qml_fps": 0.0,
+        "qml_scene_render_hz": 60.06,
+        "qquickwidget_paint_hz": 60.06,
+        "container_paint_hz": 0.0,
+        "process_cpu_pct_of_one_core": 23.23,
+        "bake_count_observed": 180,
+        "bake_count_expected_approx": 180
+      },
+      "overlay": {
+        "cell": "overlay",
+        "overlay": true,
+        "errors": [],
+        "qml_status": "Status.Ready",
+        "qml_errors": [],
+        "wall_s": 15.062,
+        "qml_fps": 0.0,
+        "qml_scene_render_hz": 23.04,
+        "qquickwidget_paint_hz": 22.97,
+        "container_paint_hz": 13.88,
+        "process_cpu_pct_of_one_core": 78.84,
+        "island_feed_hz": 16.36,
+        "island_feed_ticks": 246,
+        "scanmap_repaint_hz": 5.98,
+        "scanmap_repaints": 90,
+        "island_point_count": 278,
+        "island_showing_map": true,
+        "bake_count_observed": 153,
+        "bake_count_expected_approx": 180
+      },
+      "verdict": {
+        "island_feed_hz": 16.36,
+        "island_floor": 28.0,
+        "qml_fps": 0.0,
+        "qml_floor": 55.0,
+        "near_floor": false,
+        "state": "FAIL"
+      },
+      "storm": {
+        "control_scene_render_hz": 60.06,
+        "overlay_scene_render_hz": 23.04,
+        "scene_render_ratio": 0.384,
+        "control_qqw_paint_hz": 60.06,
+        "overlay_qqw_paint_hz": 22.97,
+        "qqw_paint_ratio": 0.382,
+        "storm_suspected": false
+      }
+    },
+    {
+      "pass": 2,
+      "control": {
+        "cell": "control",
+        "overlay": false,
+        "errors": [],
+        "qml_status": "Status.Ready",
+        "qml_errors": [],
+        "wall_s": 15.0,
+        "qml_fps": 0.0,
+        "qml_scene_render_hz": 60.0,
+        "qquickwidget_paint_hz": 60.07,
+        "container_paint_hz": 0.0,
+        "process_cpu_pct_of_one_core": 23.65,
+        "bake_count_observed": 180,
+        "bake_count_expected_approx": 180
+      },
+      "overlay": {
+        "cell": "overlay",
+        "overlay": true,
+        "errors": [],
+        "qml_status": "Status.Ready",
+        "qml_errors": [],
+        "wall_s": 15.006,
+        "qml_fps": 0.0,
+        "qml_scene_render_hz": 22.59,
+        "qquickwidget_paint_hz": 22.59,
+        "container_paint_hz": 13.66,
+        "process_cpu_pct_of_one_core": 81.64,
+        "island_feed_hz": 16.08,
+        "island_feed_ticks": 242,
+        "scanmap_repaint_hz": 5.8,
+        "scanmap_repaints": 87,
+        "island_point_count": 272,
+        "island_showing_map": true,
+        "bake_count_observed": 146,
+        "bake_count_expected_approx": 180
+      },
+      "verdict": {
+        "island_feed_hz": 16.08,
+        "island_floor": 28.0,
+        "qml_fps": 0.0,
+        "qml_floor": 55.0,
+        "near_floor": false,
+        "state": "FAIL"
+      },
+      "storm": {
+        "control_scene_render_hz": 60.0,
+        "overlay_scene_render_hz": 22.59,
+        "scene_render_ratio": 0.377,
+        "control_qqw_paint_hz": 60.07,
+        "overlay_qqw_paint_hz": 22.59,
+        "qqw_paint_ratio": 0.376,
+        "storm_suspected": false
+      }
+    }
+  ],
+  "overall": {
+    "pass_states": [
+      "FAIL",
+      "FAIL"
+    ],
+    "overall": "FAIL"
+  }
+}
