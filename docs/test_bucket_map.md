@@ -11,7 +11,7 @@ The A/B/C/D classification is the ratified ground truth from the coupling
 analysis. Every file listed here was verified to exist in `TCT_app/tests/` on
 2026-07-13 (updated 2026-07-13 night; `test_qt_danger_gate.py` added at U1.0,
 2026-07-15) — **no drift, no missing files, nothing invented.** Counts:
-**A = 49, B = 21, C = 43, D = 5 (118 total test files).**
+**A = 49, B = 25, C = 39, D = 8 (121 total test files).**
 
 | Bucket | Meaning | Migration behavior | Gate |
 |---|---|---|---|
@@ -22,7 +22,7 @@ analysis. Every file listed here was verified to exist in `TCT_app/tests/` on
 
 ---
 
-## Bucket A — CORE-PURE (47 files)
+## Bucket A — CORE-PURE (49 files)
 
 These are the **[A-green] gate**: ~15k LOC of GUI-free logic that must run green
 **unmodified** on every capability/QML migration stage. `check_bucket_a.ps1`
@@ -115,7 +115,7 @@ guarded: if the parse yields zero files, the script errors instead of passing.
 
 ---
 
-## Bucket B — CONTRACT (20 files)
+## Bucket B — CONTRACT (25 files)
 
 Safety / wiring contracts. They touch Qt but assert a boundary that must survive
 the migration; the GUI half is rehosted, the contract is preserved (many map 1:1
@@ -144,10 +144,14 @@ into `SAFETY_NORMATIVE_TESTS.md`).
 | 19 | `test_motor_transport_lock.py` | motor transport-lock contract (GRBL + PI serialization) |
 | 20 | `test_drs4_lock.py` | DRS4 board-transport lock contract |
 | 21 | `test_guarded_exchange_base.py` | guarded-exchange base machinery (G0, devices/base.py) |
+| 22 | `test_qt_danger_gate.py` | `QtDangerGate` confirm/deny/timeout/shutdown contract (bucket B per Mary ruling at U1.0 review) |
+| 23 | `test_scan_map_view.py` | scan-map view (pyqtgraph) — U1.1 reclaim |
+| 24 | `test_scan_viewer_panel.py` | scan-viewer panel — U1.2 reclaim |
+| 25 | `test_sequencer_panel.py` | sequencer panel — U1.3 reclaim |
 
 ---
 
-## Bucket C — QWIDGET-PINNED (43 files)
+## Bucket C — QWIDGET-PINNED (39 files)
 
 Enumerated from disk = every remaining `tests/test_*.py` not in A/B/D. Bound to
 the classic QWidget panels / theme engine / shell; U1 reclaims the high-value
@@ -177,31 +181,27 @@ third into viewmodel contract tests, the rest retire or port as panels migrate.
 | 20 | `test_panel_kit_rollout_batch1.py` | panel kit rollout batch 1 |
 | 21 | `test_panel_kit_rollout_batch3.py` | panel kit rollout batch 3 |
 | 22 | `test_planner_panel.py` | planner panel (drag&drop tree) — U1 reclaim target |
-| 23 | `test_scan_map_view.py` | scan-map view (pyqtgraph) — U1 reclaim target |
-| 24 | `test_scan_viewer_panel.py` | scan-viewer panel — U1 reclaim target |
-| 25 | `test_scope_panel_yaml_persist.py` | scope panel YAML persistence |
-| 26 | `test_sequencer_panel.py` | sequencer panel — U1 reclaim target |
-| 27 | `test_settings_window_panel_kit_rollout.py` | settings window panel-kit rollout |
-| 28 | `test_settings_window_visa_scan.py` | settings window VISA scan |
-| 29 | `test_settings_window_visa_scan_deadlock.py` | settings window VISA-scan deadlock |
-| 30 | `test_settings_window_yaml_persist.py` | settings window YAML persistence |
-| 31 | `test_shell_cockpit_v5.py` | cockpit-v5 shell composition |
-| 32 | `test_status_widgets.py` | status widgets / status bus UI |
-| 33 | `test_style_hover_hotpath_guard.py` | style hover hot-path guard |
-| 34 | `test_style_no_label_box.py` | style no-label-box guard |
-| 35 | `test_suite_isolation.py` | test-suite isolation harness |
-| 36 | `test_theme_editor.py` | theme editor |
-| 37 | `test_theme_fanout_completeness.py` | theme fan-out completeness |
-| 38 | `test_ui_monkey.py` | UI monkey denial ruleset (QTest harness; ~20% portable to QML walker) |
-| 39 | `test_worker_primitive.py` | `WorkerThread` primitive (Qt teardown) |
-| 40 | `test_bias_section_sim_channel_count.py` | bias settings widget sim-channel config |
-| 41 | `test_no_render_to_texture_children_in_gui.py` | RTT-widget child tree guard (AST + dynamic) |
-| 42 | `test_panel_glass_rollout.py` | glass Z-ladder role census + hazard-exclusion gates (builds real panels) |
-| 43 | `test_qt_danger_gate.py` | `QtDangerGate` confirm/deny/timeout/shutdown contract (carved out of `test_planner_panel.py` at U1.0; S2 manifest row). Proposed **C**; **or B if widget-light — Mary decides at U1.0 review** (it constructs no QWidget panel, only the `QtDangerGate` QObject + a worker thread, so a B reclassification is defensible). |
+| 23 | `test_scope_panel_yaml_persist.py` | scope panel YAML persistence |
+| 24 | `test_settings_window_panel_kit_rollout.py` | settings window panel-kit rollout |
+| 25 | `test_settings_window_visa_scan.py` | settings window VISA scan |
+| 26 | `test_settings_window_visa_scan_deadlock.py` | settings window VISA-scan deadlock |
+| 27 | `test_settings_window_yaml_persist.py` | settings window YAML persistence |
+| 28 | `test_shell_cockpit_v5.py` | cockpit-v5 shell composition |
+| 29 | `test_status_widgets.py` | status widgets / status bus UI |
+| 30 | `test_style_hover_hotpath_guard.py` | style hover hot-path guard |
+| 31 | `test_style_no_label_box.py` | style no-label-box guard |
+| 32 | `test_suite_isolation.py` | test-suite isolation harness |
+| 33 | `test_theme_editor.py` | theme editor |
+| 34 | `test_theme_fanout_completeness.py` | theme fan-out completeness |
+| 35 | `test_ui_monkey.py` | UI monkey denial ruleset (QTest harness; ~20% portable to QML walker) |
+| 36 | `test_worker_primitive.py` | `WorkerThread` primitive (Qt teardown) |
+| 37 | `test_bias_section_sim_channel_count.py` | bias settings widget sim-channel config |
+| 38 | `test_no_render_to_texture_children_in_gui.py` | RTT-widget child tree guard (AST + dynamic) |
+| 39 | `test_panel_glass_rollout.py` | glass Z-ladder role census + hazard-exclusion gates (builds real panels) |
 
 ---
 
-## Bucket D — QML / HYBRID (5 files)
+## Bucket D — QML / HYBRID (8 files)
 
 QML shell + viewmodel tests. These grow with the `ui-qml-migration` branch and
 get the per-panel qml-boot smoke gate.
@@ -213,6 +213,9 @@ get the per-panel qml-boot smoke gate.
 | 3 | `test_qml_theme_specular_sync.py` | QML theme specular live-sync |
 | 4 | `test_run_state_viewmodel.py` | run-state viewmodel (no controller ref) |
 | 5 | `test_scope_viewmodel.py` | scope viewmodel |
+| 6 | `test_scan_map_viewmodel.py` | scan-map viewmodel (U1.1 reclaim) |
+| 7 | `test_scan_viewer_viewmodel.py` | scan-viewer viewmodel (U1.2 reclaim) |
+| 8 | `test_sequencer_viewmodel.py` | sequencer queue viewmodel (U1.3 reclaim) |
 
 ---
 

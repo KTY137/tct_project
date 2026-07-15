@@ -150,11 +150,31 @@ non-conflicting parallelism dispatched:
   quiet-machine run of test_qml_shell.py when no agent is testing**
   (before the bench gate; if it still hangs quiet, it's real and goes
   to Noah).
-- **mary-wave1** (background, read-only) — thematic batch review of
-  `a88b823` + `62cec74` incl. deviation rulings. No locks.
-- **mamoru-w1** (background, read-only) — wave-boundary standup:
-  claims-vs-git audit (6 commits), lock/tree cross-check, AxisSpec
-  gate check, reclaim accounting spot-check. No locks.
+- ✅ **mary-wave1 DONE: U1.1 APPROVE + U1.2 APPROVE.** Deviation (d)
+  RATIFIED — and upgraded: NOT-active is the FAITHFUL reclaim (legacy
+  panel gated on `not _run_active`; §4.3's `terminal` wording would
+  have CHANGED behavior — spec letter drifts, implementer was right).
+  ONE ETA derivation confirmed by grep. Residue proofs verified
+  (U1.2's 42 added lines are comment-only move markers — cosmetic
+  gloss on "byte-untouched", accepted). RISK finding → conftest
+  micro-beat below.
+- ✅ **mamoru-w1 DONE: standup PASS all 5** (claims-vs-git, lock/tree
+  clean, AxisSpec gate closed, reclaim counts exact, import probes
+  clean). Only drift: ledger HEAD line (fixed same tick).
+- ✅ **kiroku-w1 DONE** — counts per Mary's rulings + full wave-1
+  reclassification (his correct escalation: my brief's 118-numbers
+  were pre-wave-1; staging doc §3 governs): **bucket_map now
+  A49/B25/C39/D8 = 121** (4 C→B, 3 new D rows), manifest ~465/133,
+  planner docstring trimmed, ARCHITECTURE.md indexed 3 new VMs + 4
+  changelog lines. Committed below.
+- **noah-conftest** (background) — micro-beat, Mary's RISK fix: guard
+  _widget_reaper for bare-QCoreApplication sessions so VM suites pass
+  SOLO (U1 gate §7.4a letter). LOCK: TCT_app/tests/conftest.py only.
+- **reconciliation run** (background shell, quiet-machine):
+  test_qml_shell.py solo — hang triage for the theme-toggle island
+  test flagged by U1.2.
+- **PUSHED:** origin @ 8c19005 (all four wave-1 beats Mary-approved →
+  review-then-push satisfied).
 
 ## 🌱 NIWASHI CREATED (Kaya-directed, 2026-07-15 night)
 
@@ -499,7 +519,10 @@ U1 blocker — U1 is viewmodels, paint-free).
 
 ## HEAD / TRUTH
 
-- Working branch: `ui-qml-migration` @ `973ff39` (== origin/ui-qml-migration,
-  verified new session 2026-07-15). Cut from main `cf6dd58`.
+- Working branch: `ui-qml-migration` @ `8c19005` (origin is at `55bab2e`,
+  5 behind — push deferred until mary-wave1 verdict per review-then-push).
+  Cut from main `cf6dd58`. Mamoru wave-1 standup: PASS all 5 tasks
+  (claims-vs-git, lock/tree, AxisSpec gate closed, reclaim counts,
+  import probes).
 - Tag `polish-freeze` → `45781fa` (annotated; U-track entry gate + seed
   baseline ancestor).

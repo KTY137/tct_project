@@ -1,10 +1,8 @@
-"""Headless GUI tests for the Scan Routine Planner panel and its Qt danger
-gate (Phase 2.2 step 3).
+"""Headless GUI tests for the Scan Routine Planner panel (Phase 2.2 step 3).
 
 Follows the existing gui test idiom (see ``test_status_widgets.py``):
 ``QT_QPA_PLATFORM=offscreen``, a shared ``QApplication.instance()`` helper, no
-pytest-qt. No real ``QMessageBox`` is ever shown — ``QtDangerGate._show_dialog``
-is stubbed in every test that exercises it.
+pytest-qt.
 """
 from __future__ import annotations
 
