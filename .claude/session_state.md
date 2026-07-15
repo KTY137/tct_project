@@ -305,6 +305,18 @@ non-conflicting parallelism dispatched:
   alone insufficient); raster-over-texture sibling stacking clean;
   watch for 1-frame island-lag flicker on resize. Optional Kaya
   eyeball: `--hold 25` (seam check on the real 2.5-DPR panel).
+- ⚠️ **KAYA OPERATOR OBSERVATION (2026-07-15, eyeball run, NO report
+  on disk — likely --hold mode):** "background animations am ruckeln"
+  — explicitly NOT the scan plot. Confounds at observation time:
+  (1) noah-u21 was mid-beat on the same laptop (machine NOT quiet);
+  (2) spike runs living ground at FULL amplitude (worst case; shipped
+  default is subtle); (3) the frost bake steps at 12 Hz BY DESIGN —
+  content seen through frost updates 12×/s even at 60 fps scene rate.
+  DIAGNOSIS PLAN: quiet measured run (Adam, post-U2.1) separates the
+  cases — qml_fps ≈60 + still-visible stepping ⇒ bake-cadence
+  perceptual question (design item → Baldr/Kaya, cadence ladder is a
+  tunable spec parameter); qml_fps low ⇒ real frame drops (perf
+  problem, U2.4 gate risk). Do NOT redesign before the numbers.
 - **noah-u21** (FABLE, background — judgment beat) — U2.1 Surface +
   material core per u2_hero_plan §U2.1. LOCKS: TCT_app/gui/qml/kit/*
   (new) · TCT_app/scripts/gen_shadow_assets.py (new) ·
