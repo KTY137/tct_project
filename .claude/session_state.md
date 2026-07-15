@@ -282,10 +282,15 @@ non-conflicting parallelism dispatched:
 
 ## 🔥 IN-FLIGHT NOW (U2 day 0, 2026-07-15 ~13:00)
 
-- **bench full suite** @ bundle cf52d21 (sophonone, background task) —
-  THE merge-back gate. On green: Adam merges ui-qml-migration → main
-  (--no-ff) + pushes. Later branch commits are docs-only (this ledger,
-  DECISIONS, kit_spec §7.1 amendment) — declared, acceptable delta.
+- ✅ **bench full suite GREEN @ bundle cf52d21: 2886 passed, 2
+  skipped, 1 xfailed, 625 s** (sophonone; +10 tests vs prior run =
+  P1 backfill et al.).
+- ✅ **MERGE-BACK EXECUTED: main @ `ee1f476`** (--no-ff merge of
+  branch @ bae03e0, PUSHED to origin/main). Done in a throwaway git
+  worktree so the working tree never switched branches under the two
+  live Noah beats (lesson: never checkout under in-flight locks).
+  **U1 IS FORMALLY CLOSED AND ON MAIN.** Branch `ui-qml-migration`
+  continues as the U2 working branch.
 - **noah-spike-overlay** (opus, background) — day-0 throwaway overlay
   micro-spike per u2_hero_plan §U2.4 entry paragraph. LOCKS:
   TCT_app/scripts/spikes/island_overlay_spike.py (new) + its
