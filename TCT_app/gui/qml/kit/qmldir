@@ -1,0 +1,12 @@
+# LANTERN kit — QML component kit (docs/design/qml_kit_forge/kit_spec_v1.md).
+# Directory-import qmldir: because this file exists, the implicit same-directory
+# import exposes ONLY the types listed here, so every public kit type must be
+# listed. FrostBake.qml / FrostCrop.qml are deliberately NOT listed: they are
+# internal mechanisms loaded by URL through gated Loaders (never resolved as
+# types), so the frost machinery (QtQuick.Effects / QtQuick.Shapes imports)
+# is only ever parsed when a SCENE-tier ground actually activates it.
+singleton KitEnv 1.0 KitEnv.qml
+singleton KitAssets 1.0 KitAssets.qml
+Surface 1.0 Surface.qml
+LivingGround 1.0 LivingGround.qml
+FocusRing 1.0 FocusRing.qml

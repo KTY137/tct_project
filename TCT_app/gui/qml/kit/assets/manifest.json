@@ -1,0 +1,90 @@
+{
+  "generator": "scripts/gen_shadow_assets.py",
+  "generated_utc": "20260715T105743Z",
+  "budget": {
+    "wash_peak_alpha": 0.03,
+    "sweep_peak_alpha": 0.01,
+    "ground_tint_alpha_max": 0.07
+  },
+  "geometry": {
+    "shadow_pad": {
+      "contact": 5,
+      "card": 34,
+      "pane": 54,
+      "float": 114
+    },
+    "shadow_border": {
+      "contact": 19,
+      "card": 56,
+      "pane": 80,
+      "float": 136
+    },
+    "shadow_radius": {
+      "contact": 12,
+      "card": 20,
+      "pane": 24,
+      "float": 20
+    },
+    "halo_pad": 14,
+    "halo_border": 28,
+    "focus_ring_offset_px": 2,
+    "focus_ring_width_px": 2,
+    "focus_halo_px": 8,
+    "stretch_strip_px": 8
+  },
+  "shadow_layers": {
+    "contact": [
+      [
+        1,
+        2,
+        "a"
+      ]
+    ],
+    "card": [
+      [
+        1,
+        2,
+        "a"
+      ],
+      [
+        8,
+        24,
+        "b"
+      ]
+    ],
+    "pane": [
+      [
+        12,
+        40,
+        "c"
+      ]
+    ],
+    "float": [
+      [
+        32,
+        80,
+        "d"
+      ]
+    ]
+  },
+  "tokens": {
+    "dark": {
+      "shadow_ink": "#000000",
+      "accent": "#5AA9FF",
+      "shadow_a": 0.2,
+      "shadow_b": 0.24,
+      "shadow_c": 0.3,
+      "shadow_d": 0.55,
+      "focus_halo_alpha": 0.35
+    },
+    "light": {
+      "shadow_ink": "#131A28",
+      "accent": "#2563c9",
+      "shadow_a": 0.06,
+      "shadow_b": 0.08,
+      "shadow_c": 0.1,
+      "shadow_d": 0.22,
+      "focus_halo_alpha": 0.25
+    }
+  }
+}

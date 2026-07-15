@@ -356,6 +356,91 @@ def test_device_manager_window_construct_and_theme_switch(tmp_path):
         _pump(app, 0.1)
 
 
+# --------------------------------------------------------------------------- #
+# LANTERN kit QML — the same zero-inline-hex law, extended to gui/qml/kit/    #
+# (U2.1, kit_spec_v1.md §6: "Everything through Theme.*; no inline hex, ever" #
+# — additive: the *.py scan above is untouched).                              #
+# --------------------------------------------------------------------------- #
+
+_KIT_QML_DIR = _GUI_DIR / "qml" / "kit"
+
+
+def _strip_qml_comments(source: str) -> str:
+    """Blank ``//`` and ``/* */`` comment text in QML source. String literals
+    are deliberately NOT stripped — in QML a hex colour arrives as a string
+    (``color: "#123456"``), so the string IS what the guard must see."""
+    out: list[str] = []
+    i, n = 0, len(source)
+    in_line = in_block = False
+    quote: str | None = None
+    while i < n:
+        c = source[i]
+        nxt = source[i + 1] if i + 1 < n else ""
+        if in_line:
+            if c == "\n":
+                in_line = False
+                out.append(c)
+            i += 1
+            continue
+        if in_block:
+            if c == "*" and nxt == "/":
+                in_block = False
+                i += 2
+                continue
+            if c == "\n":
+                out.append(c)
+            i += 1
+            continue
+        if quote is not None:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(nxt)
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            i += 1
+            continue
+        if c in ("'", '"'):
+            quote = c
+            out.append(c)
+            i += 1
+            continue
+        if c == "/" and nxt == "/":
+            in_line = True
+            i += 2
+            continue
+        if c == "/" and nxt == "*":
+            in_block = True
+            i += 2
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _kit_qml_files() -> list[Path]:
+    return sorted(_KIT_QML_DIR.glob("*.qml"))
+
+
+def test_kit_qml_glob_is_non_empty():
+    # Guards the guard, same as test_gui_modules_glob_is_non_empty above.
+    assert len(_kit_qml_files()) >= 5
+
+
+def test_no_inline_hex_in_kit_qml():
+    failures: dict[str, list[str]] = {}
+    for path in _kit_qml_files():
+        hits = _HEX_RE.findall(
+            _strip_qml_comments(path.read_text(encoding="utf-8")))
+        if hits:
+            failures[path.name] = hits
+    assert failures == {}, (
+        "inline hex literal(s) in kit QML — every colour resolves through "
+        f"the Theme bridge (kit_spec_v1.md §6), never a literal: {failures}"
+    )
+
+
 def test_device_manager_connected_state_never_renders_green(tmp_path):
     """State-color census D4 rank-1 hit: ``_STATUS_STYLE["connected"]`` still
     names ``OK_GREEN`` (gui/device_panel.py), but that colour half is dead --
