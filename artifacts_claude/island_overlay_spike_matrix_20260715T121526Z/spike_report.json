@@ -1,0 +1,874 @@
+{
+  "spike": "island_overlay_spike_matrix",
+  "utc": "20260715T121526Z",
+  "windows_build": 26200,
+  "qt_platform": "windows",
+  "pyside": "6.11.1",
+  "panes": 6,
+  "rebake_hz": 12.0,
+  "params": {
+    "seconds": 15.0,
+    "warmup_s": 3.0,
+    "island_nominal_hz": 30,
+    "blur_max_px": 40,
+    "n_passes": 2
+  },
+  "thresholds": {
+    "island_hz_floor": 28.0,
+    "scene_hz_floor": 55.0,
+    "near_floor_frac": 0.1
+  },
+  "screen": {
+    "dip": [
+      1536,
+      864
+    ],
+    "dpr": 2.5
+  },
+  "out_dir": "C:\\Users\\nukei\\Desktop\\project_tct\\artifacts_claude\\island_overlay_spike_matrix_20260715T121526Z",
+  "cell_specs": {
+    "m0_control": {
+      "label": "M0 control (frost scene alone)",
+      "hypothesis": "Storm baseline: living-glass QML scene alone, no island, no feed -- what the window sustains unopposed.",
+      "overlay": false
+    },
+    "m0_overlay": {
+      "label": "M0 overlay (unmitigated -- prior spike's FAIL case)",
+      "hypothesis": "Baseline failure: raster sibling QWidget composited over the full QQuickWidget; every island repaint tick appears to force a full-FBO recomposite on the GUI thread.",
+      "overlay": true
+    },
+    "m1_opaque_island": {
+      "label": "M1 damage-clipped island (opaque island + holder + pg viewport)",
+      "hypothesis": "If the backing store can prove the island's paint is fully opaque over its own rect, damage should clip to that rect instead of recompositing the whole QQuickWidget -- scene_render_hz should recover.",
+      "overlay": true,
+      "opaque_island": true
+    },
+    "m2_opaque_qqw": {
+      "label": "M2 opaque QQuickWidget (opaque clearColor + WA_OpaquePaintEvent)",
+      "hypothesis": "An opaque QQuickWidget composited surface may let Qt skip erase/alpha-blend bookkeeping on its own repaint, independent of M1 (does not touch the QML scene graph itself -- see docstring note on partial-update knobs).",
+      "overlay": true,
+      "opaque_qqw": true
+    },
+    "m1_m2_combined": {
+      "label": "M1+M2 combined",
+      "hypothesis": "Upper bound of what widget-level opacity flags alone can buy -- do the two mitigations compound, or does one subsume the other?",
+      "overlay": true,
+      "opaque_island": true,
+      "opaque_qqw": true
+    },
+    "m3_half_area": {
+      "label": "M3 half-area diagnostic (QQuickWidget ~50% area, island beside it)",
+      "hypothesis": "DIAGNOSTIC, not a fix: if scene_render_hz scales up roughly with the smaller Quick blit area, the mechanism is a full-backing-store blit proportional to area, not a fixed per-tick cost.",
+      "overlay": true,
+      "area_scale": 0.5,
+      "diagnostic_only": true
+    },
+    "m4_feed15": {
+      "label": "M4 island-rate diagnostic @ 15 Hz drive",
+      "hypothesis": "DIAGNOSTIC: if scene_render_hz rises as the island's own tick/repaint rate drops, each island repaint is what forces one full QQuickWidget recomposite (rate-paced), not a fixed background cost. island_feed_hz cannot clear the 28 floor at this drive rate by construction.",
+      "overlay": true,
+      "island_hz": 15.0,
+      "diagnostic_only": true
+    },
+    "m4_feed8": {
+      "label": "M4 island-rate diagnostic @ 8 Hz drive",
+      "hypothesis": "Same as m4_feed15 at a lower drive rate -- extends the scaling trend read.",
+      "overlay": true,
+      "island_hz": 8.0,
+      "diagnostic_only": true
+    },
+    "m5_render_loop_basic": {
+      "label": "M5 QSG_RENDER_LOOP=basic (env re-exec, TOKEN-tier data point)",
+      "hypothesis": "DIAGNOSTIC: forcing the synchronous 'basic' render loop removes GUI/render-thread pipelining. Could help (no cross-thread sync stall feeding the starvation) or hurt (removes the one thread not blocked by the GUI event loop). Not an expected fix, a data point.",
+      "overlay": true,
+      "env": {
+        "QSG_RENDER_LOOP": "basic"
+      },
+      "diagnostic_only": true
+    }
+  },
+  "cells_run": [
+    "m0_control",
+    "m0_overlay",
+    "m1_opaque_island",
+    "m2_opaque_qqw",
+    "m1_m2_combined",
+    "m3_half_area",
+    "m4_feed15",
+    "m4_feed8",
+    "m5_render_loop_basic"
+  ],
+  "passes": [
+    {
+      "pass": 1,
+      "cells": {
+        "m0_control": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 14.996,
+            "qml_fps": 60.08,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 60.08,
+            "qquickwidget_paint_hz": 60.02,
+            "container_paint_hz": 0.0,
+            "process_cpu_pct_of_one_core": 21.67,
+            "bake_count_observed": 181,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": null,
+            "island_floor": 28.0,
+            "scene_render_hz": 60.08,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "REFERENCE"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.08,
+            "cell_scene_render_hz": 60.08,
+            "scene_render_ratio": 1.0,
+            "control_qqw_paint_hz": 60.02,
+            "cell_qqw_paint_hz": 60.02,
+            "qqw_paint_ratio": 1.0,
+            "storm_suspected": false
+          }
+        },
+        "m0_overlay": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 14.997,
+            "qml_fps": 28.34,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 28.34,
+            "qquickwidget_paint_hz": 28.27,
+            "container_paint_hz": 15.67,
+            "process_cpu_pct_of_one_core": 68.24,
+            "island_feed_hz": 20.63,
+            "island_feed_ticks": 310,
+            "scanmap_repaint_hz": 6.8,
+            "scanmap_repaints": 102,
+            "island_point_count": 349,
+            "island_showing_map": true,
+            "bake_count_observed": 169,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 20.63,
+            "island_floor": 28.0,
+            "scene_render_hz": 28.34,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.08,
+            "cell_scene_render_hz": 28.34,
+            "scene_render_ratio": 0.472,
+            "control_qqw_paint_hz": 60.02,
+            "cell_qqw_paint_hz": 28.27,
+            "qqw_paint_ratio": 0.471,
+            "storm_suspected": false
+          }
+        },
+        "m1_opaque_island": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.005,
+            "qml_fps": 24.46,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 24.46,
+            "qquickwidget_paint_hz": 24.46,
+            "container_paint_hz": 5.0,
+            "process_cpu_pct_of_one_core": 79.35,
+            "island_feed_hz": 17.46,
+            "island_feed_ticks": 263,
+            "scanmap_repaint_hz": 6.4,
+            "scanmap_repaints": 96,
+            "island_point_count": 305,
+            "island_showing_map": true,
+            "bake_count_observed": 160,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 17.46,
+            "island_floor": 28.0,
+            "scene_render_hz": 24.46,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.08,
+            "cell_scene_render_hz": 24.46,
+            "scene_render_ratio": 0.407,
+            "control_qqw_paint_hz": 60.02,
+            "cell_qqw_paint_hz": 24.46,
+            "qqw_paint_ratio": 0.408,
+            "storm_suspected": false
+          }
+        },
+        "m2_opaque_qqw": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.063,
+            "qml_fps": 24.83,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 24.83,
+            "qquickwidget_paint_hz": 24.76,
+            "container_paint_hz": 0.0,
+            "process_cpu_pct_of_one_core": 78.11,
+            "island_feed_hz": 17.53,
+            "island_feed_ticks": 265,
+            "scanmap_repaint_hz": 5.97,
+            "scanmap_repaints": 90,
+            "island_point_count": 304,
+            "island_showing_map": true,
+            "bake_count_observed": 153,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 17.53,
+            "island_floor": 28.0,
+            "scene_render_hz": 24.83,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.08,
+            "cell_scene_render_hz": 24.83,
+            "scene_render_ratio": 0.413,
+            "control_qqw_paint_hz": 60.02,
+            "cell_qqw_paint_hz": 24.76,
+            "qqw_paint_ratio": 0.413,
+            "storm_suspected": false
+          }
+        },
+        "m1_m2_combined": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 14.996,
+            "qml_fps": 23.87,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 23.87,
+            "qquickwidget_paint_hz": 23.87,
+            "container_paint_hz": 0.0,
+            "process_cpu_pct_of_one_core": 74.81,
+            "island_feed_hz": 12.95,
+            "island_feed_ticks": 194,
+            "scanmap_repaint_hz": 5.6,
+            "scanmap_repaints": 84,
+            "island_point_count": 226,
+            "island_showing_map": true,
+            "bake_count_observed": 155,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 12.95,
+            "island_floor": 28.0,
+            "scene_render_hz": 23.87,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.08,
+            "cell_scene_render_hz": 23.87,
+            "scene_render_ratio": 0.397,
+            "control_qqw_paint_hz": 60.02,
+            "cell_qqw_paint_hz": 23.87,
+            "qqw_paint_ratio": 0.398,
+            "storm_suspected": false
+          }
+        },
+        "m3_half_area": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 14.992,
+            "qml_fps": 27.42,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 27.42,
+            "qquickwidget_paint_hz": 27.42,
+            "container_paint_hz": 17.14,
+            "process_cpu_pct_of_one_core": 74.0,
+            "island_feed_hz": 16.23,
+            "island_feed_ticks": 244,
+            "scanmap_repaint_hz": 7.4,
+            "scanmap_repaints": 111,
+            "island_point_count": 276,
+            "island_showing_map": true,
+            "bake_count_observed": 172,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 16.23,
+            "island_floor": 28.0,
+            "scene_render_hz": 27.42,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "DIAGNOSTIC-FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.08,
+            "cell_scene_render_hz": 27.42,
+            "scene_render_ratio": 0.456,
+            "control_qqw_paint_hz": 60.02,
+            "cell_qqw_paint_hz": 27.42,
+            "qqw_paint_ratio": 0.457,
+            "storm_suspected": false
+          }
+        },
+        "m4_feed15": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.055,
+            "qml_fps": 23.51,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 23.51,
+            "qquickwidget_paint_hz": 23.51,
+            "container_paint_hz": 13.15,
+            "process_cpu_pct_of_one_core": 78.05,
+            "island_feed_hz": 9.65,
+            "island_feed_ticks": 144,
+            "scanmap_repaint_hz": 5.51,
+            "scanmap_repaints": 83,
+            "island_point_count": 168,
+            "island_showing_map": true,
+            "bake_count_observed": 150,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 9.65,
+            "island_floor": 28.0,
+            "scene_render_hz": 23.51,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "DIAGNOSTIC-FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.08,
+            "cell_scene_render_hz": 23.51,
+            "scene_render_ratio": 0.391,
+            "control_qqw_paint_hz": 60.02,
+            "cell_qqw_paint_hz": 23.51,
+            "qqw_paint_ratio": 0.392,
+            "storm_suspected": false
+          }
+        },
+        "m4_feed8": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.036,
+            "qml_fps": 24.48,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 24.48,
+            "qquickwidget_paint_hz": 24.48,
+            "container_paint_hz": 13.24,
+            "process_cpu_pct_of_one_core": 78.15,
+            "island_feed_hz": 7.02,
+            "island_feed_ticks": 106,
+            "scanmap_repaint_hz": 5.45,
+            "scanmap_repaints": 82,
+            "island_point_count": 128,
+            "island_showing_map": true,
+            "bake_count_observed": 156,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 7.02,
+            "island_floor": 28.0,
+            "scene_render_hz": 24.48,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "DIAGNOSTIC-FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.08,
+            "cell_scene_render_hz": 24.48,
+            "scene_render_ratio": 0.407,
+            "control_qqw_paint_hz": 60.02,
+            "cell_qqw_paint_hz": 24.48,
+            "qqw_paint_ratio": 0.408,
+            "storm_suspected": false
+          }
+        },
+        "m5_render_loop_basic": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.026,
+            "qml_fps": 21.1,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 21.1,
+            "qquickwidget_paint_hz": 20.96,
+            "container_paint_hz": 13.71,
+            "process_cpu_pct_of_one_core": 69.67,
+            "island_feed_hz": 16.91,
+            "island_feed_ticks": 255,
+            "scanmap_repaint_hz": 5.86,
+            "scanmap_repaints": 88,
+            "island_point_count": 295,
+            "island_showing_map": true,
+            "bake_count_observed": 153,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 16.91,
+            "island_floor": 28.0,
+            "scene_render_hz": 21.1,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "DIAGNOSTIC-FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.08,
+            "cell_scene_render_hz": 21.1,
+            "scene_render_ratio": 0.351,
+            "control_qqw_paint_hz": 60.02,
+            "cell_qqw_paint_hz": 20.96,
+            "qqw_paint_ratio": 0.349,
+            "storm_suspected": false
+          }
+        }
+      }
+    },
+    {
+      "pass": 2,
+      "cells": {
+        "m0_control": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.0,
+            "qml_fps": 60.07,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 60.07,
+            "qquickwidget_paint_hz": 60.0,
+            "container_paint_hz": 0.0,
+            "process_cpu_pct_of_one_core": 26.98,
+            "bake_count_observed": 181,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": null,
+            "island_floor": 28.0,
+            "scene_render_hz": 60.07,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "REFERENCE"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.07,
+            "cell_scene_render_hz": 60.07,
+            "scene_render_ratio": 1.0,
+            "control_qqw_paint_hz": 60.0,
+            "cell_qqw_paint_hz": 60.0,
+            "qqw_paint_ratio": 1.0,
+            "storm_suspected": false
+          }
+        },
+        "m0_overlay": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.023,
+            "qml_fps": 23.63,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 23.63,
+            "qquickwidget_paint_hz": 23.63,
+            "container_paint_hz": 13.85,
+            "process_cpu_pct_of_one_core": 79.88,
+            "island_feed_hz": 13.17,
+            "island_feed_ticks": 197,
+            "scanmap_repaint_hz": 5.92,
+            "scanmap_repaints": 89,
+            "island_point_count": 228,
+            "island_showing_map": true,
+            "bake_count_observed": 155,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 13.17,
+            "island_floor": 28.0,
+            "scene_render_hz": 23.63,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.07,
+            "cell_scene_render_hz": 23.63,
+            "scene_render_ratio": 0.393,
+            "control_qqw_paint_hz": 60.0,
+            "cell_qqw_paint_hz": 23.63,
+            "qqw_paint_ratio": 0.394,
+            "storm_suspected": false
+          }
+        },
+        "m1_opaque_island": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.009,
+            "qml_fps": 25.32,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 25.32,
+            "qquickwidget_paint_hz": 25.32,
+            "container_paint_hz": 5.6,
+            "process_cpu_pct_of_one_core": 77.35,
+            "island_feed_hz": 14.33,
+            "island_feed_ticks": 214,
+            "scanmap_repaint_hz": 6.2,
+            "scanmap_repaints": 93,
+            "island_point_count": 244,
+            "island_showing_map": true,
+            "bake_count_observed": 163,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 14.33,
+            "island_floor": 28.0,
+            "scene_render_hz": 25.32,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.07,
+            "cell_scene_render_hz": 25.32,
+            "scene_render_ratio": 0.422,
+            "control_qqw_paint_hz": 60.0,
+            "cell_qqw_paint_hz": 25.32,
+            "qqw_paint_ratio": 0.422,
+            "storm_suspected": false
+          }
+        },
+        "m2_opaque_qqw": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.003,
+            "qml_fps": 22.93,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 22.93,
+            "qquickwidget_paint_hz": 22.66,
+            "container_paint_hz": 0.0,
+            "process_cpu_pct_of_one_core": 77.17,
+            "island_feed_hz": 13.62,
+            "island_feed_ticks": 205,
+            "scanmap_repaint_hz": 6.07,
+            "scanmap_repaints": 91,
+            "island_point_count": 236,
+            "island_showing_map": true,
+            "bake_count_observed": 156,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 13.62,
+            "island_floor": 28.0,
+            "scene_render_hz": 22.93,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.07,
+            "cell_scene_render_hz": 22.93,
+            "scene_render_ratio": 0.382,
+            "control_qqw_paint_hz": 60.0,
+            "cell_qqw_paint_hz": 22.66,
+            "qqw_paint_ratio": 0.378,
+            "storm_suspected": false
+          }
+        },
+        "m1_m2_combined": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.068,
+            "qml_fps": 19.58,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 19.58,
+            "qquickwidget_paint_hz": 19.58,
+            "container_paint_hz": 0.0,
+            "process_cpu_pct_of_one_core": 75.18,
+            "island_feed_hz": 16.26,
+            "island_feed_ticks": 246,
+            "scanmap_repaint_hz": 6.11,
+            "scanmap_repaints": 92,
+            "island_point_count": 283,
+            "island_showing_map": true,
+            "bake_count_observed": 143,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 16.26,
+            "island_floor": 28.0,
+            "scene_render_hz": 19.58,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.07,
+            "cell_scene_render_hz": 19.58,
+            "scene_render_ratio": 0.326,
+            "control_qqw_paint_hz": 60.0,
+            "cell_qqw_paint_hz": 19.58,
+            "qqw_paint_ratio": 0.326,
+            "storm_suspected": false
+          }
+        },
+        "m3_half_area": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 14.994,
+            "qml_fps": 24.08,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 24.08,
+            "qquickwidget_paint_hz": 24.08,
+            "container_paint_hz": 15.94,
+            "process_cpu_pct_of_one_core": 66.38,
+            "island_feed_hz": 19.46,
+            "island_feed_ticks": 292,
+            "scanmap_repaint_hz": 6.87,
+            "scanmap_repaints": 103,
+            "island_point_count": 337,
+            "island_showing_map": true,
+            "bake_count_observed": 162,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 19.46,
+            "island_floor": 28.0,
+            "scene_render_hz": 24.08,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "DIAGNOSTIC-FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.07,
+            "cell_scene_render_hz": 24.08,
+            "scene_render_ratio": 0.401,
+            "control_qqw_paint_hz": 60.0,
+            "cell_qqw_paint_hz": 24.08,
+            "qqw_paint_ratio": 0.401,
+            "storm_suspected": false
+          }
+        },
+        "m4_feed15": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.017,
+            "qml_fps": 19.98,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 19.98,
+            "qquickwidget_paint_hz": 20.04,
+            "container_paint_hz": 13.52,
+            "process_cpu_pct_of_one_core": 71.59,
+            "island_feed_hz": 11.19,
+            "island_feed_ticks": 169,
+            "scanmap_repaint_hz": 5.73,
+            "scanmap_repaints": 86,
+            "island_point_count": 195,
+            "island_showing_map": true,
+            "bake_count_observed": 147,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 11.19,
+            "island_floor": 28.0,
+            "scene_render_hz": 19.98,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "DIAGNOSTIC-FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.07,
+            "cell_scene_render_hz": 19.98,
+            "scene_render_ratio": 0.333,
+            "control_qqw_paint_hz": 60.0,
+            "cell_qqw_paint_hz": 20.04,
+            "qqw_paint_ratio": 0.334,
+            "storm_suspected": false
+          }
+        },
+        "m4_feed8": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.071,
+            "qml_fps": 20.44,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 20.44,
+            "qquickwidget_paint_hz": 20.44,
+            "container_paint_hz": 13.27,
+            "process_cpu_pct_of_one_core": 73.4,
+            "island_feed_hz": 7.05,
+            "island_feed_ticks": 105,
+            "scanmap_repaint_hz": 5.31,
+            "scanmap_repaints": 80,
+            "island_point_count": 124,
+            "island_showing_map": true,
+            "bake_count_observed": 153,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 7.05,
+            "island_floor": 28.0,
+            "scene_render_hz": 20.44,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "DIAGNOSTIC-FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.07,
+            "cell_scene_render_hz": 20.44,
+            "scene_render_ratio": 0.34,
+            "control_qqw_paint_hz": 60.0,
+            "cell_qqw_paint_hz": 20.44,
+            "qqw_paint_ratio": 0.341,
+            "storm_suspected": false
+          }
+        },
+        "m5_render_loop_basic": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.062,
+            "qml_fps": 18.06,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 18.06,
+            "qquickwidget_paint_hz": 17.93,
+            "container_paint_hz": 14.01,
+            "process_cpu_pct_of_one_core": 73.86,
+            "island_feed_hz": 16.3,
+            "island_feed_ticks": 245,
+            "scanmap_repaint_hz": 6.11,
+            "scanmap_repaints": 92,
+            "island_point_count": 288,
+            "island_showing_map": true,
+            "bake_count_observed": 146,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 16.3,
+            "island_floor": 28.0,
+            "scene_render_hz": 18.06,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "DIAGNOSTIC-FAIL"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.07,
+            "cell_scene_render_hz": 18.06,
+            "scene_render_ratio": 0.301,
+            "control_qqw_paint_hz": 60.0,
+            "cell_qqw_paint_hz": 17.93,
+            "qqw_paint_ratio": 0.299,
+            "storm_suspected": false
+          }
+        }
+      }
+    }
+  ],
+  "overall_by_cell": {
+    "m0_control": {
+      "pass_states": [
+        "REFERENCE",
+        "REFERENCE"
+      ],
+      "overall": "REFERENCE"
+    },
+    "m0_overlay": {
+      "pass_states": [
+        "FAIL",
+        "FAIL"
+      ],
+      "overall": "FAIL"
+    },
+    "m1_opaque_island": {
+      "pass_states": [
+        "FAIL",
+        "FAIL"
+      ],
+      "overall": "FAIL"
+    },
+    "m2_opaque_qqw": {
+      "pass_states": [
+        "FAIL",
+        "FAIL"
+      ],
+      "overall": "FAIL"
+    },
+    "m1_m2_combined": {
+      "pass_states": [
+        "FAIL",
+        "FAIL"
+      ],
+      "overall": "FAIL"
+    },
+    "m3_half_area": {
+      "pass_states": [
+        "DIAGNOSTIC-FAIL",
+        "DIAGNOSTIC-FAIL"
+      ],
+      "overall": "DIAGNOSTIC-FAIL"
+    },
+    "m4_feed15": {
+      "pass_states": [
+        "DIAGNOSTIC-FAIL",
+        "DIAGNOSTIC-FAIL"
+      ],
+      "overall": "DIAGNOSTIC-FAIL"
+    },
+    "m4_feed8": {
+      "pass_states": [
+        "DIAGNOSTIC-FAIL",
+        "DIAGNOSTIC-FAIL"
+      ],
+      "overall": "DIAGNOSTIC-FAIL"
+    },
+    "m5_render_loop_basic": {
+      "pass_states": [
+        "DIAGNOSTIC-FAIL",
+        "DIAGNOSTIC-FAIL"
+      ],
+      "overall": "DIAGNOSTIC-FAIL"
+    }
+  },
+  "overall": {
+    "mitigations_passing": [],
+    "diagnostics_passing": [],
+    "quiet_rerun_needed": [],
+    "verdict": "ALL MITIGATIONS FAILED"
+  }
+}
