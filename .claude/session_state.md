@@ -405,18 +405,34 @@ U-track) instead of being smuggled into beats.
   variant, QQuickWidget stays · m7-only ⇒ container pivot (architect:
   detach/redock + focus notes) · both fail ⇒ separate top-levels
   A/B-style, full architect escalation.
-- **NATIVE-SURFACE RUN 1 (`dbe7ad1`): m6 GENUINE FAIL** (~23 fps @
-  80% both passes — WA_NativeWindow island does NOT restore the fast
-  path). **m7 NO-DATA = harness bug, not a verdict** (measure_cell
-  assumed QQuickWidget; AttributeError on the container wrapper;
-  smoke never walked that line — coverage gap named). noah-spike-
-  mitigation RESUMED with the traceback: fix + smoke-parity, then
-  Adam runs windowed m0_control/m0_overlay/m7 only. **m7 is the LAST
-  in-window candidate** — if it fails, mechanism = separate
-  top-levels (A/B-proven) + full architect round.
-- **U2.3 dispatch HELD until the m7 windowed run completes** (one
-  more short cycle; measurement integrity beats parallelism).
-  Mary thematic batch queues behind U2.3's face.
+- **ISLAND MEASUREMENT PHASE CLOSED (`1c99df5`):** m6 native-island
+  genuine FAIL (~23 fps). **m7 container = STABLE INTRINSIC NEAR-MISS:
+  six passes over three runs (incl. one with Kaya's RDP stream
+  closed) converge scene 52.3-54.3 fps vs floor 55 / island 25-26 Hz
+  vs floor 28 / CPU 65-67% NOT saturated** (pacing suspicion:
+  optimization space untouched). Harness fix mid-cycle: measure_cell
+  qml_root_object() polymorphism + smoke-parity rule ("smoke walks
+  the measurement's exact path") landed `390a1a9`. Container teardown
+  hazard documented (deterministic segfault in naive close order;
+  disciplined order 7/7 clean).
+- **u24-architect** (FABLE, background) — island-hosting DECISION on
+  the full evidence. LOCK: docs/design/u2_island_hosting_decision.md
+  (new). Decision space: separate top-levels (B-proven 60 fps) vs m7
+  + bounded pacing spike vs load-shaping at representative load;
+  [Kaya] items (threshold re-rate / representative-load ratification)
+  isolated; Mary class = concurrency/lifecycle at landing.
+- **noah-u23** (FABLE — face = design moment, background) — U2.3
+  ScanViewer.qml face + additive VM growth per plan §U2.3. Bindings:
+  ActionBar = ONE strip frame (classed holes unused, U3+); face
+  hosting-AGNOSTIC (holes published only, zero U2.4 host code);
+  naming hazard resolved against the standing-law matcher BEFORE
+  code. LOCKS: gui/qml/panels/ScanViewer.qml (new) ·
+  gui/scan_viewer_viewmodel.py · tests/test_scan_viewer_viewmodel.py
+  (additive) · tests/test_scan_viewer_qml.py (new).
+- Mary thematic batch (U2.1+U2.2+U2.3) queues on U2.3 landing.
+  Bake-cadence sweep (Kaya frost aesthetics) queued behind the
+  architect verdict — no windowed runs while build beats hold the
+  test lane.
 - 👁️ **KAYA OPERATOR OBSERVATION #2 (aesthetic, booked):** "frost
   bake doesn't look that good relative to live glass — in the spike."
   Data context: bake exonerated on PERF (control cell 60 fps @23%);
