@@ -115,7 +115,7 @@ with any glass/frost/shadow-response flag — the QML twin of
 | rung | FLAT/TOKEN fill | SCENE fill (one rung up @ alpha) | frost | edges | shadow |
 |---|---|---|---|---|---|
 | Shelf | `shelf` | `card` @ `glassPaneAlpha` | sampled, deep (`blurPane` 40) | `hairlineStrong` + `specular` | `shPane` |
-| Card | `card` | `raised` @ `glassCardAlpha` | sampled, shallow (`blurCard` 16) | `hairlineStrong` + `specular` | `shCard` |
+| Card | `card` | `raised` @ `glassCardAlpha` | sampled from the SHARED pane-depth bake (ruling 10: one blur, ever; `blurCard` 16 = reserved tuning token, unconsumed) | `hairlineStrong` + `specular` | `shCard` |
 | Tile | `raised` | `raised` (opaque, always) | none | `specular` | contact only |
 | Well | `well` | `well` (opaque, always) | none | `edgeShade` | none |
 | Island | `plotBg` | `plotBg` (opaque, always) | none | `hairlineStrong` + `edgeShade` | none — and none may fall on it |

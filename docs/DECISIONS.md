@@ -612,3 +612,24 @@ measurement B, you have my go on everything"):
   First dispatches: day-0 overlay micro-spike + U2.1 Surface core.
 
 Status: **RATIFIED** (Kaya, explicit).
+
+## 2026-07-15 — Ruling 10: one shared frost bake; kit-spec §2.2 card-frost row amended (Adam, under the delegated design authority)
+
+Source: U2.1 implementer flag (noah-u21, commit 1ab0085). kit_spec_v1
+§2.2 lists per-rung frost depths (Shelf `blurPane` 40 / Card `blurCard`
+16) while §2.4's load-bearing law permits exactly ONE blur pass on the
+shared source ("the only MultiEffect in the application"). Two depths
+require two bakes — the contradiction is internal to the signed spec.
+
+**Ruling:** the one-blur law wins. There is ONE frost bake at pane
+depth (`blurPane` 40); **card-rung surfaces sample the shared bake.**
+A second 16 px bake is refused: it would double the measured bake cost
+and break the mechanism measurement A validated. If the windowed U2
+sign-off finds cards reading too deep, the legal adjustment lever is
+the card's SCENE fill alpha over the shared bake (more fill =
+perceptually shallower frost) — a token tweak, never a second blur.
+`blurCard` 16 stays in the bridge (A.5) as a reserved token for that
+lever's tuning, currently unconsumed. kit_spec §2.2 amended citing
+this entry (§8 mechanism). Kaya reviews rendered pixels at the U2
+sign-off and may overrule with the cost number on the table.
+Status: **ACTIVE** (delegated decision, post-hoc logged).

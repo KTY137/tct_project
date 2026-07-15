@@ -1097,3 +1097,28 @@ is the one row to review.
 - Tests run: none; C14 explicitly says pytest is not needed.
 - Risk: bucket proposals are advisory and should be applied by the map-update
   owner at the wave boundary; no changes were made to `docs/test_bucket_map.md`.
+
+## C15 - Kit-QML conformance second opinion: gui/qml/kit vs kit_spec_v1 laws (advisory, read-only)
+
+**Status: QUEUED** - Effort: M - Source: Adam, 2026-07-15 (free-lane
+second opinion on U2.1, commit `1ab0085`; Mary's thematic batch reviews
+U2.1-U2.3 together later — this is the independent early read).
+
+Task (advisory — findings feed the Mary batch, never edit code):
+
+1. Read `docs/design/qml_kit_forge/kit_spec_v1.md` §2 (Surface material:
+   rung ladder §2.2 as amended by DECISIONS ruling 10, tier resolution
+   §2.3, one-blur law §2.4, state table §2.6) and §4.1 (focus ring).
+2. Audit `TCT_app/gui/qml/kit/*.qml` against each law. Deliverable: a
+   conformance table (law -> CONFORMS / DEVIATES / CANNOT-VERIFY-STATICALLY
+   with file:line evidence for every row). Pay special attention to:
+   exactly ONE MultiEffect app-wide; hazard rung refuses glass structurally
+   (not only via the construction throw); washes move POSITION never alpha
+   (band law); no inline hex (tokens only via TOKEN_MAP); run-active clamp
+   <= 1.0x in LivingGround; outside-offset focus ring geometry.
+3. Note anything in KitEnv.qml's dead-zone registry that could fail silently
+   (registration forgotten, rect never updated) — advisory list only.
+
+Read-only: do NOT modify any repo file except appending your report below
+this brief. Do not run pytest (offscreen kit suite already green in CI
+evidence; your value is the static read, not re-execution).
