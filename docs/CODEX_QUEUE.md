@@ -1001,7 +1001,7 @@ the source of truth.
 
 ## C14 - Bucket-map completeness re-enumeration: 152 files on disk vs 118 mapped (advisory, read-only)
 
-**Status: QUEUED** - Effort: M - Source: Adam, 2026-07-15 night (Mary RISK
+**Status: DONE - Enumerated 34 unmapped tests; proposed A/B/C/D buckets.** - Effort: M - Source: Adam, 2026-07-15 night (Mary RISK
 finding at the U1.0 review: `docs/test_bucket_map.md` enumerates 118 test
 files while `git ls-tree` at `8166752` lists 152 `tests/test_*.py` — a
 34-file pre-existing gap; the Bucket-C preamble's "every remaining
@@ -1025,3 +1025,75 @@ boundary, using your table as input):
 
 Read-only: do NOT modify test_bucket_map.md or any repo file other than
 appending here. Running pytest is not needed.
+
+**Codex findings (2026-07-15):**
+
+Enumeration method: parsed only markdown table rows matching
+``| n | `test_*.py` |`` in `docs/test_bucket_map.md`, then compared that
+118-row set to `git ls-tree -r --name-only HEAD -- TCT_app/tests` filtered to
+`test_*.py`. Current HEAD has 152 committed test files, so the drift is exactly
+34 unmapped files. Mapped rows whose file no longer exists: none.
+
+| Missing file | Proposed bucket | Rationale |
+|---|---|---|
+| `test_ambient_ground.py` | C | Imports PySide6 paint/widget classes plus `AmbientGround` (`TCT_app/tests/test_ambient_ground.py:29-35`) and asserts paint/cache/layering/theme-refresh behavior (`:106`, `:201`, `:265`), so it is QWidget/material pinned. |
+| `test_backdrop_event_spine.py` | C | Imports PySide6 events/widgets plus `gui.backdrop`/`style` (`TCT_app/tests/test_backdrop_event_spine.py:32-38`) and pins native-window/material event handling and detached-window behavior (`:96`, `:657`, `:742`). |
+| `test_capability_registry.py` | A | No Qt imports; it builds capability adapters, `DeviceManager`, and simulated devices (`TCT_app/tests/test_capability_registry.py:22-54`) and asserts descriptor/reservation/fail-closed registry behavior (`:183-838`). |
+| `test_device_connect_lifecycle.py` | A | No Qt imports; it exercises `devices.base.DeviceError` and `WaveformGenerator` lifecycle/open-failure paths with fake VISA resources (`TCT_app/tests/test_device_connect_lifecycle.py:38-41`, `:69-266`). |
+| `test_glass_env.py` | A | No Qt imports; it exercises the pure `gui.glass_env` tier/transition policy (`TCT_app/tests/test_glass_env.py:36-62`) across matrix, fail-safe, and transition-policy tests (`:264`, `:383`, `:600`). |
+| `test_glass_shell_skeleton.py` | D | Imports QML bridge pieces (`QUrl`, `qml_theme`) (`TCT_app/tests/test_glass_shell_skeleton.py:26-29`) and boots the QML GlassShell/QQuickWindow/island path (`:70`, `:75`, `:83`). |
+| `test_glass_text_contract.py` | C | Tests style/material contrast and the LaserPanel safety-banner widget path (`TCT_app/tests/test_glass_text_contract.py:45-56`, `:304-342`), so it is a QWidget glass contract rather than a QML shell test. |
+| `test_ground_perf.py` | C | Imports QApplication, detachable tabs, `AmbientGround`, `HazardSurface`, and `Well` (`TCT_app/tests/test_ground_perf.py:35-41`) and asserts render cache/detach behavior including `BiasPanel` (`:56-146`, `:196-200`). |
+| `test_icon_theme_walk_safety.py` | C | Imports QApplication/QMainWindow/QPushButton and `gui.status_widgets`/`style` (`TCT_app/tests/test_icon_theme_walk_safety.py:43-48`) and pins QWidget icon paint/repolish lifecycle (`:69-263`). |
+| `test_icon_theming_gui.py` | C | Combines GUI AST icon scanning with QPushButton and ScopePanel helpers (`TCT_app/tests/test_icon_theming_gui.py:69-137`, `:239-383`), matching the existing GUI style-guard bucket. |
+| `test_material_contract.py` | C | Imports QApplication plus `panel_kit`/`style` (`TCT_app/tests/test_material_contract.py:33-37`) and asserts QSS surface, registry, and offscreen component behavior (`:190-460`). |
+| `test_monitor_alarm_notify.py` | B | Constructs `MonitorPanel` and the `STATUS` notification boundary (`TCT_app/tests/test_monitor_alarm_notify.py:27-37`) to pin ALARM/WARN notification semantics (`:104-355`). |
+| `test_motor_icon_theming.py` | C | Constructs `MotorPanel(SimulatedMotorStage())` (`TCT_app/tests/test_motor_icon_theming.py:30-39`) and renders jog/STOP icon pixels across themes (`:71-171`). |
+| `test_no_immortal_panels.py` | C | Imports QApplication/QWidget and constructs named panels (`TCT_app/tests/test_no_immortal_panels.py:53-95`) for widget lifetime, lambda-connect, and thread-panel leak assertions (`:215-509`). |
+| `test_palette_contrast.py` | C | Imports GUI style tokens (`TCT_app/tests/test_palette_contrast.py:49-50`) and scans QSS/contrast rules for theme legality (`:215-350`), matching style-guard C behavior. |
+| `test_panel_kit_registry.py` | C | Imports QApplication/QWidget, shiboken, and `panel_kit` registry APIs (`TCT_app/tests/test_panel_kit_registry.py:31-36`) and asserts dead C++ widget pruning (`:51-123`). |
+| `test_pilot_bias_render.py` | C | Imports QApplication, `BiasPanel`, `HazardSurface`, and `Well` (`TCT_app/tests/test_pilot_bias_render.py:32-37`) and asserts the migrated BiasPanel glass-kit render contract (`:79-141`). |
+| `test_plan_estimate_cap.py` | A | No Qt imports; it imports `controller.plan_estimate` and `scan_plan` (`TCT_app/tests/test_plan_estimate_cap.py:29-34`) and tests estimator caps/materialization behavior (`:90-281`). |
+| `test_qml_preview.py` | D | Imports `QtQuick`, `Tct`, and the QML preview harness (`TCT_app/tests/test_qml_preview.py:23-29`) and tests QML load, hot reload, tier override, and engine shutdown (`:83-226`). |
+| `test_ribbon_never_clips.py` | C | Imports QApplication/QFrame/QScrollArea (`TCT_app/tests/test_ribbon_never_clips.py:29-30`) and checks current QWidget shell safety-ribbon chip layout (`:68-128`). |
+| `test_run_bg_thread_affinity.py` | B | Uses a simulated device manager and `qapp` (`TCT_app/tests/test_run_bg_thread_affinity.py:32-62`) to assert device-panel/main-window `_run_bg` completions land on the GUI thread (`:88-223`). |
+| `test_wave_analysis_render.py` | C | Imports QApplication, `AnalysisPanel`, and panel-kit widgets (`TCT_app/tests/test_wave_analysis_render.py:38-45`) and tests shelf/glass/refresh/shutdown behavior (`:60-208`). |
+| `test_wave_calibration_render.py` | C | Imports QApplication, `CalibrationPanel`, `DenyAllGate`, and `HazardSurface` (`TCT_app/tests/test_wave_calibration_render.py:43-52`) and tests glass, hazard, gate, refresh, and render behavior (`:132-433`). |
+| `test_wave_camera_render.py` | C | Imports QApplication, `CameraPanel`, ROI dialog, and pyqtgraph (`TCT_app/tests/test_wave_camera_render.py:51-60`) and tests camera panel glass/dialog/canvas/worker behavior (`:94-327`). |
+| `test_wave_device_render.py` | C | Imports QApplication/QMainWindow and `DeviceManagerWindow` (`TCT_app/tests/test_wave_device_render.py:52-57`) and tests device window glass/theme/close/shutdown behavior (`:96-243`). |
+| `test_wave_intensity_render.py` | C | Imports QApplication, `IntensityPanel`, and panel-kit widgets (`TCT_app/tests/test_wave_intensity_render.py:30-36`) and tests one-shelf/glass/well/refresh behavior (`:58-149`). |
+| `test_wave_laser_render.py` | C | Imports QApplication, `LaserPanel`, waveform generator, and `HazardSurface` (`TCT_app/tests/test_wave_laser_render.py:51-58`) and tests glass/hazard/well/render behavior (`:84-218`). |
+| `test_wave_motor_render.py` | C | Imports QApplication, `MotorPanel`, and `HazardSurface` (`TCT_app/tests/test_wave_motor_render.py:47-53`) and tests stage-command hazard placement, refresh, and render behavior (`:92-260`). |
+| `test_wave_planner_render.py` | C | Imports QApplication, `PlannerPanel`, `ArmLatch`, and `HazardSurface` (`TCT_app/tests/test_wave_planner_render.py:45-52`) and tests hazard wrap, abort enable-state, theme, and render behavior (`:82-239`). |
+| `test_wave_scan_map_render.py` | C | Imports QApplication, `ScanMapView`, `FigureCard`, and pyqtgraph-dependent paths (`TCT_app/tests/test_wave_scan_map_render.py:43-50`) and tests shelf/well/refresh/render behavior (`:85-183`). |
+| `test_wave_scope_render.py` | C | Imports QApplication, `ScopePanel`, pyqtgraph, and `_TriggerDialog` (`TCT_app/tests/test_wave_scope_render.py:44-53`) and tests glass/dialog/theme/shutdown behavior (`:83-328`). |
+| `test_wave_sequencer_render.py` | C | Imports QApplication, `SequencerPanel`, `SequenceCoordinator`, and `HazardSurface` (`TCT_app/tests/test_wave_sequencer_render.py:43-54`) and tests hazard/action-bar/theme/render behavior (`:140-278`). |
+| `test_wave_stage_view_render.py` | C | Imports QApplication plus `StageView`/`StageView2D` (`TCT_app/tests/test_wave_stage_view_render.py:39-46`) and tests shelf/z-chip/theme/render behavior (`:69-131`). |
+| `test_widget_pile_bounded.py` | C | Imports QApplication/QWidget (`TCT_app/tests/test_widget_pile_bounded.py:37-38`) and asserts DeleteLater, reaper, and abandoned-panel pile bounds (`:54-167`). |
+
+Proposed additions by bucket: A +4, B +2, C +26, D +2. Corrected totals if
+accepted: **A = 53, B = 23, C = 69, D = 7 (152 total committed test files at
+HEAD)**.
+
+Gap origin: one unmapped file was added by the 2026-07-13 D1b capability-registry
+commit (`b26144a`). The other 33 were added on 2026-07-14 across the glass-kit
+foundation/material/GlassShell/QML-preview work, the 12/12 `test_wave_*_render`
+panel migration wave, and follow-up safety/lifetime fixes such as backdrop event
+spine, device connect lifecycle, monitor alarm notifications, icon theming,
+immortal-panel cleanup, run-background thread affinity, and widget-pile bounds.
+No mapped row points at a deleted file. Current untracked worktree tests were not
+counted because this brief asks for current HEAD.
+
+Review note: `test_glass_env.py` lives under `gui/`, but the file is Qt-free and
+policy-only, so I proposed A by the map's zero-widget/byte-identical survival
+criterion. If the council wants design-system pure policy outside Bucket A, this
+is the one row to review.
+
+- Files touched: `docs/CODEX_QUEUE.md` only.
+- Verification: static enumeration/audit only. Commands used:
+  `git ls-tree -r --name-only HEAD -- TCT_app/tests`, markdown table-row parsing
+  of `docs/test_bucket_map.md`, targeted `rg`/source reads of the 34 missing
+  files, and `git log --diff-filter=A --follow` for gap-origin commits.
+- Tests run: none; C14 explicitly says pytest is not needed.
+- Risk: bucket proposals are advisory and should be applied by the map-update
+  owner at the wave boundary; no changes were made to `docs/test_bucket_map.md`.
