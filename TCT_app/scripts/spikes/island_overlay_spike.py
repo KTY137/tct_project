@@ -900,6 +900,15 @@ class OverlayWindow:
     def quick_window(self):
         return self.qqw.quickWindow()
 
+    def qml_root_object(self):
+        """The QML root ``Item`` -- ``win.qqw`` IS the real QQuickWidget on
+        this class, so this is a direct passthrough. NativeContainerWindow
+        (M7) exposes the same method name over its ``quick_view`` instead --
+        every caller (measure_cell, smoke) goes through this method, never
+        ``win.qqw.rootObject()`` directly, precisely so it stays correct
+        across both window classes."""
+        return self.qqw.rootObject()
+
     def qml_errors(self) -> list[str]:
         return [str(e) for e in self.qqw.errors()]
 
@@ -1074,6 +1083,14 @@ class NativeContainerWindow:
     def quick_window(self):
         return self.quick_view  # QQuickView IS its own QQuickWindow
 
+    def qml_root_object(self):
+        """The QML root ``Item``, read from ``quick_view`` (there is no
+        QQuickWidget on this class -- ``self.qqw`` is only the duck-typed
+        ``_PaintCounter``, which has no ``rootObject()``). Every caller uses
+        this method name, never ``win.qqw.rootObject()`` directly, so it
+        resolves correctly on both window classes."""
+        return self.quick_view.rootObject()
+
     def qml_errors(self) -> list[str]:
         return [str(e) for e in self.quick_view.errors()]
 
@@ -1181,7 +1198,7 @@ def measure_cell(cfg: dict, *, panes: int, rebake_hz: float, seconds: float,
     win.reposition_island()
 
     # window the telemetry
-    qml_root = win.qqw.rootObject()
+    qml_root = win.qml_root_object()
     if qml_root is not None:
         qml_root.setProperty("bakeCount", 0)
     frames_end["n"] = 0
@@ -1445,6 +1462,21 @@ def _smoke_check_cell(cell_id: str, cfg: dict, panes: int, rebake_hz: float) -> 
         win.reposition_island()
         detail_bits = [f"qml_status={win.qml_status()}"]
         ok = True
+
+        # Exercise the EXACT qml_root_object() code path measure_cell walks
+        # (the bakeCount reset/read) for EVERY cell, not just overlay ones --
+        # this is the coverage gap that let the m7 win.qqw.rootObject()
+        # AttributeError through: the old smoke never called this method at
+        # all, so it never had a chance to catch a window class that can't
+        # answer it. Any AttributeError/etc. here is caught by the outer
+        # try/except and surfaces as a smoke FAIL, exactly as it should.
+        qml_root = win.qml_root_object()
+        if qml_root is not None:
+            qml_root.setProperty("bakeCount", 0)
+            detail_bits.append(f"qml_root_bakeCount={qml_root.property('bakeCount')}")
+        else:
+            detail_bits.append("qml_root=None")
+
         if cfg.get("overlay", False):
             win.feed.start()
             _settle(700)
