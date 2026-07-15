@@ -357,17 +357,19 @@ non-conflicting parallelism dispatched:
   NEW component files only (U2.1 files FROZEN) ·
   gui/qml/ScanStatusStrip.qml · tests/test_qml_kit_components.py
   (new) · tests/test_qml_scan_status.py (additive).
-- ⚠️ **BENCH-GATE RISK (new, must fix BEFORE next bench run):**
-  bench_run.ps1 disables LFS smudge ("only LFS file is an irrelevant
-  PDF" — comment now STALE): U2.1's 12 kit PNGs are LFS and the kit
-  suite READS them ⇒ next bench full suite fails on pointer files.
-  Bench has git-lfs 3.7.1 but NO GitHub credentials by design ⇒ fix =
-  transport objects (scp .git/lfs/objects subset + `git lfs checkout`
-  on bench, or scp the asset dir post-checkout). Owner: Adam
-  (harness infra), before the U2.2|U2.4 wave-boundary bench gate.
-  Local hygiene fixed in `184852e` (TCT_app/.gitattributes `-text`
-  restated for binaries; blobs verified pointer-clean; LFS objects
-  confirmed pushed, nothing pending).
+- ✅ **BENCH-GATE LFS RISK RESOLVED (Adam, harness infra):**
+  bench_run.ps1 gained step [3b] — ships ONLY the LFS objects for
+  files under TCT_app/ (32 KB, never the 1.9 GB store) as a tar
+  extracted into the bench repo's .git, then `git lfs checkout
+  TCT_app` (offline smudge, no credentials) + laptop-side
+  pointer-verification that FAILS the sync if any TCT_app LFS file
+  stays a pointer. **Proven end-to-end:** -SyncOnly run → "LFS OK: 12
+  TCT_app files smudged"; bench PNG byte-size verified 2507 (was a
+  129-byte pointer). Two cmd-over-ssh traps documented in the script:
+  `if not exist X mkdir X & rest` groups `rest` INTO the if-body;
+  bench git-lfs rejects `-- <path>` as a bad ref. Local hygiene:
+  `184852e` (.gitattributes -text restated; blobs pointer-clean; LFS
+  objects confirmed pushed).
 - **After U2.1 lands:** immediate-ish Mary look is NOT required (not
   safety-class) → thematic batch with U2.2+U2.3 per plan §gate line 6;
   U2.2 (components, Noah sonnet) dispatches on U2.1's frozen API.
