@@ -104,6 +104,74 @@ tabulated against the same M0 baseline and the same PASS BAR, in one run.
     was NOT blocked by the GUI-thread event loop). A data point, not an
     expected fix.
 
+RESULT OF THE FIRST MATRIX RUN (windowed, quiet machine,
+artifacts_claude/island_overlay_spike_matrix_20260715T121526Z): ALL MITIGATIONS
+FAILED, both passes. Control held 60.0-60.1 fps @ 22-27% CPU; every overlay
+cell (M0/M1/M2/M1+M2) sat at 23-28 scene_render_hz @ 68-80% CPU regardless of
+opacity flags. The two most diagnostic rows both fired negatively:
+``m3_half_area`` (QQuickWidget at 50% area, island NOT overlapping it at all)
+STILL failed (~24-27 Hz), and ``m4_feed8`` (island driven at ~7 Hz) STILL
+failed (~20-24 Hz) -- ruling out blit-area-proportional cost AND island-rate
+pacing as the mechanism, on top of M1/M2 already ruling out damage-clip/opacity
+provability, and M5 ruling out the render-loop mode. The conclusion: the mere
+*presence* of a raster sibling QWidget anywhere over/near a QQuickWidget
+forces Qt to CPU-composite the whole top-level's backing store on every QML
+frame, independent of area, opacity flags, or pacing -- a compositing-model
+fact of ``QQuickWidget`` + a raster sibling in the same window, not a tunable.
+
+NATIVE-SURFACE FOLLOW-UP (M6/M7 -- masterplan's own "revisit WindowContainer
+at Qt 6.10+ with a bench spike" clause is active on this Qt 6.11.1 build)
+-----------------------------------------------------------------------------
+Before escalating the design pivot to the architect on hypothesis alone, two
+native-surface candidates are added as MEASURED cells, not assumed:
+
+  M6 -- native island (``m6_native_island``)
+    The island keeps its ``QQuickWidget``-hosting arrangement (hole-and-frame,
+    unmodified), but the island itself is given ``WA_NativeWindow`` (forced via
+    an explicit ``winId()`` call right after parenting) -- its own native
+    (HWND) surface that DWM composites above the QQuickWidget, instead of
+    sharing its backing store. HYPOTHESIS: the QQuickWidget's own repaint
+    should return to its unopposed 60fps path once no raster sibling shares
+    its backing store at all. WATCH FOR (operator eyeball via
+    ``--hold --hold-cell m6_native_island``): geometry/z-order/DPR-2.5
+    correctness of the native child, and flicker on move/resize (this spike's
+    protocol is a static single-shot geometry read, not a live resize test --
+    ``island_internal_win_id_nonzero`` and ``island_final_geometry`` are
+    recorded in every cell's measurement dict as a structural check; the
+    move/resize flicker read itself needs the operator's eyeball).
+
+  M7 -- native QML host (``m7_native_qml``)
+    QML is hosted via ``QQuickView`` + ``QWidget.createWindowContainer``
+    instead of ``QQuickWidget`` -- QML renders through a real native
+    swapchain, never through the FBO->backing-store path at all. Airspace
+    consequence (brief): a native window-container renders ABOVE raster
+    siblings regardless of widget z-order, so the island in this cell is ALSO
+    native (``WA_NativeWindow``) to stack above the QML -- which this design's
+    dead-zone law already requires (nothing may ever render above an island),
+    so this is not a new constraint, just the first cell that measures it.
+    KNOWN HAZARD, NARROWED (reproduced empirically during this beat, NOT a
+    Python exception -- a hard process segfault): a BARE MINIMAL
+    ``createWindowContainer(QQuickView) + .show()`` with NO explicit teardown
+    (letting CPython's interpreter-shutdown GC destroy the QQuickView/
+    container in whatever order it chooses) segfaults deterministically
+    (3/3) at process exit under the ``offscreen`` QPA platform on this
+    PySide6/Qt build (6.11.1). This spike's own code, which always calls
+    ``win.close()`` (stops the feed, closes island then host then container,
+    in that order) BEFORE the process would naturally exit, did NOT
+    reproduce the crash in any observed run (7/7 clean: the ``--smoke
+    --cells all`` run below, plus 4 repeated standalone ``--measure-one``
+    invocations) -- strongly suggesting the hazard is an object-destruction-
+    order issue that ``close()``-before-exit discipline avoids, not an
+    unconditional property of the API combination. The cell is STILL always
+    subprocess-isolated (``isolate=True``, the same re-exec mechanism M5 uses
+    for its env requirement) as defense-in-depth -- an exception mid-
+    measurement that skips ``close()``, or the real "windows" QPA platform,
+    could behave differently -- and the parent process trusts the JSON
+    result file over the subprocess's exit code regardless, since the file
+    is written before any teardown code runs. Whether the bare hazard (or
+    any other) reproduces under the real "windows" QPA platform is unknown
+    until the operator's windowed run -- report it either way.
+
 Every cell (mitigation or diagnostic) is measured against the SAME PASS BAR:
 ``island_feed_hz >= 28.0 AND qml_scene_render_hz >= 55.0``, in every pass
 (``--passes``, default 2, matching the original QUIET-RERUN-NEEDED
@@ -124,6 +192,11 @@ RUN
 
   # a narrower/faster matrix run (e.g. just the two required mitigations):
   .venv/Scripts/python.exe scripts/spikes/island_overlay_spike.py --cells m0_control,m0_overlay,m1_opaque_island,m2_opaque_qqw
+
+  # operator eyeball for M6/M7 flicker/z-order/geometry-drift on move/resize
+  # (this protocol's own measurement is a static single-shot geometry read):
+  .venv/Scripts/python.exe scripts/spikes/island_overlay_spike.py --hold 30 --hold-cell m6_native_island
+  .venv/Scripts/python.exe scripts/spikes/island_overlay_spike.py --hold 30 --hold-cell m7_native_qml
 
 SAFETY
 ------
@@ -544,6 +617,34 @@ CELLS: dict[str, dict] = {
                    "loop). Not an expected fix, a data point.",
         overlay=True, env={"QSG_RENDER_LOOP": "basic"}, diagnostic_only=True,
     ),
+    "m6_native_island": dict(
+        label="M6 native island (WA_NativeWindow on the island; QQuickWidget stays)",
+        hypothesis="A native DWM-composited surface for the island removes it "
+                   "from the QQuickWidget's shared backing store entirely -- "
+                   "the QQuickWidget's own repaint should return to its "
+                   "unopposed 60fps path. Watch (operator eyeball, "
+                   "--hold --hold-cell m6_native_island): geometry/z-order/"
+                   "DPR-2.5 correctness of the native child, flicker on "
+                   "move/resize.",
+        overlay=True, native_island=True,
+    ),
+    "m7_native_qml": dict(
+        label="M7 native QML host (QQuickView + createWindowContainer; native island)",
+        hypothesis="QML renders through a real native swapchain, never the "
+                   "FBO->backing-store path -- its repaint should be fully "
+                   "uncoupled from the island. Airspace consequence: a "
+                   "window-container renders ABOVE raster siblings regardless "
+                   "of z-order, so the island here is ALSO native "
+                   "(WA_NativeWindow) -- already required by the dead-zone "
+                   "law. NARROWED HAZARD: a bare createWindowContainer + "
+                   "show() with no explicit teardown segfaults at process "
+                   "exit under offscreen on this build; this spike's own "
+                   "disciplined close() avoided it in every observed run "
+                   "(see module docstring) -- still ALWAYS subprocess-"
+                   "isolated as defense-in-depth so any crash cannot take "
+                   "down the rest of the matrix.",
+        overlay=True, native_qml=True, native_island=True, isolate=True,
+    ),
 }
 
 _CELL_ORDER = list(CELLS.keys())
@@ -687,7 +788,8 @@ class OverlayWindow:
     def __init__(self, panes: int, rebake_hz: float, geo: tuple[int, int, int, int],
                  *, overlay: bool, opaque_island: bool = False,
                  opaque_qqw: bool = False, area_scale: float = 1.0,
-                 island_hz: float = ISLAND_NOMINAL_HZ) -> None:
+                 island_hz: float = ISLAND_NOMINAL_HZ,
+                 native_island: bool = False) -> None:
         from PySide6.QtCore import QUrl, Qt
         from PySide6.QtGui import QColor
         from PySide6.QtWidgets import QWidget
@@ -743,6 +845,13 @@ class OverlayWindow:
             else:
                 self.island = ScanMapView(self.container)
                 self._island_outer = self.island
+            if native_island:
+                # M6: force the island (or its opaque holder, if combined)
+                # onto its own native (HWND) surface, DWM-composited above
+                # the QQuickWidget instead of sharing its backing store.
+                # winId() forces creation now rather than waiting on show().
+                self._island_outer.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+                self._island_outer.winId()
             self._wrap_island_redraw()
 
         self.feed = SimScanFeed(self.island, hz=island_hz) if overlay else None
@@ -852,6 +961,187 @@ class OverlayWindow:
         self.container.close()
 
 
+class _PaintCounter:
+    """Minimal duck-typed stand-in exposing only ``.paint_count`` -- lets
+    :class:`NativeContainerWindow` present a ``.qqw.paint_count`` attribute
+    identical in shape to :class:`OverlayWindow`'s counting QQuickWidget
+    subclass, so ``measure_cell``/``_smoke_check_cell`` never need to know
+    which window class they are driving."""
+
+    def __init__(self) -> None:
+        self.paint_count = 0
+
+
+class NativeContainerWindow:
+    """M7: QML hosted via ``QQuickView`` + ``QWidget.createWindowContainer``
+    instead of ``QQuickWidget`` -- renders through a real native swapchain,
+    never the FBO->backing-store path at all. Airspace consequence (dead-zone
+    law): a native window-container renders ABOVE raster siblings regardless
+    of widget z-order, so the island here is also given ``WA_NativeWindow``.
+
+    KNOWN HAZARD, NARROWED (see module docstring): a BARE MINIMAL
+    ``createWindowContainer`` + ``.show()`` with no explicit teardown
+    segfaults deterministically at process exit under offscreen on this
+    build; THIS class's own disciplined ``close()`` (feed -> island -> host
+    -> container, always called before process exit) did not reproduce it in
+    7/7 observed runs. Every caller still goes through the subprocess-
+    isolation path regardless (this cell's spec sets ``isolate=True`` -- see
+    ``_needs_subprocess``) as defense-in-depth, so a crash from any cause
+    can never take down the rest of the matrix or the smoke suite; the
+    parent trusts the JSON result file over the subprocess exit code, since
+    the file is written well before any teardown code runs."""
+
+    def __init__(self, panes: int, rebake_hz: float, geo: tuple[int, int, int, int],
+                 *, native_island: bool = True, island_hz: float = ISLAND_NOMINAL_HZ) -> None:
+        from PySide6.QtCore import QUrl, Qt
+        from PySide6.QtGui import QColor
+        from PySide6.QtWidgets import QWidget
+        from PySide6.QtQuick import QQuickView
+
+        self.overlay = True
+        self.area_scale = 1.0
+        self.container = QWidget(None)
+        self.container.setWindowTitle(
+            f"island_overlay_spike -- M7 NATIVE-QML-HOST panes={panes} "
+            f"rebakeHz={rebake_hz} native_island={native_island} island_hz={island_hz}")
+        x, y, w, h = geo
+        self.container.setGeometry(x, y, w, h)
+        self.container_paint_count = 0
+        self._install_container_paint_counter()
+
+        self.quick_view = QQuickView()
+        self.quick_view.setResizeMode(QQuickView.ResizeMode.SizeRootObjectToView)
+        self.quick_view.setInitialProperties(
+            {"paneCount": panes, "rebakeHz": float(rebake_hz), "groundOn": True})
+        self.quick_view.setColor(QColor("#0B0D12"))  # opaque native swapchain clear
+        self.quick_view.setSource(QUrl.fromLocalFile(str(_write_qml_tmp())))
+
+        self._host = QWidget.createWindowContainer(self.quick_view, self.container)
+        self._host.setGeometry(0, 0, w, h)
+        self.qqw = _PaintCounter()   # duck-typed: measure_cell reads win.qqw.paint_count
+        self._install_host_paint_counter()
+
+        from gui.scan_map_view import ScanMapView
+        self.island = ScanMapView(self.container)
+        self.island_holder = None
+        self._island_outer = self.island
+        if native_island:
+            # Airspace consequence: the window-container's native surface
+            # renders above ordinary raster siblings regardless of widget
+            # z-order/raise_() -- the island MUST be native too to stack
+            # above the QML (the dead-zone law already requires this).
+            self.island.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+            self.island.winId()
+        self._redraw_count = {"n": 0}
+        self._wrap_island_redraw()
+
+        self.feed = SimScanFeed(self.island, hz=island_hz)
+
+    def _install_container_paint_counter(self) -> None:
+        orig = self.container.paintEvent
+
+        def _counted(event):
+            self.container_paint_count += 1
+            orig(event)
+
+        self.container.paintEvent = _counted  # type: ignore[method-assign]
+
+    def _install_host_paint_counter(self) -> None:
+        """Window-container widgets rarely receive real ``paintEvent``s (the
+        actual QML pixels bypass QWidget painting entirely, DWM-composited
+        natively) -- this staying near 0 is itself the expected/interesting
+        signal, not a bug in the counter."""
+        orig = self._host.paintEvent
+
+        def _counted(event):
+            self.qqw.paint_count += 1
+            orig(event)
+
+        self._host.paintEvent = _counted  # type: ignore[method-assign]
+
+    def _wrap_island_redraw(self) -> None:
+        orig = self.island._redraw
+
+        def _counted():
+            self._redraw_count["n"] += 1
+            orig()
+
+        self.island._redraw = _counted  # type: ignore[method-assign]
+
+    def scanmap_repaints(self) -> int:
+        return self._redraw_count["n"]
+
+    def quick_window(self):
+        return self.quick_view  # QQuickView IS its own QQuickWindow
+
+    def qml_errors(self) -> list[str]:
+        return [str(e) for e in self.quick_view.errors()]
+
+    def qml_status(self) -> str:
+        return str(self.quick_view.status())
+
+    def show(self) -> None:
+        self.container.show()
+        self.reposition_island()
+
+    def reposition_island(self) -> None:
+        if self.island is None:
+            return
+        from PySide6.QtCore import QObject
+        root = self.quick_view.rootObject()
+        if root is None:
+            return
+        hole = root.findChild(QObject, "mapHole")
+        if hole is None:
+            return
+        hx = float(hole.property("x")); hy = float(hole.property("y"))
+        hw = float(hole.property("width")); hh = float(hole.property("height"))
+        inset = 6
+        self.island.setGeometry(int(hx + inset), int(hy + inset),
+                                int(max(1, hw - 2 * inset)), int(max(1, hh - 2 * inset)))
+        self.island.raise_()
+
+    def close(self) -> None:
+        if self.feed is not None:
+            self.feed.stop()
+        if self.island is not None:
+            self.island.close()
+        self._host.close()
+        self.container.close()
+
+
+def _build_window(cfg: dict, panes: int, rebake_hz: float,
+                  geo: tuple[int, int, int, int]):
+    """Cell-config-driven window factory -- dispatches to
+    :class:`NativeContainerWindow` for ``native_qml`` cells (M7), else the
+    default :class:`OverlayWindow` (M0-M6). Both classes expose an identical
+    method/attribute surface, so every caller (``measure_cell``,
+    ``_smoke_check_cell``, ``run_hold``) is agnostic to which one it gets."""
+    if cfg.get("native_qml"):
+        return NativeContainerWindow(panes, rebake_hz, geo,
+                                     native_island=bool(cfg.get("native_island", True)),
+                                     island_hz=float(cfg.get("island_hz", ISLAND_NOMINAL_HZ)))
+    return OverlayWindow(panes, rebake_hz, geo, overlay=bool(cfg.get("overlay", False)),
+                        opaque_island=bool(cfg.get("opaque_island", False)),
+                        opaque_qqw=bool(cfg.get("opaque_qqw", False)),
+                        area_scale=float(cfg.get("area_scale", 1.0)),
+                        island_hz=float(cfg.get("island_hz", ISLAND_NOMINAL_HZ)),
+                        native_island=bool(cfg.get("native_island", False)))
+
+
+def _needs_subprocess(cfg: dict) -> bool:
+    """True if this cell must be measured in a fresh, isolated process:
+    either it needs an env var Qt only reads pre-``QGuiApplication`` (M5), or
+    it is flagged ``isolate`` because in-process measurement risks taking
+    down the whole run (M7's reproduced offscreen teardown segfault)."""
+    if cfg.get("isolate"):
+        return True
+    env_req = cfg.get("env")
+    if env_req and not all(os.environ.get(k) == v for k, v in env_req.items()):
+        return True
+    return False
+
+
 # --------------------------------------------------------------------------- #
 # One measured cell                                                            #
 # --------------------------------------------------------------------------- #
@@ -863,11 +1153,7 @@ def measure_cell(cfg: dict, *, panes: int, rebake_hz: float, seconds: float,
     overlay = bool(cfg.get("overlay", False))
     entry: dict = {"errors": []}
 
-    win = OverlayWindow(panes, rebake_hz, geo, overlay=overlay,
-                        opaque_island=bool(cfg.get("opaque_island", False)),
-                        opaque_qqw=bool(cfg.get("opaque_qqw", False)),
-                        area_scale=float(cfg.get("area_scale", 1.0)),
-                        island_hz=float(cfg.get("island_hz", ISLAND_NOMINAL_HZ)))
+    win = _build_window(cfg, panes, rebake_hz, geo)
     entry["qml_status"] = win.qml_status()
     entry["qml_errors"] = win.qml_errors()
     if entry["qml_errors"]:
@@ -932,6 +1218,16 @@ def measure_cell(cfg: dict, *, panes: int, rebake_hz: float, seconds: float,
             entry["island_showing_map"] = bool(win.island.is_showing_map())
         except Exception as exc:  # noqa: BLE001
             entry["errors"].append(f"island read failed: {exc}")
+        # M6/M7 structural checks (harmless/near-always-0 for non-native
+        # cells): did the island actually get a native surface, and does its
+        # final geometry match the reserved rect (a static single-shot read
+        # -- move/resize flicker still needs the operator's --hold eyeball).
+        try:
+            entry["island_internal_win_id_nonzero"] = bool(win.island.internalWinId())
+        except Exception:  # noqa: BLE001
+            entry["island_internal_win_id_nonzero"] = None
+        g = win.island.geometry()
+        entry["island_final_geometry"] = [g.x(), g.y(), g.width(), g.height()]
     entry["bake_count_observed"] = (
         int(qml_root.property("bakeCount")) if qml_root is not None else None)
     entry["bake_count_expected_approx"] = round(seconds * rebake_hz)
@@ -1138,12 +1434,7 @@ def _smoke_check_cell(cell_id: str, cfg: dict, panes: int, rebake_hz: float) -> 
     proves construction + wiring only."""
     result = {"cell": cell_id, "ok": False, "detail": ""}
     try:
-        win = OverlayWindow(panes, rebake_hz, _cell_geometry(0),
-                            overlay=bool(cfg.get("overlay", False)),
-                            opaque_island=bool(cfg.get("opaque_island", False)),
-                            opaque_qqw=bool(cfg.get("opaque_qqw", False)),
-                            area_scale=float(cfg.get("area_scale", 1.0)),
-                            island_hz=float(cfg.get("island_hz", ISLAND_NOMINAL_HZ)))
+        win = _build_window(cfg, panes, rebake_hz, _cell_geometry(0))
         qml_errs = win.qml_errors()
         if qml_errs:
             result["detail"] = "QML errors: " + "; ".join(qml_errs)
@@ -1165,6 +1456,10 @@ def _smoke_check_cell(cell_id: str, cfg: dict, panes: int, rebake_hz: float) -> 
             repaints = win.scanmap_repaints()
             ok = bool(pts >= 1 and showing and ticks >= 1 and repaints >= 1)
             detail_bits.append(f"points={pts} showing={showing} ticks={ticks} repaints={repaints}")
+            try:
+                detail_bits.append(f"island_native={bool(win.island.internalWinId())}")
+            except Exception:  # noqa: BLE001
+                pass
         result["ok"] = ok
         result["detail"] = "; ".join(detail_bits)
         win.close()
@@ -1222,31 +1517,44 @@ def run_smoke(args) -> int:
     for cid in cell_ids:
         cfg = CELLS[cid]
         env_req = cfg.get("env")
-        already_set = bool(env_req) and all(os.environ.get(k) == v for k, v in env_req.items())
-        if env_req and not already_set:
+        if _needs_subprocess(cfg):
             tmp = Path(tempfile.gettempdir()) / f"tct_spike_smoke_{cid}.json"
             if tmp.exists():
                 tmp.unlink()
             env = dict(os.environ)
-            env.update(env_req)
+            if env_req:
+                env.update(env_req)
             cmd = [sys.executable, str(Path(__file__).resolve()), "--smoke",
                   "--measure-one", cid, "--panes", str(args.panes),
                   "--rebake-hz", str(args.rebake_hz), "--json-out", str(tmp)]
             try:
                 proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
-                ok = proc.returncode == EXIT_PASS
                 detail = f"subprocess rc={proc.returncode}"
                 if tmp.exists():
+                    # The JSON file is written BEFORE any crash-prone teardown
+                    # code runs (m7_native_qml: confirmed segfault is always
+                    # the LAST thing that happens, after cleanup already
+                    # printed) -- so a written ok=True result is trusted even
+                    # if the subprocess then exits abnormally.
                     payload = json.loads(tmp.read_text(encoding="utf-8"))
-                    ok = ok and bool(payload.get("ok"))
+                    ok = bool(payload.get("ok"))
                     detail += f" payload_ok={payload.get('ok')} detail={payload.get('detail')}"
+                    if proc.returncode != EXIT_PASS:
+                        detail += (" (NOTE: subprocess exited abnormally AFTER writing this "
+                                  "result -- known teardown hazard for isolate=True cells, "
+                                  "not a mechanics failure; see module docstring)")
                 else:
                     ok = False
-                    detail += " (no JSON produced)"
+                    detail += " (no JSON produced -- crashed before the result could be written)"
+            except subprocess.TimeoutExpired:
+                ok = False
+                detail = "subprocess TIMEOUT"
             except Exception as exc:  # noqa: BLE001
                 ok = False
                 detail = f"subprocess EXCEPTION: {exc}"
-            print(f"  [{cid}] env-reexec smoke (env={env_req}): {'OK' if ok else 'FAIL'} -- {detail}")
+            kind = "env-reexec" if env_req else "isolated"
+            print(f"  [{cid}] {kind} smoke (env={env_req}, isolate={cfg.get('isolate', False)}): "
+                  f"{'OK' if ok else 'FAIL'} -- {detail}")
         else:
             res = _smoke_check_cell(cid, cfg, args.panes, args.rebake_hz)
             ok = res["ok"]
@@ -1287,19 +1595,22 @@ def run_measure_one(args) -> int:
 
 def _measure_cell_dispatch(cell_id: str, cfg: dict, args, geo) -> dict:
     """Measure one cell for the real matrix: in-process directly, or (for
-    ``env``-gated cells) via a re-exec'd subprocess so the env var is read
-    before that process's own QGuiApplication exists."""
-    env_req = cfg.get("env")
-    already_set = bool(env_req) and all(os.environ.get(k) == v for k, v in env_req.items())
-    if not env_req or already_set:
+    ``env``-gated or ``isolate``-flagged cells) via a re-exec'd subprocess so
+    the env var is read before that process's own QGuiApplication exists (M5)
+    or a known in-process hazard cannot take down the rest of the matrix (M7).
+    The JSON result file is trusted over the subprocess exit code -- it is
+    written before any crash-prone teardown code runs."""
+    if not _needs_subprocess(cfg):
         return measure_cell(cfg, panes=args.panes, rebake_hz=args.rebake_hz,
                             seconds=args.seconds, warmup_s=args.warmup, geo=geo)
 
+    env_req = cfg.get("env")
     tmp = Path(tempfile.gettempdir()) / f"tct_spike_measure_{cell_id}_{os.getpid()}.json"
     if tmp.exists():
         tmp.unlink()
     env = dict(os.environ)
-    env.update(env_req)
+    if env_req:
+        env.update(env_req)
     cmd = [sys.executable, str(Path(__file__).resolve()), "--measure-one", cell_id,
           "--seconds", str(args.seconds), "--warmup", str(args.warmup),
           "--panes", str(args.panes), "--rebake-hz", str(args.rebake_hz),
@@ -1307,13 +1618,21 @@ def _measure_cell_dispatch(cell_id: str, cfg: dict, args, geo) -> dict:
     timeout_s = args.warmup + args.seconds + 60.0
     try:
         proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout_s)
-        if proc.returncode != EXIT_PASS or not tmp.exists():
-            return {"errors": [f"env-reexec subprocess failed rc={proc.returncode} "
+        if not tmp.exists():
+            return {"errors": [f"subprocess produced no JSON rc={proc.returncode} "
                                f"stderr={proc.stderr[-500:]}"]}
         payload = json.loads(tmp.read_text(encoding="utf-8"))
-        return payload.get("measurement", {"errors": ["no measurement in subprocess JSON"]})
+        measurement = payload.get("measurement", {"errors": ["no measurement in subprocess JSON"]})
+        if proc.returncode != EXIT_PASS:
+            measurement.setdefault("errors", []).append(
+                f"NOTE: subprocess exited abnormally (rc={proc.returncode}) AFTER writing "
+                "this measurement -- known teardown hazard for isolate=True cells (see "
+                "module docstring); the measurement itself is still trusted.")
+        return measurement
+    except subprocess.TimeoutExpired:
+        return {"errors": ["subprocess TIMEOUT"]}
     except Exception as exc:  # noqa: BLE001
-        return {"errors": [f"env-reexec subprocess EXCEPTION: {exc}"]}
+        return {"errors": [f"subprocess EXCEPTION: {exc}"]}
 
 
 def run_measurement(args) -> int:
@@ -1410,22 +1729,32 @@ def run_measurement(args) -> int:
 
 
 def run_hold(args) -> int:
-    """Eyeball mode: leave the overlay scene + live synthetic feed on screen."""
+    """Eyeball mode: leave a cell's scene + live synthetic feed on screen for
+    ``--hold`` seconds. Defaults to the original ``m0_overlay`` cell;
+    ``--hold-cell m6_native_island`` / ``m7_native_qml`` is the operator's
+    tool for the flicker/z-order/geometry-drift-on-move-resize checks this
+    protocol's own static single-shot measurement cannot perform."""
     app = _bootstrap_app(smoke=False)
     reason = _check_real_session()
     if reason:
         print(f"REFUSED: {reason}", file=sys.stderr)
         return EXIT_GUARD
+    cfg = CELLS.get(args.hold_cell)
+    if cfg is None:
+        print(f"unknown cell id {args.hold_cell!r} -- valid: {_CELL_ORDER}", file=sys.stderr)
+        return EXIT_ERROR
     from PySide6.QtCore import QTimer
-    win = OverlayWindow(args.panes, args.rebake_hz, _cell_geometry(), overlay=True)
+    win = _build_window(cfg, args.panes, args.rebake_hz, _cell_geometry())
     errs = win.qml_errors()
     if errs:
         print("QML ERRORS:", errs, file=sys.stderr)
     win.show()
     win.reposition_island()
-    win.feed.start()
-    print(f"holding overlay scene + live synthetic feed for {args.hold}s -- watch the "
-          "island map for stalls and the flanking panes for bake steps.")
+    if win.feed is not None:
+        win.feed.start()
+    print(f"holding cell={args.hold_cell!r} ({cfg.get('label')}) for {args.hold}s -- watch the "
+          "island for stalls/flicker/z-order/geometry drift on move/resize "
+          "(M6/M7: try dragging or resizing the window).")
     sys.stdout.flush()
     QTimer.singleShot(args.hold * 1000, app.quit)
     app.exec()
@@ -1445,7 +1774,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--warmup", type=float, default=DEFAULT_WARMUP_S)
     ap.add_argument("--panes", type=int, default=DEFAULT_PANES)
     ap.add_argument("--rebake-hz", type=float, default=DEFAULT_REBAKE_HZ)
-    ap.add_argument("--hold", type=int, default=0, help="eyeball: leave overlay scene on screen N s")
+    ap.add_argument("--hold", type=int, default=0, help="eyeball: leave a cell's scene on screen N s")
+    ap.add_argument("--hold-cell", type=str, default="m0_overlay",
+                    help="cell id to hold for --hold seconds (default m0_overlay)")
     ap.add_argument("--watchdog", type=float, default=0.0,
                     help="hard out-of-process kill after N s (0 = auto)")
     # internal-only flags used for the env-reexec single-cell subprocess path
