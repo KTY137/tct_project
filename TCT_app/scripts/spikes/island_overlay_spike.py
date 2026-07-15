@@ -1,4 +1,5 @@
-"""SPIKE (U2.4 entry micro-spike) -- the IN-WINDOW island overlay measurement.
+"""SPIKE (U2.4 entry micro-spike + mitigation matrix) -- the IN-WINDOW island
+overlay measurement, and its follow-up.
 
 WHAT GAP THIS CLOSES (docs/design/u2_hero_plan.md SS2 U2.4, risk R1)
 --------------------------------------------------------------------
@@ -8,90 +9,130 @@ window sitting *next to* the QML scene. U2.4's ratified architecture is the
 opposite: the real ``gui.scan_map_view.ScanMapView`` island is an ordinary
 sibling ``QWidget`` positioned OVER a published hole in a ``QQuickWidget`` that
 renders the whole living-glass face, inside ONE top-level window (option-(a)
-hole-and-frame, u2_hero_plan.md SS1). The unmeasured question is exactly that
-overlay interaction (R1): a live island blitting above a 12 Hz-rebaking QML
-texture, in one window, on the weak lab iGPU -- does the island lose rate, does
-QML fps drop, does the composite trigger full-window repaint storms?
+hole-and-frame, u2_hero_plan.md SS1). This spike composes precisely that
+arrangement and measures it.
 
-This throwaway spike composes precisely that arrangement and measures it. It is
-the day-0 gate before any ``gui/qml_island_host.py`` code is written.
+FIRST RESULT (artifacts_claude/island_overlay_spike_20260715T111751Z, quiet
+machine): FAIL, hard. ``scene_render_hz`` 60 -> 23, ``island_feed_hz`` 30 -> 16,
+CPU 23% -> 80% of one core. The control cell (frost+ground alone) held a clean
+60 fps -- the living-glass material is innocent; the raster-sibling-over-
+QQuickWidget *composition* is the killer. ``storm_suspected=False`` (the ratio
+math is tuned to flag an inflated overlay rate; here the overlay rate
+*collapsed*, which is a different, worse mechanism: full-backing-store
+recomposition of the whole QQuickWidget FBO on every island repaint tick,
+CPU-bound on the GUI thread, starving the event loop and every timer in it).
+Also: the ``qml_fps`` probe (``QQuickWindow.frameSwapped``) read 0.0 in every
+windowed cell -- ``QQuickWidget`` renders to an offscreen FBO and composites
+it into the widget backing store; it never performs a real "buffer swap", so
+``frameSwapped`` structurally never fires for this widget class. Fixed below
+by switching to ``QQuickWindow.afterFrameEnd`` (Qt 6.11), the render-loop-
+agnostic "a frame just finished" signal that *does* fire for the FBO/RHI
+render-to-texture path. ``qml_scene_render_hz`` (``afterRendering``) remains
+the ratified gating metric per the follow-up brief; ``qml_fps`` is now a
+real, reportable cross-check, not the gate.
 
-THE ARRANGEMENT (one top-level window)
---------------------------------------
-  * a container ``QWidget`` (the single top-level);
-  * a ``QQuickWidget`` (``SizeRootObjectToView``) filling the container,
-    rendering the living ground at FULL amplitude + ONE frost bake @ 12 Hz +
-    N flanking crop-sampler panes -- the exact ``layer.live:false`` +
-    ``ShaderEffectSource`` mechanism from the passing frost spike
-    (``scripts/spikes/lantern_frost_bake_spike.py`` / artifact
-    ``lantern_frost_spike_20260714T233707Z``), plus a reserved ``mapHole``
-    item that publishes its rect (objectName lookup);
-  * the REAL ``ScanMapView`` as a sibling ``QWidget`` of the container,
-    ``setGeometry`` into the published hole rect + ``raise_()`` above the
-    QQuickWidget (texture-composited sibling stacking, no native airspace --
-    both islands are raster pyqtgraph, u2_hero_plan.md SS1.4);
-  * a SYNTHETIC sim scan-point feed (``QTimer``, 30 Hz nominal) pushing
-    duck-typed ScanResults into ``ScanMapView.update_point`` -- NO controller,
-    NO DeviceManager, NO devices import anywhere (see SAFETY).
+MITIGATION MATRIX (this follow-up -- still throwaway, still a half-day box)
+-----------------------------------------------------------------------------
+Same one-window arrangement, now built from a per-cell config (``CELLS``
+below) so a battery of targeted compositing mitigations can be tried and
+tabulated against the same M0 baseline and the same PASS BAR, in one run.
 
-WHAT IS MEASURED (two cells x two passes, measurement-A/B idioms)
-----------------------------------------------------------------
-Per pass, back to back in one process:
-  * ``control`` -- QQuickWidget frost scene ALONE (no island, no feed). The
-    storm baseline: what QML fps / scene-render rate / QQuickWidget composite
-    rate the window sustains with only the living glass painting.
-  * ``overlay`` -- the SAME frost scene + the ScanMapView island overlaid in
-    the hole + the 30 Hz synthetic feed driving it. The real U2.4 case.
+  M0 (kept, unmodified)
+    ``m0_control``  -- frost scene alone, no island, no feed. Storm baseline.
+    ``m0_overlay``  -- unmitigated overlay (the exact prior-spike FAIL case),
+                       carried forward as the matrix's reference failure row.
 
-Signals (all wall-clock, independent probes -- this repo's rule):
-  * ``island_feed_hz``     -- effective rate of the 30 Hz point-feed QTimer
-                              (the island DRIVE timer, the direct analog of the
-                              A/B island's own 30 Hz drive timer -- an
-                              event-loop-starvation probe). GATED vs the floor.
-  * ``qml_fps``            -- QQuickWidget scene frames via the internal
-                              QQuickWindow ``frameSwapped`` counter. GATED.
-  * ``scanmap_repaint_hz`` -- the REAL ScanMapView coalesced ImageView repaints
-                              (its own ``_redraw`` wrapped/counted). Reported,
-                              NOT gated: ScanMapView intentionally coalesces at
-                              ~15 Hz (``SCAN_MAP_REDRAW_INTERVAL_MS = 67``), so
-                              this is BELOW 28 by design and must not be read
-                              against the island floor. It is the honest
-                              "how often does the overlaid widget actually
-                              blit" number.
-  * repaint-storm observations -- QQuickWidget ``paintEvent`` rate + QML
-                              ``afterRendering`` (scene-graph render) rate, in
-                              BOTH cells; a storm shows up as overlay rates
-                              inflated well above the control baseline.
-  * process CPU % of one core (Win32 GetProcessTimes; no psutil in this venv).
+  M1 -- damage clipping (``m1_opaque_island``)
+    Flags the island (``WA_OpaquePaintEvent`` + ``autoFillBackground``) AND an
+    intermediate holder ``QWidget`` at the published hole rect with the same
+    flags, plus the pyqtgraph viewport's own ``QGraphicsView``
+    (``ui.graphicsView``) opacity-fied the same way. HYPOTHESIS: if Qt's
+    widget-compositing backing store can prove the island's paint is fully
+    opaque over its own rect, damage/composition work should clip to that
+    rect instead of recomposing the whole ``QQuickWidget`` -- ``scene_render_hz``
+    should recover toward the M0 control baseline.
 
-PASS BAR (measurement-A floors, ratified in the brief)
-------------------------------------------------------
-  island_feed_hz >= 28.0  AND  qml_fps >= 55.0  -- in BOTH passes.
+  M2 -- opaque QQuickWidget (``m2_opaque_qqw``)
+    ``WA_OpaquePaintEvent`` + an opaque ``setClearColor`` on the
+    ``QQuickWidget`` itself (matching the QML root's own background so no
+    seam appears). HYPOTHESIS: an opaque top-level composited surface lets Qt
+    skip erase/alpha-blend bookkeeping on the widget's own repaint, cutting
+    per-tick overhead independent of M1. NOTE (Qt 6.11 partial-update
+    knobs): I could not find an actual damage-region/partial-update knob for
+    ``QQuickWidget`` itself -- its FBO-per-frame render-to-texture model
+    repaints the whole scene graph each frame regardless of clear-color
+    opacity; the opacity flags here act on the *widget-compositing* side
+    (this widget's own backing-store blit into its parent), not the QML
+    scene graph's internal work. Documented so the result isn't
+    over-interpreted as "found a Quick-side partial-update switch".
 
-QUIET-RERUN honesty (brief): another beat may be running targeted pytest on
-this laptop. If ANY gated number lands within ~10% of its floor
-(island in [25.2, 30.8] or qml_fps in [49.5, 60.5]) the verdict is
-**QUIET-RERUN-NEEDED**, never a pass/fail claim -- rerun on a quiet machine.
+  M1+M2 combined (``m1_m2_combined``)
+    Both mitigations stacked -- the upper bound of what widget-level opacity
+    flags alone can buy, and whether they compound or one subsumes the other.
+
+  M3 -- area-scaling diagnostic (``m3_half_area``, DIAGNOSTIC, not a fix)
+    ``QQuickWidget`` resized to ~50% of the window area; the island moved
+    OUTSIDE it entirely (a sibling strip beside it, zero overlap, no hole
+    read at all). HYPOTHESIS: if the failure is a fixed-cost full-FBO blit
+    proportional to blit *area*, shrinking that area should raise
+    ``scene_render_hz`` roughly in proportion -- confirming (or refuting) the
+    "recomposites the whole backing store" mechanism versus a per-widget
+    fixed overhead independent of size.
+
+  M4 -- island-rate-scaling diagnostic (``m4_feed15`` / ``m4_feed8``,
+        DIAGNOSTIC, not a fix)
+    Same unmitigated hole-and-frame arrangement, but the synthetic feed
+    (and hence the island's own coalesced repaint pressure) is driven at
+    15 Hz and 8 Hz instead of the nominal 30 Hz. HYPOTHESIS: if
+    ``scene_render_hz`` scales up as the island's own tick/repaint rate goes
+    down, the mechanism is *paced by the island's repaint frequency itself*
+    (each island paint triggers one full QQuickWidget recomposite) rather
+    than a fixed per-frame cost independent of how often the island paints.
+    These floors are gated the same as everywhere (island_feed_hz >= 28) but
+    a 15/8 Hz *drive* structurally cannot clear that floor -- the state is
+    prefixed ``DIAGNOSTIC-`` so it is never misread as a real pass/fail.
+
+  M5 -- QSG_RENDER_LOOP=basic (``m5_render_loop_basic``, DIAGNOSTIC,
+        TOKEN-tier optional pick)
+    Qt Quick's render-loop mode must be fixed before ``QGuiApplication``
+    exists, so this cell is measured by RE-EXECING this script as a
+    subprocess with the env var set (``run_measure_one`` / ``--measure-one``
+    below), never in-process. HYPOTHESIS: the default threaded render loop
+    pipelines GUI-thread and render-thread work; ``basic`` forces
+    synchronous same-thread rendering, which could help (no cross-thread
+    sync stalls feeding the starvation) or hurt (removes the one thread that
+    was NOT blocked by the GUI-thread event loop). A data point, not an
+    expected fix.
+
+Every cell (mitigation or diagnostic) is measured against the SAME PASS BAR:
+``island_feed_hz >= 28.0 AND qml_scene_render_hz >= 55.0``, in every pass
+(``--passes``, default 2, matching the original QUIET-RERUN-NEEDED
+protocol), printed as one combined table.
 
 RUN
 ---
   # headless mechanics smoke (what an agent runs -- offscreen, NO fps
-  # assertions; proves the overlay/hole/feed/teardown wiring, not GPU rate):
+  # assertions; proves every selected cell constructs + the env-reexec
+  # subprocess/JSON plumbing for env-gated cells, not GPU rate):
   QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe scripts/spikes/island_overlay_spike.py --smoke
+  QT_QPA_PLATFORM=offscreen .venv/Scripts/python.exe scripts/spikes/island_overlay_spike.py --smoke --cells all
 
-  # the real windowed measurement (a real desktop GPU session -- refuses under
-  # offscreen/minimal). This spike class is a RATIFIED exception to the
-  # no-app-runs rule *precisely because it imports zero device code and feeds
-  # only synthetic data* (brief): it may be run windowed.
-  .venv/Scripts/python.exe scripts/spikes/island_overlay_spike.py
+  # the real windowed matrix (a real desktop GPU session -- refuses under
+  # offscreen/minimal). Same ratified exception as before: zero device
+  # imports, only synthetic data.
+  .venv/Scripts/python.exe scripts/spikes/island_overlay_spike.py --cells all
+
+  # a narrower/faster matrix run (e.g. just the two required mitigations):
+  .venv/Scripts/python.exe scripts/spikes/island_overlay_spike.py --cells m0_control,m0_overlay,m1_opaque_island,m2_opaque_qqw
 
 SAFETY
 ------
 Zero hardware surface by construction: imports NO ``devices`` module, NO
 ``DeviceManager``, NO ``controller``. The only app import is
-``gui.scan_map_view.ScanMapView`` (verified import-clean: pulls in no
-controller/devices module). The scan-point feed is a local synthetic generator
-of duck-typed ``ScanResult`` objects; nothing here can reach an instrument.
+``gui.scan_map_view.ScanMapView``. The scan-point feed is a local synthetic
+generator of duck-typed ``ScanResult`` objects; nothing here can reach an
+instrument. The env-reexec subprocess (M5) launches only this same script
+with an extra env var -- no new import surface.
 
 NOT app code. NOT imported by the app. NOT part of the test suite. Throwaway.
 """
@@ -123,11 +164,15 @@ DEFAULT_PANES = 6
 DEFAULT_REBAKE_HZ = 12.0         # living ground "full" -> 12 Hz bake
 DEFAULT_SECONDS = 15.0
 DEFAULT_WARMUP_S = 3.0
+DEFAULT_PASSES = 2               # "both passes each" -- kept from the original protocol
 BLUR_MAX_PX = 40                 # matches candidate_lantern.md SS6 blurPane token
 
-# Verdict thresholds (measurement-A floors, ratified in the brief).
+# Verdict thresholds (measurement-A floors, ratified in the brief; the
+# follow-up brief keeps the numeric bar but gates on qml_scene_render_hz --
+# the proven-reliable proxy -- rather than the (now fixed, but still
+# secondary) qml_fps probe).
 ISLAND_HZ_FLOOR = 28.0
-QML_FPS_FLOOR = 55.0
+SCENE_HZ_FLOOR = 55.0
 NEAR_FLOOR_FRAC = 0.10           # within +/-10% of a floor => QUIET-RERUN-NEEDED
 
 # Exit codes.
@@ -422,6 +467,107 @@ def validate_qml() -> list[str]:
 
 
 # --------------------------------------------------------------------------- #
+# The mitigation-matrix cell registry                                          #
+# --------------------------------------------------------------------------- #
+# Every cell is a plain dict of construction knobs consumed by OverlayWindow /
+# measure_cell. ``overlay=False`` cells (m0_control) carry no island/feed at
+# all. ``env`` cells can only be measured correctly in a fresh process (Qt
+# reads these before QGuiApplication exists) -- run_measurement/run_smoke
+# re-exec this same script as a subprocess for those, see run_measure_one().
+
+CELLS: dict[str, dict] = {
+    "m0_control": dict(
+        label="M0 control (frost scene alone)",
+        hypothesis="Storm baseline: living-glass QML scene alone, no island, "
+                   "no feed -- what the window sustains unopposed.",
+        overlay=False,
+    ),
+    "m0_overlay": dict(
+        label="M0 overlay (unmitigated -- prior spike's FAIL case)",
+        hypothesis="Baseline failure: raster sibling QWidget composited over "
+                   "the full QQuickWidget; every island repaint tick appears "
+                   "to force a full-FBO recomposite on the GUI thread.",
+        overlay=True,
+    ),
+    "m1_opaque_island": dict(
+        label="M1 damage-clipped island (opaque island + holder + pg viewport)",
+        hypothesis="If the backing store can prove the island's paint is "
+                   "fully opaque over its own rect, damage should clip to "
+                   "that rect instead of recompositing the whole "
+                   "QQuickWidget -- scene_render_hz should recover.",
+        overlay=True, opaque_island=True,
+    ),
+    "m2_opaque_qqw": dict(
+        label="M2 opaque QQuickWidget (opaque clearColor + WA_OpaquePaintEvent)",
+        hypothesis="An opaque QQuickWidget composited surface may let Qt "
+                   "skip erase/alpha-blend bookkeeping on its own repaint, "
+                   "independent of M1 (does not touch the QML scene graph "
+                   "itself -- see docstring note on partial-update knobs).",
+        overlay=True, opaque_qqw=True,
+    ),
+    "m1_m2_combined": dict(
+        label="M1+M2 combined",
+        hypothesis="Upper bound of what widget-level opacity flags alone "
+                   "can buy -- do the two mitigations compound, or does one "
+                   "subsume the other?",
+        overlay=True, opaque_island=True, opaque_qqw=True,
+    ),
+    "m3_half_area": dict(
+        label="M3 half-area diagnostic (QQuickWidget ~50% area, island beside it)",
+        hypothesis="DIAGNOSTIC, not a fix: if scene_render_hz scales up "
+                   "roughly with the smaller Quick blit area, the mechanism "
+                   "is a full-backing-store blit proportional to area, not "
+                   "a fixed per-tick cost.",
+        overlay=True, area_scale=0.5, diagnostic_only=True,
+    ),
+    "m4_feed15": dict(
+        label="M4 island-rate diagnostic @ 15 Hz drive",
+        hypothesis="DIAGNOSTIC: if scene_render_hz rises as the island's own "
+                   "tick/repaint rate drops, each island repaint is what "
+                   "forces one full QQuickWidget recomposite (rate-paced), "
+                   "not a fixed background cost. island_feed_hz cannot clear "
+                   "the 28 floor at this drive rate by construction.",
+        overlay=True, island_hz=15.0, diagnostic_only=True,
+    ),
+    "m4_feed8": dict(
+        label="M4 island-rate diagnostic @ 8 Hz drive",
+        hypothesis="Same as m4_feed15 at a lower drive rate -- extends the "
+                   "scaling trend read.",
+        overlay=True, island_hz=8.0, diagnostic_only=True,
+    ),
+    "m5_render_loop_basic": dict(
+        label="M5 QSG_RENDER_LOOP=basic (env re-exec, TOKEN-tier data point)",
+        hypothesis="DIAGNOSTIC: forcing the synchronous 'basic' render loop "
+                   "removes GUI/render-thread pipelining. Could help (no "
+                   "cross-thread sync stall feeding the starvation) or hurt "
+                   "(removes the one thread not blocked by the GUI event "
+                   "loop). Not an expected fix, a data point.",
+        overlay=True, env={"QSG_RENDER_LOOP": "basic"}, diagnostic_only=True,
+    ),
+}
+
+_CELL_ORDER = list(CELLS.keys())
+
+
+def _resolve_cells(spec: str) -> list[str]:
+    """Parse ``--cells`` ('all' or a comma list of ids) into an ordered,
+    deduplicated, validated list of registry keys."""
+    if spec.strip().lower() == "all":
+        return list(_CELL_ORDER)
+    ids = [s.strip() for s in spec.split(",") if s.strip()]
+    unknown = [i for i in ids if i not in CELLS]
+    if unknown:
+        raise ValueError(
+            f"unknown cell id(s) {unknown} -- valid ids: {_CELL_ORDER}")
+    # de-dup, preserve requested order
+    seen: list[str] = []
+    for i in ids:
+        if i not in seen:
+            seen.append(i)
+    return seen
+
+
+# --------------------------------------------------------------------------- #
 # Synthetic scan-point feed -- duck-typed ScanResults, NO controller import     #
 # --------------------------------------------------------------------------- #
 
@@ -456,7 +602,8 @@ class _SynthResult:
 
 
 class SimScanFeed:
-    """A ``QTimer`` at ``ISLAND_NOMINAL_HZ`` (30) generating synthetic scan
+    """A ``QTimer`` at ``hz`` (nominally :data:`ISLAND_NOMINAL_HZ`, overridable
+    per cell for the M4 rate-scaling diagnostic) generating synthetic scan
     points along a raster grid and pushing them into ``ScanMapView.update_point``
     -- the "island drive timer" whose effective wall-clock rate is the gated
     ``island_feed_hz``. Cycles the grid so it never runs dry; last-write-wins
@@ -466,9 +613,10 @@ class SimScanFeed:
     X0, X1 = -2.0, 2.0
     Y0, Y1 = -1.5, 1.5
 
-    def __init__(self, island) -> None:
+    def __init__(self, island, hz: float = ISLAND_NOMINAL_HZ) -> None:
         from PySide6.QtCore import QTimer, Qt
         self._island = island
+        self._hz = float(hz)
         self._i = 0
         self._phase = 0.0
         self.tick_times: list[float] = []
@@ -478,7 +626,7 @@ class SimScanFeed:
 
     def start(self) -> None:
         self.tick_times = []
-        self._timer.start(round(1000 / ISLAND_NOMINAL_HZ))
+        self._timer.start(round(1000 / max(0.1, self._hz)))
 
     def stop(self) -> None:
         self._timer.stop()
@@ -508,6 +656,7 @@ class SimScanFeed:
 
 # --------------------------------------------------------------------------- #
 # The overlay window -- ONE top-level: QQuickWidget filled, ScanMapView sibling #
+# (now cell-config-driven: opaque flags, area scaling, drive rate).            #
 # --------------------------------------------------------------------------- #
 
 def _counting_quickwidget_cls():
@@ -530,20 +679,27 @@ def _counting_quickwidget_cls():
 
 class OverlayWindow:
     """Owns the single top-level container, the frost QQuickWidget, and (when
-    ``overlay``) the real ScanMapView island positioned into the published
-    ``mapHole`` rect."""
+    ``overlay``) the real ScanMapView island -- either positioned into the
+    published ``mapHole`` rect (default hole-and-frame layout) or, for the M3
+    diagnostic (``area_scale < 1``), as a non-overlapping sibling strip beside
+    a shrunk QQuickWidget."""
 
     def __init__(self, panes: int, rebake_hz: float, geo: tuple[int, int, int, int],
-                 *, overlay: bool) -> None:
-        from PySide6.QtCore import QUrl
+                 *, overlay: bool, opaque_island: bool = False,
+                 opaque_qqw: bool = False, area_scale: float = 1.0,
+                 island_hz: float = ISLAND_NOMINAL_HZ) -> None:
+        from PySide6.QtCore import QUrl, Qt
+        from PySide6.QtGui import QColor
         from PySide6.QtWidgets import QWidget
         from PySide6.QtQuickWidgets import QQuickWidget
 
         self.overlay = overlay
+        self.area_scale = float(area_scale)
         self.container = QWidget(None)
         self.container.setWindowTitle(
             f"island_overlay_spike -- {'OVERLAY' if overlay else 'CONTROL'} "
-            f"panes={panes} rebakeHz={rebake_hz}")
+            f"panes={panes} rebakeHz={rebake_hz} opaque_island={opaque_island} "
+            f"opaque_qqw={opaque_qqw} area_scale={area_scale} island_hz={island_hz}")
         x, y, w, h = geo
         self.container.setGeometry(x, y, w, h)
         self.container_paint_count = 0
@@ -555,16 +711,54 @@ class OverlayWindow:
         self.qqw.setInitialProperties(
             {"paneCount": panes, "rebakeHz": float(rebake_hz), "groundOn": True})
         self.qqw.setSource(QUrl.fromLocalFile(str(_write_qml_tmp())))
-        self.qqw.setGeometry(0, 0, w, h)
+        qqw_w = w if self.area_scale >= 0.999 else max(80, int(w * self.area_scale))
+        self.qqw.setGeometry(0, 0, qqw_w, h)
+        if opaque_qqw:
+            # M2: opaque top-level composited surface. Matches the QML
+            # root's own bg color so no seam appears at the widget edge.
+            self.qqw.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+            self.qqw.setClearColor(QColor("#0B0D12"))
 
         self.island = None
+        self.island_holder = None
+        self._island_outer = None
         self._redraw_count = {"n": 0}
         if overlay:
             from gui.scan_map_view import ScanMapView
-            self.island = ScanMapView(self.container)
+            if opaque_island:
+                # M1: an intermediate holder QWidget at the hole rect,
+                # flagged opaque, hosting the island -- the "and/or an
+                # intermediate container" half of the brief.
+                self.island_holder = QWidget(self.container)
+                self.island_holder.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+                self.island_holder.setAutoFillBackground(True)
+                pal = self.island_holder.palette()
+                pal.setColor(self.island_holder.backgroundRole(), QColor("#0B0D12"))
+                self.island_holder.setPalette(pal)
+                self.island = ScanMapView(self.island_holder)
+                self.island.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+                self.island.setAutoFillBackground(True)
+                self._apply_opaque_pg_viewport(self.island)
+                self._island_outer = self.island_holder
+            else:
+                self.island = ScanMapView(self.container)
+                self._island_outer = self.island
             self._wrap_island_redraw()
 
-        self.feed = SimScanFeed(self.island) if overlay else None
+        self.feed = SimScanFeed(self.island, hz=island_hz) if overlay else None
+
+    @staticmethod
+    def _apply_opaque_pg_viewport(island) -> None:
+        """M1: flag the pyqtgraph ImageView's own QGraphicsView viewport
+        opaque too -- the island's actual paint surface, one level below the
+        ScanMapView QWidget wrapper."""
+        from PySide6.QtCore import Qt
+        view = island.image_view()
+        if view is None:
+            return
+        gv = view.ui.graphicsView
+        gv.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        gv.setAutoFillBackground(True)
 
     # -- repaint counters ------------------------------------------------- #
 
@@ -608,11 +802,28 @@ class OverlayWindow:
         self.reposition_island()
 
     def reposition_island(self) -> None:
-        """Read the published ``mapHole`` rect and lay the sibling island over
-        its interior (inset by the frame). Logical px both sides -> no DPR
-        math (the claim this spike also exercises on a 2.5-DPI panel)."""
+        """Position the island (or its opaque holder, M1) either into the
+        published ``mapHole`` rect (default) or, for the M3 area-scaling
+        diagnostic (``area_scale < 1``), as a non-overlapping sibling strip
+        beside the shrunk QQuickWidget -- no hole read at all in that mode."""
         if self.island is None:
             return
+        outer = self._island_outer
+
+        if self.area_scale < 0.999:
+            qw = self.qqw.width()
+            cw = self.container.width()
+            ch = self.container.height()
+            gap = 12
+            xpos = qw + gap
+            outer_w = max(1, cw - xpos - 8)
+            outer.setGeometry(xpos, 8, outer_w, max(1, ch - 16))
+            if outer is not self.island:
+                self.island.setGeometry(0, 0, outer.width(), outer.height())
+            outer.raise_()
+            self.island.raise_()
+            return
+
         from PySide6.QtCore import QObject
         root = self.qqw.rootObject()
         if root is None:
@@ -623,8 +834,11 @@ class OverlayWindow:
         hx = float(hole.property("x")); hy = float(hole.property("y"))
         hw = float(hole.property("width")); hh = float(hole.property("height"))
         inset = 6
-        self.island.setGeometry(int(hx + inset), int(hy + inset),
-                                int(max(1, hw - 2 * inset)), int(max(1, hh - 2 * inset)))
+        outer.setGeometry(int(hx + inset), int(hy + inset),
+                          int(max(1, hw - 2 * inset)), int(max(1, hh - 2 * inset)))
+        if outer is not self.island:
+            self.island.setGeometry(0, 0, outer.width(), outer.height())
+        outer.raise_()
         self.island.raise_()
 
     def close(self) -> None:
@@ -632,32 +846,43 @@ class OverlayWindow:
             self.feed.stop()
         if self.island is not None:
             self.island.close()
+        if self.island_holder is not None:
+            self.island_holder.close()
         self.qqw.close()
         self.container.close()
 
 
 # --------------------------------------------------------------------------- #
-# One measured cell                                                             #
+# One measured cell                                                            #
 # --------------------------------------------------------------------------- #
 
-def measure_cell(*, overlay: bool, panes: int, rebake_hz: float, seconds: float,
+def measure_cell(cfg: dict, *, panes: int, rebake_hz: float, seconds: float,
                  warmup_s: float, geo: tuple[int, int, int, int]) -> dict:
-    """Build the window, warm up, window the telemetry for ``seconds``, tear
-    down. Returns the cell dict."""
-    tag = "overlay" if overlay else "control"
-    entry: dict = {"cell": tag, "overlay": overlay, "errors": []}
+    """Build the window per ``cfg`` (a :data:`CELLS` entry), warm up, window
+    the telemetry for ``seconds``, tear down. Returns the measurement dict."""
+    overlay = bool(cfg.get("overlay", False))
+    entry: dict = {"errors": []}
 
-    win = OverlayWindow(panes, rebake_hz, geo, overlay=overlay)
+    win = OverlayWindow(panes, rebake_hz, geo, overlay=overlay,
+                        opaque_island=bool(cfg.get("opaque_island", False)),
+                        opaque_qqw=bool(cfg.get("opaque_qqw", False)),
+                        area_scale=float(cfg.get("area_scale", 1.0)),
+                        island_hz=float(cfg.get("island_hz", ISLAND_NOMINAL_HZ)))
     entry["qml_status"] = win.qml_status()
     entry["qml_errors"] = win.qml_errors()
     if entry["qml_errors"]:
         entry["errors"].append("QML load errors: " + "; ".join(entry["qml_errors"]))
 
-    frames = {"n": 0}
-    renders = {"n": 0}
+    frames_end = {"n": 0}        # afterFrameEnd -- the FIXED qml_fps probe
+    frames_swapped_raw = {"n": 0}  # frameSwapped -- informational only, expect 0
+    renders = {"n": 0}            # afterRendering -- the ratified gating proxy
     qwin = win.quick_window()
     if qwin is not None:
-        qwin.frameSwapped.connect(lambda: frames.__setitem__("n", frames["n"] + 1))
+        if hasattr(qwin, "afterFrameEnd"):
+            qwin.afterFrameEnd.connect(lambda: frames_end.__setitem__("n", frames_end["n"] + 1))
+        if hasattr(qwin, "frameSwapped"):
+            qwin.frameSwapped.connect(
+                lambda: frames_swapped_raw.__setitem__("n", frames_swapped_raw["n"] + 1))
         qwin.afterRendering.connect(lambda: renders.__setitem__("n", renders["n"] + 1))
 
     win.show()
@@ -670,11 +895,11 @@ def measure_cell(*, overlay: bool, panes: int, rebake_hz: float, seconds: float,
     win.reposition_island()
 
     # window the telemetry
-    root = qwin  # noqa: F841
     qml_root = win.qqw.rootObject()
     if qml_root is not None:
         qml_root.setProperty("bakeCount", 0)
-    frames["n"] = 0
+    frames_end["n"] = 0
+    frames_swapped_raw["n"] = 0
     renders["n"] = 0
     win.qqw.paint_count = 0
     win.container_paint_count = 0
@@ -689,7 +914,8 @@ def measure_cell(*, overlay: bool, panes: int, rebake_hz: float, seconds: float,
 
     wall = t1 - t0
     entry["wall_s"] = round(wall, 3)
-    entry["qml_fps"] = round(frames["n"] / wall, 2) if wall > 0 else None
+    entry["qml_fps"] = round(frames_end["n"] / wall, 2) if wall > 0 else None
+    entry["qml_frameswapped_hz_raw"] = round(frames_swapped_raw["n"] / wall, 2) if wall > 0 else None
     entry["qml_scene_render_hz"] = round(renders["n"] / wall, 2) if wall > 0 else None
     entry["qquickwidget_paint_hz"] = round(win.qqw.paint_count / wall, 2) if wall > 0 else None
     entry["container_paint_hz"] = round(win.container_paint_count / wall, 2) if wall > 0 else None
@@ -723,60 +949,95 @@ def _near_floor(value, floor: float) -> bool:
     return value is not None and abs(value - floor) <= NEAR_FLOOR_FRAC * floor
 
 
-def pass_verdict(overlay_cell: dict) -> dict:
-    island = overlay_cell.get("island_feed_hz")
-    fps = overlay_cell.get("qml_fps")
-    near = _near_floor(island, ISLAND_HZ_FLOOR) or _near_floor(fps, QML_FPS_FLOOR)
-    if island is None or fps is None:
+def pass_verdict(entry: dict, cfg: dict) -> dict:
+    """Gate on ``island_feed_hz`` and ``qml_scene_render_hz`` (the ratified
+    proxy). ``qml_fps`` (now fixed via afterFrameEnd) is reported but is not
+    the gating field. Diagnostic cells (M3/M4) get their PASS/FAIL state
+    prefixed ``DIAGNOSTIC-`` so a genuine floor-clear never reads as a real
+    pass claim for a config that isn't a candidate mitigation."""
+    if not cfg.get("overlay", True):
+        return {"island_feed_hz": None, "island_floor": ISLAND_HZ_FLOOR,
+                "scene_render_hz": entry.get("qml_scene_render_hz"),
+                "scene_floor": SCENE_HZ_FLOOR, "near_floor": False, "state": "REFERENCE"}
+    island = entry.get("island_feed_hz")
+    scene = entry.get("qml_scene_render_hz")
+    near = _near_floor(island, ISLAND_HZ_FLOOR) or _near_floor(scene, SCENE_HZ_FLOOR)
+    if island is None or scene is None:
         state = "NO-DATA"
     elif near:
         state = "QUIET-RERUN-NEEDED"
-    elif island >= ISLAND_HZ_FLOOR and fps >= QML_FPS_FLOOR:
+    elif island >= ISLAND_HZ_FLOOR and scene >= SCENE_HZ_FLOOR:
         state = "PASS"
     else:
         state = "FAIL"
-    return {
-        "island_feed_hz": island, "island_floor": ISLAND_HZ_FLOOR,
-        "qml_fps": fps, "qml_floor": QML_FPS_FLOOR,
-        "near_floor": near, "state": state,
-    }
+    if cfg.get("diagnostic_only") and state in ("PASS", "FAIL"):
+        state = f"DIAGNOSTIC-{state}"
+    return {"island_feed_hz": island, "island_floor": ISLAND_HZ_FLOOR,
+            "scene_render_hz": scene, "scene_floor": SCENE_HZ_FLOOR,
+            "near_floor": near, "state": state}
 
 
-def storm_observation(control_cell: dict, overlay_cell: dict) -> dict:
-    """Repaint-storm read: overlay QQuickWidget/scene-render rates vs the
-    control baseline. A storm shows as overlay rates inflated well above
-    control (the island forcing extra full-scene recomposition)."""
+def storm_observation(control_entry: dict, cell_entry: dict) -> dict:
+    """Repaint-storm read: this cell's QQuickWidget/scene-render rates vs the
+    SAME PASS's control baseline. A storm shows as inflated rates well above
+    control; the original spike's result instead showed collapse (rates far
+    BELOW control), which storm_suspected correctly does not flag -- it is a
+    different, worse mechanism (full recomposition cost, not an amplified
+    repaint count)."""
     def ratio(a, b):
         if a is None or b in (None, 0):
             return None
         return round(a / b, 3)
 
-    o_render = overlay_cell.get("qml_scene_render_hz")
-    c_render = control_cell.get("qml_scene_render_hz")
-    o_paint = overlay_cell.get("qquickwidget_paint_hz")
-    c_paint = control_cell.get("qquickwidget_paint_hz")
+    o_render = cell_entry.get("qml_scene_render_hz")
+    c_render = control_entry.get("qml_scene_render_hz")
+    o_paint = cell_entry.get("qquickwidget_paint_hz")
+    c_paint = control_entry.get("qquickwidget_paint_hz")
     render_ratio = ratio(o_render, c_render)
     paint_ratio = ratio(o_paint, c_paint)
     suspected = bool((render_ratio is not None and render_ratio > 1.30)
                      or (paint_ratio is not None and paint_ratio > 1.50))
     return {
-        "control_scene_render_hz": c_render, "overlay_scene_render_hz": o_render,
+        "control_scene_render_hz": c_render, "cell_scene_render_hz": o_render,
         "scene_render_ratio": render_ratio,
-        "control_qqw_paint_hz": c_paint, "overlay_qqw_paint_hz": o_paint,
+        "control_qqw_paint_hz": c_paint, "cell_qqw_paint_hz": o_paint,
         "qqw_paint_ratio": paint_ratio,
         "storm_suspected": suspected,
     }
 
 
-def compute_overall(passes: list[dict]) -> dict:
-    states = [p["verdict"]["state"] for p in passes]
-    if any(s in ("NO-DATA", "QUIET-RERUN-NEEDED") for s in states):
-        overall = "QUIET-RERUN-NEEDED" if "QUIET-RERUN-NEEDED" in states else "NO-DATA"
+def compute_cell_overall(states: list[str]) -> dict:
+    if any(s == "NO-DATA" for s in states):
+        overall = "NO-DATA"
+    elif any(s == "QUIET-RERUN-NEEDED" for s in states):
+        overall = "QUIET-RERUN-NEEDED"
+    elif any(s == "REFERENCE" for s in states):
+        overall = "REFERENCE"
     elif all(s == "PASS" for s in states):
         overall = "PASS"
+    elif all(s.startswith("DIAGNOSTIC") for s in states):
+        overall = "DIAGNOSTIC-PASS" if all(s == "DIAGNOSTIC-PASS" for s in states) else "DIAGNOSTIC-FAIL"
     else:
         overall = "FAIL"
     return {"pass_states": states, "overall": overall}
+
+
+def compute_matrix_overall(cell_specs: dict, overall_by_cell: dict) -> dict:
+    """The matrix-level read: which mitigation cells actually cleared the bar
+    in every pass -- the direct input to the U2.4 decision table."""
+    passing = [cid for cid, v in overall_by_cell.items()
+              if v["overall"] == "PASS" and cell_specs[cid].get("overlay")
+              and not cell_specs[cid].get("diagnostic_only") and cid != "m0_overlay"]
+    quiet = [cid for cid, v in overall_by_cell.items() if v["overall"] == "QUIET-RERUN-NEEDED"]
+    diag_pass = [cid for cid, v in overall_by_cell.items() if v["overall"] == "DIAGNOSTIC-PASS"]
+    if passing:
+        verdict = "MITIGATION FOUND"
+    elif quiet:
+        verdict = "QUIET-RERUN-NEEDED"
+    else:
+        verdict = "ALL MITIGATIONS FAILED"
+    return {"mitigations_passing": passing, "diagnostics_passing": diag_pass,
+            "quiet_rerun_needed": quiet, "verdict": verdict}
 
 
 # --------------------------------------------------------------------------- #
@@ -787,29 +1048,36 @@ def _fmt(v) -> str:
     return "n/a" if v is None else str(v)
 
 
-def _print_verdict_block(report: dict) -> None:
-    print("\n" + "=" * 92)
-    print("ISLAND OVERLAY SPIKE -- VERDICT  (floors: island_feed_hz >= 28.0, qml_fps >= 55.0)")
+def _print_matrix_table(report: dict) -> None:
+    print("\n" + "=" * 116)
+    print("ISLAND OVERLAY MITIGATION MATRIX -- VERDICT  "
+          "(floors: island_feed_hz >= 28.0, qml_scene_render_hz >= 55.0)")
     print(f"  build={_fmt(report.get('windows_build'))} qt={_fmt(report.get('qt_platform'))} "
           f"pyside={_fmt(report.get('pyside'))} dpr={_fmt((report.get('screen') or {}).get('dpr'))} "
           f"panes={report.get('panes')} rebakeHz={report.get('rebake_hz')}")
-    print("-" * 92)
+    print("-" * 116)
+    header = (f"  {'cell':<22}{'pass':<5}{'island_hz':<11}{'scene_hz':<10}"
+              f"{'qml_fps':<9}{'qqw_paint':<11}{'cpu%':<8}{'state':<20}")
+    print(header)
     for p in report["passes"]:
-        v = p["verdict"]
-        s = p["storm"]
-        print(f"  pass {p['pass']}: island_feed_hz={_fmt(v['island_feed_hz'])} "
-              f"qml_fps={_fmt(v['qml_fps'])} -> {v['state']}")
-        print(f"           scanmap_repaint_hz(obs,~15 by design)="
-              f"{_fmt(p['overlay'].get('scanmap_repaint_hz'))}  "
-              f"cpu%={_fmt(p['overlay'].get('process_cpu_pct_of_one_core'))}")
-        print(f"           storm: scene_render overlay={_fmt(s['overlay_scene_render_hz'])} "
-              f"vs control={_fmt(s['control_scene_render_hz'])} (x{_fmt(s['scene_render_ratio'])}); "
-              f"qqw_paint overlay={_fmt(s['overlay_qqw_paint_hz'])} "
-              f"vs control={_fmt(s['control_qqw_paint_hz'])} (x{_fmt(s['qqw_paint_ratio'])}) "
-              f"-> storm_suspected={s['storm_suspected']}")
-    print("-" * 92)
-    print(f"  OVERALL: {report['overall']['overall']}   pass_states={report['overall']['pass_states']}")
-    print("=" * 92)
+        for cid in report["cells_run"]:
+            c = p["cells"][cid]
+            m, v = c["measurement"], c["verdict"]
+            print(f"  {cid:<22}{p['pass']:<5}"
+                  f"{_fmt(m.get('island_feed_hz')):<11}{_fmt(m.get('qml_scene_render_hz')):<10}"
+                  f"{_fmt(m.get('qml_fps')):<9}{_fmt(m.get('qquickwidget_paint_hz')):<11}"
+                  f"{_fmt(m.get('process_cpu_pct_of_one_core')):<8}{v['state']:<20}")
+    print("-" * 116)
+    for cid in report["cells_run"]:
+        ov = report["overall_by_cell"][cid]
+        print(f"  {cid:<22} overall={ov['overall']:<20} pass_states={ov['pass_states']}")
+    print("-" * 116)
+    mo = report["overall"]
+    print(f"  MATRIX VERDICT: {mo['verdict']}")
+    print(f"    mitigations_passing={mo['mitigations_passing']}")
+    print(f"    diagnostics_passing={mo['diagnostics_passing']}")
+    print(f"    quiet_rerun_needed={mo['quiet_rerun_needed']}")
+    print("=" * 116)
 
 
 def write_artifacts(report: dict, out_dir: Path) -> None:
@@ -862,6 +1130,69 @@ def _cell_geometry(idx: int = 0) -> tuple[int, int, int, int]:
 # Smoke (offscreen mechanics -- what an agent runs)                            #
 # --------------------------------------------------------------------------- #
 
+def _smoke_check_cell(cell_id: str, cfg: dict, panes: int, rebake_hz: float) -> dict:
+    """Offscreen mechanics check for one cell config: construct the window
+    with this cell's mitigation flags, run the synthetic feed briefly (only
+    if overlay), confirm QML parses + (if overlay) the island accumulates
+    points and repaints. NO fps assertions (offscreen caps rendering) --
+    proves construction + wiring only."""
+    result = {"cell": cell_id, "ok": False, "detail": ""}
+    try:
+        win = OverlayWindow(panes, rebake_hz, _cell_geometry(0),
+                            overlay=bool(cfg.get("overlay", False)),
+                            opaque_island=bool(cfg.get("opaque_island", False)),
+                            opaque_qqw=bool(cfg.get("opaque_qqw", False)),
+                            area_scale=float(cfg.get("area_scale", 1.0)),
+                            island_hz=float(cfg.get("island_hz", ISLAND_NOMINAL_HZ)))
+        qml_errs = win.qml_errors()
+        if qml_errs:
+            result["detail"] = "QML errors: " + "; ".join(qml_errs)
+            win.close()
+            return result
+        win.show()
+        _settle(300)
+        win.reposition_island()
+        detail_bits = [f"qml_status={win.qml_status()}"]
+        ok = True
+        if cfg.get("overlay", False):
+            win.feed.start()
+            _settle(700)
+            win.feed.stop()
+            win.island.flush_pending()
+            pts = win.island.point_count()
+            showing = win.island.is_showing_map()
+            ticks = win.feed.ticks()
+            repaints = win.scanmap_repaints()
+            ok = bool(pts >= 1 and showing and ticks >= 1 and repaints >= 1)
+            detail_bits.append(f"points={pts} showing={showing} ticks={ticks} repaints={repaints}")
+        result["ok"] = ok
+        result["detail"] = "; ".join(detail_bits)
+        win.close()
+        _settle(100)
+    except Exception as exc:  # noqa: BLE001
+        result["detail"] = f"EXCEPTION: {exc}"
+    return result
+
+
+def run_smoke_one(args) -> int:
+    """``--smoke --measure-one CELL_ID``: the lightweight per-cell mechanics
+    check invoked either directly, or re-execed as a subprocess by run_smoke()
+    for env-gated cells (proving the subprocess/env/JSON plumbing, not GPU
+    rate -- Qt reads env-based render knobs before QGuiApplication exists, so
+    they cannot be exercised in-process)."""
+    app = _bootstrap_app(smoke=True)  # noqa: F841
+    cell_id = args.measure_one
+    cfg = CELLS.get(cell_id)
+    if cfg is None:
+        print(f"unknown cell id {cell_id!r} -- valid: {_CELL_ORDER}", file=sys.stderr)
+        return EXIT_ERROR
+    res = _smoke_check_cell(cell_id, cfg, args.panes, args.rebake_hz)
+    print(f"[measure-one smoke] {cell_id}: ok={res['ok']} detail={res['detail']}")
+    if args.json_out:
+        Path(args.json_out).write_text(json.dumps(res), encoding="utf-8")
+    return EXIT_PASS if res["ok"] else EXIT_FAIL
+
+
 def run_smoke(args) -> int:
     app = _bootstrap_app(smoke=True)  # noqa: F841 -- keep QApplication alive
     from PySide6.QtGui import QGuiApplication
@@ -870,7 +1201,7 @@ def run_smoke(args) -> int:
     print("ISLAND OVERLAY SPIKE -- SMOKE (offscreen mechanics; NO fps assertions)")
     print(f"  qt_platform={QGuiApplication.instance().platformName()!r} pyside={PySide6.__version__}")
 
-    # 1. QML parse validity (authoritative -- no GL needed)
+    # 1. QML parse validity (authoritative -- no GL needed; shared by every cell)
     qml_errs = validate_qml()
     print(f"  [1] QML parse: {'OK (no errors)' if not qml_errs else 'ERRORS: ' + '; '.join(qml_errs)}")
     if qml_errs:
@@ -881,55 +1212,109 @@ def run_smoke(args) -> int:
                       if m.split(".")[0] in ("controller", "devices"))
     print(f"  [2] controller/devices modules loaded: {dev_mods if dev_mods else 'NONE'}")
 
-    # 3. build the overlay window, position the island into the hole
-    win = OverlayWindow(args.panes, args.rebake_hz, _cell_geometry(), overlay=True)
-    print(f"  [3] QQuickWidget status={win.qml_status()} errors={win.qml_errors() or 'none'}")
-    win.show()
-    _settle(500)
-    win.reposition_island()
-    root = win.qqw.rootObject()
-    if root is None:
-        print("  [3a] rootObject is None under offscreen -- hole geometry read is "
-              "verified only in the windowed run; QML parse (step 1) still authoritative.")
-    else:
-        from PySide6.QtCore import QObject
-        hole = root.findChild(QObject, "mapHole")
-        if hole is None:
-            print("  [3a] mapHole not found via objectName (FAIL)")
-            win.close()
-            return EXIT_FAIL
-        geo = win.island.geometry()
-        print(f"  [3a] mapHole rect=({hole.property('x')},{hole.property('y')},"
-              f"{hole.property('width')},{hole.property('height')}) -> island setGeometry="
-              f"({geo.x()},{geo.y()},{geo.width()},{geo.height()})")
+    # 3. every selected cell: construct + exercise mechanics. env-gated cells
+    #    are exercised via a re-exec'd subprocess (proves that plumbing,
+    #    since the env var itself only matters pre-QGuiApplication -- offscreen
+    #    cannot demonstrate its GPU effect anyway).
+    cell_ids = _resolve_cells(args.cells)
+    print(f"  [3] cells selected: {cell_ids}")
+    all_ok = True
+    for cid in cell_ids:
+        cfg = CELLS[cid]
+        env_req = cfg.get("env")
+        already_set = bool(env_req) and all(os.environ.get(k) == v for k, v in env_req.items())
+        if env_req and not already_set:
+            tmp = Path(tempfile.gettempdir()) / f"tct_spike_smoke_{cid}.json"
+            if tmp.exists():
+                tmp.unlink()
+            env = dict(os.environ)
+            env.update(env_req)
+            cmd = [sys.executable, str(Path(__file__).resolve()), "--smoke",
+                  "--measure-one", cid, "--panes", str(args.panes),
+                  "--rebake-hz", str(args.rebake_hz), "--json-out", str(tmp)]
+            try:
+                proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=60)
+                ok = proc.returncode == EXIT_PASS
+                detail = f"subprocess rc={proc.returncode}"
+                if tmp.exists():
+                    payload = json.loads(tmp.read_text(encoding="utf-8"))
+                    ok = ok and bool(payload.get("ok"))
+                    detail += f" payload_ok={payload.get('ok')} detail={payload.get('detail')}"
+                else:
+                    ok = False
+                    detail += " (no JSON produced)"
+            except Exception as exc:  # noqa: BLE001
+                ok = False
+                detail = f"subprocess EXCEPTION: {exc}"
+            print(f"  [{cid}] env-reexec smoke (env={env_req}): {'OK' if ok else 'FAIL'} -- {detail}")
+        else:
+            res = _smoke_check_cell(cid, cfg, args.panes, args.rebake_hz)
+            ok = res["ok"]
+            print(f"  [{cid}] in-process smoke: {'OK' if ok else 'FAIL'} -- {res['detail']}")
+        all_ok = all_ok and ok
 
-    # 4. run the synthetic feed briefly, confirm the island accumulates + shows map
-    win.feed.start()
-    _settle(1500)
-    win.feed.stop()
-    win.island.flush_pending()
-    pts = win.island.point_count()
-    showing = win.island.is_showing_map()
-    feed_hz = round(win.feed.effective_hz(), 2)
-    repaints = win.scanmap_repaints()
-    print(f"  [4] feed: ticks={win.feed.ticks()} effective_hz={feed_hz} "
-          f"island_points={pts} showing_map={showing} scanmap_repaints={repaints}")
-
-    win.close()
-    _settle(150)
-
-    mech_ok = (not qml_errs and pts >= 1 and showing and win.feed.ticks() >= 1
-               and repaints >= 1)
-    print(f"\n  SMOKE {'PASS' if mech_ok else 'FAIL'} -- "
-          f"{'QML + overlay window + hole positioning + synthetic feed + ScanMapView repaint all exercised' if mech_ok else 'a mechanic did not fire'}")
+    print(f"\n  SMOKE {'PASS' if all_ok else 'FAIL'} -- "
+          f"{'every selected cell constructed and its wiring fired' if all_ok else 'a cell mechanic did not fire'}")
     print("  (GPU rate numbers require the windowed operator run -- offscreen "
           "caps rendering; see module docstring RUN.)")
-    return EXIT_PASS if mech_ok else EXIT_FAIL
+    return EXIT_PASS if all_ok else EXIT_FAIL
 
 
 # --------------------------------------------------------------------------- #
-# The real windowed measurement (two cells x two passes)                        #
+# The real windowed measurement -- single cell (used directly, and as the      #
+# env-reexec subprocess target for env-gated cells)                            #
 # --------------------------------------------------------------------------- #
+
+def run_measure_one(args) -> int:
+    app = _bootstrap_app(smoke=False)
+    reason = _check_real_session()
+    if reason:
+        print(f"REFUSED: {reason}", file=sys.stderr)
+        return EXIT_GUARD
+    cell_id = args.measure_one
+    cfg = CELLS.get(cell_id)
+    if cfg is None:
+        print(f"unknown cell id {cell_id!r} -- valid: {_CELL_ORDER}", file=sys.stderr)
+        return EXIT_ERROR
+    entry = measure_cell(cfg, panes=args.panes, rebake_hz=args.rebake_hz,
+                         seconds=args.seconds, warmup_s=args.warmup, geo=_cell_geometry(0))
+    payload = {"cell": cell_id, "measurement": entry}
+    if args.json_out:
+        Path(args.json_out).write_text(json.dumps(payload), encoding="utf-8")
+    print(f"[measure-one] {cell_id}: {json.dumps(entry)}")
+    return EXIT_PASS
+
+
+def _measure_cell_dispatch(cell_id: str, cfg: dict, args, geo) -> dict:
+    """Measure one cell for the real matrix: in-process directly, or (for
+    ``env``-gated cells) via a re-exec'd subprocess so the env var is read
+    before that process's own QGuiApplication exists."""
+    env_req = cfg.get("env")
+    already_set = bool(env_req) and all(os.environ.get(k) == v for k, v in env_req.items())
+    if not env_req or already_set:
+        return measure_cell(cfg, panes=args.panes, rebake_hz=args.rebake_hz,
+                            seconds=args.seconds, warmup_s=args.warmup, geo=geo)
+
+    tmp = Path(tempfile.gettempdir()) / f"tct_spike_measure_{cell_id}_{os.getpid()}.json"
+    if tmp.exists():
+        tmp.unlink()
+    env = dict(os.environ)
+    env.update(env_req)
+    cmd = [sys.executable, str(Path(__file__).resolve()), "--measure-one", cell_id,
+          "--seconds", str(args.seconds), "--warmup", str(args.warmup),
+          "--panes", str(args.panes), "--rebake-hz", str(args.rebake_hz),
+          "--json-out", str(tmp)]
+    timeout_s = args.warmup + args.seconds + 60.0
+    try:
+        proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout_s)
+        if proc.returncode != EXIT_PASS or not tmp.exists():
+            return {"errors": [f"env-reexec subprocess failed rc={proc.returncode} "
+                               f"stderr={proc.stderr[-500:]}"]}
+        payload = json.loads(tmp.read_text(encoding="utf-8"))
+        return payload.get("measurement", {"errors": ["no measurement in subprocess JSON"]})
+    except Exception as exc:  # noqa: BLE001
+        return {"errors": [f"env-reexec subprocess EXCEPTION: {exc}"]}
+
 
 def run_measurement(args) -> int:
     app = _bootstrap_app(smoke=False)
@@ -941,14 +1326,19 @@ def run_measurement(args) -> int:
         print(f"REFUSED: {reason}", file=sys.stderr)
         return EXIT_GUARD
 
+    cell_ids = _resolve_cells(args.cells)
+    # m0_control is always measured (it is this pass's storm baseline for
+    # every other cell) but only listed once, first, in the printed table.
+    cells_run = (["m0_control"] if "m0_control" not in cell_ids else []) + cell_ids
+
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out_dir = _REPO_ROOT / "artifacts_claude" / f"island_overlay_spike_{ts}"
+    out_dir = _REPO_ROOT / "artifacts_claude" / f"island_overlay_spike_matrix_{ts}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     screen = QGuiApplication.primaryScreen()
     avail = screen.availableGeometry() if screen else None
     report: dict = {
-        "spike": "island_overlay_spike",
+        "spike": "island_overlay_spike_matrix",
         "utc": ts,
         "windows_build": (sys.getwindowsversion().build      # type: ignore[attr-defined]
                           if hasattr(sys, "getwindowsversion") else None),
@@ -958,53 +1348,63 @@ def run_measurement(args) -> int:
         "rebake_hz": args.rebake_hz,
         "params": {"seconds": args.seconds, "warmup_s": args.warmup,
                    "island_nominal_hz": ISLAND_NOMINAL_HZ, "blur_max_px": BLUR_MAX_PX,
-                   "n_passes": 2},
-        "thresholds": {"island_hz_floor": ISLAND_HZ_FLOOR, "qml_fps_floor": QML_FPS_FLOOR,
+                   "n_passes": args.passes},
+        "thresholds": {"island_hz_floor": ISLAND_HZ_FLOOR, "scene_hz_floor": SCENE_HZ_FLOOR,
                        "near_floor_frac": NEAR_FLOOR_FRAC},
         "screen": {"dip": [avail.width(), avail.height()] if avail else None,
                    "dpr": screen.devicePixelRatio() if screen else None},
         "out_dir": str(out_dir),
+        "cell_specs": {cid: {k: v for k, v in CELLS[cid].items()} for cid in cells_run},
+        "cells_run": cells_run,
         "passes": [],
     }
 
-    print(f"\nISLAND OVERLAY SPIKE -- {args.seconds:.0f}s window/cell, 2 cells "
-          f"(control|overlay) x 2 passes  panes={args.panes} rebakeHz={args.rebake_hz}")
-    for p in (1, 2):
-        print(f"\n--- pass {p} / control: frost scene alone (storm baseline) ---")
-        sys.stdout.flush()
-        control = measure_cell(overlay=False, panes=args.panes, rebake_hz=args.rebake_hz,
-                               seconds=args.seconds, warmup_s=args.warmup,
-                               geo=_cell_geometry(0))
-        print(f"    qml_fps={control.get('qml_fps')} scene_render_hz={control.get('qml_scene_render_hz')} "
-              f"qqw_paint_hz={control.get('qquickwidget_paint_hz')} cpu%={control.get('process_cpu_pct_of_one_core')}")
+    print(f"\nISLAND OVERLAY MITIGATION MATRIX -- {args.seconds:.0f}s window/cell, "
+          f"{args.passes} pass(es), cells={cells_run}")
+    states_by_cell: dict[str, list[str]] = {cid: [] for cid in cells_run}
+    for p in range(1, args.passes + 1):
+        print(f"\n--- pass {p} ---")
+        control_entry = measure_cell(CELLS["m0_control"], panes=args.panes, rebake_hz=args.rebake_hz,
+                                     seconds=args.seconds, warmup_s=args.warmup, geo=_cell_geometry(0))
+        print(f"    m0_control: scene_render_hz={control_entry.get('qml_scene_render_hz')} "
+              f"qml_fps={control_entry.get('qml_fps')} cpu%={control_entry.get('process_cpu_pct_of_one_core')}")
 
-        print(f"--- pass {p} / overlay: frost scene + ScanMapView island + 30 Hz feed ---")
-        sys.stdout.flush()
-        overlay = measure_cell(overlay=True, panes=args.panes, rebake_hz=args.rebake_hz,
-                               seconds=args.seconds, warmup_s=args.warmup,
-                               geo=_cell_geometry(1))
-        print(f"    island_feed_hz={overlay.get('island_feed_hz')} qml_fps={overlay.get('qml_fps')} "
-              f"scanmap_repaint_hz={overlay.get('scanmap_repaint_hz')} "
-              f"cpu%={overlay.get('process_cpu_pct_of_one_core')} "
-              f"points={overlay.get('island_point_count')}")
+        pass_cells: dict = {}
+        v_control = pass_verdict(control_entry, CELLS["m0_control"])
+        pass_cells["m0_control"] = {
+            "measurement": control_entry, "verdict": v_control,
+            "storm": storm_observation(control_entry, control_entry),
+        }
+        states_by_cell["m0_control"].append(v_control["state"])
 
-        report["passes"].append({
-            "pass": p,
-            "control": control,
-            "overlay": overlay,
-            "verdict": pass_verdict(overlay),
-            "storm": storm_observation(control, overlay),
-        })
+        for cid in cell_ids:
+            if cid == "m0_control":
+                continue
+            cfg = CELLS[cid]
+            sys.stdout.flush()
+            entry = _measure_cell_dispatch(cid, cfg, args, _cell_geometry(1))
+            verdict = pass_verdict(entry, cfg)
+            storm = storm_observation(control_entry, entry)
+            pass_cells[cid] = {"measurement": entry, "verdict": verdict, "storm": storm}
+            states_by_cell[cid].append(verdict["state"])
+            print(f"    {cid}: island_feed_hz={entry.get('island_feed_hz')} "
+                  f"scene_render_hz={entry.get('qml_scene_render_hz')} "
+                  f"qml_fps={entry.get('qml_fps')} cpu%={entry.get('process_cpu_pct_of_one_core')} "
+                  f"-> {verdict['state']}")
 
-    report["overall"] = compute_overall(report["passes"])
+        report["passes"].append({"pass": p, "cells": pass_cells})
+
+    overall_by_cell = {cid: compute_cell_overall(states_by_cell[cid]) for cid in cells_run}
+    report["overall_by_cell"] = overall_by_cell
+    report["overall"] = compute_matrix_overall(report["cell_specs"], overall_by_cell)
     write_artifacts(report, out_dir)
-    _print_verdict_block(report)
+    _print_matrix_table(report)
     print(f"\nartifacts: {out_dir}\n")
 
-    state = report["overall"]["overall"]
-    if state == "PASS":
+    verdict = report["overall"]["verdict"]
+    if verdict == "MITIGATION FOUND":
         return EXIT_PASS
-    if state == "QUIET-RERUN-NEEDED" or state == "NO-DATA":
+    if verdict == "QUIET-RERUN-NEEDED":
         return EXIT_QUIET
     return EXIT_FAIL
 
@@ -1034,9 +1434,13 @@ def run_hold(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="U2.4 island-overlay entry micro-spike.")
+    ap = argparse.ArgumentParser(description="U2.4 island-overlay mitigation matrix.")
     ap.add_argument("--smoke", action="store_true",
                     help="headless mechanics check (offscreen; no fps assertions)")
+    ap.add_argument("--cells", type=str, default="all",
+                    help=f"comma list of cell ids or 'all'. valid: {_CELL_ORDER}")
+    ap.add_argument("--passes", type=int, default=DEFAULT_PASSES,
+                    help="measurement passes per cell (default 2)")
     ap.add_argument("--seconds", type=float, default=DEFAULT_SECONDS, help="window per cell")
     ap.add_argument("--warmup", type=float, default=DEFAULT_WARMUP_S)
     ap.add_argument("--panes", type=int, default=DEFAULT_PANES)
@@ -1044,20 +1448,37 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--hold", type=int, default=0, help="eyeball: leave overlay scene on screen N s")
     ap.add_argument("--watchdog", type=float, default=0.0,
                     help="hard out-of-process kill after N s (0 = auto)")
+    # internal-only flags used for the env-reexec single-cell subprocess path
+    ap.add_argument("--measure-one", type=str, default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--json-out", type=str, default=None, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+
+    if not args.measure_one:
+        try:
+            _resolve_cells(args.cells)
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return EXIT_ERROR
 
     if args.hold > 0:
         wd_timeout = args.hold + 60.0
+    elif args.measure_one:
+        wd_timeout = args.warmup + args.seconds + 60.0
     elif args.smoke:
-        wd_timeout = 120.0
+        wd_timeout = 60.0 + 20.0 * len(_resolve_cells(args.cells))
     else:
-        # 2 passes x 2 cells, each ~ warmup + seconds + teardown
-        wd_timeout = 4 * (args.warmup + args.seconds + 8.0) + 90.0
+        n_other = len([c for c in _resolve_cells(args.cells) if c != "m0_control"])
+        total_per_pass = 1 + n_other
+        wd_timeout = args.passes * total_per_pass * (args.warmup + args.seconds + 15.0) + 150.0
     if args.watchdog > 0:
         wd_timeout = args.watchdog
     watchdog = _spawn_hard_watchdog(os.getpid(), wd_timeout)
 
     try:
+        if args.measure_one and args.smoke:
+            return run_smoke_one(args)
+        if args.measure_one:
+            return run_measure_one(args)
         if args.smoke:
             return run_smoke(args)
         if args.hold > 0:
