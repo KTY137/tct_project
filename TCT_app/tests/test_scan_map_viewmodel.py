@@ -30,6 +30,10 @@ from PySide6.QtCore import QCoreApplication
 
 from controller.scan_controller import ScanPoint, ScanResult
 from gui.scan_map_viewmodel import QUANTITIES, ScanMapViewModel
+from tests._viewmodel_standing_law import (
+    assert_no_command_surface,
+    assert_owns_no_timer_or_thread,
+)
 
 
 def _app() -> QCoreApplication:
@@ -341,29 +345,14 @@ def test_read_only_no_command_surface():
     boundary that encodes hardware safety rule 2."""
     _app()
     vm = ScanMapViewModel()
-
-    for name in ("start", "pause", "resume", "stop", "abort", "execute", "arm"):
-        assert not hasattr(vm, name), (
-            f"scan-map viewmodel must expose no '{name}' — it is read-only"
-        )
-
-    for attr in ("_scanner", "_sm", "_coordinator", "_scan", "_danger_gate", "_gate"):
-        assert not hasattr(vm, attr), (
-            f"scan-map viewmodel must hold no '{attr}' — the boundary is structural"
-        )
-
-    forbidden_types = ("ScanController", "StateMachine", "ScanCoordinator", "DangerGate")
-    for key, val in vars(vm).items():
-        assert type(val).__name__ not in forbidden_types, (
-            f"attribute {key!r} holds a {type(val).__name__} — forbidden"
-        )
+    assert_no_command_surface(
+        vm,
+        extra_names=("execute", "arm"),
+        extra_attrs=("_scan",),
+    )
 
 
 def test_owns_no_timer_no_thread():
-    from PySide6.QtCore import QThread, QTimer
-
     _app()
     vm = ScanMapViewModel()
-    assert vm.findChildren(QTimer) == []
-    assert vm.findChildren(QThread) == []
-    assert not hasattr(vm, "start")   # no start() → no self-driven poll loop
+    assert_owns_no_timer_or_thread(vm)

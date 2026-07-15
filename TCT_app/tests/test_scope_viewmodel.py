@@ -16,6 +16,10 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QCoreApplication
 
 from gui.scope_viewmodel import ScopeViewModel
+from tests._viewmodel_standing_law import (
+    assert_no_command_surface,
+    assert_owns_no_timer_or_thread,
+)
 
 
 def _app() -> QCoreApplication:
@@ -91,3 +95,27 @@ def test_default_construction_no_parent_does_not_raise():
     _app()
     vm = ScopeViewModel(parent=None)
     assert isinstance(vm, ScopeViewModel)
+
+
+# --------------------------------------------------------------------------- #
+# SAFETY-CRITICAL standing law (S2 Ruling Q3): no command surface, no upward   #
+# reference, no owned timer/thread — the pair every U1/QML view-model suite   #
+# carries (this file was previously missing it; backfilled per Niwashi P1).    #
+# ``ScopeViewModel`` has no per-file extras: its only state is the connected/  #
+# simulated/acquiring flags and the status/rate text, so the base sets alone  #
+# fully cover it.                                                              #
+# --------------------------------------------------------------------------- #
+def test_read_only_no_command_surface():
+    """The scope facade is a mirror of already-cached poll state, not a
+    remote. It must expose NO run-control callable and hold NO reference
+    through which QML could issue one — the structural read/command
+    boundary that encodes hardware safety rule 2."""
+    _app()
+    vm = ScopeViewModel()
+    assert_no_command_surface(vm)
+
+
+def test_owns_no_timer_no_thread():
+    _app()
+    vm = ScopeViewModel()
+    assert_owns_no_timer_or_thread(vm)

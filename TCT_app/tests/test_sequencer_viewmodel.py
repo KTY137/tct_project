@@ -35,6 +35,10 @@ from controller.sequencer import SequenceEntry
 from controller.state_machine import AppState, StateMachine
 from gui.sequence_coordinator import SequenceCoordinator
 from gui.sequencer_viewmodel import SequencerQueueViewModel
+from tests._viewmodel_standing_law import (
+    assert_no_command_surface,
+    assert_owns_no_timer_or_thread,
+)
 
 
 def _app() -> QCoreApplication:
@@ -328,37 +332,18 @@ def test_read_only_no_command_surface():
     read/command boundary that encodes hardware-safety rule 2."""
     _app()
     vm = SequencerQueueViewModel()
-
-    # No start/pause/resume/stop/abort/execute/arm attribute of any kind.
-    for name in ("start", "pause", "resume", "stop", "abort", "execute", "arm"):
-        assert not hasattr(vm, name), (
-            f"sequencer queue viewmodel must expose no '{name}' — it commands nothing"
-        )
-
-    # No reference to the run-control layer through which a command could reach.
-    for attr in ("_scanner", "_sm", "_coordinator", "_scan", "_danger_gate", "_gate"):
-        assert not hasattr(vm, attr), (
-            f"sequencer queue viewmodel must hold no '{attr}' — the boundary is structural"
-        )
-
-    # Positive: nothing in its instance dict references a controller / state
-    # machine / coordinator / gate object by any name.
-    forbidden_types = ("ScanController", "StateMachine", "ScanCoordinator",
-                       "SequenceCoordinator", "ArmedEnvelopeGate", "DangerGate")
-    for key, val in vars(vm).items():
-        assert type(val).__name__ not in forbidden_types, (
-            f"attribute {key!r} holds a {type(val).__name__} — forbidden"
-        )
+    assert_no_command_surface(
+        vm,
+        extra_names=("execute", "arm"),
+        extra_attrs=("_scan",),
+        extra_types=("SequenceCoordinator", "ArmedEnvelopeGate"),
+    )
 
 
 # --------------------------------------------------------------------------- #
 # (9) Owns no timer / no thread (single-timer law)                              #
 # --------------------------------------------------------------------------- #
 def test_owns_no_timer_no_thread():
-    from PySide6.QtCore import QThread, QTimer
-
     _app()
     vm = SequencerQueueViewModel()
-    assert vm.findChildren(QTimer) == []
-    assert vm.findChildren(QThread) == []
-    assert not hasattr(vm, "start")   # no start() → no self-driven poll loop
+    assert_owns_no_timer_or_thread(vm)

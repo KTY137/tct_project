@@ -23,6 +23,10 @@ from PySide6.QtCore import QCoreApplication
 from controller.scan_controller import ScanPoint, ScanResult
 from controller.state_machine import AppState
 from gui.run_state_viewmodel import RunStateViewModel
+from tests._viewmodel_standing_law import (
+    assert_no_command_surface,
+    assert_owns_no_timer_or_thread,
+)
 
 
 def _app() -> QCoreApplication:
@@ -294,36 +298,13 @@ def test_read_only_no_command_surface():
     structural read/command boundary that encodes hardware safety rule 2."""
     _app()
     vm = RunStateViewModel()
-
-    # No start/pause/resume/stop/abort attribute of any kind.
-    for name in ("start", "pause", "resume", "stop", "abort"):
-        assert not hasattr(vm, name), (
-            f"run-state facade must expose no '{name}' — it is read-only"
-        )
-
-    # No reference to the run-control layer through which a command could reach.
-    for attr in ("_scanner", "_sm", "_coordinator", "_danger_gate", "_gate"):
-        assert not hasattr(vm, attr), (
-            f"run-state facade must hold no '{attr}' — the boundary is structural"
-        )
-
-    # Positive: nothing in its instance dict references a controller/state
-    # machine / coordinator / danger-gate object by any name.
-    forbidden_types = ("ScanController", "StateMachine", "ScanCoordinator", "DangerGate")
-    for key, val in vars(vm).items():
-        assert type(val).__name__ not in forbidden_types, (
-            f"attribute {key!r} holds a {type(val).__name__} — forbidden"
-        )
+    assert_no_command_surface(vm)
 
 
 # --------------------------------------------------------------------------- #
 # 15. Owns no timer / no thread (single-timer law)                              #
 # --------------------------------------------------------------------------- #
 def test_owns_no_timer_no_thread():
-    from PySide6.QtCore import QThread, QTimer
-
     _app()
     vm = RunStateViewModel()
-    assert vm.findChildren(QTimer) == []
-    assert vm.findChildren(QThread) == []
-    assert not hasattr(vm, "start")   # no start() → no self-driven poll loop
+    assert_owns_no_timer_or_thread(vm)
