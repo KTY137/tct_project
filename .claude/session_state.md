@@ -317,14 +317,52 @@ non-conflicting parallelism dispatched:
   perceptual question (design item → Baldr/Kaya, cadence ladder is a
   tunable spec parameter); qml_fps low ⇒ real frame drops (perf
   problem, U2.4 gate risk). Do NOT redesign before the numbers.
-- **noah-u21** (FABLE, background — judgment beat) — U2.1 Surface +
-  material core per u2_hero_plan §U2.1. LOCKS: TCT_app/gui/qml/kit/*
-  (new) · TCT_app/scripts/gen_shadow_assets.py (new) ·
-  TCT_app/tests/test_qml_kit_surface.py (new) ·
-  TCT_app/tests/test_no_inline_hex_gui.py (ADDITIVE ONLY, glob
-  extension to .qml). Calm policy: panel-scoped ships, global-calm
-  flag encoded off. Does NOT touch style.py/qml_theme.py/
-  app_settings.py. Shiori brief-check PASSED all 10 items pre-dispatch.
+- ✅ **noah-u21 DONE, landed `1ab0085`** — U2.1 Surface + material
+  core, ALL exit criteria green (kit suite 27, contrast check exit 0
+  ring-vs-surround all rungs both themes, inline-hex +85/-0 additive,
+  MultiEffect budget = exactly 1, combined targeted 88 passed).
+  Frozen API for U2.2 in his report (Surface rung enum, KitEnv
+  singleton, calm = ONE switch panel-default). 2 reconciliation flags:
+  (i) edgeShade needs bridge edgeShadeAlpha for the true gradient
+  (legal fallback shipped) → bridge micro-beat, queued; (ii) spec §2.2
+  per-rung frost depths (40/16) vs §2.4 one-blur law — shipped ONE
+  40px bake both rungs sample; needs an Adam budget ruling → with the
+  U2.1–U2.3 Mary batch. Mary: thematic batch U2.1+U2.2+U2.3 (plan §gate
+  line 6).
+- 🚨 **OVERLAY SPIKE MEASURED (Adam, quiet machine): FAIL — and it
+  VALIDATES Kaya's ruckeln observation as REAL.** `9efa5ce` artifacts
+  island_overlay_spike_20260715T111751Z: scene 60→23 Hz with raster
+  island in same top-level; island feed 30→16 Hz; map repaint ~6 Hz;
+  CPU 23→80% one core. CONTROL (frost+ground alone) = clean 60 fps @
+  23% ⇒ material innocent, bake cadence innocent; the raster-sibling-
+  over-QQuickWidget composition is the killer (mechanism reads as
+  full-backing-store recomposition per island tick, GUI-thread
+  CPU-bound; storm_suspected=False). **U2.4 host code does NOT start
+  on these numbers** (plan's own stop rule).
+- **noah-spike-mitigation** (opus, background) — mitigation MATRIX in
+  the same harness: M1 opaque-damage-clipping (island/container
+  WA_OpaquePaintEvent), M2 opaque QQuickWidget, M3 blit-area scaling
+  diagnostic, M4 island-rate scaling diagnostic, + his own cells; also
+  fix the dead qml_fps probe. LOCK: scripts/spikes/
+  island_overlay_spike.py + artifacts. Adam runs the windowed matrix
+  on a quiet machine after landing; decision table maps results to
+  IslandHost design vs architect escalation.
+- **noah-u22** (sonnet, background) — U2.2 components (ScanViewer
+  subset; independent of island mechanics). LOCKS: gui/qml/kit/*.qml
+  NEW component files only (U2.1 files FROZEN) ·
+  gui/qml/ScanStatusStrip.qml · tests/test_qml_kit_components.py
+  (new) · tests/test_qml_scan_status.py (additive).
+- ⚠️ **BENCH-GATE RISK (new, must fix BEFORE next bench run):**
+  bench_run.ps1 disables LFS smudge ("only LFS file is an irrelevant
+  PDF" — comment now STALE): U2.1's 12 kit PNGs are LFS and the kit
+  suite READS them ⇒ next bench full suite fails on pointer files.
+  Bench has git-lfs 3.7.1 but NO GitHub credentials by design ⇒ fix =
+  transport objects (scp .git/lfs/objects subset + `git lfs checkout`
+  on bench, or scp the asset dir post-checkout). Owner: Adam
+  (harness infra), before the U2.2|U2.4 wave-boundary bench gate.
+  Local hygiene fixed in `184852e` (TCT_app/.gitattributes `-text`
+  restated for binaries; blobs verified pointer-clean; LFS objects
+  confirmed pushed, nothing pending).
 - **After U2.1 lands:** immediate-ish Mary look is NOT required (not
   safety-class) → thematic batch with U2.2+U2.3 per plan §gate line 6;
   U2.2 (components, Noah sonnet) dispatches on U2.1's frozen API.
