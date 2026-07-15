@@ -508,3 +508,26 @@ U1 staging design pins this convention in its run-ownership seam section
 (run-active GLOBAL calm) the question is moot — no ownership resolution
 needed.
 Status: **ACTIVE** (delegated decision, post-hoc logged).
+
+## 2026-07-15 (night) — Ruling 8: distillation balance as a U2+ stage-gate criterion (Adam, under the delegated design authority; Kaya-directed)
+
+Source: Kaya's migration-vs-rewrite deliberation (external Gemini second
+opinion raised "migration leaves too much legacy code"). Outcome of the
+discussion: **migration confirmed, rewrite rejected** — with Kaya's
+binding synthesis-routine directive (verbatim): *"behalte Destillation/
+Struktur-maxxing mit altcode minimizing + verification am ende im
+gedächnis das hört sich nach na guten Syntheseroutine an."*
+
+**Ruling:** the standing U-stage gate gains a distillation-balance
+criterion for U2 and later: every stage gate reports net LOC and an
+explicit delete list; a stage that only adds does not pass. Deliberately
+retained code (safety controls, GL islands, the never-migrates list) is
+ratified essence, never residue. U1 is exempt — viewmodel and old face
+legitimately coexist until the QML face replaces the QWidget face.
+Written into docs/ROADMAP_MASTERPLAN.md standing-gate bullet. Rationale
+on the record: migration = distillation (extract essence fraction by
+fraction with tests as the thermometer, forced deletion per stage);
+rewrite = re-synthesis from memory (unspecified behavior is lost, which
+for a lab-control app is a safety cost, not an aesthetic one).
+Status: **ACTIVE** (delegated decision, post-hoc logged; principle also
+persisted in Adam's cross-session memory).

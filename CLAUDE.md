@@ -144,6 +144,7 @@ the one doing the delegating.
 | Kiroku | `kiroku` | **Haiku** bookkeeper/scribe. Keeps the *structured* record in sync: `docs/ARCHITECTURE.md` index + changelog lines, `docs/TECH_DEBT.md`, research index, TODO ledgers. Cheap; call often. (Prose docs stay Samantha.) |
 | Shiori | `shiori` | **Haiku** librarian / internal researcher. Read-only in-repo lookups: where is X, what calls Y, which config keys/signals/HDF5 groups exist, what a research note already says. The in-repo counterpart to Prometheus's external research. |
 | Mamoru | `mamoru` | **Haiku** watchdog / drift-catcher. Routine read-only sweeps: docs-vs-code drift, config keys missing from the validator, dead code, stale `TODO(manual needed)`, missing tests; runs the pytest suite. Reports; never fixes (hands to the owner). |
+| Niwashi | `niwashi` | **Sonnet** gardener / structure distiller ("der Gärtner", Kaya-created 2026-07-15 night). Read-only, `TCT_app/**` code ONLY (never the instruction layer): proposes rot/weakness findings and distillation/synthesis proposals (compression, dedup, structure) with a named test-thermometer per proposal. Never edits; execution goes to owners via Adam. Feeds the U2+ distillation-balance gate (DECISIONS ruling 8). Safety-critical paths: flag-only, `SAFETY-CLASS` → Mary + Kaya. |
 
 ### The Haiku trio — "always-on" the practical way
 

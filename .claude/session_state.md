@@ -112,23 +112,71 @@ non-conflicting parallelism dispatched:
   completeness re-enumeration (Mary RISK: 152 files on disk vs 118
   mapped, 34-file pre-existing gap). Advisory table only; Kiroku
   executes the map fix at the boundary with C14 as input.
-- **abel-u13** (Abel, Opus, background) — U1.3 sequencer VM/host split
-  per u1_staging.md §4.4+§5. LOCKS: gui/sequencer_viewmodel.py (new) ·
-  gui/sequencer_panel.py · tests/test_sequencer_viewmodel.py (new) ·
-  tests/test_sequencer_panel.py · docs/SAFETY_NORMATIVE_TESTS.md
-  (two-row host update only, builds on 8166752's version). 10 (c)-class
-  tests byte-untouched. Immediate Mary review at landing.
-- **jonathan-u11** (Jonathan, background) — U1.1 ScanMapViewModel per
-  §4.2, 17 reclaims. LOCKS: gui/scan_map_viewmodel.py (new) ·
-  gui/scan_map_view.py · tests/test_scan_map_viewmodel.py (new) ·
-  tests/test_scan_map_view.py.
-- **noah-u12** (Noah #2, background) — U1.2 ScanViewerViewModel per
-  §4.3 + **Q1 ACKED by Adam** (ETA moves into RunStateViewModel, panel
-  copy deleted; post-hoc log pending). LOCKS: gui/scan_viewer_viewmodel.py
-  (new) · gui/scan_viewer_panel.py · gui/run_state_viewmodel.py (ETA
-  only) · tests/test_scan_viewer_viewmodel.py (new) ·
-  tests/test_scan_viewer_panel.py · tests/test_run_state_viewmodel.py
-  (additive).
+- ✅ **U1.3 LANDED `a5bacf2`** — sequencer split per §5: read-only
+  QueueVM (no coordinator/gate/callable/notify/timer), panel = retained
+  command/safety host, 6 reclaims, 10 (c) byte-untouched (numstat
+  0-added proof), 41+14 green. Two deviations for Mary to ratify
+  (envelope_html kept byte-stable for the pinned (b) test;
+  _on_active trimmed to gating-only). VM-suite conftest caveat: run
+  alongside a widget suite, not solo (house pattern). Manifest lock
+  RELEASED → Kiroku batch unblocked at boundary.
+- ✅ **mary-u13 DONE: U1.3 APPROVED** (clean, no nits) — safety
+  boundary structurally verified (VM imports no coordinator/gate/
+  callable/notify/timer; standing-law pair real); both deviations
+  RATIFIED (envelope_html bounded one-directional; _on_active trim is
+  actually spec-conformant). Residual notes: VM suites must co-run
+  AFTER a widget suite (pre-existing house pattern, bench alphabetical
+  order unaffected); vm.envelopeSummary production-dead until the QML
+  port binds it (intentional §5.2).
+- **kiroku-w1** (background) — boundary bookkeeping batch. LOCKS:
+  docs/SAFETY_NORMATIVE_TESTS.md (§Counts + bucket cell) ·
+  docs/test_bucket_map.md · TCT_app/tests/test_planner_panel.py
+  (docstring only) · docs/ARCHITECTURE.md.
+- ✅ **U1.1 LANDED `a88b823`** — 17 reclaims + standing-law pair (20
+  tests in new suite), residue 15 byte-untouched (diff shows deletions
+  only), 136-test consumer sweep green, import-boot chain intact.
+  Deviations (accepted): snake_case value_at/cursor_text; empty section
+  headers removed with fully-reclaimed sections. → Mary thematic batch
+  with U1.2.
+- ✅ **U1.2 LANDED `62cec74`** — 15 reclaims + 2 (d) retired (panel
+  40→23), Q1 executed (ONE ETA derivation in RunStateViewModel).
+  Byte-proof method: ran unmodified 40 against the refactored panel
+  BEFORE trimming (all green). Deviations for Mary-wave1 to ratify:
+  (1) openInAnalysisEligible = NOT run.active statt run.terminal
+  (terminal nur vom 1 Hz-Poll gefüttert, den ein panel-owned VM in U1
+  nie sieht); (2) ETA-Placeholder-Test per Q1 notwendig umgeschrieben.
+  ⚠ FLAGGED: test_qml_shell.py hängt am theme-toggle-island-Test (auch
+  "solo", aber unter Parallellast) → **RECONCILIATION RUN pending: ONE
+  quiet-machine run of test_qml_shell.py when no agent is testing**
+  (before the bench gate; if it still hangs quiet, it's real and goes
+  to Noah).
+- **mary-wave1** (background, read-only) — thematic batch review of
+  `a88b823` + `62cec74` incl. deviation rulings. No locks.
+- **mamoru-w1** (background, read-only) — wave-boundary standup:
+  claims-vs-git audit (6 commits), lock/tree cross-check, AxisSpec
+  gate check, reclaim accounting spot-check. No locks.
+
+## 🌱 NIWASHI CREATED (Kaya-directed, 2026-07-15 night)
+
+New agent seat `.claude/agents/niwashi.md` + CLAUDE.md table row:
+read-only structure distiller (Sonnet), TCT_app/** code only, proposes
+rot findings + distillation/synthesis proposals with named
+test-thermometer; never edits, instruction layer out of scope,
+SAFETY-CLASS proposals gated Mary+Kaya. Feeds the ruling-8
+distillation-balance gate. First dispatch: at this wave boundary,
+after Mamoru returns (avoid duplicate sweeps).
+
+## 🎯 KAYA'S PARTING DIRECTIVE (verbatim intent, before sleep #2)
+
+"Full QML+MVVM+TrueGlassShell am Morgen steht immernoch." Bounded
+interpretation ON RECORD (gates are ratified; a stretch goal does not
+override them): maximize toward that target WITHOUT crossing [Kaya]
+gates, Mary reviews, bench gates, safety rules, or merge-to-main.
+Concretely added to the queue: **U2 implementation plan ON PAPER**
+(Fable architect, against the staged U1.5 kit spec + Lantern) so the
+hero slice can start the minute Kaya's morning gates (measurement B,
+U1.5 sign-off) click. Code for U2 is NOT written overnight — the entry
+gate is his, and that is exactly what makes the plan trustworthy.
 
 ## ✅ U1 STAGING DESIGN LANDED (u1-architect, Fable, this session)
 
