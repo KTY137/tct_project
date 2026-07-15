@@ -436,3 +436,45 @@ logging in this file instead of pre-asking. The quality bar he set is explicit:
 Affects: `docs/DECISIONS.md` process, U1.5/U2 design beats, `gui/style.py`
 token family growth, `gui/qml_theme.py` TOKEN_MAP.
 Status: **RATIFIED** (standing delegation).
+
+## 2026-07-15 — Post-attack-pass rulings (Adam, under the delegated design authority)
+
+Both attack passes on ratified LANTERN are in (`docs/design/qml_kit_forge/
+attack_loki.md`, `attack_baldr.md`). Rulings, logged post-hoc per the
+delegation above:
+
+1. **Run-active motion clamp (Baldr MAJOR-4 adopted):** whenever ANY run is
+   active, the living-glass effective speed clamps to ≤1.0× app-wide
+   (worst legal case was full × 2.0 = ~8% viewport / 45 s period in panels the
+   operator watches during the same acquisition). This BOUNDS the ratified
+   panel-scoped calm; it does not reverse it — the room still flows, calmer.
+   Baldr's verbatim challenge to the panel-scope assumption is ON RECORD in
+   attack_baldr.md for Kaya to read; the clamp is the narrowest fix and ships
+   unless he overrules.
+2. **Stale state is ink-only (Baldr BLOCKER-1):** the shipped
+   `MetricTile.qml` `opacity: 0.6` stale dim (measured AA failure: crit
+   5.02→2.59 dark, warn 5.43→2.52 light) is removed in favor of ink-based
+   staleness per Lantern §5; kit.md §4.3's Tile-dim permission is amended to
+   cap any opacity cascade over semantic ink at the measured legal ceiling.
+3. **Ring-vs-own-fill becomes a standing check (Baldr BLOCKER-2):**
+   `kit_contrast_check.py` gains the ring-on-component's-own-fill
+   measurement; the spec must state the ring offset convention explicitly.
+4. **Hazard-rung focus text (Baldr BLOCKER-3):** the ambiguity ("no halo" vs
+   "ring is the accessible channel") is resolved in favor of: RING ALWAYS
+   PRESENT on hazard rungs, halo never — focus visibility on the highest-
+   stakes controls is non-negotiable (this direction strengthens the safety
+   posture; the hazard-opacity law itself is untouched).
+5. **Dead-zone law names the halo (Baldr MAJOR-5):** kit.md §8's enumerated
+   translucent-pixel mechanisms extend from {sample, shadow} to {sample,
+   shadow, halo} — a strengthening of a protective law.
+6. **Spec reconciliation (Loki BLOCKER-1/MAJOR-2):** candidate_lantern §3.2/§7
+   rewritten to the true post-ratification behavior — the bake runs at idle
+   rate during scans; only the run-owning pane freezes its own sampler
+   (mechanism (a), stale-crop seam named and handed to visual review);
+   "zero material cost during acquisition" claim retired, replaced by the
+   measured standing cost + measurement B as U2 entry gate.
+
+Execution: Brokkr revision pass (spec files + kit.md design text) + Noah
+micro-beat (MetricTile.qml, kit_contrast_check.py). Measurement B queued as
+U2-entry requirement. Safety carve-outs untouched.
+Status: **ACTIVE** (delegated decisions, post-hoc logged).

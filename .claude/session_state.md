@@ -54,14 +54,33 @@ design round. Dispatched (see in-flight).
 
 ## 🔥 IN-FLIGHT BEATS (locks)
 
-- **baldr-lantern-attack** (baldr): accessibility attack on Lantern +
-  panel-scoped calm (worst-case motion vs WCAG 2.3.3, ring-on-composite
-  measurement, local-calm-as-cue). LOCKS:
-  `docs/design/qml_kit_forge/attack_baldr.md` only.
-- (landed this session on `ui-qml-migration`: `2a2cb38` forge ·
-  `bb44801` LANTERN ratification + panel-scoped auto-calm · `e875571`
-  Codex C12 · `2a5e67e` U0 probe · `4c5de40` frost spike · `9187d9b`
-  U0 gate green. Mamoru standup: ALL 7 CLAIMS VERIFIED, audit clean.)
+- **brokkr-lantern-revision** (Fable): ONE batched spec revision from
+  both attack reports + Adam's six delegated rulings (DECISIONS.md
+  2026-07-15 post-attack entry). LOCKS:
+  `docs/design/qml_kit_forge/candidate_lantern.md`, `00_comparison.md`,
+  `docs/design/iterations/glasshell-cockpit/round-03/kit.md` (§4.3, §8,
+  focus text — design text only, band/ink/hazard-opacity laws
+  untouched).
+- **noah-tile-fix** (ui-ux-dev): Baldr BLOCKER-1/2 code side —
+  MetricTile stale dim → ink-only; kit_contrast_check.py ring-vs-own-
+  fill extension. LOCKS: `TCT_app/gui/qml/MetricTile.qml`,
+  `TCT_app/scripts/kit_contrast_check.py` (+ their test files).
+- (landed this session: `2a2cb38` forge · `bb44801` ratification ·
+  `e875571` C12 · `2a5e67e` probe · `4c5de40` spike · `9187d9b` U0
+  green · `db5f0fe` Loki verdict · `b23bae8` design delegation.
+  Mamoru standup: ALL 7 CLAIMS VERIFIED.)
+
+## 🛡️ BALDR VERDICT on LANTERN (2026-07-15): fixable, no redesign
+
+Full audit `docs/design/qml_kit_forge/attack_baldr.md`. Material
+system / tier-invariance / chip law: SOUND. Findings → Adam's rulings
+1–5 in DECISIONS.md (run-active speed clamp ≤1.0×; stale=ink-only —
+MetricTile 0.6 dim is a MEASURED shipped AA failure, crit 2.59 dark /
+warn 2.52 light; ring-vs-own-fill check was MISSING, accent-on-accent
+1.00–1.37:1; hazard-rung focus = ring always, halo never; dead-zone law
+gains 'halo'). His panel-scope challenge (adjacent panels are watched
+during the same run) is on record verbatim for Kaya; clamp adopted as
+the narrowest fix, ships unless overruled.
 
 ## ⚔️ LOKI VERDICT on LANTERN (2026-07-15): REVISE — sound, 2 riders
 
