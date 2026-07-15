@@ -580,3 +580,35 @@ Scope notes, exactly as the spec stages them (§7):
 
 Status: **RATIFIED** (Kaya, explicit, this entry logged with his
 per-change approval).
+
+## 2026-07-15 — U1 CLOSED, U2 entry gate PAID: measurement-B thresholds ratified, merge-back authorized (Kaya: "go on everything")
+
+Kaya's remaining morning items, answered in one directive ("i ran the
+measurement B, you have my go on everything"):
+
+- **Q2 = YES:** U1 closes after wave 1. The U1.4 planner tail (36
+  reclaims, designed in u1_staging.md) becomes a later self-gated beat
+  that dispatches when AxisSpec (trunk-P2) is importable on the branch.
+- **Measurement B: PASS, all three assertions** — live operator run
+  2026-07-15, artifacts `artifacts_claude/measurement_b_20260715T102648Z/`
+  (6 panes, bake 12 Hz, live sim scan + HDF5 + 30 Hz island):
+  P1 island 30.24 Hz loaded vs 30.31 baseline (floor 28.0, retention
+  target 27.28) · P2 DAQ 5.374 Hz loaded vs 4.856 baseline, CV 0.084 vs
+  0.153 (ceiling 0.50) · P3 QML 60.03 fps (floor 55.0) · bake telemetry
+  181 observed vs ~180 commanded · CPU 93.7% of one core loaded vs
+  83.6% baseline (~10 pp tax; Loki's ~0.5-core fear did not
+  materialize at this load). **The kit-spec §7.1 PROPOSED thresholds
+  are hereby RATIFIED unchanged as the binding numbers** (island
+  28.0 Hz / 0.90× retention; DAQ 0.80× rate + CV ≤ max(1.5× baseline,
+  0.50); QML 55.0 fps). Consequence per u2_hero_plan §4 R4: the U2.1
+  calm-policy flag ships **panel-scoped** (the ratified refinement);
+  run-active global calm remains the encoded fallback, off.
+- **Merge-back of `ui-qml-migration` → `main` AUTHORIZED.** Execution
+  condition per test-lane policy: the bench full suite at branch HEAD
+  must return green first ([A-green] verified PASS across the whole
+  branch range cf6dd58..HEAD, 52 bucket-A files byte-unchanged).
+- **U2 execution OPEN** (all entry gates green: kit spec signed ·
+  measurement B passed · theme bridge landed+approved · plan on paper).
+  First dispatches: day-0 overlay micro-spike + U2.1 Surface core.
+
+Status: **RATIFIED** (Kaya, explicit).

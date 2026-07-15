@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| **Status** | **RATIFIED — signed by Kaya 2026-07-15** (DECISIONS entry "U1.5 kit spec v1 signed"); §7.1 measurement-B threshold NUMBERS still bind only after the live operator run |
+| **Status** | **RATIFIED — signed by Kaya 2026-07-15** (DECISIONS entry "U1.5 kit spec v1 signed"); §7.1 thresholds RATIFIED unchanged after the live measurement-B PASS same day (DECISIONS entry "U1 CLOSED, U2 entry gate PAID") — nothing in this spec remains open |
 | **Assembled by** | Brokkr, 2026-07-15 (U1.5 kit-spec consolidation beat — consolidation only, zero new design) |
 | **Supersedes as the working reference** | nothing is deleted — this document is the single *binding* surface over its sources; the sources remain the lineage record |
 | **Sources (ratified truth)** | `docs/design/qml_kit_forge/candidate_lantern.md` (post-revision, c11b580) · `docs/design/iterations/glasshell-cockpit/round-03/kit.md` (ratified kit contract, incl. amended §1.2) · `docs/DECISIONS.md` 2026-07-15 rulings 1–8 · `docs/CODEX_QUEUE.md` §C13 (Theme-bridge audit) · `docs/design/u1_staging.md` §6 · `artifacts_claude/lantern_frost_spike_20260714T233707Z/` (measurement A) · `TCT_app/scripts/spike_measurement_b.py` (measurement-B harness) |
@@ -393,6 +393,13 @@ read, even though only the QML engine renders them.
 ## 7. Open items Kaya explicitly decides at the gate
 
 ### 7.1 Measurement-B thresholds — ratify or tune (THE gate decision)
+
+> **DECIDED 2026-07-15 (DECISIONS entry "U1 CLOSED, U2 entry gate
+> PAID"): measurement B ran live and PASSED all three assertions
+> (artifacts `artifacts_claude/measurement_b_20260715T102648Z/`); the
+> PROPOSED thresholds below are RATIFIED unchanged as the binding
+> numbers. Panel-scoped calm ships; global calm stays the encoded
+> fallback. The table below is kept as the normative record.**
 
 Measurement B (acquisition headroom) is the **U2 entry gate**: idle-rate bake
 + living ground at `full`, running through a live *simulated* scan (sim

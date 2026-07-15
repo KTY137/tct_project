@@ -5,12 +5,17 @@ context. A fresh session reads this file and is as informed as the old one.
 Updated on every dispatch and every landing. Run `.claude/beat_status.ps1`
 before every commit; stage explicit paths; never `-am`.
 
-**Updated: 2026-07-15 midday — Kaya is AWAKE and has SIGNED the U1.5 kit
-spec (checklist ③ DONE, DECISIONS entry logged). Night queue complete
-(kiroku-final landed `101e914`, 156/156 files mapped A52/B28/C65/D11;
-branch == origin). OPEN Kaya items: ① measurement B live run · ② Q2
-yes/no · ④ merge-back. U2 execution stays gated on ① + ② + ④ (③ now
-green; theme-bridge green; U2 plan on paper at `81c56fe`).**
+**Updated: 2026-07-15 ~12:45 — ALL FOUR morning gates RESOLVED.
+① measurement B RAN LIVE and PASSED all 3 assertions
+(`artifacts_claude/measurement_b_20260715T102648Z/`; island 30.24 Hz,
+DAQ CV 0.084, QML 60.03 fps) — §7.1 thresholds RATIFIED unchanged;
+panel-scoped calm ships. ② Q2 = YES (U1 closed; planner tail =
+self-gated later beat on AxisSpec). ③ kit spec SIGNED (cf52d21).
+④ merge-back AUTHORIZED — executes on bench green: full suite RUNNING
+on sophonone at branch HEAD (background task; bundle @ cf52d21;
+later commits are docs-only). [A-green] PASS across cf6dd58..HEAD
+(52 files, 0 changed). U2 EXECUTION OPEN — Shiori brief-check in
+flight, then day-0 overlay micro-spike + U2.1 Surface core dispatch.**
 
 ## EPOCH: QML migration (U-track, docs/ROADMAP_MASTERPLAN.md Part II "UI")
 
@@ -269,10 +274,35 @@ non-conflicting parallelism dispatched:
 - ✅ MORNING REPORT delivered (Kaya awake midday 07-15).
 - 🏛️ **CHECKLIST ③ DONE: kit_spec_v1 SIGNED by Kaya** ("I approve the
   kit spec from the smith") — DECISIONS entry "U1.5 kit spec v1
-  signed" logged, spec Status line flipped to RATIFIED. §7.1 threshold
-  NUMBERS still bind only after the live measurement-B run (①).
-- **PUSHED:** origin @ 101e914 (== local before the ratification
-  commit).
+  signed" logged, spec Status line flipped to RATIFIED (cf52d21).
+- 🏛️ **①②④ RESOLVED same session** — DECISIONS entry "U1 CLOSED, U2
+  entry gate PAID": measurement B PASS (thresholds ratified unchanged,
+  panel-scoped calm ships), Q2=YES (U1 closed, planner tail self-gated
+  on AxisSpec), merge-back authorized-on-bench-green.
+
+## 🔥 IN-FLIGHT NOW (U2 day 0, 2026-07-15 ~13:00)
+
+- **bench full suite** @ bundle cf52d21 (sophonone, background task) —
+  THE merge-back gate. On green: Adam merges ui-qml-migration → main
+  (--no-ff) + pushes. Later branch commits are docs-only (this ledger,
+  DECISIONS, kit_spec §7.1 amendment) — declared, acceptable delta.
+- **noah-spike-overlay** (opus, background) — day-0 throwaway overlay
+  micro-spike per u2_hero_plan §U2.4 entry paragraph. LOCKS:
+  TCT_app/scripts/spikes/island_overlay_spike.py (new) + its
+  artifacts_claude/ dir. Floors 28 Hz / 55 fps; contention guard:
+  double pass, QUIET-RERUN-NEEDED flag if within 10% of a floor.
+- **noah-u21** (FABLE, background — judgment beat) — U2.1 Surface +
+  material core per u2_hero_plan §U2.1. LOCKS: TCT_app/gui/qml/kit/*
+  (new) · TCT_app/scripts/gen_shadow_assets.py (new) ·
+  TCT_app/tests/test_qml_kit_surface.py (new) ·
+  TCT_app/tests/test_no_inline_hex_gui.py (ADDITIVE ONLY, glob
+  extension to .qml). Calm policy: panel-scoped ships, global-calm
+  flag encoded off. Does NOT touch style.py/qml_theme.py/
+  app_settings.py. Shiori brief-check PASSED all 10 items pre-dispatch.
+- **After U2.1 lands:** immediate-ish Mary look is NOT required (not
+  safety-class) → thematic batch with U2.2+U2.3 per plan §gate line 6;
+  U2.2 (components, Noah sonnet) dispatches on U2.1's frozen API.
+- **PUSHED:** origin @ cf52d21 before this commit.
 
 ## 🌱 NIWASHI CREATED (Kaya-directed, 2026-07-15 night)
 
