@@ -5,3 +5,12 @@
 *.yml text eol=lf
 *.txt text eol=lf
 *.ps1 text eol=crlf
+# Binary types: this file's "* text=auto" is CLOSER than the root
+# .gitattributes and would shadow its "-text" — restate binaries here
+# so eol conversion can never touch them (LFS filter still comes from root).
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.ico -text
+*.h5 -text
+*.hdf5 -text
