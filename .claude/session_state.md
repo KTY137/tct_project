@@ -415,12 +415,29 @@ U-track) instead of being smuggled into beats.
   the measurement's exact path") landed `390a1a9`. Container teardown
   hazard documented (deterministic segfault in naive close order;
   disciplined order 7/7 clean).
-- **u24-architect** (FABLE, background) — island-hosting DECISION on
-  the full evidence. LOCK: docs/design/u2_island_hosting_decision.md
-  (new). Decision space: separate top-levels (B-proven 60 fps) vs m7
-  + bounded pacing spike vs load-shaping at representative load;
-  [Kaya] items (threshold re-rate / representative-load ratification)
-  isolated; Mary class = concurrency/lifecycle at landing.
+- ✅ **u24-architect DONE, decision landed `9d973b1`** —
+  docs/design/u2_island_hosting_decision.md: **ADOPT container face
+  (QQuickView+createWindowContainer); islands AND command strip =
+  WA_NativeWindow children** (m6's failure kills option-(a), the
+  interleaved-strips fallback AND floating-Abort-strip option A);
+  gate = U2.4a representative-load+pacing spike (cells A-D, floors
+  UNCHANGED, 1-day box, hard go/no-go) with fallback F = floating
+  islands (B-proven) PRE-MEASURED in the same matrix; unconditional
+  laws: teardown order (tested), natives-only-above-container,
+  host-owned surface policy, AA_DontCreateNativeWidgetSiblings.
+  **[KAYA] OPEN: K1 mechanism nod · K2 BLOCKING representative-load
+  ratification (spike may run before; verdict BINDS only after) ·
+  K3/K4 contingent · K5 sign-off additions.** ESCALATION: collapse
+  law reaches U6 shell scale — diagnostic cell G carried; masterplan
+  annotation queued behind K1. Doc chore queued: hero-plan/masterplan
+  option-(a) text edits AFTER K1, never before.
+- **noah-spike-mitigation RESUMED** — U2.4a cell family build (A-D,
+  F, G, E-levers) per decision doc §4. Same lock (spike file). Adam
+  runs windowed after noah-u23 lands.
+- **prometheus-qt-hosting** (background) — 3 research questions
+  (QQuickWidget sibling recomposition in Qt 6.10-6.12 / container
+  focus+teardown prior art / render-loop pacing levers) →
+  docs/research/qt_hosting_composition_2026-07.md.
 - **noah-u23** (FABLE — face = design moment, background) — U2.3
   ScanViewer.qml face + additive VM growth per plan §U2.3. Bindings:
   ActionBar = ONE strip frame (classed holes unused, U3+); face
