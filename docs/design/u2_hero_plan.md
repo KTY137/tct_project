@@ -47,6 +47,15 @@ being minimal.
 
 ## 1. The slice shape — option (a) mechanics, stated precisely
 
+> **⚠ SUPERSEDED IN PART (2026-07-15, K1 Kaya-ratified):** items 1–2
+> below (the QQuickWidget hosting mechanics incl. the
+> WindowContainer-rejection paragraph) are superseded by
+> `docs/design/u2_island_hosting_decision.md` §3 after measurement
+> refuted them (five spike matrices; DECISIONS "Island hosting:
+> container mechanism adopted"). Items 3+ (hole-and-frame contract,
+> FigureCard, dead-zone law) stand. Kept unedited below as the
+> decision lineage.
+
 The ratified architecture (masterplan Part II §UI, web-verified note) is
 **QWidget tree + QQuickWidget islands**, and its terms are load-bearing:
 
@@ -214,6 +223,13 @@ Shiori brief-check before every dispatch (paths free, named APIs real).
   the U1 fidelity proof repeated for the VM growth).
 
 ### U2.4 — Island embedding (hole-and-frame runtime)
+
+> **⚠ SUPERSEDED AS WRITTEN (2026-07-15, K1 Kaya-ratified):** this
+> beat is replaced by U2.4a (representative-load + pacing gate spike)
+> and U2.4b (IslandHost on the container mechanism) as designed in
+> `docs/design/u2_island_hosting_decision.md` §4. The entry
+> micro-spike below ran, failed, and spawned the mechanism matrix —
+> kept unedited as lineage.
 
 - **Owner/model:** Noah, **opus** (widget lifecycle/reparent/teardown class).
 - **Entry micro-spike (throwaway, half-day box, runs day 0 in parallel):**

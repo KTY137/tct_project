@@ -375,6 +375,14 @@ because it is safety-relevant (the gate must never appear under an island).
 
 ## 6. [Kaya] items — isolated, everything else in this doc is not his to carry
 
+> **STATUS 2026-07-15: [K1] RATIFIED · [K2] RATIFIED (gate ARMED) ·
+> [K5] additions accepted** — Kaya, same day, verbatim "I nod at
+> everything you do. Container sounds also like the most
+> robust/advanced one." (DECISIONS entry "Island hosting: container
+> mechanism adopted; K1 + K2 ratified".) [K3]/[K4] remain CONTINGENT
+> — not pre-triggered by the blanket nod; each returns to Kaya with
+> numbers if its trigger fires.
+
 - **[K1] Hosting-mechanism amendment nod.** The masterplan's revisit clause
   is exercised on its own stated terms (Qt 6.11.1 + bench spikes): option-(a)
   hosting mechanics amend from "QQuickWidget + raster siblings" to

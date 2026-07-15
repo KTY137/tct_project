@@ -633,3 +633,37 @@ lever's tuning, currently unconsumed. kit_spec §2.2 amended citing
 this entry (§8 mechanism). Kaya reviews rendered pixels at the U2
 sign-off and may overrule with the cost number on the table.
 Status: **ACTIVE** (delegated decision, post-hoc logged).
+
+## 2026-07-15 — Island hosting: container mechanism adopted; K1 + K2 ratified (Kaya)
+
+Context: option-(a) hosting mechanics (QQuickWidget + raster sibling
+islands) REFUTED by measurement (five committed spike matrices,
+2026-07-15; any raster sibling collapses the scene 60→~23 fps on the
+lab laptop). Architect decision `docs/design/u2_island_hosting_decision.md`
+(9d973b1): adopt **QQuickView + createWindowContainer face with islands
+AND the command strip as WA_NativeWindow children**, gated by the
+U2.4a representative-load + pacing spike against the UNCHANGED
+ratified floors; fallback (floating islands, measurement-B-proven)
+pre-measured in the same matrix.
+
+Kaya, verbatim: *"I nod at everything you do. Container sounds also
+like the most robust/advanced one."* Booked as:
+
+- **[K1] RATIFIED** — hosting-mechanism amendment. The masterplan's
+  own revisit clause ("Qt 6.10+ LTS with a bench spike") exercised on
+  its own terms (Qt 6.11.1, spikes committed). Safety sub-clauses
+  survive verbatim: no safety-critical control reimplemented in QML;
+  no live shader glass; islands stay pyqtgraph QWidgets (the strip
+  stays the same QWidget instances — hosting changed, never the
+  controls). Masterplan + hero-plan §1/U2.4 text annotated citing
+  this entry.
+- **[K2] RATIFIED (gate armed)** — the decision doc §4.1 cell family
+  A–D is THE representative gate load. Floors themselves unchanged
+  (island ≥ 28 Hz, scene ≥ 55 fps). The U2.4a spike verdict now BINDS
+  when it runs.
+- K3 (run-active bake clamp 12→6) and K4 (threshold re-rate) remain
+  CONTINGENT — not pre-triggered by the blanket nod; each returns to
+  Kaya with numbers if its trigger fires. K5's three windowed
+  sign-off additions are accepted into the §5 checklist.
+
+Status: **RATIFIED** (Kaya, explicit).

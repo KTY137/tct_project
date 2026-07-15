@@ -298,7 +298,16 @@ sub-clauses of that entry survive unchanged: no safety-critical control
 is ever reimplemented in QML; no live shader glass; islands stay.** (web-verified: Qt 6.7/6.8 WindowContainer hosts
 windows, not widget trees; airspace + QQuickWidget non-interop
 documented → the ratified QWidget-tree + QQuickWidget-chrome
-architecture stands; revisit only at Qt 6.10+ LTS with a bench spike):
+architecture stands; revisit only at Qt 6.10+ LTS with a bench spike)
+**⚠ REVISIT CLAUSE EXERCISED 2026-07-15 (K1, Kaya-ratified — DECISIONS
+"Island hosting: container mechanism adopted"): on Qt 6.11.1 with five
+committed spike matrices, QQuickWidget-with-raster-siblings is
+measured-refuted (60→~23 fps); hosting is now QQuickView +
+createWindowContainer with islands and the command strip as native
+children, per `docs/design/u2_island_hosting_decision.md`. The safety
+sub-clauses above survive verbatim. The same collapse law reaches U6's
+shell composition — U6 design must consume diagnostic cell G's numbers
+before committing shell mechanics.**:
 - U0 branch cut + RHI/GL pin probe on the bench GPU (S).
 - U1 **viewmodel-first test reclaim (C→B) BEFORE porting** (L):
   test_planner_panel (1.7k), test_scan_map_view + test_scan_viewer_panel
