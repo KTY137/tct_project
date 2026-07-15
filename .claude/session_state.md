@@ -388,11 +388,26 @@ U-track) instead of being smuggled into beats.
   280ms tween (spec §5.1 wins — correct reading); ActionBar 4 classed
   holes vs plan's ONE commandHole → U2.3 brief binds per plan (single
   re-hosted strip = ONE frame region; classed holes stay for U3+).
-- 🔬 **WINDOWED MITIGATION MATRIX RUNNING NOW** (Adam, quiet machine,
-  background task; ~8-10 min, --cells all ×2 passes). NOTHING
-  CPU-heavy dispatches until it returns. On verdict → decision table
-  (ledger above) → U2.3 dispatch + U2.4 disposition + Mary thematic
-  batch (U2.1+U2.2+U2.3 when face lands).
+- 🚨 **MATRIX VERDICT: ALL MITIGATIONS FAIL** (`a6ce24d`, quiet
+  machine, 2 passes × 9 cells). Control 60 fps @~22-27% both passes;
+  EVERY overlay cell ~18-28 fps @~66-80%. Mechanism findings: NOT
+  blit-area (m3 non-overlapping half-size sibling still fails), NOT
+  island-paced (m4 8 Hz still fails), NOT opacity flags, NOT render
+  loop. A raster sibling's mere presence forces per-QML-frame CPU
+  composition. Decision-table row fired: design-level pivot — BUT
+  two untested native-surface mechanisms remain, and Qt 6.11
+  ACTIVATES the masterplan's own "revisit WindowContainer at Qt
+  6.10+ with a bench spike" clause. → **noah-spike-mitigation
+  RESUMED: cells m6_native_island (WA_NativeWindow) +
+  m7_native_qml (QQuickView+createWindowContainer, island also
+  native per dead-zone law).** Adam runs windowed after landing.
+  Updated decision table: m6 passes ⇒ IslandHost native-island
+  variant, QQuickWidget stays · m7-only ⇒ container pivot (architect:
+  detach/redock + focus notes) · both fail ⇒ separate top-levels
+  A/B-style, full architect escalation.
+- **U2.3 dispatch HELD until the m6/m7 windowed run completes**
+  (~30-45 min; measurement integrity beats parallelism for one beat).
+  Mary thematic batch queues behind U2.3's face.
 - 👁️ **KAYA OPERATOR OBSERVATION #2 (aesthetic, booked):** "frost
   bake doesn't look that good relative to live glass — in the spike."
   Data context: bake exonerated on PERF (control cell 60 fps @23%);
