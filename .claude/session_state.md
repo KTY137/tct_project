@@ -167,12 +167,39 @@ non-conflicting parallelism dispatched:
   A49/B25/C39/D8 = 121** (4 C→B, 3 new D rows), manifest ~465/133,
   planner docstring trimmed, ARCHITECTURE.md indexed 3 new VMs + 4
   changelog lines. Committed below.
-- **noah-conftest** (background) — micro-beat, Mary's RISK fix: guard
-  _widget_reaper for bare-QCoreApplication sessions so VM suites pass
-  SOLO (U1 gate §7.4a letter). LOCK: TCT_app/tests/conftest.py only.
-- **reconciliation run** (background shell, quiet-machine):
-  test_qml_shell.py solo — hang triage for the theme-toggle island
-  test flagged by U1.2.
+- **noah-conftest** (background, RESUMED with widened task, same lock
+  TCT_app/tests/conftest.py) — phase 1 done: isinstance guard works,
+  4 VM suites solo green. UNCOVERED DEEPER DEFECT: file-local `_app()`
+  Core-pattern poisons the Qt singleton → later widget tests crash
+  natively exit 127 (previously masked by the reaper bug as accidental
+  circuit-breaker; alphabetical collection dodges it in full runs, NOT
+  guaranteed). **Adam ruling (to log): session-scoped autouse
+  QApplication fixture in conftest closes the whole class; staging-doc
+  §7.4a "bare QCoreApplication" letter to be amended by Adam.** Phase 2
+  in flight: implement + re-verify incl. previously-crashing order.
+- **brokkr-u15** (Fable, background) — U1.5 kit-spec CONSOLIDATION
+  (frozen programme, lean deliverable): one binding doc for Kaya's
+  morning [Kaya] gate from lantern+kit.md+rulings 1–8+C13 bridge
+  table+seam. LOCK: docs/design/qml_kit_forge/kit_spec_v1.md (new).
+  DECISIONS wins conflicts; no new design decisions.
+- QUEUED after conftest-fix + reconciliation land (test-lane serialized):
+  Theme-bridge beat (Noah; gui/qml_theme.py + style.py constants +
+  2 app_settings keys + retire QML guesses; C13 table = the spec),
+  then bench full suite (gate evidence incl. the conftest fix), then
+  U2 implementation plan on paper (Fable architect).
+- ⚠️ **reconciliation run DONE: HANG CONFIRMED REAL** (quiet machine,
+  solo): test_qml_shell.py:1028 theme-toggle island test hits the 60 s
+  timeout inside app.setStyleSheet(qss) (style.py:3760 via
+  tct_gui.py:1048), stack bottom pyqtgraph HistogramLUTWidget.sizeHint.
+  24/26 neighbors pass. NOT wave-1-caused per Mary (verify anyway).
+  Blocks TRUST in the bench full suite (it runs this file).
+  (Lesson: never pipe background pytest through tail — exit code was
+  tail's. Write to file, check pytest's own summary.)
+- **noah-hang** (Opus, background) — investigation beat: wedge vs
+  stall, regression archaeology (test age, style.py/tct_gui churn,
+  QSS growth), mechanism, minimal-fix proposal. NO edits unless
+  trivially safe; conftest.py explicitly off-limits (other beat).
+  Bench full suite WAITS for this verdict + conftest fix.
 - **PUSHED:** origin @ 8c19005 (all four wave-1 beats Mary-approved →
   review-then-push satisfied).
 
@@ -185,6 +212,27 @@ test-thermometer; never edits, instruction layer out of scope,
 SAFETY-CLASS proposals gated Mary+Kaya. Feeds the ruling-8
 distillation-balance gate. First dispatch: at this wave boundary,
 after Mamoru returns (avoid duplicate sweeps).
+
+## 🌱 NIWASHI SWEEP 1 DONE — 4 proposals, Adam's routing
+
+- Wave-1 area: CLEAN (no leftover scaffolding, no dead imports — the
+  extraction discipline held). Sequencer/DangerGate safety paths read,
+  zero SAFETY-CLASS proposals.
+- **P1 (synth, risk NONE, net ≈ −60 LOC): standing-law test pair →
+  shared helpers** (tests/_viewmodel_standing_law.py), keeps test
+  names, **backfills the ScopeViewModel coverage gap** (only VM
+  without the pair!). → EXECUTE OVERNIGHT (Noah beat) AFTER
+  noah-conftest lands (same suites involved).
+- **P2 (distill, LOW, 19 identical 2-line sites in 17 files):
+  resolve_theme_mode helper in style.py + the disclosed None-branch
+  unit test.** → Codex lane after C14 returns (mechanical, non-safety).
+- **P3 (distill, LOW, tiny): _zf_z_data/_zf_a_data shadow copies in
+  scan_viewer_panel → read VM directly** (3 test lines edited). →
+  morning list (batch with next scan-viewer touch).
+- **P4 (rot flag, audit-first): thread-teardown idiom ×21 across 14
+  panels; motor_panel documents an ordering-sensitive historical bug —
+  NOT batch-mergeable.** → morning list; per-panel, Noah-class, never
+  free-lane.
 
 ## 🎯 KAYA'S PARTING DIRECTIVE (verbatim intent, before sleep #2)
 

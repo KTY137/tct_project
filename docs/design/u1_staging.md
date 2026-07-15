@@ -521,9 +521,14 @@ Before merge-back to trunk (wave 1 complete; U1.4 handled per Q2):
 4. **Per-panel qml-offscreen smoke, U1 form** (no QML exists for these
    panels yet — the gate's letter is "the migrated panel boots under
    `TCT_SHELL=qml`"; U1's equivalent): (a) every new VM imports and
-   instantiates headless (`QT_QPA_PLATFORM=offscreen`, bare
-   `QCoreApplication`) — this is each VM suite's default-construction test,
-   named per panel; (b) the existing QML shell still boots offscreen
+   instantiates headless (`QT_QPA_PLATFORM=offscreen`) — this is each VM
+   suite's default-construction test, named per panel. *(Amended by Adam
+   ruling 9, 2026-07-15 night: originally "bare `QCoreApplication`" — a
+   file-local bare-Core `_app()` pattern was found to poison the
+   process-wide Qt singleton (later widget tests crash natively);
+   conftest now provides one session-scoped offscreen `QApplication` for
+   every run, and the no-widget boundary is proven by the standing-law
+   pair, not by the application class);* (b) the existing QML shell still boots offscreen
    (`test_qml_shell.py` green) proving the VM additions broke no context
    wiring; (c) each new VM suite carries the replicated standing-law pair
    (the gate's per-panel check item).

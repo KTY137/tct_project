@@ -531,3 +531,25 @@ rewrite = re-synthesis from memory (unspecified behavior is lost, which
 for a lab-control app is a safety cost, not an aesthetic one).
 Status: **ACTIVE** (delegated decision, post-hoc logged; principle also
 persisted in Adam's cross-session memory).
+
+## 2026-07-15 (night) — Ruling 9: session-scoped QApplication in conftest; §7.4a gate letter amended (Adam, under the delegated design authority)
+
+Source: Mary's wave-1 RISK finding (VM suites error solo in the
+_widget_reaper teardown) → Noah's micro-beat guard uncovered the deeper
+defect: the file-local bare-Core `_app()` pattern
+(`QCoreApplication.instance() or QCoreApplication([])`) permanently
+poisons the process-wide Qt singleton — any widget test running later in
+the same process crashes natively (exit 127, no Python exception). The
+old reaper bug had been masking this as an accidental circuit-breaker;
+alphabetical collection dodges it in full runs by luck, not by design.
+
+**Ruling:** tests/conftest.py gains a session-scoped autouse fixture
+creating ONE offscreen QApplication before any test; file-local `_app()`
+helpers then always find it via .instance() and the bare-Core hazard
+class is closed for all current and future suites, in one file. The U1
+gate letter (u1_staging.md §7.4a) is amended accordingly: VM suites
+prove headless-ness offscreen; the no-widget boundary is proven by the
+standing-law test pair, not by the application class. Implementation +
+verification: noah-conftest beat (incl. the previously-crashing
+VM-first mixed order, which must fully pass).
+Status: **ACTIVE** (delegated decision, post-hoc logged).
