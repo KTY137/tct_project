@@ -52,18 +52,72 @@ design round. Dispatched (see in-flight).
   distraction gate is no longer fully satisfied → attack-pass item #1;
   local calm is a redundant run cue, never the only indicator.
 
+## 🌙 OVERNIGHT MANDATE (Kaya, 2026-07-15 night — "koch mal die Nacht weiter")
+
+Kaya sleeps; Adam runs autonomous via /loop (dynamic, task-notification
+driven, ScheduleWakeup fallback ~25 min). Directive: maximum migration
+progress by morning. HARD LIMITS overnight: **no merge to main** (Q2
+unanswered — prepare full gate evidence, merge waits for Kaya) · **no
+windowed GUI runs** (measurement B live = Kaya) · safety rules and
+review cadence unchanged.
+
+**Overnight queue (work top-down as beats land):**
+1. Land wave 1 (U1.1/U1.2/U1.3 in flight) + immediate Mary on U1.3 +
+   thematic Mary batch (U1.1+U1.2), commit each after review.
+2. Wave boundary: Mamoru standup (claims-vs-git + locks) + Kiroku batch.
+   **Kiroku batch spec is Mary's verbatim counts_recompute_instruction
+   (her U1.0 review JSON, on file in this ledger's git history):**
+   manifest §Counts ~461→~465 (subset 129→133), row bucket cell C→B,
+   'Manifest files: 45' UNCHANGED, behavior split UNCHANGED; bucket_map
+   totals → A49/B22/C42/D5=118 (revert C bump, take B 21→22), move the
+   test_qt_danger_gate.py row C→B, fix stale A-header 47→49; do NOT
+   touch the §Counts bottom coverage line (own reconciliation beat,
+   with C14's table). Plus: trim test_planner_panel.py stale docstring
+   (Mary NIT), ARCHITECTURE.md changelog, research index.
+   ⚠ WAITS for abel-u13 to release SAFETY_NORMATIVE_TESTS.md.
+   **U1.0 REVIEW VERDICT (mary-u10 DONE): APPROVED_WITH_NITS; Q3
+   RATIFIED at 9; bucket ruled B.**
+3. U1 gate evidence: [A-green] + S2 targeted suites local + bench full
+   suite (`bench_run.ps1 -Branch ui-qml-migration`; ssh reachability
+   check first; if bench down, SAY SO in the ledger, never substitute).
+4. Theme-bridge beat (C13's 42 exposures → TOKEN_MAP + style.py
+   constants + 2 app_settings keys + retire QML hardcode guesses) —
+   Noah; token law is Adam-delegated, shadow ladder has Kaya's nod.
+5. U1.5 kit-spec consolidation (Brokkr, Fable): assemble the binding
+   QML component-kit spec from candidate_lantern + round-03/kit.md +
+   rulings 1–7 into ONE document staged for Kaya's [Kaya] gate.
+6. If queue empty: free-lane chores (Codex second-opinion on wave-1
+   diffs; NEVER idle), TECH_DEBT sweep via Mamoru.
+
+**Kaya wakes ~09:00 — a readable morning report (plain language, he
+asked for that register) must be the loop's standing deliverable, ready
+whenever the wake happens.**
+
+**Kaya's morning checklist (write into the morning report):**
+① measurement B (45 s, README in measurement_b_prep_20260715T004557Z)
+② Q2 yes/no (close U1 after wave 1, planner tail later — recommended)
+③ [Kaya] gate on the U1.5 kit spec (staged overnight)
+④ merge-back decision once ①–③ done. HONESTY LINE: U2+ entry is
+structurally gated on ① and ③ plus AxisSpec (trunk-P2) for U1.4 — "die
+Migration fertig bis morgen" is not reachable; the reachable maximum is
+U1 gate-ready + U2 unblocked-except-Kaya-items. Say this plainly.
+
 ## 🔥 IN-FLIGHT BEATS (locks) — FULL THROTTLE (Kaya directive, new session 2026-07-15)
 
 Restart happened at the planned boundary; fresh session picked up the
 handoff. Kaya: "run all agents in parallel full throttle" → maximum
 non-conflicting parallelism dispatched:
 
-- **noah-u10** (Noah, Opus, background) — U1.0 QtDangerGate carve-out
-  per u1_staging.md §4.1. LOCKS: tests/test_planner_panel.py ·
-  tests/test_qt_danger_gate.py (new) · docs/SAFETY_NORMATIVE_TESTS.md ·
-  docs/test_bucket_map.md. Safety-class ⇒ IMMEDIATE Mary review at
-  landing (Q3 count drift 9-vs-5 rides with her). Blocks U1.3
-  (manifest lock) — dispatch Abel when this lands.
+- **Codex C14** (free lane, enqueued 20260715T010507Z) — bucket-map
+  completeness re-enumeration (Mary RISK: 152 files on disk vs 118
+  mapped, 34-file pre-existing gap). Advisory table only; Kiroku
+  executes the map fix at the boundary with C14 as input.
+- **abel-u13** (Abel, Opus, background) — U1.3 sequencer VM/host split
+  per u1_staging.md §4.4+§5. LOCKS: gui/sequencer_viewmodel.py (new) ·
+  gui/sequencer_panel.py · tests/test_sequencer_viewmodel.py (new) ·
+  tests/test_sequencer_panel.py · docs/SAFETY_NORMATIVE_TESTS.md
+  (two-row host update only, builds on 8166752's version). 10 (c)-class
+  tests byte-untouched. Immediate Mary review at landing.
 - **jonathan-u11** (Jonathan, background) — U1.1 ScanMapViewModel per
   §4.2, 17 reclaims. LOCKS: gui/scan_map_viewmodel.py (new) ·
   gui/scan_map_view.py · tests/test_scan_map_viewmodel.py (new) ·
@@ -89,8 +143,17 @@ non-conflicting parallelism dispatched:
   ruling 7 convention pinned. **OPEN: Q2 to Kaya** (close U1/merge
   back after wave 1, planner tail self-gated later — recommended) ·
   Q3 to Mary at U1.0 review.
-- (U1.3 Abel: QUEUED, dispatches when U1.0 releases the
-  SAFETY_NORMATIVE_TESTS.md lock. U1.4 planner: HELD for AxisSpec.)
+- (U1.4 planner: HELD for AxisSpec on branch.)
+
+## ✅ U1.0 LANDED — commit `8166752` ([A-green] PASS re-run over it)
+
+- Pure move verified by implementer byte-compare (host diff 202 del /
+  0 ins; 9 signatures identical). New file 9 passed / host 58 passed
+  (output tails = verification). Judgment call flagged to Mary: 2 dead
+  single-symbol imports (DangerAction, QtDangerGate) removed from host.
+  Manifest Q4 row rehosted 5+4=9 with inline Q3 flag; aggregate Counts
+  section deliberately NOT recomputed (waits for Mary's Q3 ruling, then
+  Kiroku). Bucket-map: new row C-proposed, count 117→118.
 
 ## ✅ LANDED THIS SESSION (besides U1 staging design)
 

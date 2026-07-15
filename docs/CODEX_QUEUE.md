@@ -998,3 +998,30 @@ the source of truth.
   and read-only except for this queue handback.
 - Risk: `docs/design/qml_kit_forge/kit.md` is missing on this branch; the audit
   uses the referenced round-03 kit contract path instead.
+
+## C14 - Bucket-map completeness re-enumeration: 152 files on disk vs 118 mapped (advisory, read-only)
+
+**Status: QUEUED** - Effort: M - Source: Adam, 2026-07-15 night (Mary RISK
+finding at the U1.0 review: `docs/test_bucket_map.md` enumerates 118 test
+files while `git ls-tree` at `8166752` lists 152 `tests/test_*.py` — a
+34-file pre-existing gap; the Bucket-C preamble's "every remaining
+tests/test_*.py" completeness claim is false. The map must be trustworthy
+before U1 reclaim counts are cited at the stage gate.)
+
+Task (advisory — the crew executes the actual map update at the wave
+boundary, using your table as input):
+
+1. Enumerate every `TCT_app/tests/test_*.py` at current HEAD (subdirs too,
+   if any). Diff that list against the rows enumerated in
+   `docs/test_bucket_map.md`. Produce the exact missing-file list (expected
+   ~34) and flag any mapped row whose file no longer exists.
+2. For each missing file, PROPOSE a bucket (A/B/C/D) using the map's own
+   section criteria, with a one-line rationale each (imports/what it
+   constructs/what it asserts — cite file evidence, no guessing). Do not
+   propose reclassifying existing rows; note disagreements separately.
+3. Deliverable: markdown table (file → proposed bucket → rationale) + a
+   corrected totals line + a short note on how the gap arose (e.g. which
+   commits/waves added unmapped tests), appended below this brief.
+
+Read-only: do NOT modify test_bucket_map.md or any repo file other than
+appending here. Running pytest is not needed.
