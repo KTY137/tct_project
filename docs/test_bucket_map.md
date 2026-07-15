@@ -9,8 +9,9 @@
 
 The A/B/C/D classification is the ratified ground truth from the coupling
 analysis. Every file listed here was verified to exist in `TCT_app/tests/` on
-2026-07-13 (updated 2026-07-13 night) — **no drift, no missing files, nothing invented.** Counts:
-**A = 49, B = 21, C = 42, D = 5 (117 total test files).**
+2026-07-13 (updated 2026-07-13 night; `test_qt_danger_gate.py` added at U1.0,
+2026-07-15) — **no drift, no missing files, nothing invented.** Counts:
+**A = 49, B = 21, C = 43, D = 5 (118 total test files).**
 
 | Bucket | Meaning | Migration behavior | Gate |
 |---|---|---|---|
@@ -146,7 +147,7 @@ into `SAFETY_NORMATIVE_TESTS.md`).
 
 ---
 
-## Bucket C — QWIDGET-PINNED (42 files)
+## Bucket C — QWIDGET-PINNED (43 files)
 
 Enumerated from disk = every remaining `tests/test_*.py` not in A/B/D. Bound to
 the classic QWidget panels / theme engine / shell; U1 reclaims the high-value
@@ -196,6 +197,7 @@ third into viewmodel contract tests, the rest retire or port as panels migrate.
 | 40 | `test_bias_section_sim_channel_count.py` | bias settings widget sim-channel config |
 | 41 | `test_no_render_to_texture_children_in_gui.py` | RTT-widget child tree guard (AST + dynamic) |
 | 42 | `test_panel_glass_rollout.py` | glass Z-ladder role census + hazard-exclusion gates (builds real panels) |
+| 43 | `test_qt_danger_gate.py` | `QtDangerGate` confirm/deny/timeout/shutdown contract (carved out of `test_planner_panel.py` at U1.0; S2 manifest row). Proposed **C**; **or B if widget-light — Mary decides at U1.0 review** (it constructs no QWidget panel, only the `QtDangerGate` QObject + a worker thread, so a B reclassification is defensible). |
 
 ---
 
