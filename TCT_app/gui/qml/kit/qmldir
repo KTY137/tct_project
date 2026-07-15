@@ -10,3 +10,14 @@ singleton KitAssets 1.0 KitAssets.qml
 Surface 1.0 Surface.qml
 LivingGround 1.0 LivingGround.qml
 FocusRing 1.0 FocusRing.qml
+# U2.2 — the §3 component inventory (ScanViewer-consumed subset).
+PanelHeader 1.0 PanelHeader.qml
+StatusPill 1.0 StatusPill.qml
+Card 1.0 Card.qml
+MetricTile 1.0 MetricTile.qml
+MetricGrid 1.0 MetricGrid.qml
+CollapsibleCard 1.0 CollapsibleCard.qml
+ActionBar 1.0 ActionBar.qml
+EmptyState 1.0 EmptyState.qml
+FormRow 1.0 FormRow.qml
+FigureCard 1.0 FigureCard.qml

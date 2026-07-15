@@ -26,8 +26,21 @@
 // only the properties a given test sets) — which becomes QML `null`, not a
 // missing identifier. The guards keep both cases rendering a fallback instead
 // of throwing a null-dereference — a presentation fallback, not policy.
+//
+// U2.2 (kit_spec_v1.md §3 rework, feeding the U2.7 delete list): tiles now
+// bind to the kit's `Kit.MetricTile` (gui/qml/kit/MetricTile.qml) instead of
+// this directory's own pre-kit `MetricTile.qml` — same property surface and
+// internal objectNames (tileTitle/tileValue/tileUnit/tileCaption/
+// tileStaleMark/tileMeter/tileMeterFill), so nothing else in this file or in
+// tests/test_qml_scan_status.py needed to change. The pre-kit file is
+// SUPERSEDED, not deleted (U2.7 owns deletion) — a qualified import (`as
+// Kit`) is used rather than an unqualified `import "kit"` specifically so
+// the two same-named `MetricTile` types (this directory's implicit
+// same-directory visibility for the old file, and the kit's registered type)
+// never collide.
 import QtQuick
 import Tct
+import "kit" as Kit
 
 // A plain Row (not a Flow): tile widths are computed below as an explicit
 // fraction of the strip's own width (the "State 1.5fr / HV 1.1fr /
@@ -40,8 +53,9 @@ Row {
     objectName: "scanStatusStrip"
     spacing: Theme.spaceSm
 
-    // A run is in progress (running or paused); tiles dim (MetricTile's own
-    // `stale` opacity Behavior) when it is not.
+    // A run is in progress (running or paused); tiles go stale (MetricTile's
+    // own ink-only `stale` treatment, ruling 2 — never an opacity dim) when
+    // it is not.
     readonly property bool _active: !!(runState && runState.active)
 
     // -- flex-ratio tile widths (§5's "State 1.5fr / HV 1.1fr / Progress·ETA
@@ -74,7 +88,7 @@ Row {
     }
     readonly property bool _hvStale: !shell || shell.hvState === "neutral"
 
-    MetricTile {
+    Kit.MetricTile {
         objectName: "tileState"
         title: "State"
         value: runState ? runState.stateName : "--"
@@ -83,7 +97,7 @@ Row {
         width: root._unitWidth * root._stateUnits
     }
 
-    MetricTile {
+    Kit.MetricTile {
         objectName: "tileHv"
         title: "HV · measured"
         value: root._hvValue()
@@ -93,7 +107,7 @@ Row {
         width: root._unitWidth * root._hvUnits
     }
 
-    MetricTile {
+    Kit.MetricTile {
         objectName: "tileProgress"
         title: "Progress · ETA"
         value: runState ? (runState.done + "/" + runState.total + " · " + runState.etaText) : "--/-- · --"
@@ -103,7 +117,7 @@ Row {
         width: root._unitWidth * root._progressUnits
     }
 
-    MetricTile {
+    Kit.MetricTile {
         objectName: "tilePosition"
         title: "Position"
         value: runState ? runState.pointText : "--"
