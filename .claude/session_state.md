@@ -356,7 +356,19 @@ non-conflicting parallelism dispatched:
   subset; independent of island mechanics). LOCKS: gui/qml/kit/*.qml
   NEW component files only (U2.1 files FROZEN) ·
   gui/qml/ScanStatusStrip.qml · tests/test_qml_kit_components.py
-  (new) · tests/test_qml_scan_status.py (additive).
+  (new) · tests/test_qml_scan_status.py (additive). NOTE at review:
+  he also touched gui/qml/kit/qmldir (component registration —
+  natural necessity, not in the declared locks; ratify at landing).
+- ✅ **Ruling 10 landed `6b593f2`** (delegated design authority):
+  ONE shared frost bake at pane depth; §2.2 card row amended; blurCard
+  = reserved fill-alpha tuning lever; second bake refused (cost).
+  Kaya may overrule at the windowed sign-off.
+- **kiroku-u21** (background) — ARCHITECTURE.md entry for
+  gui/qml/kit/* + changelog. LOCK: docs/ARCHITECTURE.md.
+- **Codex C15** (free lane, enqueued 20260715T120953Z) — kit-QML
+  conformance second opinion vs kit_spec laws (advisory; feeds the
+  Mary batch). Bridge watcher was DEAD again (2140 s stale) —
+  restarted as background task this session.
 - ✅ **BENCH-GATE LFS RISK RESOLVED (Adam, harness infra):**
   bench_run.ps1 gained step [3b] — ships ONLY the LFS objects for
   files under TCT_app/ (32 KB, never the 1.9 GB store) as a tar
