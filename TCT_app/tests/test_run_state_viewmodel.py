@@ -23,6 +23,10 @@ from PySide6.QtCore import QCoreApplication
 from controller.scan_controller import ScanPoint, ScanResult
 from controller.state_machine import AppState
 from gui.run_state_viewmodel import RunStateViewModel
+from tests._viewmodel_standing_law import (
+    assert_no_command_surface,
+    assert_owns_no_timer_or_thread,
+)
 
 
 def _app() -> QCoreApplication:
@@ -140,19 +144,35 @@ def test_on_progress_zero_total_no_divzero():
 
 
 # --------------------------------------------------------------------------- #
-# 6. ETA is a stable placeholder this slice (Adam's ruling — NOT VM-derived)    #
+# 6. ETA is rate-derived (Adam's Q1 ruling, docs/design/u1_staging.md §4.3/§8, #
+#    2026-07-15 — supersedes the letter of the 2026-07-11 placeholder ruling,  #
+#    which this file's ``test_eta_text_stable_placeholder_not_derived`` used   #
+#    to pin; that test's premise is what the Q1 ack changes, so it is updated  #
+#    here rather than left red — see the U1.2 beat report for the deviation    #
+#    note.)                                                                    #
 # --------------------------------------------------------------------------- #
-def test_eta_text_stable_placeholder_not_derived():
-    """DEVIATION from design-doc test 6 (rate-derived ETA): per Adam's
-    2026-07-11 ruling the facade must NOT derive a competing estimate; ETA is
-    deferred and, when wired, sourced from controller/plan_estimate.py. So
-    etaText stays ``"--"`` across a start + progress cycle."""
+def test_eta_computed_with_injected_clock():
+    """Design-doc test 6 (``docs/design/run_state_facade.md`` §7), now the
+    canonical behavior: a fake clock makes the rate-derived ETA deterministic
+    — matches ``ScanViewerPanel``'s own former ``_compute_eta``/
+    ``_format_duration`` arithmetic 1:1 (ported, not re-derived)."""
     _app()
     clock = {"t": 100.0}
     vm = RunStateViewModel(clock=lambda: clock["t"])
     vm.on_scan_started()
-    clock["t"] = 110.0
-    vm.on_progress(4, 20)
+    clock["t"] = 110.0          # 10 s elapsed
+    vm.on_progress(4, 20)       # rate = 0.4/s, remaining = 16 -> 40 s
+    assert vm.etaText == "40 s"
+
+
+def test_eta_dashes_before_elapsed_time():
+    """``on_progress`` reported before ``on_scan_started`` (no t0 yet) must
+    degrade gracefully — mirrors the reclaimed
+    ``test_progress_before_any_elapsed_time_reports_eta_dashes`` scan-viewer
+    behavior, now provable directly against the one ETA derivation."""
+    _app()
+    vm = RunStateViewModel()
+    vm.on_progress(1, 4)
     assert vm.etaText == "--"
 
 
@@ -278,36 +298,13 @@ def test_read_only_no_command_surface():
     structural read/command boundary that encodes hardware safety rule 2."""
     _app()
     vm = RunStateViewModel()
-
-    # No start/pause/resume/stop/abort attribute of any kind.
-    for name in ("start", "pause", "resume", "stop", "abort"):
-        assert not hasattr(vm, name), (
-            f"run-state facade must expose no '{name}' — it is read-only"
-        )
-
-    # No reference to the run-control layer through which a command could reach.
-    for attr in ("_scanner", "_sm", "_coordinator", "_danger_gate", "_gate"):
-        assert not hasattr(vm, attr), (
-            f"run-state facade must hold no '{attr}' — the boundary is structural"
-        )
-
-    # Positive: nothing in its instance dict references a controller/state
-    # machine / coordinator / danger-gate object by any name.
-    forbidden_types = ("ScanController", "StateMachine", "ScanCoordinator", "DangerGate")
-    for key, val in vars(vm).items():
-        assert type(val).__name__ not in forbidden_types, (
-            f"attribute {key!r} holds a {type(val).__name__} — forbidden"
-        )
+    assert_no_command_surface(vm)
 
 
 # --------------------------------------------------------------------------- #
 # 15. Owns no timer / no thread (single-timer law)                              #
 # --------------------------------------------------------------------------- #
 def test_owns_no_timer_no_thread():
-    from PySide6.QtCore import QThread, QTimer
-
     _app()
     vm = RunStateViewModel()
-    assert vm.findChildren(QTimer) == []
-    assert vm.findChildren(QThread) == []
-    assert not hasattr(vm, "start")   # no start() → no self-driven poll loop
+    assert_owns_no_timer_or_thread(vm)

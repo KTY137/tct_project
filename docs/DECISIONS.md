@@ -352,3 +352,263 @@ Verbatim: *"ja drop die regel wir sind designer und designen geile Sachen"*
 
 Affects: `tests/test_glass_text_contract.py`, `docs/DECISIONS.md`, `artifacts_claude/semantic_ink_on_glass/`. (No QSS gate existed — the law lived only in the test; `gui/style.py` untouched.)
 Status: **RATIFIED** — glass ink law extended; enforced by the derived-floor test.
+
+## 2026-07-15 — LANTERN is the QML kit; the ground auto-calms during a run (Kaya)
+
+Verbatim: *"DO LANTERN"* · auto-calm amendment: *"you have my nod"* — the nod
+was followed by his question *"but what is auto calm?"*; the mechanism (idle =
+flow per off/subtle/full + speed; RUNNING = freeze to static wash; resume after)
+AND the one collision (if he wanted glass alive *during* runs, auto-calm is the
+opposite) were explained in full, and **"DO LANTERN" came after that
+explanation** — Lantern's spec contains auto-calm verbatim, so the pick is
+informed consent for both decisions.
+
+**Adopted: candidate LANTERN** (`docs/design/qml_kit_forge/candidate_lantern.md`)
+as the U1.5 QML component-kit direction — one `Surface` material (elevation rung
++ baked position-sampled frost + edge ladder + springs), the living ground as
+layer 0 and the frost source, living glass default **subtle**, deliberate
+classic-shell divergence during U1–U6 (classic = fallback, not design target —
+consistent with the owned-glass ratification of 2026-07-14).
+
+**kit.md §1.2 amended** (PROTECTED region, per-change approval given as above):
+"never animates during a run" → "auto-calms to static during a run", with the
+band law holding per frame (washes move position, never alpha — what makes
+living glass legal at all).
+
+**Scope refinement (Kaya, same session):** verbatim *"also auto calm should
+only then apply to that panel"* — the calm is **PANEL-SCOPED**: during a run,
+only the ground behind the panel that owns the run stills; the rest of the room
+keeps flowing. A detached panel is its own top-level with its own ground, so it
+calms whole. Two consequences, on the record: (1) the Baldr distraction gate is
+no longer fully satisfied by auto-calm — motion in the operator's periphery
+during a live run is back in scope, explicitly booked as attack-pass item #1;
+(2) a locally-calm pane now *signals* which panel is running — permitted as a
+redundant cue, but never the only run indicator (the status chip stays the
+carrier; state never by motion alone).
+
+**Conditions carried with the ratification** (Adam's recommendation, on which
+the pick was made — "the frost-bake spike is the entry ticket"):
+1. The **frost-bake spike runs BEFORE any U2 architecture commits to Lantern**:
+   N sampling panes + one pyqtgraph island at 30 Hz, re-bake 6–12 Hz, measured
+   on the weakest realistic GPU (the laptop iGPU), per the standing
+   spikes-are-routine rule. If the bake fails, Lantern collapses into
+   Twin-with-springs and the pick returns to Kaya with the numbers.
+2. The **Loki/Baldr attack pass** runs against Lantern WITH the spike numbers
+   in hand (queued after U0; attack surface pre-mapped in
+   `docs/design/qml_kit_forge/00_comparison.md` §3).
+3. **Twin's Theme-gap audit is prerequisite homework regardless of pick**
+   (real `gui/qml_theme.py` TOKEN_MAP gaps); **Ledger's LOCKED-safety-row idea
+   stays available for merge** — a merge is a decision, not a diff.
+
+What did NOT change: hazard surfaces opaque at every tier; the never-migrates
+list; the ink laws; the Baldr distraction gate (auto-calm IS its satisfaction).
+
+Affects: `docs/design/iterations/glasshell-cockpit/round-03/kit.md` §1.2,
+`docs/design/qml_kit_forge/`, the U1.5 deliverable, U2 reference implementation.
+Status: **RATIFIED**.
+
+## 2026-07-15 — Design authority delegated to Adam: token law + design changes (Kaya)
+
+Verbatim: *"u have all token law approvals to implement the best looking awesome
+design if you need to change stuff do it dont ask me again"*
+
+**Adopted (delegation, per the masterplan's delegable-gates mechanism):**
+token-law approvals — including NEW token families — and design-domain change
+decisions during the QML migration are delegated to **Adam**, with post-hoc
+logging in this file instead of pre-asking. The quality bar he set is explicit:
+*the best looking awesome design*.
+
+**Immediately exercised:** the Lantern shadow token family (`shadowInk`,
+`shadowA..D` → `shCard`/`shPane`/`shFloat`) is **APPROVED** for promotion into
+`gui/style.py` and the QML Theme bridge (resolves Loki MINOR-5, 2026-07-15).
+
+**Explicit carve-outs (NOT delegated — constitution unchanged):**
+1. Hardware safety rules 1–6 and every safety sub-clause of ratified entries
+   (hazard-surface opacity, danger topology, the never-migrates list) remain
+   PROTECTED and personal to Kaya — design authority is not safety authority.
+2. Reversing one of Kaya's own explicit design ratifications (e.g. dropping
+   LANTERN, un-ratifying panel-scoped calm) still goes back to him; the
+   delegation covers implementing and evolving the ratified direction, not
+   overturning it.
+3. Constitution-class gates from the masterplan (S0, S2, seed tag, M2
+   go/no-go, U-track supersede, U3 checkpoint) stay personal as listed.
+
+Affects: `docs/DECISIONS.md` process, U1.5/U2 design beats, `gui/style.py`
+token family growth, `gui/qml_theme.py` TOKEN_MAP.
+Status: **RATIFIED** (standing delegation).
+
+## 2026-07-15 — Post-attack-pass rulings (Adam, under the delegated design authority)
+
+Both attack passes on ratified LANTERN are in (`docs/design/qml_kit_forge/
+attack_loki.md`, `attack_baldr.md`). Rulings, logged post-hoc per the
+delegation above:
+
+1. **Run-active motion clamp (Baldr MAJOR-4 adopted):** whenever ANY run is
+   active, the living-glass effective speed clamps to ≤1.0× app-wide
+   (worst legal case was full × 2.0 = ~8% viewport / 45 s period in panels the
+   operator watches during the same acquisition). This BOUNDS the ratified
+   panel-scoped calm; it does not reverse it — the room still flows, calmer.
+   Baldr's verbatim challenge to the panel-scope assumption is ON RECORD in
+   attack_baldr.md for Kaya to read; the clamp is the narrowest fix and ships
+   unless he overrules.
+2. **Stale state is ink-only (Baldr BLOCKER-1):** the shipped
+   `MetricTile.qml` `opacity: 0.6` stale dim (measured AA failure: crit
+   5.02→2.59 dark, warn 5.43→2.52 light) is removed in favor of ink-based
+   staleness per Lantern §5; kit.md §4.3's Tile-dim permission is amended to
+   cap any opacity cascade over semantic ink at the measured legal ceiling.
+3. **Ring-vs-own-fill becomes a standing check (Baldr BLOCKER-2):**
+   `kit_contrast_check.py` gains the ring-on-component's-own-fill
+   measurement; the spec must state the ring offset convention explicitly.
+4. **Hazard-rung focus text (Baldr BLOCKER-3):** the ambiguity ("no halo" vs
+   "ring is the accessible channel") is resolved in favor of: RING ALWAYS
+   PRESENT on hazard rungs, halo never — focus visibility on the highest-
+   stakes controls is non-negotiable (this direction strengthens the safety
+   posture; the hazard-opacity law itself is untouched).
+5. **Dead-zone law names the halo (Baldr MAJOR-5):** the enumerated
+   translucent-pixel mechanisms extend from {sample, shadow} to {sample,
+   shadow, halo} — a strengthening of a protective law. *(Location
+   correction, caught by Brokkr in the revision pass: the enumeration lives
+   in candidate_lantern.md §8 and kit.md §7 law 4 — not "kit.md §8" as this
+   entry first said; implemented at both real locations.)*
+6. **Spec reconciliation (Loki BLOCKER-1/MAJOR-2):** candidate_lantern §3.2/§7
+   rewritten to the true post-ratification behavior — the bake runs at idle
+   rate during scans; only the run-owning pane freezes its own sampler
+   (mechanism (a), stale-crop seam named and handed to visual review);
+   "zero material cost during acquisition" claim retired, replaced by the
+   measured standing cost + measurement B as U2 entry gate.
+
+Execution: Brokkr revision pass (spec files + kit.md design text) + Noah
+micro-beat (MetricTile.qml, kit_contrast_check.py). Measurement B queued as
+U2-entry requirement. Safety carve-outs untouched.
+Status: **ACTIVE** (delegated decisions, post-hoc logged).
+
+## 2026-07-15 — Ruling 7: run-ownership convention for panel-scoped calm (Adam, under the delegated design authority)
+
+Source: Loki's routing note ("the facade must resolve WHICH panel owns the
+run"), investigated by Mary (review of 6452da3, item 2). Finding: the app is
+single-run by construction (one global StateMachine/ScanController/
+ScanCoordinator; the Sequencer drives that same coordinator), so the
+facade's single `active` flag suffices — the gap was definitional, not
+structural.
+
+**Ruling:** "the run-owning panel" for panel-scoped calm (kit.md §1.2) is
+defined as **the top-level currently hosting the ScanViewer/ScanStatusStrip,
+gated by `facade.active`** — explicitly NOT the arming panel (Planner or
+Sequencer). This definition survives Planner-close-mid-run and the detached
+ScanViewer (which calms whole, per Lantern). Sequencer-driven runs stay
+ScanViewer-scoped; if that ever changes, the extension seam is a read-only
+run-source/owner STRING on the facade, fed like runPath/scanType — never a
+controller reference (the read/command boundary is untouched).
+
+Consequences: (a) queued spec chore — candidate_lantern §7's "ownership
+resolves through run_state_facade only" overstates the facade and will be
+amended to name the ScanViewer-host convention (next spec pass); (b) the
+U1 staging design pins this convention in its run-ownership seam section
+(relayed to the architect in-flight); (c) under ruling 1's fallback
+(run-active GLOBAL calm) the question is moot — no ownership resolution
+needed.
+Status: **ACTIVE** (delegated decision, post-hoc logged).
+
+## 2026-07-15 (night) — Ruling 8: distillation balance as a U2+ stage-gate criterion (Adam, under the delegated design authority; Kaya-directed)
+
+Source: Kaya's migration-vs-rewrite deliberation (external Gemini second
+opinion raised "migration leaves too much legacy code"). Outcome of the
+discussion: **migration confirmed, rewrite rejected** — with Kaya's
+binding synthesis-routine directive (verbatim): *"behalte Destillation/
+Struktur-maxxing mit altcode minimizing + verification am ende im
+gedächnis das hört sich nach na guten Syntheseroutine an."*
+
+**Ruling:** the standing U-stage gate gains a distillation-balance
+criterion for U2 and later: every stage gate reports net LOC and an
+explicit delete list; a stage that only adds does not pass. Deliberately
+retained code (safety controls, GL islands, the never-migrates list) is
+ratified essence, never residue. U1 is exempt — viewmodel and old face
+legitimately coexist until the QML face replaces the QWidget face.
+Written into docs/ROADMAP_MASTERPLAN.md standing-gate bullet. Rationale
+on the record: migration = distillation (extract essence fraction by
+fraction with tests as the thermometer, forced deletion per stage);
+rewrite = re-synthesis from memory (unspecified behavior is lost, which
+for a lab-control app is a safety cost, not an aesthetic one).
+Status: **ACTIVE** (delegated decision, post-hoc logged; principle also
+persisted in Adam's cross-session memory).
+
+## 2026-07-15 (night) — Ruling 9: session-scoped QApplication in conftest; §7.4a gate letter amended (Adam, under the delegated design authority)
+
+Source: Mary's wave-1 RISK finding (VM suites error solo in the
+_widget_reaper teardown) → Noah's micro-beat guard uncovered the deeper
+defect: the file-local bare-Core `_app()` pattern
+(`QCoreApplication.instance() or QCoreApplication([])`) permanently
+poisons the process-wide Qt singleton — any widget test running later in
+the same process crashes natively (exit 127, no Python exception). The
+old reaper bug had been masking this as an accidental circuit-breaker;
+alphabetical collection dodges it in full runs by luck, not by design.
+
+**Ruling:** tests/conftest.py gains a session-scoped autouse fixture
+creating ONE offscreen QApplication before any test; file-local `_app()`
+helpers then always find it via .instance() and the bare-Core hazard
+class is closed for all current and future suites, in one file. The U1
+gate letter (u1_staging.md §7.4a) is amended accordingly: VM suites
+prove headless-ness offscreen; the no-widget boundary is proven by the
+standing-law test pair, not by the application class. Implementation +
+verification: noah-conftest beat (incl. the previously-crashing
+VM-first mixed order, which must fully pass).
+Status: **ACTIVE** (delegated decision, post-hoc logged).
+
+## 2026-07-15 — U1.5 kit spec v1 signed (Kaya): the [Kaya] gate on the QML component kit
+
+Kaya's morning checklist item ③: **"I approve the kit spec from the
+smith"** — `docs/design/qml_kit_forge/kit_spec_v1.md` (Brokkr
+consolidation, commit 1e35626) is **signed as the binding QML
+component-kit contract** for U2 and every later U-stage: §§1–6 (Surface
+material + rungs + state table, 15-component inventory, focus/contrast
+laws, motion + panel-scoped auto-calm incl. the ruling-7 ownership
+convention, 42-token bridge contract).
+
+Scope notes, exactly as the spec stages them (§7):
+
+- **§7.1 measurement-B thresholds are ratified in KIND, not in number.**
+  The harness's proposed floors (island 28 Hz, qml 55 fps, retention
+  0.90/0.80, jitter CV rule) bind only after the live operator run
+  prints real numbers and Kaya confirms/tunes them. Measurement B
+  remains the U2 **entry** gate; if it fails, the ratified fallback is
+  run-active GLOBAL calm, back to Kaya with the numbers.
+- §7.2 items stay as decided elsewhere: living-glass default = subtle
+  (Kaya may still overrule to off, delegation carve-out 2); shadow-token
+  family carried with Kaya's nod.
+- Change mechanism §8 active: amendments land here (DECISIONS) first,
+  then in the spec — never the reverse.
+
+Status: **RATIFIED** (Kaya, explicit, this entry logged with his
+per-change approval).
+
+## 2026-07-15 — U1 CLOSED, U2 entry gate PAID: measurement-B thresholds ratified, merge-back authorized (Kaya: "go on everything")
+
+Kaya's remaining morning items, answered in one directive ("i ran the
+measurement B, you have my go on everything"):
+
+- **Q2 = YES:** U1 closes after wave 1. The U1.4 planner tail (36
+  reclaims, designed in u1_staging.md) becomes a later self-gated beat
+  that dispatches when AxisSpec (trunk-P2) is importable on the branch.
+- **Measurement B: PASS, all three assertions** — live operator run
+  2026-07-15, artifacts `artifacts_claude/measurement_b_20260715T102648Z/`
+  (6 panes, bake 12 Hz, live sim scan + HDF5 + 30 Hz island):
+  P1 island 30.24 Hz loaded vs 30.31 baseline (floor 28.0, retention
+  target 27.28) · P2 DAQ 5.374 Hz loaded vs 4.856 baseline, CV 0.084 vs
+  0.153 (ceiling 0.50) · P3 QML 60.03 fps (floor 55.0) · bake telemetry
+  181 observed vs ~180 commanded · CPU 93.7% of one core loaded vs
+  83.6% baseline (~10 pp tax; Loki's ~0.5-core fear did not
+  materialize at this load). **The kit-spec §7.1 PROPOSED thresholds
+  are hereby RATIFIED unchanged as the binding numbers** (island
+  28.0 Hz / 0.90× retention; DAQ 0.80× rate + CV ≤ max(1.5× baseline,
+  0.50); QML 55.0 fps). Consequence per u2_hero_plan §4 R4: the U2.1
+  calm-policy flag ships **panel-scoped** (the ratified refinement);
+  run-active global calm remains the encoded fallback, off.
+- **Merge-back of `ui-qml-migration` → `main` AUTHORIZED.** Execution
+  condition per test-lane policy: the bench full suite at branch HEAD
+  must return green first ([A-green] verified PASS across the whole
+  branch range cf6dd58..HEAD, 52 bucket-A files byte-unchanged).
+- **U2 execution OPEN** (all entry gates green: kit spec signed ·
+  measurement B passed · theme bridge landed+approved · plan on paper).
+  First dispatches: day-0 overlay micro-spike + U2.1 Surface core.
+
+Status: **RATIFIED** (Kaya, explicit).

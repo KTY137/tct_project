@@ -62,7 +62,9 @@ Item {
         Rectangle {
             Layout.fillWidth: true
             implicitHeight: 48
-            radius: Theme.radiusMd
+            // Shelf outer radius (kit_spec_v1.md Appendix A.1) — was a
+            // generic radiusMd guess on this chrome command-strip shelf.
+            radius: Theme.radiusShelf
             color: Theme.chrome
             border.width: 1
             border.color: Theme.hairline
@@ -76,8 +78,11 @@ Item {
                 Text {
                     text: "TCT"
                     color: Theme.text
-                    font.pixelSize: Theme.fontLg
-                    font.bold: true
+                    // Panel-title role (kit_spec_v1.md Appendix A.2): was a
+                    // generic fontLg/font.bold guess (fontLg and
+                    // fontPanelTitle are both 18px — no size delta here).
+                    font.pixelSize: Theme.fontPanelTitle
+                    font.weight: Theme.weightPanelTitle
                     font.letterSpacing: 1.5
                 }
                 Text {
@@ -273,7 +278,9 @@ Item {
                 Rectangle {
                     Layout.fillWidth: true
                     implicitHeight: 38
-                    radius: Theme.radiusMd
+                    // Shelf outer radius (kit_spec_v1.md Appendix A.1) — was
+                    // a generic radiusMd guess on this pill-tab shelf.
+                    radius: Theme.radiusShelf
                     color: Theme.panel2
                     border.width: 1
                     border.color: Theme.hairline
@@ -368,10 +375,18 @@ Item {
                     Rectangle {
                         anchors.fill: parent
                         visible: !skeleton.islandAttached
-                        radius: Theme.radiusMd
+                        // Card radius (kit_spec_v1.md Appendix A.1) — this
+                        // frame plays the FigureCard "Card frame around the
+                        // reserved island hole" role (§3); was a generic
+                        // radiusMd guess.
+                        radius: Theme.radiusXl
                         color: Theme.well
                         border.width: 1
-                        border.color: Theme.crit
+                        // A failed island attach is a device/system hard
+                        // error, not an HV/abort danger state — Appendix
+                        // A.1's `error` token (was a Theme.crit misuse; red
+                        // stays reserved for HV/abort).
+                        border.color: Theme.error
 
                         Text {
                             anchors.centerIn: parent
@@ -379,8 +394,11 @@ Item {
                             horizontalAlignment: Text.AlignHCenter
                             wrapMode: Text.WordWrap
                             text: "ISLAND DID NOT ATTACH\n\n" + skeleton.islandNote
-                            color: Theme.crit
-                            font.pixelSize: Theme.fontMd
+                            color: Theme.error
+                            // Body-prose role (kit_spec_v1.md Appendix A.2):
+                            // fontMd and fontBody are both 13px — no size
+                            // delta here.
+                            font.pixelSize: Theme.fontBody
                         }
                     }
                 }

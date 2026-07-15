@@ -347,7 +347,16 @@ architecture stands; revisit only at Qt 6.10+ LTS with a bench spike):
   exercised BEFORE U6): the migrated panel boots under TCT_SHELL=qml
   offscreen AND its viewmodel-contract suite runs green under qml — a
   named per-panel smoke; a flagged panel that is green-on-classic but
-  dead-under-qml can never merge.** Continue/pause checkpoint with Kaya
+  dead-under-qml can never merge.** **+ distillation balance (Adam
+  ruling 8 under the delegated design authority; Kaya's
+  synthesis-routine directive 2026-07-15 night: "Destillation/
+  Struktur-maxxing mit Altcode-minimizing + Verification am Ende"):
+  every U2+ stage gate reports its net LOC and an explicit delete list
+  — a stage that only adds does not pass. Deliberately retained code
+  (safety controls, GL islands, the never-migrates list) is ratified
+  essence, never counted as residue. U1 is exempt (VM + old face
+  legitimately coexist until the face is replaced).** Continue/pause
+  checkpoint with Kaya
   after U3; U4/U5 are explicitly DESCOPE-ABLE post-seed (the seed needs
   only U0–U2; the two-shell window bound is credible precisely because
   of this).

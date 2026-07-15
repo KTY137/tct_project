@@ -31,10 +31,16 @@ No hardware I/O in the constructor; thread-free (only consumes signals a
 caller feeds into its slots — see ``docs/research/scan_viewer_design_review.md``
 R3). Slot/signal names deliberately mirror ``gui/scan_coordinator.py`` so S2c
 wiring is a straight ``connect()`` pass, not a rewrite.
+
+**Delegates to** :class:`~gui.scan_viewer_viewmodel.ScanViewerViewModel`
+(U1.2, ``docs/design/u1_staging.md`` §4.3): every ``on_*``/``set_*`` slot
+forwards into a panel-owned ``self._vm`` and reads tile text/staleness and
+run-state (progress/ETA/elapsed/active — via ``self._vm.run``) back from it
+— no duplicated derivation. Command signals (Pause/Abort/Z-focus/Apply-best-
+Z/Open-in-Analysis) stay emitted directly by this panel; the view-model only
+ever reads.
 """
 from __future__ import annotations
-
-import time
 
 import pyqtgraph as pg
 from PySide6.QtCore import Qt, Signal
@@ -49,6 +55,7 @@ from gui.panel_kit import (
 )
 from gui.motion import flash_readout
 from gui.scan_map_view import ScanMapView
+from gui.scan_viewer_viewmodel import ScanViewerViewModel
 from gui.status_widgets import StatusChip, set_button_icon
 from gui.style import (
     FONT_BODY_PX, PLOT_OVERLAY, SPACE_SM, WEIGHT_BODY, axis_color, palette,
@@ -100,6 +107,12 @@ class ScanViewerPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._theme_mode = "light"
+        # Viewer-local + composed run-state VM (docs/design/u1_staging.md
+        # §4.3) — panel-constructed per U1's VM lifetime rule. Feeds are
+        # forwarded into it below; texts/enabled-states are read back from
+        # it. Never holds a controller/state-machine reference (see
+        # gui/scan_viewer_viewmodel.py).
+        self._vm = ScanViewerViewModel()
         self._run_active = False
         self._abort_pending = False
         # A fault (compliance trip, slow-control ALARM, driver error) reached the
@@ -109,7 +122,6 @@ class ScanViewerPanel(QWidget):
         self._fault_pending = False
         self._fault_reason: str = ""
         self._last_run_path: str | None = None
-        self._start_time: float | None = None
         self._zf_z_data: list[float] = []
         self._zf_a_data: list[float] = []
         self._last_best_z: float | None = None
@@ -336,7 +348,7 @@ class ScanViewerPanel(QWidget):
         # that never publishes a fresh path (e.g. aborted before the writer
         # opened) would re-offer the *prior* run's file on finish.
         self._last_run_path = None
-        self._start_time = time.monotonic()
+        self._vm.on_scan_started()
         self._map_view.clear()
         # Law 8 — never paint a run type as something it isn't.  This slot arms
         # the cockpit for EVERY run type (raster/plan, z-focus, voltage scan),
@@ -356,20 +368,21 @@ class ScanViewerPanel(QWidget):
         self._chip_run.set_status("Running", "busy")
         # Law 8 — "0/0" is not yet a measurement: no run has reported progress
         # at this instant, so the tile is stale-captioned until the first
-        # on_progress lands (exactly like the ETA tile next to it).  Painting it
-        # crisp-fresh made a run with no progress yet look like a live 0-of-0.
+        # on_progress lands (exactly like the ETA tile next to it). Staleness
+        # and text read from the VM — no duplicated derivation.
         self._metric_progress.set_value("0/0")
-        self._metric_progress.set_stale(True, "waiting for progress")
+        self._metric_progress.set_stale(self._vm.progressStale, "waiting for progress")
         self._metric_eta.set_value("--")
-        self._metric_eta.set_stale(True, "waiting for progress")
-        self._metric_point.set_value("x=-- y=-- z=--")
-        self._metric_point.set_stale(True, "no point yet")
-        self._metric_elapsed.set_value("0 s")
+        self._metric_eta.set_stale(self._vm.etaStale, "waiting for progress")
+        self._metric_point.set_value(self._vm.currentPositionText)
+        self._metric_point.set_stale(self._vm.pointStale, "no point yet")
+        self._metric_elapsed.set_value(self._vm.run.elapsedText)
         self._metric_elapsed.set_stale(False, "")
 
     def on_scan_finished(self) -> None:
         self._map_view.flush_pending()
         self._run_active = False
+        self._vm.on_scan_finished()
         self._btn_pause.setEnabled(False)
         self._btn_pause.setChecked(False)
         self._btn_abort.setEnabled(False)
@@ -379,8 +392,7 @@ class ScanViewerPanel(QWidget):
         # silently. Values stay readable (final numbers), ink goes stale.
         for tile in self._metrics.tiles():
             tile.set_stale(True, "final — run ended")
-        if self._last_run_path:
-            self._btn_open_analysis.setEnabled(True)
+        self._btn_open_analysis.setEnabled(self._vm.openInAnalysisEligible)
 
     def on_scan_error(self, title: str, msg: str) -> None:
         """A fault ended this run — repaint the terminal state honestly.
@@ -394,6 +406,7 @@ class ScanViewerPanel(QWidget):
         operator as a clean green "Scan finished".
         """
         self._map_view.flush_pending()
+        self._vm.on_error(title, msg)
         self._fault_pending = True
         self._fault_reason = (msg or title or "").strip()
         # A fault always ends the run; if the finish has not arrived yet the
@@ -437,55 +450,60 @@ class ScanViewerPanel(QWidget):
 
     def on_point_done(self, result: ScanResult) -> None:
         self._map_view.update_point(result)
-        p = result.point
-        self._metric_point.set_value(f"x={p.x_mm:.3f} y={p.y_mm:.3f} z={p.z_mm:.3f}")
-        if self._run_active:
+        self._vm.on_point_done(result)
+        self._metric_point.set_value(self._vm.currentPositionText)
+        if not self._vm.pointStale:
             self._metric_point.set_stale(False, "")
 
     def on_progress(self, done: int, total: int) -> None:
+        self._vm.on_progress(done, total)
         self._metric_progress.set_value(f"{done}/{total}")
         # First real progress of the run — the tile now carries a measurement
         # (every run type reports progress: raster/plan, voltage sweep, z-focus).
-        if self._run_active:
+        if not self._vm.progressStale:
             self._metric_progress.set_stale(False, "")
-        eta = self._compute_eta(done, total)
+        eta = self._vm.run.etaText
         self._metric_eta.set_value(eta)
-        if eta != "--":
+        if not self._vm.etaStale:
             self._metric_eta.set_stale(False, "")
-        self._metric_elapsed.set_value(self._format_duration(self._elapsed_s()))
+        self._metric_elapsed.set_value(self._vm.run.elapsedText)
         flash_readout(self._metric_progress, "accent", timeout_ms=450)
 
     def on_manual_pause(self, msg: str) -> None:
-        self._chip_run.set_status(f"Manual pause: {msg}"[:60], "warn")
+        self._vm.on_manual_pause(msg)
+        self._chip_run.set_status(f"Manual pause: {self._vm.manualPauseMessage}"[:60], "warn")
 
     def set_current_position(self, x_mm: float, y_mm: float, z_mm: float) -> None:
-        self._metric_point.set_value(f"x={x_mm:.3f} y={y_mm:.3f} z={z_mm:.3f}")
-        if self._run_active:
+        self._vm.set_current_position(x_mm, y_mm, z_mm)
+        self._metric_point.set_value(self._vm.currentPositionText)
+        if not self._vm.pointStale:
             self._metric_point.set_stale(False, "")
 
     def set_last_run_path(self, path: str | None) -> None:
         """Learn the just-written run's HDF5 path (see class docstring)."""
         self._last_run_path = path
-        if not self._run_active:
-            self._btn_open_analysis.setEnabled(bool(path))
+        self._vm.set_last_run_path(path)
+        self._btn_open_analysis.setEnabled(self._vm.openInAnalysisEligible)
 
     # ------------------------------------------------------------------ #
     # Slots IN — Z-focus                                                  #
     # ------------------------------------------------------------------ #
 
     def on_z_focus_pt(self, z_mm: float, amplitude_V: float) -> None:
-        self._zf_z_data.append(z_mm)
-        self._zf_a_data.append(amplitude_V)
+        self._vm.on_z_focus_pt(z_mm, amplitude_V)
+        self._zf_z_data = list(self._vm.zFocusZ)
+        self._zf_a_data = list(self._vm.zFocusA)
         self._zf_curve.setData(self._zf_z_data, self._zf_a_data)
 
     def on_z_focus_done(self, best_z_mm: float) -> None:
         mode = self._zf_mode.currentData()
+        self._vm.on_z_focus_done(best_z_mm, mode)
         mode_label = "edge scan" if mode == "edge_scan" else "amplitude"
         self._lbl_best_z.setText(f"Best Z: {best_z_mm:.3f} mm  ({mode_label})")
-        # Header chip: the collapsed card's live summary (§7 "header chip").
+        # Header chip: the collapsed card's live summary (§7 "header chip") —
+        # text read from the VM (single derivation, gui/scan_viewer_viewmodel.py).
         self._chip_best_z.set_status(
-            f"Best Z {best_z_mm:.3f} mm", "neutral",
-            f"from {mode_label} — Apply to Planner stages it, never moves the motor")
+            self._vm.bestZSummaryText, "neutral", self._vm.bestZDetailText)
         self._zf_marker.setValue(best_z_mm)
         self._zf_marker.setVisible(True)
         self._last_best_z = float(best_z_mm)
@@ -509,33 +527,10 @@ class ScanViewerPanel(QWidget):
         self._chip_run.set_status("Aborting", "warn")
         self.abort_requested.emit()
 
-    def _elapsed_s(self) -> float:
-        if self._start_time is None:
-            return 0.0
-        return time.monotonic() - self._start_time
-
-    def _compute_eta(self, done: int, total: int) -> str:
-        if done <= 0 or total <= 0:
-            return "--"
-        elapsed = self._elapsed_s()
-        if elapsed <= 0:
-            return "--"
-        rate = done / elapsed
-        if rate <= 0:
-            return "--"
-        remaining = max(0, total - done)
-        return self._format_duration(remaining / rate)
-
-    @staticmethod
-    def _format_duration(seconds: float | None) -> str:
-        if seconds is None:
-            return "--"
-        seconds = max(0.0, float(seconds))
-        if seconds < 60:
-            return f"{seconds:.0f} s"
-        if seconds < 3600:
-            return f"{seconds / 60:.1f} min"
-        return f"{seconds / 3600:.1f} h"
+    # ETA/elapsed arithmetic (formerly _compute_eta/_format_duration here)
+    # moved into gui/run_state_viewmodel.py (Adam's Q1 ruling,
+    # docs/design/u1_staging.md §4.3/§8) — read via self._vm.run.etaText /
+    # self._vm.run.elapsedText above. Exactly ONE derivation now exists.
 
     # ------------------------------------------------------------------ #
     # Internal — Z-focus                                                  #
@@ -554,8 +549,9 @@ class ScanViewerPanel(QWidget):
             self._zf_figure.plot.setLabel("left", "Amplitude", units="V")
 
     def _emit_z_focus(self) -> None:
-        self._zf_z_data = []
-        self._zf_a_data = []
+        self._vm.reset_z_focus_curve()
+        self._zf_z_data = list(self._vm.zFocusZ)
+        self._zf_a_data = list(self._vm.zFocusA)
         self._zf_curve.setData([], [])
         self._zf_marker.setVisible(False)
         self._lbl_best_z.setText("Best Z: --")

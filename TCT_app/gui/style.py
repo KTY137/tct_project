@@ -570,6 +570,67 @@ _LIGHT_SHELF = _blend(_LIGHT_PANEL_V6, "#E6EBF3", _KIT_SHELF_BLEND_LIGHT)
 GLASS_CARD_ALPHA_DARK = 0.62
 GLASS_CARD_ALPHA_LIGHT = 0.86
 
+# ---------------------------------------------------------------------------
+# LANTERN kit-bridge constants (docs/design/qml_kit_forge/kit_spec_v1.md §6 +
+# Appendix A; U2-entry Theme-bridge beat, docs/CODEX_QUEUE.md §C13). Every
+# value below is a named spec number with no QWidget consumer of its own yet
+# — they exist so ``gui/qml_theme.py`` can bridge them to QML as ``Theme.*``
+# BEFORE the first ``Surface`` lands (§6: "otherwise Lantern's first Surface
+# becomes the source of truth instead of a renderer of it"). Additive only;
+# nothing below is read by any QWidget/QSS path today. ``shadow_ink`` (the
+# fifth shadow-ladder token) lives in the LIGHT/DARK dicts instead of here —
+# see the assignment just after the ``plot_*`` loop below, which is where it
+# needs the theme's own live "text" hue.
+# ---------------------------------------------------------------------------
+
+# Shadow ladder (APPROVED for promotion, kit_spec_v1.md §2.5/A.4): one ink per
+# theme (see LIGHT["shadow_ink"]/DARK["shadow_ink"] below) + four alpha
+# steps, assembled in QML as shCard/shPane/shFloat (pre-rendered 9-patch
+# BorderImages — no live drop-shadow effect anywhere).
+SHADOW_A_DARK, SHADOW_A_LIGHT = 0.20, 0.06     # contact shadow / shCard base
+SHADOW_B_DARK, SHADOW_B_LIGHT = 0.24, 0.08     # shCard lift
+SHADOW_C_DARK, SHADOW_C_LIGHT = 0.30, 0.10     # shPane lift
+SHADOW_D_DARK, SHADOW_D_LIGHT = 0.55, 0.22     # shFloat (overlay/drag/modal)
+
+# Frost bake (kit_spec_v1.md §2.4/A.5): one ShaderEffectSource + one blur
+# pass on the living ground; every Shelf/Card samples it at its own rect.
+# Re-bake cadence is state-driven (0 Hz static ground, 6 Hz `subtle`, 12 Hz
+# `full`) — held by measurement A, 2026-07-15
+# (artifacts_claude/lantern_frost_spike_20260714T233707Z/).
+BLUR_PANE_PX = 40          # Shelf frost sampler blur radius
+BLUR_CARD_PX = 16          # Card frost sampler blur radius
+BLUR_OVERLAY_PX = 28       # transient overlay/modal frost blur radius
+FROST_REBAKE_HZ_SUBTLE = 6
+FROST_REBAKE_HZ_FULL = 12
+
+# Focus ring + halo (kit_spec_v1.md §4.1/A.5, ruling 3): the ring itself is
+# drawn `focusRingOffsetPx` OUTSIDE the fill boundary — accent-ring-on-
+# accent-fill is a non-case by construction (matches the shipped QSS
+# `outline-offset` precedent). The halo is decorative garnish only (never
+# appears on hazard rungs, ruling 4, §4.3) — the ring alone is the
+# accessible channel.
+FOCUS_HALO_ALPHA_DARK = 0.35
+FOCUS_HALO_ALPHA_LIGHT = 0.25
+FOCUS_RING_OFFSET_PX = 2
+
+# Living ground flow period (kit_spec_v1.md §5.3): `full` amplitude moves the
+# wash offsets ~8% of the viewport over this period; `subtle` = half
+# amplitude, half speed. Effective period = groundFlowPeriodS / speed (speed
+# persisted in [0.25, 2.0]x, further clamped to <=1.0x app-wide whenever any
+# run is active — a controller-owned runtime clamp, not a style.py concern).
+GROUND_FLOW_PERIOD_S = 90
+
+# Motion scale (kit_spec_v1.md §5.1): springs are interaction identity.
+# `motionState` needs no new constant here — it IS TRANSITION_MS, already
+# bridged (see gui/qml_theme.py's ``transitionMs`` property).
+MOTION_TAP_MS = 120        # hover/press
+MOTION_UNFOLD_MS = 280     # structural reveals (CollapsibleCard unfold, OutQuint)
+# SegmentedControl thumb / CollapsibleCard unfold / StatusPill width / drawer
+# entrance all share ONE spring identity — bridged as a single QVariant
+# property (spring + damping together), matching kit_spec_v1.md Appendix
+# A.3's count of ONE exposure for `motionSpringUi`, not two.
+MOTION_SPRING_UI = {"spring": 3.0, "damping": 0.32}
+
 LIGHT = {
     "accent": ACCENT_LIGHT, "accent_strong": ACCENT_LIGHT_STRONG,
     "amber": AMBER_LIGHT,
@@ -2132,6 +2193,16 @@ for _p in (LIGHT, DARK):
     _p["plot_overlay"] = PLOT_OVERLAY
     _p["plot_accent"] = PLOT_ACCENT
 del _p
+
+# Shadow-ladder ink (kit_spec_v1.md §2.5/A.4): dark #000000 / light = the
+# theme's own text hue (a light shadow needs a coloured, not black, ink to
+# read against a pale ground). Lives in the LIGHT/DARK dicts (not a flat
+# module constant like SHADOW_A..D above) so it is captured into
+# _BASE_LIGHT/_BASE_DARK below and carried through _recompute_palettes'
+# ``merged = dict(base)`` unchanged — no formula depends on it, so it never
+# needs re-deriving on an override/glass-amount change.
+LIGHT["shadow_ink"] = LIGHT["text"]
+DARK["shadow_ink"] = "#000000"
 
 
 # ---------------------------------------------------------------------------

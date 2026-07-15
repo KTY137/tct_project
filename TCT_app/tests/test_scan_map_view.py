@@ -55,53 +55,9 @@ def test_construct_headless_no_hardware():
     assert view.grid_result() is None
 
 
-def test_quantities_list_matches_scan_result_fields():
-    for qty in QUANTITIES:
-        assert hasattr(ScanResult, "__dataclass_fields__")
-        assert qty in ScanResult.__dataclass_fields__
-
-
 # --------------------------------------------------------------------------- #
 # update_point (live streaming)                                               #
 # --------------------------------------------------------------------------- #
-
-def test_update_point_streams_and_builds_grid():
-    _app()
-    view = ScanMapView()
-    for (x, y) in [(0.0, 0.0), (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)]:
-        view.update_point(_result(x, y, charge=x + y + 1.0))
-
-    assert view.point_count() == 4
-    result = view.grid_result()
-    assert result is not None
-    assert result.grid.shape == (2, 2)
-    assert result.n_missing == 0
-    assert np.count_nonzero(np.isnan(result.grid)) == 0
-
-
-def test_update_point_partial_scan_reports_nan_missing_cells():
-    _app()
-    view = ScanMapView()
-    # 3x3 raster, only 2 of 9 points arrived — a live/mid-scan view.
-    view.update_point(_result(0.0, 0.0, charge=1.0))
-    view.update_point(_result(1.0, 1.0, charge=2.0))
-    view.update_point(_result(2.0, 2.0, charge=3.0))
-
-    result = view.grid_result()
-    assert result.grid.shape == (3, 3)
-    assert result.n_missing == 9 - 3
-    assert np.count_nonzero(np.isnan(result.grid)) == result.n_missing
-
-
-def test_update_point_last_write_wins_on_revisit():
-    _app()
-    view = ScanMapView()
-    view.update_point(_result(0.0, 0.0, charge=1.0))
-    view.update_point(_result(0.0, 0.0, charge=99.0))
-    assert view.point_count() == 1
-    result = view.grid_result()
-    assert result.grid[0, 0] == pytest.approx(99.0)
-
 
 def test_update_point_coalesces_rebuilds_until_timer_tick(monkeypatch):
     app = _app()
@@ -165,117 +121,6 @@ def test_flush_pending_redraw_renders_immediately(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# Quantity switch                                                             #
-# --------------------------------------------------------------------------- #
-
-def test_quantity_switch_rerenders_without_restreaming():
-    _app()
-    view = ScanMapView()
-    view.update_point(_result(0.0, 0.0, charge=5.0))
-    view.update_point(_result(1.0, 0.0, charge=10.0))
-
-    assert view.current_quantity() == "dut_charge_pC"
-    result_charge = view.grid_result()
-    assert set(result_charge.grid[~np.isnan(result_charge.grid)]) == {5.0, 10.0}
-
-    view.set_quantity("baseline_rms_V")
-    assert view.current_quantity() == "baseline_rms_V"
-    # No new update_point() call — same accumulated points, new quantity.
-    assert view.point_count() == 2
-    result_rms = view.grid_result()
-    assert np.allclose(result_rms.grid[~np.isnan(result_rms.grid)], 0.001)
-
-
-# --------------------------------------------------------------------------- #
-# set_points (batch load)                                                     #
-# --------------------------------------------------------------------------- #
-
-def test_set_points_batch_load_from_iterable_of_results():
-    _app()
-    view = ScanMapView()
-    results = [_result(x, y, charge=x * 10 + y) for x in (0.0, 1.0) for y in (0.0, 1.0)]
-    view.set_points(results)
-    assert view.point_count() == 4
-    assert view.grid_result().grid.shape == (2, 2)
-
-
-def test_set_points_batch_load_from_mapping_replaces_state():
-    _app()
-    view = ScanMapView()
-    view.update_point(_result(5.0, 5.0, charge=1.0))
-    assert view.point_count() == 1
-
-    mapping = {
-        (0.0, 0.0): _result(0.0, 0.0, charge=1.0),
-        (0.0, 1.0): _result(0.0, 1.0, charge=2.0),
-    }
-    view.set_points(mapping)
-    assert view.point_count() == 2
-    assert (5.0, 5.0) not in view.points()
-
-
-def test_set_points_mapping_branch_counts_rounding_collisions():
-    """The mapping branch of set_points() must count a duplicate exactly
-    like the iterable branch: two distinct raw (x, y) keys that collide
-    only AFTER the 6-decimal rounding (storage-layer dedup) still increment
-    the one honest _n_duplicates counter — never silently absorbed."""
-    _app()
-    view = ScanMapView()
-    mapping = {
-        (1e-7, 0.0): _result(1e-7, 0.0, charge=1.0),
-        (4e-7, 0.0): _result(4e-7, 0.0, charge=2.0),   # rounds to the same (0.0, 0.0) cell
-    }
-    view.set_points(mapping)
-
-    assert view.point_count() == 1
-    assert view.duplicate_count() == 1
-
-
-def test_set_points_accepts_plain_dict_values():
-    _app()
-    view = ScanMapView()
-    mapping = {
-        (0.0, 0.0): {"dut_charge_pC": 1.0},
-        (1.0, 0.0): {"dut_charge_pC": 2.0},
-    }
-    view.set_points(mapping)
-    result = view.grid_result()
-    assert result.grid.shape == (2, 1)
-    assert set(result.grid.flatten()) == {1.0, 2.0}
-
-
-# --------------------------------------------------------------------------- #
-# Cursor readout                                                              #
-# --------------------------------------------------------------------------- #
-
-def test_cursor_readout_formats_with_value():
-    _app()
-    view = ScanMapView()
-    view.update_point(_result(0.0, 0.0, charge=1.0))
-    view.update_point(_result(1.0, 0.0, charge=2.0))
-    view._update_cursor_readout(1.0, 0.0)
-    text = view._lbl_cursor.text()
-    assert "1.0000 mm" in text
-    assert "0.0000 mm" in text
-    assert "dut_charge_pC" in text
-    assert "2" in text
-
-
-def test_cursor_readout_default_before_any_motion():
-    _app()
-    view = ScanMapView()
-    assert "--" in view._lbl_cursor.text()
-
-
-def test_cursor_readout_out_of_bounds_shows_dashes():
-    _app()
-    view = ScanMapView()
-    view.update_point(_result(0.0, 0.0, charge=1.0))
-    view._update_cursor_readout(500.0, 500.0)
-    assert "--" in view._lbl_cursor.text()
-
-
-# --------------------------------------------------------------------------- #
 # Theme switch                                                                #
 # --------------------------------------------------------------------------- #
 
@@ -321,65 +166,9 @@ def test_no_graphics_effect_on_figure_card_or_plot():
 
 
 # --------------------------------------------------------------------------- #
-# NaN colorbar policy                                                         #
-# --------------------------------------------------------------------------- #
-
-def test_nan_value_does_not_skew_autoscale_levels():
-    _app()
-    view = ScanMapView()
-    view.update_point(_result(0.0, 0.0, charge=10.0))
-    view.update_point(_result(1.0, 0.0, charge=20.0))
-    # A third point whose selected-quantity value is itself NaN (e.g. a
-    # failed per-point analysis) must not corrupt the sampled-cell range.
-    bad = _result(2.0, 0.0, charge=float("nan"))
-    view.update_point(bad)
-
-    grid = view.grid_result().grid
-    finite = grid[~np.isnan(grid)]
-    assert set(finite.tolist()) == {10.0, 20.0}
-
-
-# --------------------------------------------------------------------------- #
 # PNG/CSV export (S2c work package A) — dialog-free write helpers behind the  #
 # toolbar's export toolbuttons.                                               #
 # --------------------------------------------------------------------------- #
-
-def test_write_csv_writes_expected_rows(tmp_path):
-    _app()
-    view = ScanMapView()
-    view.update_point(_result(0.0, 0.0, charge=1.0))
-    view.update_point(_result(1.0, 0.0, charge=2.0))
-    view.update_point(_result(0.0, 1.0, charge=3.0))
-
-    out = tmp_path / "map.csv"
-    view._write_csv(str(out))
-
-    assert out.exists()
-    with open(out, newline="") as fh:
-        rows = list(csv.reader(fh))
-
-    assert rows[0] == ["x_mm", "y_mm", "dut_charge_pC"]
-    # Rows are written in sorted (x_mm, y_mm) order.
-    assert rows[1] == ["0.000000", "0.000000", "1"]
-    assert rows[2] == ["0.000000", "1.000000", "3"]
-    assert rows[3] == ["1.000000", "0.000000", "2"]
-    assert len(rows) == 4
-
-
-def test_write_csv_uses_currently_selected_quantity(tmp_path):
-    _app()
-    view = ScanMapView()
-    view.update_point(_result(0.0, 0.0, charge=1.0))
-    view.set_quantity("baseline_rms_V")
-
-    out = tmp_path / "map.csv"
-    view._write_csv(str(out))
-
-    with open(out, newline="") as fh:
-        rows = list(csv.reader(fh))
-    assert rows[0] == ["x_mm", "y_mm", "baseline_rms_V"]
-    assert float(rows[1][2]) == pytest.approx(0.001, rel=1e-6)
-
 
 def test_write_png_writes_nonzero_file(tmp_path):
     app = _app()
@@ -403,16 +192,6 @@ def test_write_png_writes_nonzero_file(tmp_path):
 
     assert out.exists()
     assert out.stat().st_size > 0
-
-
-def test_write_csv_on_empty_view_writes_header_only(tmp_path):
-    _app()
-    view = ScanMapView()
-    out = tmp_path / "empty.csv"
-    view._write_csv(str(out))
-    with open(out, newline="") as fh:
-        rows = list(csv.reader(fh))
-    assert rows == [["x_mm", "y_mm", "dut_charge_pC"]]
 
 
 # --------------------------------------------------------------------------- #
@@ -532,36 +311,6 @@ def test_viridis_colormap_applied():
     expected = pg.colormap.get("viridis").getLookupTable(nPts=16)
     actual = view.image_view().ui.histogram.gradient.colorMap().getLookupTable(nPts=16)
     assert np.array_equal(expected, actual)
-
-
-def test_missing_and_duplicate_counts_surfaced():
-    _app()
-    view = ScanMapView()
-    if view.image_view() is None:
-        pytest.skip("pyqtgraph not installed")
-    # 3 of 4 cells sampled; one cell revisited (last-write-wins, but the
-    # revisit is COUNTED, never silently absorbed — §4).
-    view.update_point(_result(0.0, 0.0, charge=1.0))
-    view.update_point(_result(1.0, 1.0, charge=2.0))
-    view.update_point(_result(1.0, 0.0, charge=3.0))
-    view.update_point(_result(1.0, 1.0, charge=9.0))
-
-    assert view.duplicate_count() == 1
-    assert "3/4 sampled" in view._chip_points.text()
-    subtitle = view._figure_card._subtitle_label.text()
-    assert "1 unsampled" in subtitle
-    assert "1 duplicate" in subtitle
-
-    # Batch load: duplicates counted across the incoming iterable too.
-    view.set_points([
-        _result(0.0, 0.0, charge=1.0),
-        _result(0.0, 0.0, charge=5.0),
-        _result(1.0, 1.0, charge=2.0),
-    ])
-    assert view.duplicate_count() == 1
-    # clear() re-arms the counter.
-    view.clear()
-    assert view.duplicate_count() == 0
 
 
 def test_empty_view_shows_placeholder_page_with_toolbar_live():

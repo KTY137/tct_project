@@ -644,3 +644,456 @@ valid verdict if you name what you checked.
 - Confirm clean - the slow-control permanence trap I initially suspected is handled in current v0.2: section 5.1.1 defines a static alias table for shipped names and requires `config_validator` errors for future invalid/colliding names.
 - Runtime lane check: the rebuilt venv now works in this sandbox. `TCT_app\.venv\Scripts\python.exe -c "import sys; print(sys.version)"` reports CPython 3.10.11 64-bit; `TCT_app\.venv\Scripts\python.exe -m pytest --version` reports pytest 9.1.1; a simulated smoke run from `TCT_app` with `QT_QPA_PLATFORM=offscreen` passed `tests/test_bias_api_guard.py` (`21 passed in 0.43s`).
 - Risk: advisory review only; no HDF5 writer migration, Qt generated UI, Linux stack, or real hardware behavior was executed. `docs/CAPABILITY_MODEL.md` remains dirty from another lane's v0.2 edit and was intentionally not changed here.
+
+## C12 - U1 prep survey: viewmodel-portability of the four U1 test suites (advisory, read-only)
+
+**Status: DONE - Appended U1 viewmodel-portability survey for four suites.** - Effort: M - Source: Adam, 2026-07-15 (Kaya: bring the Codex lane into the QML-migration session)
+
+The QML-migration epoch opened today on branch `ui-qml-migration`. Stage U1
+of `docs/ROADMAP_MASTERPLAN.md` (Part II, "UI" section) is the
+**viewmodel-first test reclaim**: the big C-bucket GUI test suites get
+rewritten against new viewmodels per the run_state_facade boundary — a
+viewmodel holds NO controller reference and NO start/stop callables.
+Before the crew stages U1, we want an independent map of the terrain.
+
+Survey these four files (do not modify them — the report you append here IS
+the deliverable):
+
+- `TCT_app/tests/test_planner_panel.py`
+- `TCT_app/tests/test_scan_map_view.py`
+- `TCT_app/tests/test_scan_viewer_panel.py`
+- `TCT_app/tests/test_sequencer_panel.py`
+
+For EACH test function, classify:
+
+1. **(a) portable-to-viewmodel** — asserts state/logic that a VM could expose
+   with no widget instantiated;
+2. **(b) GUI-half** — genuinely tests widget behavior (paint, focus, Qt
+   interaction); stays as a thin rehosted GUI test;
+3. **(c) safety-normative** — danger-gate / abort / manual-pause / STOP
+   denial semantics; flag these and do NOT propose changes (they follow the
+   S2 manifest `SAFETY_NORMATIVE_TESTS.md` path, not U1);
+4. **(d) obsolete/duplicate** — superseded or redundant coverage.
+
+Per file, also name the concrete couplings that block porting: direct
+controller references, start/stop callables passed into the panel, QTest
+key/mouse interaction, widget-tree introspection.
+
+Planner note: `planner_panel.py` hard-codes `Axis` enum members (~15 places)
+and its U1 slice waits for trunk-P2 `AxisSpec` — survey it anyway and mark
+Axis-coupled tests explicitly.
+
+Deliverable: markdown tables (test -> class -> blocking coupling) + a totals
+summary per file, appended below this brief. Ranked observations welcome
+(e.g. "this suite is 80% (a) once X is injectable"). Do NOT modify any repo
+file other than appending here. Running the four suites is allowed
+(offscreen, venv `TCT_app\.venv\Scripts\python.exe`) but not required.
+
+**Codex findings (2026-07-15):**
+- Files touched: `docs/CODEX_QUEUE.md` only. The four target test files were read and run but not modified.
+- Legend: `(a)` portable-to-viewmodel; `(b)` GUI-half; `(c)` safety-normative; `(d)` obsolete/duplicate.
+- Verification: from `TCT_app`, `$env:QT_QPA_PLATFORM='offscreen'; .\.venv\Scripts\python.exe -m pytest --collect-only -q tests/test_planner_panel.py tests/test_scan_map_view.py tests/test_scan_viewer_panel.py tests/test_sequencer_panel.py` collected 156 tests. The full run with the same four files passed: `156 passed, 3 warnings in 72.01s`; warnings were the existing pyqtgraph all-NaN slice warnings in `test_scan_map_view.py::test_all_nan_grid_does_not_raise_and_levels_are_finite`. `git diff --check` passed.
+- Cross-suite observation: no target suite uses QTest key/mouse synthesis. The blocking couplings are private widget-tree introspection, pyqtgraph/ImageView state, QMessageBox/QtDangerGate, coordinator/controller references in sequencer tests, and `Axis` enum shape in planner tests.
+- Planner observation: U1 can reclaim 36/67 tests into a planner VM once trunk-P2 `AxisSpec` replaces direct `Axis` enum assumptions. The QtDangerGate cluster is 9 tests at HEAD and is a hard carve-out before U1 per `SAFETY_NORMATIVE_TESTS.md`; `test_arm_confirmation_uses_live_plan_bias_range_not_stale_estimate` is also safety-sensitive HV confirmation text and should be preserved with the arm-summary contract.
+- Scan-map observation: 17/32 tests are pure map data/model/export behavior; the GUI residue is almost entirely pyqtgraph image/histogram/toolbar/theme/export-PNG behavior.
+- Scan-viewer observation: 15/40 tests map cleanly to `RunStateViewModel`/z-focus/open-analysis state. Abort/pause tests here are button-signal GUI affordances, not the S2 normative wiring host; the manifest points safety wiring to `test_scan_viewer_wiring.py`.
+- Sequencer observation: only 6/17 tests are normal VM candidates. 10/17 are safety-normative sequence-active, manual-danger-lock, abort, modal-shim, or manual-pause/fail-safe tests. `SequencerPanel` currently holds a `SequenceCoordinator` and command callables; U1 needs a read-only queue/run VM plus a retained command/safety host, not a direct port of this panel shape.
+
+### `TCT_app/tests/test_planner_panel.py` totals
+
+Totals: `(a)=36`, `(b)=21`, `(c)=10`, `(d)=0` (67 tests).
+
+File-level blockers: `Axis` enum appears through template/default-plan helpers and explicit `Axis.STAGE_X/Y/Z/BIAS_V`; QTreeWidget/QListWidget private state (`_tree`, `_palette`, `_ghost_item`, `_loop_editors`); Qt MIME payloads; QThread/timer estimate machinery; QMessageBox/QtDangerGate; private command signals (`start_plan_requested`, `arm_hv_requested`, `abort_requested`). No direct controller reference and no QTest key/mouse interaction.
+
+| Test | Class | Blocking coupling |
+|---|---|---|
+| `test_panel_constructs_light_and_dark_theme` | (b) | QWidget construction/theme/tree smoke. |
+| `test_empty_plan_shows_empty_state_row_and_survives_theme_switch` | (b) | `EmptyState` widget and QTree row introspection. |
+| `test_default_template_validates_clean_under_default_limits` | (a) | Axis-coupled default plan; pure validation result. |
+| `test_default_template_matches_frozen_r1_routine` | (a) | Axis-coupled template/corpus round-trip. |
+| `test_large_estimate_runs_off_gui_thread` | (a) | Estimate worker currently panel-owned QThread. |
+| `test_estimate_worker_thread_not_parented_to_panel` | (a) | Worker lifetime should move to VM/service. |
+| `test_estimate_shutdown_bounded_when_estimate_in_flight` | (a) | VM/service shutdown contract; no widget needed. |
+| `test_rapid_estimate_edits_coalesce_latest_wins` | (a) | Estimate latest-wins state; Axis plan fixture. |
+| `test_safe_estimate_routes_large_plan_off_gui_thread` | (a) | Async estimate routing; panel-private cache today. |
+| `test_safe_estimate_small_plan_still_runs_inline` | (a) | Estimate fast path; panel-private cache today. |
+| `test_drag_preview_large_candidate_skips_synchronous_estimate` | (a) | Candidate-estimate logic; Axis + drag helper coupling. |
+| `test_spinbox_edit_updates_plan_and_invalidates_armed` | (a) | QSpinBox editor today; VM setter can expose result. |
+| `test_start_enable_requires_armed_and_dry_run_ok` | (a) | `can_execute` state; currently `_btn_start`. |
+| `test_start_plan_requested_carries_scan_plan` | (b) | Start button/signal command surface; VM must not own callable. |
+| `test_dry_run_sets_ok_flag_and_arm_requires_confirmation_signal` | (a) | Arm/dry-run state; command request must stay outside VM. |
+| `test_arm_confirmation_uses_live_plan_bias_range_not_stale_estimate` | (c) | HV arm confirmation text via QMessageBox; preserve safety wording. |
+| `test_palette_new_inserts_into_loop_children` | (a) | Axis + drop-decision model currently called on panel. |
+| `test_palette_double_click_appends_new_loop_to_root` | (a) | Axis + palette append fallback; model mutation portable. |
+| `test_internal_move_reorders_with_same_parent_index_shift` | (a) | Axis + move decision; tree item helper today. |
+| `test_self_and_descendant_move_rejected` | (a) | Axis + drop validation; no widget required after VM split. |
+| `test_action_leaf_rejects_into_drop` | (a) | Drop validation; tree item helper today. |
+| `test_decorative_rows_are_not_drop_targets` | (b) | Decorative QTree rows are a GUI construct. |
+| `test_structural_change_invalidates_latches_even_when_armed` | (a) | Axis + latch invalidation state. |
+| `test_undo_restores_pre_drop_plan_and_invalidates` | (a) | Axis + undo/latch state. |
+| `test_undo_stack_is_capped` | (a) | Pure undo-stack policy. |
+| `test_duplicate_and_remove_block_mutate_plan_and_invalidate` | (a) | Axis + plan mutation/latch state. |
+| `test_reorder_block_swaps_and_boundary_move_is_a_noop` | (a) | Axis + plan mutation/undo policy. |
+| `test_palette_mime_data_carries_new_op_payload` | (b) | Qt `mimeData()` override. |
+| `test_recipe_tree_mime_data_carries_move_op_payload` | (b) | QTreeWidget MIME override. |
+| `test_recipe_tree_mime_data_empty_for_decorative_row` | (b) | QTree decorative row MIME behavior. |
+| `test_public_api_surface_unchanged` | (b) | Classic `tct_gui.py` panel wiring surface. |
+| `test_run_end_clears_stale_arm_so_second_execute_needs_rearm` | (a) | Arm/latch state; safety-sensitive but VM-portable. |
+| `test_on_error_also_clears_the_per_run_arm` | (a) | Arm/latch terminal-state contract. |
+| `test_set_position_from_motor_stores_value_and_updates_label` | (a) | Motor position state; label is presentational. |
+| `test_use_current_position_writes_x_loop_start_and_invalidates_latches` | (a) | Axis + selected-loop state; QTree selection today. |
+| `test_use_current_position_writes_z_loop_start` | (a) | Axis + selected-loop state; QTree selection today. |
+| `test_use_current_position_disabled_before_position_and_for_non_axis_loop` | (a) | Axis + selection eligibility; QTree selection today. |
+| `test_set_focus_z_stores_value_and_updates_label` | (a) | Focus-Z state; label is presentational. |
+| `test_use_focus_z_writes_z_loop_start_and_invalidates_latches` | (a) | Axis + selected-loop state; QTree selection today. |
+| `test_use_focus_z_disabled_for_x_and_y_loops` | (a) | Axis eligibility; QTree selection today. |
+| `test_use_focus_z_disabled_before_result_and_while_running` | (a) | Focus/run state; QTree selection today. |
+| `test_drag_preview_ghost_appears_for_palette_new_at_correct_index` | (b) | Ghost QTree row rendering. |
+| `test_drag_preview_ghost_appears_for_internal_move_at_correct_index` | (b) | Ghost QTree row rendering. |
+| `test_drag_preview_ghost_for_new_loop_at_root_after_preflight_offset` | (b) | Axis + root ghost row offset. |
+| `test_drag_preview_ghost_absent_for_self_and_descendant_move` | (b) | Ghost/chip visibility around drop rejection. |
+| `test_drag_preview_ghost_absent_for_leaf_into_target` | (b) | Ghost row visibility around leaf target. |
+| `test_drag_preview_candidate_change_moves_ghost_without_duplicate` | (b) | Ghost row lifecycle and QTree traversal. |
+| `test_drag_preview_same_candidate_slot_does_not_recreate_ghost` | (b) | Ghost row identity/repaint behavior. |
+| `test_drag_preview_delta_computes_correct_candidate_points` | (b) | Delta chip text plus Axis candidate model. |
+| `test_drag_preview_delta_warns_when_candidate_exceeds_max_points` | (b) | Delta chip state/property. |
+| `test_drag_preview_cleared_by_clear_drag_preview` | (b) | Ghost/chip/timer widget cleanup. |
+| `test_drag_preview_survives_into_real_drop_with_no_stray_ghost` | (b) | Ghost-to-drop widget lifecycle. |
+| `test_shutdown_mid_drag_clears_ghost_and_stops_timers` | (b) | Widget shutdown and QTimer cleanup. |
+| `test_drag_preview_never_touches_plan_or_undo_stack_across_a_session` | (a) | Core invariant portable; current proof uses preview widgets. |
+| `test_qt_danger_gate_confirms_true_on_gui_thread` | (c) | QtDangerGate carve-out; QMessageBox seam. |
+| `test_qt_danger_gate_denies_false_on_gui_thread` | (c) | QtDangerGate denial semantics. |
+| `test_qt_danger_gate_confirm_from_worker_thread` | (c) | QtDangerGate cross-thread confirmation. |
+| `test_qt_danger_gate_timeout_denies` | (c) | QtDangerGate fail-closed timeout. |
+| `test_qt_danger_gate_no_stray_dialog_after_shutdown` | (c) | QtDangerGate teardown denial. |
+| `test_qt_danger_gate_timeout_then_pump_shows_no_stray_dialog` | (c) | QtDangerGate stale-request denial. |
+| `test_qt_danger_gate_dialog_exception_releases_worker_as_deny` | (c) | QtDangerGate exception fail-closed. |
+| `test_qt_danger_gate_shutdown_denies_pending_and_future` | (c) | QtDangerGate shutdown fail-closed. |
+| `test_qt_danger_gate_abort_denies_pending_but_stays_usable` | (c) | QtDangerGate abort semantics. |
+| `test_palette_has_capture_photo_block` | (b) | Palette widget payload. |
+| `test_capture_photo_validates_with_camera_and_rejects_without` | (a) | Pure validator/model behavior. |
+| `test_default_planner_limits_enable_camera` | (a) | Static limits contract. |
+| `test_plan_limits_camera_available_from_devices` | (a) | Composition-root limits helper; no widget required. |
+
+### `TCT_app/tests/test_scan_map_view.py` totals
+
+Totals: `(a)=17`, `(b)=15`, `(c)=0`, `(d)=0` (32 tests).
+
+File-level blockers: pyqtgraph `ImageView`/histogram/image item state; toolbar private widgets (`_combo_qty`, `_btn_freeze`, export buttons); redraw timer; `grab()`, `show()`, and PNG export geometry. No start/stop callables, no controller reference beyond `ScanPoint`/`ScanResult` dataclasses, and no QTest key/mouse interaction.
+
+| Test | Class | Blocking coupling |
+|---|---|---|
+| `test_construct_headless_no_hardware` | (b) | QWidget construction smoke. |
+| `test_quantities_list_matches_scan_result_fields` | (a) | Pure data schema contract. |
+| `test_update_point_streams_and_builds_grid` | (a) | Grid model state. |
+| `test_update_point_partial_scan_reports_nan_missing_cells` | (a) | Grid missing-cell model. |
+| `test_update_point_last_write_wins_on_revisit` | (a) | Dedup/last-write model. |
+| `test_update_point_coalesces_rebuilds_until_timer_tick` | (b) | Qt redraw timer and pyqtgraph repaint. |
+| `test_flush_pending_redraw_renders_immediately` | (b) | Timer flush and redraw call. |
+| `test_quantity_switch_rerenders_without_restreaming` | (a) | Selected quantity + accumulated data model. |
+| `test_set_points_batch_load_from_iterable_of_results` | (a) | Batch-load model. |
+| `test_set_points_batch_load_from_mapping_replaces_state` | (a) | Batch-load replacement model. |
+| `test_set_points_mapping_branch_counts_rounding_collisions` | (a) | Rounding-collision accounting. |
+| `test_set_points_accepts_plain_dict_values` | (a) | Input normalization. |
+| `test_cursor_readout_formats_with_value` | (a) | Cursor text derivation; label today. |
+| `test_cursor_readout_default_before_any_motion` | (a) | Cursor empty-state derivation. |
+| `test_cursor_readout_out_of_bounds_shows_dashes` | (a) | Cursor bounds derivation. |
+| `test_theme_switch_survives_and_grid_intact` | (b) | Theme refresh and widget grab. |
+| `test_no_graphics_effect_on_figure_card_or_plot` | (b) | QWidget/pyqtgraph effect guard. |
+| `test_nan_value_does_not_skew_autoscale_levels` | (a) | Finite-range model. |
+| `test_write_csv_writes_expected_rows` | (a) | CSV export data contract. |
+| `test_write_csv_uses_currently_selected_quantity` | (a) | CSV selected-quantity contract. |
+| `test_write_png_writes_nonzero_file` | (b) | pyqtgraph PNG exporter + shown geometry. |
+| `test_write_csv_on_empty_view_writes_header_only` | (a) | CSV empty-state contract. |
+| `test_freeze_levels_keeps_colorbar_fixed_while_new_points_widen_range` | (b) | Toolbar toggle + ImageItem levels. |
+| `test_unfreeze_levels_resumes_live_autoscale` | (b) | Toolbar toggle + ImageItem levels. |
+| `test_unsampled_cells_stay_nan_in_displayed_image` | (b) | ImageItem displayed image. |
+| `test_unsampled_cells_render_transparent_not_vmin_color` | (b) | ImageItem render/qimage alpha. |
+| `test_colorbar_unit_bound_to_selected_quantity` | (b) | Histogram axis unit state. |
+| `test_viridis_colormap_applied` | (b) | pyqtgraph colormap object. |
+| `test_missing_and_duplicate_counts_surfaced` | (a) | Counts model; chips/subtitle are current view. |
+| `test_empty_view_shows_placeholder_page_with_toolbar_live` | (b) | Placeholder stack and toolbar visibility. |
+| `test_all_nan_grid_does_not_raise_and_levels_are_finite` | (b) | pyqtgraph all-NaN ImageView path. |
+| `test_freeze_toggled_before_any_data_captures_on_first_arrival` | (b) | Freeze toolbar + first ImageItem levels. |
+
+### `TCT_app/tests/test_scan_viewer_panel.py` totals
+
+Totals: `(a)=15`, `(b)=23`, `(c)=0`, `(d)=2` (40 tests).
+
+File-level blockers: private button/metric/card state; nested `ScanMapView` internals; pyqtgraph z-focus curve/marker; command signals for pause/abort/z-focus/open-analysis; theme `grab()`; source-lint tests. No direct controller reference, no start/stop callables passed in, and no QTest key/mouse interaction.
+
+| Test | Class | Blocking coupling |
+|---|---|---|
+| `test_construct_headless_no_hardware` | (b) | QWidget construction smoke. |
+| `test_initial_state_shows_empty_state_and_disabled_run_control` | (b) | Buttons/map/banner widget state. |
+| `test_map_toolbar_reachable_in_empty_state` | (b) | Nested map toolbar widgets. |
+| `test_scan_started_enables_run_control_and_arms_tiles` | (a) | Run-state derivation; buttons/metrics today. |
+| `test_first_progress_de_stales_the_progress_tile` | (a) | Progress VM property. |
+| `test_point_done_fills_map_and_updates_point_metric` | (a) | Run point/map VM state. |
+| `test_point_done_before_scan_started_still_swaps_to_map` | (b) | Stack/map visibility behavior. |
+| `test_progress_updates_progress_and_eta_and_elapsed_tiles` | (a) | Progress/ETA/elapsed derivation. |
+| `test_progress_before_any_elapsed_time_reports_eta_dashes` | (a) | ETA derivation. |
+| `test_scan_finished_disables_run_control_and_keeps_map` | (a) | Terminal run state; buttons/banner today. |
+| `test_abort_finish_shows_aborted_banner_variant` | (b) | Abort button click + banner variant. |
+| `test_new_run_clears_previous_map` | (a) | New-run reset state. |
+| `test_pause_toggle_emits_signal_only_while_enabled` | (b) | Pause button command signal. |
+| `test_abort_button_emits_abort_requested` | (b) | Abort button command signal. |
+| `test_abort_disabled_when_idle_rule` | (b) | Abort affordance enabled-state. |
+| `test_manual_pause_sets_warn_chip` | (a) | Manual-pause display state. |
+| `test_set_current_position_updates_point_tile` | (a) | Current-position display derivation. |
+| `test_z_focus_start_emits_config_and_resets_curve` | (b) | Find-focus button command signal. |
+| `test_z_focus_point_accumulates_curve_data` | (a) | Z-focus curve data model. |
+| `test_z_focus_done_sets_marker_and_label` | (b) | pyqtgraph marker + label. |
+| `test_apply_best_z_disabled_until_z_focus_done` | (b) | Apply button enabled-state. |
+| `test_apply_best_z_redisabled_on_new_z_focus_run` | (b) | Find-focus button + apply button state. |
+| `test_apply_best_z_click_emits_last_value` | (b) | Apply button command signal. |
+| `test_apply_best_z_noop_without_result` | (b) | Command no-op signal guard. |
+| `test_z_focus_mode_switch_toggles_edge_and_amp_frames` | (b) | Form frame visibility. |
+| `test_z_focus_card_collapsed_by_default_with_header_controls` | (b) | Expandable card/header controls. |
+| `test_z_focus_done_updates_header_chip` | (a) | Best-Z summary property. |
+| `test_open_in_analysis_disabled_until_path_and_finished` | (a) | Open-analysis eligibility state. |
+| `test_open_in_analysis_enables_immediately_if_path_set_after_finish` | (a) | Open-analysis eligibility state. |
+| `test_open_in_analysis_click_emits_path` | (b) | Open-analysis command signal. |
+| `test_new_run_invalidates_previous_run_path` | (a) | Run-path invalidation state. |
+| `test_zf_spin_suffixes_match_units` | (b) | Spinbox widget suffixes. |
+| `test_open_in_analysis_noop_without_path` | (b) | Command signal no-op guard. |
+| `test_full_simulated_run_sequence` | (a) | Integrated run-state VM sequence. |
+| `test_theme_switch_survives_with_data` | (b) | Theme refresh/grab + nested plot state. |
+| `test_theme_switch_before_any_data_does_not_raise` | (b) | Theme refresh smoke. |
+| `test_abort_uses_shared_danger_language` | (b) | Abort button style/state; not S2 wiring host. |
+| `test_no_graphics_effect_on_map_or_zfocus_plot` | (b) | Widget/plot effect guard. |
+| `test_scan_viewer_panel_source_has_zero_inline_hex` | (d) | Duplicates global inline-hex/style lint coverage. |
+| `test_scan_viewer_panel_never_calls_set_graphics_effect` | (d) | Duplicates source-level graphics-effect guard. |
+
+### `TCT_app/tests/test_sequencer_panel.py` totals
+
+Totals: `(a)=6`, `(b)=1`, `(c)=10`, `(d)=0` (17 tests).
+
+File-level blockers: `SequencerPanel(coord, ...)` directly holds `SequenceCoordinator`; tests drive `FakeScanCoordinator`, `StateMachine`, `SequenceCoordinator`, `park_safe` callable, `abort_sequence`, `TCTMainWindow` unbound methods, and in one case a real simulated `DeviceManager` + `ScanController`. Private table/button state and real panel child lookup also block direct VM porting. No QTest key/mouse interaction.
+
+| Test | Class | Blocking coupling |
+|---|---|---|
+| `test_panel_constructs_and_theme_switches` | (b) | QWidget/theme/envelope HTML smoke. |
+| `test_arm_text_contains_every_routine_hv_and_travel` | (a) | Envelope summary VM; latch HTML today. |
+| `test_queue_edit_rederives_envelope_no_stale` | (a) | Queue/envelope model state. |
+| `test_abort_button_calls_abort_sequence` | (c) | Abort command must stay live while sequence active. |
+| `test_rows_track_running_and_done_states` | (a) | Entry-state VM; table chips today. |
+| `test_rows_track_failed_and_skipped_states` | (a) | Entry-state VM; table chips today. |
+| `test_save_load_queue_round_trip` | (a) | Queue YAML model/persistence. |
+| `test_loader_error_surfaces_and_preserves_queue` | (a) | Loader failure state/notification; no widget needed. |
+| `test_on_sequence_active_locks_and_unlocks_manual_danger_panels` | (c) | `TCTMainWindow._on_sequence_active` manual danger lock law. |
+| `test_manual_danger_reenables_after_failure_path` | (c) | Sequence failure unlock law. |
+| `test_modal_shims_suppressed_while_active_and_restored` | (c) | Modal suppression while unattended sequence runs. |
+| `test_sequence_active_wired_in_build_central` | (c) | Composition-root safety wiring/source guard. |
+| `test_real_panels_surgical_lock_round_trip_via_coordinator_signal` | (c) | Real Bias/Motor STOP/OFF-live surgical-lock round trip. |
+| `test_manual_pause_during_sequence_no_dialog_notify_and_abort` | (c) | Manual-pause no-dialog + abort-sequence law. |
+| `test_manual_pause_during_sequence_missing_seq_coordinator_does_not_crash` | (c) | Manual-pause defensive no-dialog path. |
+| `test_non_sequence_manual_pause_still_shows_dialog_resume_and_abort` | (c) | Non-sequence manual-pause resume/abort behavior. |
+| `test_manual_pause_during_real_sequence_aborts_fail_safe_and_parks_hv` | (c) | Real simulated fail-safe HV park on manual pause during sequence. |
+
+Risk: classification is advisory and static except for running the current suites; it does not implement the U1 viewmodels or carve out the safety hosts.
+
+## C13 - Theme-gap audit: qml_theme.py TOKEN_MAP vs the Lantern kit needs (advisory, read-only)
+
+**Status: DONE - Theme bridge gap audited; 42 missing Lantern exposures.** - Effort: M - Source: Adam, 2026-07-15 (carried DO-LANTERN condition: the Theme-gap audit is prerequisite homework; Loki MINOR-6 sized it at ~40 unbuilt token exposures — a front-loaded cost line before U2's first `Surface`)
+
+Enumerate precisely which tokens the ratified LANTERN kit direction requires
+from the QML Theme bridge versus what `TCT_app/gui/qml_theme.py` `TOKEN_MAP`
+exposes today.
+
+Sources of truth (read-only):
+- `docs/design/qml_kit_forge/candidate_lantern.md` (post-revision, includes the six rulings)
+- `docs/design/qml_kit_forge/kit.md` (the kit contract)
+- `TCT_app/gui/qml_theme.py` (`TOKEN_MAP` as shipped)
+- `TCT_app/gui/style.py` / theme constants (the QWidget-side source for each token)
+- Shipped QML under `TCT_app/gui/qml/` (find hardcoded guesses, e.g. `Font.DemiBold` in `MetricTile.qml`)
+
+Known-coarse gap list to verify AND complete: danger_fill / on_danger / error /
+chip / edge / pressed / radius / font-role tokens + a `motionEnabled` bridge.
+
+For EACH missing token report: token name, QWidget-side source of truth,
+consumer components per the spec, and whether shipped QML currently hardcodes
+a guess for it (file:line). Deliverable: a markdown table + total count + a
+one-paragraph cost line for the U2 plan (how much bridge work is front-loaded
+before the first `Surface`), appended below this brief. Do NOT modify any repo
+file other than appending here.
+
+**Codex findings (2026-07-15):**
+
+Source note: the brief's `docs/design/qml_kit_forge/kit.md` path is absent on
+this branch. I used the referenced round-03 kit contract at
+`docs/design/iterations/glasshell-cockpit/round-03/kit.md` plus
+`docs/design/qml_kit_forge/candidate_lantern.md`, `TCT_app/gui/qml_theme.py`,
+`TCT_app/gui/style.py`, `TCT_app/gui/app_settings.py`, and shipped QML under
+`TCT_app/gui/qml/`.
+
+Current bridge coverage: `TOKEN_MAP` already exposes the base rungs
+`card`/`shelf`/`well`/`raised`, core inks, `danger`/`armed` aliases, spacing,
+metric font sizes, `monoFamily`, `transitionMs`, `specular`, and plot constants.
+The gaps below are the additional Lantern `Theme.*` surface needed before a
+first real `Surface` can be authoritative instead of locally guessing.
+
+| Missing Theme exposure | QWidget-side source of truth | Spec consumers | Shipped QML hardcoded guess today |
+|---|---|---|---|
+| `dangerFill` | `palette()["danger_fill"]`; `TCT_app/gui/style.py:404-428`, `585`, `730` | `ActionBar` danger, `HazardSurface`, danger state | Partial: danger buttons use `Theme.crit` border/text, no fill, in `TCT_app/gui/qml/Shell.qml:531-539` and `562-570`. |
+| `onDanger` | `palette()["on_danger"]`; `TCT_app/gui/style.py:404-428`, `585`, `730` | Danger button labels, hazard labels | Partial: same Shell danger path uses `Theme.crit` as label ink (`Shell.qml:537-539`, `568-570`). |
+| `onArmed` | `palette()["on_armed"]`; `TCT_app/gui/style.py:430-435`, `586`, `731` | Motion/armed filled controls, armed hazard stripe labels | No direct fill path; HV accent uses `Theme.armed` only in `TCT_app/gui/qml/ScanStatusStrip.qml:91`. |
+| `error` | `palette()["error"]`; `TCT_app/gui/style.py:437-459`, `577`, `725` | EmptyState error variant, device hard-error status | Yes: fault/error states reuse `Theme.crit` in `Shell.qml:224-225` and `glassshell/GlassShell.qml:374`, `382`. |
+| `chip` | `palette()["chip"]`; `TCT_app/gui/style.py:677-684`, `771-775` | `StatusPill`, chips, state pills | Yes: `VitalChip` uses `Theme.sunk` at `glassshell/VitalChip.qml:38`; `Shell.StatChip` has no pill fill at `Shell.qml:584-624`. |
+| `edge` | `palette()["edge"]`; `TCT_app/gui/style.py:685-710`, `790` | Surface specular edge / raised top edge | Partial: QML uses `Theme.specular` and `Theme.hairline`, not the QSS `edge`, e.g. `MetricTile.qml:122`. |
+| `edgeShade` | `palette()["edge_shade"]`; `TCT_app/gui/style.py:696-711`, `791` | `Well`, `Island` inner top shade | No; wells/island placeholders use plain borders such as `glassshell/GlassShell.qml:371-374`. |
+| `pressed` | `palette()["pressed"]`; `TCT_app/gui/style.py:652-655`, `762` | Surface pressed fill, button pressed state | Yes: pressed paths guess with `Theme.field`/`Theme.accentStrong` in `Shell.qml:528-529`, `559-560`, `glassshell/ChromeButton.qml:24-25`. |
+| `disabledBg` | `palette()["disabled_bg"]`; `TCT_app/gui/style.py:652-655`, `762` | Disabled Surface fill | Yes: disabled buttons use `Theme.sunk`/`Theme.faint` in `glassshell/ChromeButton.qml:24`, `36`. |
+| `glassPaneAlpha` | `PANEL_GLASS_ALPHA` plus clamp; `TCT_app/gui/style.py:910-930` | Shelf/Pane SCENE tint | Partial: QML shell uses caller `root.glassTint`, not Theme, in `Shell.qml:139-141`, `499-501`. |
+| `glassCardAlpha` | `GLASS_CARD_ALPHA_DARK/LIGHT`; `TCT_app/gui/style.py:565-571` | Card SCENE tint | No shipped card sampler yet; `MetricTile` stays opaque at `MetricTile.qml:89-90`. |
+| `radiusXl` | `RADIUS["xl"]`; `TCT_app/gui/style.py:88-109` | Card, `HazardSurface`, card-like Surface | Yes: large shells still use `Theme.radiusMd`, e.g. `glassshell/GlassShell.qml:65`, `276`, `371`. |
+| `radiusShelf` | `RADIUS["shelf"]`; `TCT_app/gui/style.py:99-109` | Shelf/Pane outer radius | Yes: shelf/chrome panes use `Theme.radiusMd`, e.g. `glassshell/GlassShell.qml:65`. |
+| `fontRail` | `FONT_RAIL_PX`; `TCT_app/gui/style.py:224-236` | Rail/chrome buttons | Yes: rail/button text uses generic `Theme.fontSm`, e.g. `Shell.qml:537`, `ChromeButton.qml:38`. |
+| `fontPanelTitle` | `FONT_PANEL_TITLE_PX`; `TCT_app/gui/style.py:238-239` | `PanelHeader`, shell/chrome titles | Yes: titles use `Theme.fontSm`/`fontLg`, e.g. `Shell.qml:176-178`, `GlassShell.qml:77-88`. |
+| `fontBody` | `FONT_BODY_PX`; `TCT_app/gui/style.py:241-242` | Body prose, hints, empty states | Yes: body/error text uses generic `Theme.fontMd`/`fontXs`, e.g. `GlassShell.qml:381-383`, `409-411`. |
+| `weightRail` | `WEIGHT_RAIL`; `TCT_app/gui/style.py:235-236` | Rail/chrome buttons | Yes: `Font.Medium`/`font.bold` guesses in `Shell.qml:537` and `ChromeButton.qml:39`. |
+| `weightPanelTitle` | `WEIGHT_PANEL_TITLE`; `TCT_app/gui/style.py:238-239` | Panel title / chrome title | Yes: `Font.DemiBold`/`font.bold` guesses in `Shell.qml:177` and `GlassShell.qml:80`, `87`. |
+| `weightBody` | `WEIGHT_BODY`; `TCT_app/gui/style.py:241-242` | Body prose | No named role; QML mostly omits weight for prose or uses generic bold flags. |
+| `weightMetricLabel` | `WEIGHT_METRIC_LABEL`; `TCT_app/gui/style.py:244-247` | Metric labels, chip labels | Yes: `Font.DemiBold` / `font.bold` in `MetricTile.qml:170`, `194`, `VitalChip.qml:58-59`. |
+| `weightValue` | `WEIGHT_VALUE`; `TCT_app/gui/style.py:255-257` | Metric values / readouts | Yes: `Font.DemiBold` and `font.bold` in `MetricTile.qml:216`, `VitalChip.qml:68`. |
+| `weightUnit` | `WEIGHT_UNIT`; `TCT_app/gui/style.py:259-260` | Unit suffixes | No explicit weight token; units rely on default weight in `MetricTile.qml:237-238`. |
+| `motionEnabled` | `app_settings.motion_enabled()`; `TCT_app/gui/app_settings.py:15`, `98-112` | Every `Behavior`, spring, living ground, reduced-motion path | No; QML animations bind only `Theme.transitionMs`, e.g. `MetricTile.qml:104`, `138`, `228`, `272`, `Shell.qml:534`, `565`. |
+| `livingGlassMode` | Not present yet; candidate requires `theme/living_glass` | `LivingGround`, Surface frost source | No shipped QML living ground; `attack_baldr.md` also notes no located key. |
+| `livingGlassSpeed` | Not present yet; candidate requires `theme/living_glass_speed` | `LivingGround` period/speed clamp | No shipped QML living ground. |
+| `motionTap` | Not present yet; candidate Lantern names 120 ms | Hover/press Surface responses | No; hover/press uses `transitionMs` or no animation. |
+| `motionUnfold` | Not present yet; candidate Lantern names 280 ms | `CollapsibleCard`, drawer/overlay reveal | No shipped collapsible Surface yet. |
+| `motionSpringUi` | Not present yet; candidate Lantern names `MOTION_SPRING_UI` | Segmented thumb, collapsible unfold, status pill width, drawer | No `SpringAnimation` in shipped QML. |
+| `shadowInk` | Not present yet; required by kit shadow ladder | Surface shadow renderer, pre-rendered 9-patch assets | No QML shadow implementation. |
+| `shadowA` | Not present yet; kit value 0.20 dark / 0.06 light | Contact shadow, `shCard` | No QML shadow implementation. |
+| `shadowB` | Not present yet; kit value 0.24 dark / 0.08 light | `shCard` lift | No QML shadow implementation. |
+| `shadowC` | Not present yet; kit value 0.30 dark / 0.10 light | `shPane` lift | No QML shadow implementation. |
+| `shadowD` | Not present yet; kit value 0.55 dark / 0.22 light | `shFloat` overlay/drag/modal | No QML shadow implementation. |
+| `blurPane` | Not present yet; candidate Lantern value 40 px | Shelf/Pane frost sampler | No shipped sampler; spike hardcodes `BLUR_MAX_PX = 40` in `scripts/spikes/lantern_frost_bake_spike.py:127`. |
+| `blurCard` | Not present yet; candidate Lantern value 16 px | Card frost sampler | No shipped sampler. |
+| `blurOverlay` | Not present yet; candidate Lantern value 28 px | Overlay/modal frost | No shipped overlay sampler. |
+| `frostRebakeHzSubtle` | Not present yet; candidate Lantern value 6 Hz | Shared frost source scheduler | No shipped scheduler. |
+| `frostRebakeHzFull` | Not present yet; candidate Lantern value 12 Hz | Shared frost source scheduler | No shipped scheduler. |
+| `focusHaloAlpha` | Not present yet; candidate Lantern value 0.35 dark / 0.25 light | Focus halo `BorderImage`; dead-zone tests | No QML focus halo. |
+| `focusRingOffsetPx` | Not present yet; candidate Lantern value 2 px | Universal focus ring | No QML focus ring; current controls rely on plain border/hover treatment. |
+| `groundFlowPeriodS` | Not present yet; candidate Lantern value 90 s | Living ground animation period | No shipped living ground animation. |
+| `groundTintAlphaMax` | `GROUND_TINT_ALPHA_MAX`; `TCT_app/gui/style.py:2138-2169` | Living ground band-law enforcement | No QML living ground; unrelated sim stripe hardcodes alpha in `Shell.qml:344-358`. |
+
+Total: 42 missing Lantern bridge exposures. The count treats grouped families
+as individual bindable `Theme.*` properties (`shadowA` through `shadowD`, the
+two frost rates, etc.) and does not count already-covered aliases such as
+`card`, `shelf`, `hairlineStrong`, `specular`, metric font sizes, or
+`transitionMs`.
+
+U2 cost line: before the first `Surface`, the bridge needs one focused
+front-loaded beat to add these 42 properties, promote the new shadow/blur/frost/
+focus/motion constants into `gui/style.py`, add the two living-glass settings
+to `gui/app_settings.py`, and update QML bindings/tests so no component guesses
+with `Theme.crit`, `Theme.sunk`, `Font.DemiBold`, generic radii, or raw behavior
+durations. That is small-to-medium plumbing, but it is a prerequisite: otherwise
+Lantern's first `Surface` becomes the source of truth instead of a renderer of
+the source of truth.
+
+- Files touched: `docs/CODEX_QUEUE.md` only.
+- Verification: static source audit only; no pytest run because C13 is advisory
+  and read-only except for this queue handback.
+- Risk: `docs/design/qml_kit_forge/kit.md` is missing on this branch; the audit
+  uses the referenced round-03 kit contract path instead.
+
+## C14 - Bucket-map completeness re-enumeration: 152 files on disk vs 118 mapped (advisory, read-only)
+
+**Status: DONE - Enumerated 34 unmapped tests; proposed A/B/C/D buckets.** - Effort: M - Source: Adam, 2026-07-15 night (Mary RISK
+finding at the U1.0 review: `docs/test_bucket_map.md` enumerates 118 test
+files while `git ls-tree` at `8166752` lists 152 `tests/test_*.py` — a
+34-file pre-existing gap; the Bucket-C preamble's "every remaining
+tests/test_*.py" completeness claim is false. The map must be trustworthy
+before U1 reclaim counts are cited at the stage gate.)
+
+Task (advisory — the crew executes the actual map update at the wave
+boundary, using your table as input):
+
+1. Enumerate every `TCT_app/tests/test_*.py` at current HEAD (subdirs too,
+   if any). Diff that list against the rows enumerated in
+   `docs/test_bucket_map.md`. Produce the exact missing-file list (expected
+   ~34) and flag any mapped row whose file no longer exists.
+2. For each missing file, PROPOSE a bucket (A/B/C/D) using the map's own
+   section criteria, with a one-line rationale each (imports/what it
+   constructs/what it asserts — cite file evidence, no guessing). Do not
+   propose reclassifying existing rows; note disagreements separately.
+3. Deliverable: markdown table (file → proposed bucket → rationale) + a
+   corrected totals line + a short note on how the gap arose (e.g. which
+   commits/waves added unmapped tests), appended below this brief.
+
+Read-only: do NOT modify test_bucket_map.md or any repo file other than
+appending here. Running pytest is not needed.
+
+**Codex findings (2026-07-15):**
+
+Enumeration method: parsed only markdown table rows matching
+``| n | `test_*.py` |`` in `docs/test_bucket_map.md`, then compared that
+118-row set to `git ls-tree -r --name-only HEAD -- TCT_app/tests` filtered to
+`test_*.py`. Current HEAD has 152 committed test files, so the drift is exactly
+34 unmapped files. Mapped rows whose file no longer exists: none.
+
+| Missing file | Proposed bucket | Rationale |
+|---|---|---|
+| `test_ambient_ground.py` | C | Imports PySide6 paint/widget classes plus `AmbientGround` (`TCT_app/tests/test_ambient_ground.py:29-35`) and asserts paint/cache/layering/theme-refresh behavior (`:106`, `:201`, `:265`), so it is QWidget/material pinned. |
+| `test_backdrop_event_spine.py` | C | Imports PySide6 events/widgets plus `gui.backdrop`/`style` (`TCT_app/tests/test_backdrop_event_spine.py:32-38`) and pins native-window/material event handling and detached-window behavior (`:96`, `:657`, `:742`). |
+| `test_capability_registry.py` | A | No Qt imports; it builds capability adapters, `DeviceManager`, and simulated devices (`TCT_app/tests/test_capability_registry.py:22-54`) and asserts descriptor/reservation/fail-closed registry behavior (`:183-838`). |
+| `test_device_connect_lifecycle.py` | A | No Qt imports; it exercises `devices.base.DeviceError` and `WaveformGenerator` lifecycle/open-failure paths with fake VISA resources (`TCT_app/tests/test_device_connect_lifecycle.py:38-41`, `:69-266`). |
+| `test_glass_env.py` | A | No Qt imports; it exercises the pure `gui.glass_env` tier/transition policy (`TCT_app/tests/test_glass_env.py:36-62`) across matrix, fail-safe, and transition-policy tests (`:264`, `:383`, `:600`). |
+| `test_glass_shell_skeleton.py` | D | Imports QML bridge pieces (`QUrl`, `qml_theme`) (`TCT_app/tests/test_glass_shell_skeleton.py:26-29`) and boots the QML GlassShell/QQuickWindow/island path (`:70`, `:75`, `:83`). |
+| `test_glass_text_contract.py` | C | Tests style/material contrast and the LaserPanel safety-banner widget path (`TCT_app/tests/test_glass_text_contract.py:45-56`, `:304-342`), so it is a QWidget glass contract rather than a QML shell test. |
+| `test_ground_perf.py` | C | Imports QApplication, detachable tabs, `AmbientGround`, `HazardSurface`, and `Well` (`TCT_app/tests/test_ground_perf.py:35-41`) and asserts render cache/detach behavior including `BiasPanel` (`:56-146`, `:196-200`). |
+| `test_icon_theme_walk_safety.py` | C | Imports QApplication/QMainWindow/QPushButton and `gui.status_widgets`/`style` (`TCT_app/tests/test_icon_theme_walk_safety.py:43-48`) and pins QWidget icon paint/repolish lifecycle (`:69-263`). |
+| `test_icon_theming_gui.py` | C | Combines GUI AST icon scanning with QPushButton and ScopePanel helpers (`TCT_app/tests/test_icon_theming_gui.py:69-137`, `:239-383`), matching the existing GUI style-guard bucket. |
+| `test_material_contract.py` | C | Imports QApplication plus `panel_kit`/`style` (`TCT_app/tests/test_material_contract.py:33-37`) and asserts QSS surface, registry, and offscreen component behavior (`:190-460`). |
+| `test_monitor_alarm_notify.py` | B | Constructs `MonitorPanel` and the `STATUS` notification boundary (`TCT_app/tests/test_monitor_alarm_notify.py:27-37`) to pin ALARM/WARN notification semantics (`:104-355`). |
+| `test_motor_icon_theming.py` | C | Constructs `MotorPanel(SimulatedMotorStage())` (`TCT_app/tests/test_motor_icon_theming.py:30-39`) and renders jog/STOP icon pixels across themes (`:71-171`). |
+| `test_no_immortal_panels.py` | C | Imports QApplication/QWidget and constructs named panels (`TCT_app/tests/test_no_immortal_panels.py:53-95`) for widget lifetime, lambda-connect, and thread-panel leak assertions (`:215-509`). |
+| `test_palette_contrast.py` | C | Imports GUI style tokens (`TCT_app/tests/test_palette_contrast.py:49-50`) and scans QSS/contrast rules for theme legality (`:215-350`), matching style-guard C behavior. |
+| `test_panel_kit_registry.py` | C | Imports QApplication/QWidget, shiboken, and `panel_kit` registry APIs (`TCT_app/tests/test_panel_kit_registry.py:31-36`) and asserts dead C++ widget pruning (`:51-123`). |
+| `test_pilot_bias_render.py` | C | Imports QApplication, `BiasPanel`, `HazardSurface`, and `Well` (`TCT_app/tests/test_pilot_bias_render.py:32-37`) and asserts the migrated BiasPanel glass-kit render contract (`:79-141`). |
+| `test_plan_estimate_cap.py` | A | No Qt imports; it imports `controller.plan_estimate` and `scan_plan` (`TCT_app/tests/test_plan_estimate_cap.py:29-34`) and tests estimator caps/materialization behavior (`:90-281`). |
+| `test_qml_preview.py` | D | Imports `QtQuick`, `Tct`, and the QML preview harness (`TCT_app/tests/test_qml_preview.py:23-29`) and tests QML load, hot reload, tier override, and engine shutdown (`:83-226`). |
+| `test_ribbon_never_clips.py` | C | Imports QApplication/QFrame/QScrollArea (`TCT_app/tests/test_ribbon_never_clips.py:29-30`) and checks current QWidget shell safety-ribbon chip layout (`:68-128`). |
+| `test_run_bg_thread_affinity.py` | B | Uses a simulated device manager and `qapp` (`TCT_app/tests/test_run_bg_thread_affinity.py:32-62`) to assert device-panel/main-window `_run_bg` completions land on the GUI thread (`:88-223`). |
+| `test_wave_analysis_render.py` | C | Imports QApplication, `AnalysisPanel`, and panel-kit widgets (`TCT_app/tests/test_wave_analysis_render.py:38-45`) and tests shelf/glass/refresh/shutdown behavior (`:60-208`). |
+| `test_wave_calibration_render.py` | C | Imports QApplication, `CalibrationPanel`, `DenyAllGate`, and `HazardSurface` (`TCT_app/tests/test_wave_calibration_render.py:43-52`) and tests glass, hazard, gate, refresh, and render behavior (`:132-433`). |
+| `test_wave_camera_render.py` | C | Imports QApplication, `CameraPanel`, ROI dialog, and pyqtgraph (`TCT_app/tests/test_wave_camera_render.py:51-60`) and tests camera panel glass/dialog/canvas/worker behavior (`:94-327`). |
+| `test_wave_device_render.py` | C | Imports QApplication/QMainWindow and `DeviceManagerWindow` (`TCT_app/tests/test_wave_device_render.py:52-57`) and tests device window glass/theme/close/shutdown behavior (`:96-243`). |
+| `test_wave_intensity_render.py` | C | Imports QApplication, `IntensityPanel`, and panel-kit widgets (`TCT_app/tests/test_wave_intensity_render.py:30-36`) and tests one-shelf/glass/well/refresh behavior (`:58-149`). |
+| `test_wave_laser_render.py` | C | Imports QApplication, `LaserPanel`, waveform generator, and `HazardSurface` (`TCT_app/tests/test_wave_laser_render.py:51-58`) and tests glass/hazard/well/render behavior (`:84-218`). |
+| `test_wave_motor_render.py` | C | Imports QApplication, `MotorPanel`, and `HazardSurface` (`TCT_app/tests/test_wave_motor_render.py:47-53`) and tests stage-command hazard placement, refresh, and render behavior (`:92-260`). |
+| `test_wave_planner_render.py` | C | Imports QApplication, `PlannerPanel`, `ArmLatch`, and `HazardSurface` (`TCT_app/tests/test_wave_planner_render.py:45-52`) and tests hazard wrap, abort enable-state, theme, and render behavior (`:82-239`). |
+| `test_wave_scan_map_render.py` | C | Imports QApplication, `ScanMapView`, `FigureCard`, and pyqtgraph-dependent paths (`TCT_app/tests/test_wave_scan_map_render.py:43-50`) and tests shelf/well/refresh/render behavior (`:85-183`). |
+| `test_wave_scope_render.py` | C | Imports QApplication, `ScopePanel`, pyqtgraph, and `_TriggerDialog` (`TCT_app/tests/test_wave_scope_render.py:44-53`) and tests glass/dialog/theme/shutdown behavior (`:83-328`). |
+| `test_wave_sequencer_render.py` | C | Imports QApplication, `SequencerPanel`, `SequenceCoordinator`, and `HazardSurface` (`TCT_app/tests/test_wave_sequencer_render.py:43-54`) and tests hazard/action-bar/theme/render behavior (`:140-278`). |
+| `test_wave_stage_view_render.py` | C | Imports QApplication plus `StageView`/`StageView2D` (`TCT_app/tests/test_wave_stage_view_render.py:39-46`) and tests shelf/z-chip/theme/render behavior (`:69-131`). |
+| `test_widget_pile_bounded.py` | C | Imports QApplication/QWidget (`TCT_app/tests/test_widget_pile_bounded.py:37-38`) and asserts DeleteLater, reaper, and abandoned-panel pile bounds (`:54-167`). |
+
+Proposed additions by bucket: A +4, B +2, C +26, D +2. Corrected totals if
+accepted: **A = 53, B = 23, C = 69, D = 7 (152 total committed test files at
+HEAD)**.
+
+Gap origin: one unmapped file was added by the 2026-07-13 D1b capability-registry
+commit (`b26144a`). The other 33 were added on 2026-07-14 across the glass-kit
+foundation/material/GlassShell/QML-preview work, the 12/12 `test_wave_*_render`
+panel migration wave, and follow-up safety/lifetime fixes such as backdrop event
+spine, device connect lifecycle, monitor alarm notifications, icon theming,
+immortal-panel cleanup, run-background thread affinity, and widget-pile bounds.
+No mapped row points at a deleted file. Current untracked worktree tests were not
+counted because this brief asks for current HEAD.
+
+Review note: `test_glass_env.py` lives under `gui/`, but the file is Qt-free and
+policy-only, so I proposed A by the map's zero-widget/byte-identical survival
+criterion. If the council wants design-system pure policy outside Bucket A, this
+is the one row to review.
+
+- Files touched: `docs/CODEX_QUEUE.md` only.
+- Verification: static enumeration/audit only. Commands used:
+  `git ls-tree -r --name-only HEAD -- TCT_app/tests`, markdown table-row parsing
+  of `docs/test_bucket_map.md`, targeted `rg`/source reads of the 34 missing
+  files, and `git log --diff-filter=A --follow` for gap-origin commits.
+- Tests run: none; C14 explicitly says pytest is not needed.
+- Risk: bucket proposals are advisory and should be applied by the map-update
+  owner at the wave boundary; no changes were made to `docs/test_bucket_map.md`.

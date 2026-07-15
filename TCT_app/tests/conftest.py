@@ -95,6 +95,54 @@ QSettings.setDefaultFormat(QSettings.Format.IniFormat)   # QSettings(parent) for
 QtCore.QSettings = _IsolatedQSettings                    # (org, app) form
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _real_qapplication():
+    """Create ONE real, offscreen ``QApplication`` before any test runs.
+
+    THE BUG THIS CLOSES. Several VM-only test files use a file-local house
+    pattern (``QCoreApplication.instance() or QCoreApplication([])``) so a
+    bare ``QObject``-only suite never needs a full ``QApplication``. Widget
+    test files use the sibling pattern (``QApplication.instance() or
+    QApplication([])``). Both read ``.instance()`` first — and Qt's
+    ``.instance()`` returns the ONE process-wide singleton regardless of
+    which subclass asks, so if a VM-only file happened to run FIRST in the
+    process it would create a bare ``QCoreApplication`` that every later
+    widget file's ``.instance()`` call finds truthy and reuses. The first
+    widget any test then constructs hits Qt's native fail-fast ("QWidget:
+    Must construct a QApplication before a QWidget") — an unrecoverable
+    process crash, not a Python exception (measured: mixed-order run of a
+    VM file then a widget file, exit code from a native abort, no pytest
+    summary at all).
+
+    THE FIX. Session scope is a fixed pytest contract, not a convention:
+    pytest sets up higher-scoped fixtures BEFORE any lower-scoped fixture
+    or test body and tears them down LAST — so this autouse fixture is
+    guaranteed to run before every file's own ``_app()`` helper gets a
+    chance to run (those only execute inside a test body, never at
+    collection/import time). Creating the real ``QApplication`` HERE means
+    every later ``.instance()`` call in the suite, Core-flavoured or not,
+    finds this one and can never fall through to construct a bare
+    ``QCoreApplication``. This does not weaken the no-widget boundary the
+    VM suites are asserting: that boundary is the standing-law pair
+    (``test_read_only_no_command_surface`` / ``test_owns_no_timer_no_thread``,
+    S2 Ruling Q3) checking the VIEWMODEL's own attributes/children, not the
+    application class it happens to run under.
+
+    The isinstance guard in ``_reap_leaked_toplevel_widgets`` below stays
+    regardless (belt and braces) — this fixture removes the ORDINARY path
+    to a bare-QCoreApplication singleton; it does not forbid one, since a
+    test could still call ``QCoreApplication()`` directly rather than
+    through ``.instance()``.
+    """
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if not isinstance(app, QApplication):
+        app = QApplication([])
+    yield app
+
+
 @pytest.fixture(autouse=True)
 def _isolate_style_globals():
     """Restore ``gui.style``'s theme-customization globals after every test.
@@ -267,13 +315,16 @@ def _reap_leaked_toplevel_widgets(request):
         return
 
     app = QApplication.instance()
-    before = {id(w) for w in app.topLevelWidgets()} if app is not None else set()
+    # A viewmodel-only suite runs under a bare QCoreApplication (house
+    # pattern for ISOLATION runs) — it has no topLevelWidgets() to reap by
+    # construction, so skip this teardown step entirely rather than AttributeError.
+    before = {id(w) for w in app.topLevelWidgets()} if isinstance(app, QApplication) else set()
     yield
 
     from PySide6.QtCore import QEvent
 
     app = QApplication.instance()
-    if app is None:
+    if not isinstance(app, QApplication):
         return
 
     # Let Python free whatever it CAN first; only the C++-cycle leaks survive.

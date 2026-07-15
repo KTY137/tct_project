@@ -5,506 +5,671 @@ context. A fresh session reads this file and is as informed as the old one.
 Updated on every dispatch and every landing. Run `.claude/beat_status.ps1`
 before every commit; stage explicit paths; never `-am`.
 
-**Updated: 2026-07-14, SESSION-CRASH RECOVERY. The previous session lost
-connection mid-wave; a fresh session recovered from this ledger + git. Branch
-`design/glass-wave-1`, HEAD `b99b5a6`. Everything the old ledger listed as
-in-flight LANDED before the crash (see git log): runbg-affinity fix `e0a9d91`
-+ Mary rider `5576378`, wavegen driver sweep `8e85f2a`, waves 1–3
-(`3a6d0ea` stage_view, `2e02b8d` intensity, `5971741` laser). Wave 4
-(scan_map_view) was orphaned complete-with-test in the working tree →
-verified green (57 targeted) and committed `b99b5a6`. Wave 5 (sequencer,
-HAZARD) was orphaned WITHOUT its test → Noah re-dispatched to finish it.
-Bench gates stay DETACHED only (schtasks + poller).**
+**Updated: 2026-07-15 ~12:45 — ALL FOUR morning gates RESOLVED.
+① measurement B RAN LIVE and PASSED all 3 assertions
+(`artifacts_claude/measurement_b_20260715T102648Z/`; island 30.24 Hz,
+DAQ CV 0.084, QML 60.03 fps) — §7.1 thresholds RATIFIED unchanged;
+panel-scoped calm ships. ② Q2 = YES (U1 closed; planner tail =
+self-gated later beat on AxisSpec). ③ kit spec SIGNED (cf52d21).
+④ merge-back AUTHORIZED — executes on bench green: full suite RUNNING
+on sophonone at branch HEAD (background task; bundle @ cf52d21;
+later commits are docs-only). [A-green] PASS across cf6dd58..HEAD
+(52 files, 0 changed). U2 EXECUTION OPEN — Shiori brief-check in
+flight, then day-0 overlay micro-spike + U2.1 Surface core dispatch.**
 
-**DRIFT NOTE (RETRACTED):** the recovery session first claimed
-`.claude/beat_status.ps1` missing — WRONG (Glob false-negative on the dot
-directory; Mamoru standup caught it). The script exists and runs; used from
-here on. Lesson: verify "missing file" claims with `ls`, not Glob alone.
+## EPOCH: QML migration (U-track, docs/ROADMAP_MASTERPLAN.md Part II "UI")
 
-## ⚠️ TREE / MACHINE STATE (read before staging ANYTHING)
+Kaya's binding course settings (2026-07-15): design programme FROZEN except
+lean U1.5 (kit spec only); full glass/SCENE round AFTER the migration;
+"fast DAQ, zero capability loss"; glass bugs deferred to post-migration
+(defer what the revamp DELETES, never what it INHERITS).
 
-- `TCT_app/configs/devices.yaml`: CLEAN again as of 2026-07-14 late —
-  Kaya reverted his real-hardware flip himself (back to simulation ×6,
-  tree == HEAD, nothing was ever staged/committed). If it goes dirty
-  again, the old rule stands: NEVER stage it.
-- Instruments may still be physically cabled ⇒ agents still never run
-  the app locally; targeted headless (offscreen) pytest only; rule 6.
+**Kaya directive (2026-07-15, this session): "den Schmied mit darauf
+ansetzen"** → Brokkr joins the migration epoch, scoped strictly to the lean
+U1.5 deliverable (QML component-kit spec candidates), NOT the frozen full
+design round. Dispatched (see in-flight).
 
-## ✅ LANDED (pre-crash session + recovery session)
+## ✅ U0a — BRANCH CUT (this session)
 
-- `11407b6` orphaned `scripts/glass_probe.py` · `ab0cbee` wave beat 0
-  (panel_kit prune-on-read, Mary APPROVED) · `7b4ea94` + `8e85f2a` wavegen
-  freeze class swept across all five VISA drivers (Paul + Mary riders) ·
-  `e0a9d91` + `5576378` _run_bg GUI-thread affinity + teardown join (Mary
-  reviewed, RISK rider applied).
-- **Wave 1/12** `3a6d0ea` stage_view · **2/12** `2e02b8d` intensity ·
-  **3/12** `5971741` laser · **4/12** `b99b5a6` scan_map_view (recovered
-  from crash-orphaned tree, 57 targeted green, committed by recovery
-  session).
-- `211618d` rotation bookkeeping.
-- ⚠️ Mary review status of waves 1–4: laser beat produced the UNGATED
-  'Output on' finding (item 0 below). Non-hazard wave beats batch at the
-  wave boundary per review cadence; scan_map (4/12, non-hazard) joins that
-  batch.
+- **`ui-qml-migration` cut at main `cf6dd58`** (current working branch).
+- **Branch-point ruling (Adam, documented judgment):** the masterplan says
+  "cut at the polish-freeze tag" (= `45781fa`), but the tag predates two
+  Mary-APPROVED rule-2 emission-safety gates on main (`856281b` laser
+  'Output on' DangerGate, `978c7d1` calibration reference-diode gate).
+  Kaya's ratified rule — defer what the revamp DELETES, never what it
+  INHERITS; safety is inherited — means the branch must carry them, so it
+  is cut at main `cf6dd58` with `polish-freeze` verified as ancestor
+  (`git merge-base --is-ancestor` OK). Delta tag..cf6dd58 is exactly the
+  two safety fixes + ledger chores. The U0 gate assertion "the tag
+  resolves" is satisfied: tag → `45781fa`, annotated, on trunk.
+- main == origin/main == `cf6dd58` (verified this session). Branch push
+  waits until U0b evidence is in.
 
-## 🔥 IN-FLIGHT BEATS (locks)
+## 🏛️ RATIFIED THIS SESSION (Kaya, 2026-07-15 — full entry in DECISIONS.md)
 
-**🏁 THE WAVE IS COMPLETE — 12/12 landed. HEAD `90a3a23`.**
-Boundary machinery in flight (no code beats, no file locks):
+- **"DO LANTERN"** — candidate LANTERN is the U1.5 QML kit direction.
+  Conditions carried: frost-bake spike BEFORE U2 commits (in flight,
+  below); Loki/Baldr attack pass against Lantern WITH spike numbers
+  (queued after U0); Twin's Theme-gap audit = prerequisite homework;
+  Ledger's LOCKED-row idea stays mergeable.
+- **kit.md §1.2 amended** (PROTECTED, per-change approval given):
+  "never animates during a run" → **auto-calms PER PANEL** — Kaya's
+  refinement "auto calm should only then apply to that panel": only the
+  ground behind the running panel stills, the room keeps flowing;
+  detached panels calm whole. Consequence on the record: the Baldr
+  distraction gate is no longer fully satisfied → attack-pass item #1;
+  local calm is a redundant run cue, never the only indicator.
 
-**🟢 GATE #3 GREEN on `d073b32`: 2842 passed, 0 failed, 2 skipped,
-1 xfailed, 9:36.** The freeze family held against the full suite.
+## 🌙 OVERNIGHT MANDATE (Kaya, 2026-07-15 night — "koch mal die Nacht weiter")
 
-**FREEZE FAMILY CLOSED (3/3):** `99b6f74` (O(1) structural bounds)
-landed; **Mary final pass: APPROVED_WITH_RIDERS** — value_count parity
-verified as TEXTUAL IDENTITY (same bytes computed, no float regime can
-diverge); the oversize-early-return behavior change SIGNED OFF as safe
-(independent HV arm gate at scan_controller.py:568; size error blocks
-start on every consumer path). Rider (queued, Kiroku writing
-TECH_DEBT): per-loop-tolerant structural bound (malformed-YAML shape
-only, not GUI-reachable) + oversize diagnostic-collapse hint + the
-option-c worker abort.
+Kaya sleeps; Adam runs autonomous via /loop (dynamic, task-notification
+driven, ScheduleWakeup fallback ~25 min). Directive: maximum migration
+progress by morning. HARD LIMITS overnight: **no merge to main** (Q2
+unanswered — prepare full gate evidence, merge waits for Kaya) · **no
+windowed GUI runs** (measurement B live = Kaya) · safety rules and
+review cadence unchanged.
 
-**Roadmap artifact** built at
-`artifacts_claude/roadmap_status_20260714/roadmap_status.html`
-(incl. Kaya's "living glass" U1.5 scope addition, also written into
-ROADMAP_MASTERPLAN.md U1.5 per his ask). Artifact deploy service 503ing
-— page viewable from the repo file; retry publish later.
+**Overnight queue (work top-down as beats land):**
+1. Land wave 1 (U1.1/U1.2/U1.3 in flight) + immediate Mary on U1.3 +
+   thematic Mary batch (U1.1+U1.2), commit each after review.
+2. Wave boundary: Mamoru standup (claims-vs-git + locks) + Kiroku batch.
+   **Kiroku batch spec is Mary's verbatim counts_recompute_instruction
+   (her U1.0 review JSON, on file in this ledger's git history):**
+   manifest §Counts ~461→~465 (subset 129→133), row bucket cell C→B,
+   'Manifest files: 45' UNCHANGED, behavior split UNCHANGED; bucket_map
+   totals → A49/B22/C42/D5=118 (revert C bump, take B 21→22), move the
+   test_qt_danger_gate.py row C→B, fix stale A-header 47→49; do NOT
+   touch the §Counts bottom coverage line (own reconciliation beat,
+   with C14's table). Plus: trim test_planner_panel.py stale docstring
+   (Mary NIT), ARCHITECTURE.md changelog, research index.
+   ⚠ WAITS for abel-u13 to release SAFETY_NORMATIVE_TESTS.md.
+   **U1.0 REVIEW VERDICT (mary-u10 DONE): APPROVED_WITH_NITS; Q3
+   RATIFIED at 9; bucket ruled B.**
+3. U1 gate evidence: [A-green] + S2 targeted suites local + bench full
+   suite (`bench_run.ps1 -Branch ui-qml-migration`; ssh reachability
+   check first; if bench down, SAY SO in the ledger, never substitute).
+4. Theme-bridge beat (C13's 42 exposures → TOKEN_MAP + style.py
+   constants + 2 app_settings keys + retire QML hardcode guesses) —
+   Noah; token law is Adam-delegated, shadow ladder has Kaya's nod.
+5. U1.5 kit-spec consolidation (Brokkr, Fable): assemble the binding
+   QML component-kit spec from candidate_lantern + round-03/kit.md +
+   rulings 1–7 into ONE document staged for Kaya's [Kaya] gate.
+6. If queue empty: free-lane chores (Codex second-opinion on wave-1
+   diffs; NEVER idle), TECH_DEBT sweep via Mamoru.
 
-**THEME-EDITOR PAIR LANDED, BOTH MARY-APPROVED:**
-- `eaa2425` glass-death fix (Kaya's live bug): root cause was NOT the
-  persisted-settings suspect — the Material macro combo desynced after
-  a direct Backdrop pick and its activated handler replays a stale
-  mapping on same-value reselects. Resync + re-entrancy guard (guard
-  cannot latch: set-in-try/clear-in-finally, Mary-verified); 9
-  regression tests incl. material-survives-every-other-setting ×6.
-- `729841f` opacity clobber (Mary's fix-before-gate-4 ruling): _apply()
-  now sources from _draft_window_opacity, not the display-forced
-  slider; 85%→Acrylic→Apply→preference intact. 199 targeted green.
+**Kaya wakes ~09:00 — a readable morning report (plain language, he
+asked for that register) must be the loop's standing deliverable, ready
+whenever the wake happens.**
 
-**✅ MERGED + PUSHED (Kaya's order 2026-07-15): `main@45781fa`**, gate
-#4 evidence in the merge message. **polish-freeze tag MOVED** (Kaya's
-order) from the premature a7dca3f to 45781fa, force-pushed, move
-documented in the tag annotation. Roadmap artifact (current):
-https://claude.ai/code/artifact/fa02f118-9ade-44dc-b58c-6bbd59bcd3f1
+**Kaya's morning checklist (write into the morning report):**
+① measurement B (45 s, README in measurement_b_prep_20260715T004557Z)
+② Q2 yes/no (close U1 after wave 1, planner tail later — recommended)
+③ [Kaya] gate on the U1.5 kit spec (staged overnight)
+④ merge-back decision once ①–③ done. HONESTY LINE: U2+ entry is
+structurally gated on ① and ③ plus AxisSpec (trunk-P2) for U1.4 — "die
+Migration fertig bis morgen" is not reachable; the reachable maximum is
+U1 gate-ready + U2 unblocked-except-Kaya-items. Say this plainly.
 
-**KAYA'S COURSE SETTINGS (2026-07-15, binding):**
-- Design programme FROZEN; the full glass/SCENE design round runs
-  AFTER the full QML migration (U1.5 stays lean — kit spec only).
-- QML migration = "fast DAQ, zero capability loss" (his words) — the
-  existing U-track gates already encode this; treat as ratified intent.
-- **Glass bugs DEFERRED to post-migration** ("maybe they are gone
-  then" — correct: the backdrop/activation plumbing is deleted by U6).
-  The second-top-level irrecoverable glass loss: Noah stopped mid-
-  trace, findings note pending → TECH_DEBT. Rule of thumb ratified in
-  chat: defer what the revamp DELETES, never what it INHERITS
-  (safety, controller, state-ownership root causes).
+## 🔥 IN-FLIGHT BEATS (locks) — FULL THROTTLE (Kaya directive, new session 2026-07-15)
 
-**P0' CORRECTION (Adam desync, caught by Abel):** P0' wavegen
-per-point apply was ALREADY LANDED 2026-07-13 (`5c75696` + Mary riders
-`ad38db5`, ancestors of main) — per-point apply in scan_controller
-:1447, HDF5 wavegen_command_trace, validator key/range checks. Abel
-verified conformance vs planner_routines_v2.md §1, 179 green, zero
-changes. Adam claimed it unstarted without checking git — session
-hygiene rule 4 violation, corrected here. Masterplan Part VI beat #4
-is DONE.
+Restart happened at the planned boundary; fresh session picked up the
+handoff. Kaya: "run all agents in parallel full throttle" → maximum
+non-conflicting parallelism dispatched:
 
-**🔁 SESSION RESTART HANDOFF (Kaya restarts for the migration epoch):**
+- **Codex C14** (free lane, enqueued 20260715T010507Z) — bucket-map
+  completeness re-enumeration (Mary RISK: 152 files on disk vs 118
+  mapped, 34-file pre-existing gap). Advisory table only; Kiroku
+  executes the map fix at the boundary with C14 as input.
+- ✅ **U1.3 LANDED `a5bacf2`** — sequencer split per §5: read-only
+  QueueVM (no coordinator/gate/callable/notify/timer), panel = retained
+  command/safety host, 6 reclaims, 10 (c) byte-untouched (numstat
+  0-added proof), 41+14 green. Two deviations for Mary to ratify
+  (envelope_html kept byte-stable for the pinned (b) test;
+  _on_active trimmed to gating-only). VM-suite conftest caveat: run
+  alongside a widget suite, not solo (house pattern). Manifest lock
+  RELEASED → Kiroku batch unblocked at boundary.
+- ✅ **mary-u13 DONE: U1.3 APPROVED** (clean, no nits) — safety
+  boundary structurally verified (VM imports no coordinator/gate/
+  callable/notify/timer; standing-law pair real); both deviations
+  RATIFIED (envelope_html bounded one-directional; _on_active trim is
+  actually spec-conformant). Residual notes: VM suites must co-run
+  AFTER a widget suite (pre-existing house pattern, bench alphabetical
+  order unaffected); vm.envelopeSummary production-dead until the QML
+  port binds it (intentional §5.2).
+- **kiroku-w1** (background) — boundary bookkeeping batch. LOCKS:
+  docs/SAFETY_NORMATIVE_TESTS.md (§Counts + bucket cell) ·
+  docs/test_bucket_map.md · TCT_app/tests/test_planner_panel.py
+  (docstring only) · docs/ARCHITECTURE.md.
+- ✅ **U1.1 LANDED `a88b823`** — 17 reclaims + standing-law pair (20
+  tests in new suite), residue 15 byte-untouched (diff shows deletions
+  only), 136-test consumer sweep green, import-boot chain intact.
+  Deviations (accepted): snake_case value_at/cursor_text; empty section
+  headers removed with fully-reclaimed sections. → Mary thematic batch
+  with U1.2.
+- ✅ **U1.2 LANDED `62cec74`** — 15 reclaims + 2 (d) retired (panel
+  40→23), Q1 executed (ONE ETA derivation in RunStateViewModel).
+  Byte-proof method: ran unmodified 40 against the refactored panel
+  BEFORE trimming (all green). Deviations for Mary-wave1 to ratify:
+  (1) openInAnalysisEligible = NOT run.active statt run.terminal
+  (terminal nur vom 1 Hz-Poll gefüttert, den ein panel-owned VM in U1
+  nie sieht); (2) ETA-Placeholder-Test per Q1 notwendig umgeschrieben.
+  ⚠ FLAGGED: test_qml_shell.py hängt am theme-toggle-island-Test (auch
+  "solo", aber unter Parallellast) → **RECONCILIATION RUN pending: ONE
+  quiet-machine run of test_qml_shell.py when no agent is testing**
+  (before the bench gate; if it still hangs quiet, it's real and goes
+  to Noah).
+- ✅ **mary-wave1 DONE: U1.1 APPROVE + U1.2 APPROVE.** Deviation (d)
+  RATIFIED — and upgraded: NOT-active is the FAITHFUL reclaim (legacy
+  panel gated on `not _run_active`; §4.3's `terminal` wording would
+  have CHANGED behavior — spec letter drifts, implementer was right).
+  ONE ETA derivation confirmed by grep. Residue proofs verified
+  (U1.2's 42 added lines are comment-only move markers — cosmetic
+  gloss on "byte-untouched", accepted). RISK finding → conftest
+  micro-beat below.
+- ✅ **mamoru-w1 DONE: standup PASS all 5** (claims-vs-git, lock/tree
+  clean, AxisSpec gate closed, reclaim counts exact, import probes
+  clean). Only drift: ledger HEAD line (fixed same tick).
+- ✅ **kiroku-w1 DONE** — counts per Mary's rulings + full wave-1
+  reclassification (his correct escalation: my brief's 118-numbers
+  were pre-wave-1; staging doc §3 governs): **bucket_map now
+  A49/B25/C39/D8 = 121** (4 C→B, 3 new D rows), manifest ~465/133,
+  planner docstring trimmed, ARCHITECTURE.md indexed 3 new VMs + 4
+  changelog lines. Committed below.
+- ✅ **noah-conftest DONE, landed `9982ce7`** — ruling 9 executed:
+  session-scoped offscreen QApplication fixture + isinstance reaper
+  guard; grep found zero conflicting tests (subprocess-based
+  no_immortal_panels unaffected); ALL verification green incl. the
+  previously-crashing VM-first order (41 passed, exit 0). §7.4a
+  amended + DECISIONS ruling 9 in the same commit. Morning Mary batch:
+  give the conftest diff a light look (test-infra, broad blast
+  radius, verification pasted).
+- ✅ **noah-p1 DONE, landed `2c01e38`** — standing-law consolidation:
+  names + per-file coverage EXACTLY preserved (evidence table in
+  report; sequencer's 2 extra forbidden types kept via extra_types),
+  ScopeViewModel gap backfilled, 76/76 green ×2, negative-proof run.
+  Honest delta: net +47 LOC (Niwashi estimated −60; helper + backfill
+  weigh more) — value = ONE source for the safety-boundary encoding.
+  Morning Mary batch: include (test-only, S2-adjacent encoding).
+  NOTE for the RUNNING BENCH SUITE: it snapshot-bundled @ 40beaa3,
+  BEFORE this commit — the bench evidence covers the pre-P1 tree;
+  P1's own 76/76 tail is its verification (test economy).
+- **brokkr-u15** (Fable, background) — U1.5 kit-spec CONSOLIDATION
+  (frozen programme, lean deliverable): one binding doc for Kaya's
+  morning [Kaya] gate from lantern+kit.md+rulings 1–8+C13 bridge
+  table+seam. LOCK: docs/design/qml_kit_forge/kit_spec_v1.md (new).
+  DECISIONS wins conflicts; no new design decisions.
+- QUEUED after conftest-fix + reconciliation land (test-lane serialized):
+  Theme-bridge beat (Noah; gui/qml_theme.py + style.py constants +
+  2 app_settings keys + retire QML guesses; C13 table = the spec),
+  then bench full suite (gate evidence incl. the conftest fix), then
+  U2 implementation plan on paper (Fable architect).
+- ✅ **noah-hang DONE, fix landed `40beaa3`** — verdict: STALL not
+  wedge (test completes 48.9 s solo; ~4 real dark↔light toggles ×
+  full-app QSS re-polish over ~3400 widgets; test born slow in
+  4e54784 on 07-14; wave-1 innocence VERIFIED). Marker fix
+  slow+timeout(180) per house precedent. CRITICAL catch: without it,
+  the 60 s thread-timeout os._exit would have ABORTED the whole bench
+  run. Bench-log reading note: faulthandler dumps a traceback at 90 s
+  on this test — noise, not failure. Morning list: (a) durable test
+  restructure (toggle once per mode, flip glass via bridge.pull);
+  (b) ~95-widget/toggle leak in refresh_theme/apply_window_backdrop
+  path → TECH_DEBT candidate, owner Noah.
+## 🟢 U1 (wave 1) GATE EVIDENCE COMPLETE (masterplan format)
 
-- **LANDED: `856281b` laser 'Output on' DangerGate — Mary: APPROVED,
-  clean for its scope** (decline ⇒ zero submissions + honest UI; OFF
-  never gated pinned; modal gate blocks double-click; P0'-apply vs
-  output_on separation VERIFIED in scan_controller; executor arming is
-  authorized-run-scoped, acceptable).
-- **🔴 HER BLOCKER (found by the every-submitter grep): SIBLING ungated
-  emission in calibration_panel._run_reference** — one click of 'Run
-  reference-diode calibration' starts _ReferenceWorker whose run()
-  calls waveform_generator.output_on() (calibration_panel.py:85), NO
-  confirmation; the panel HAS self._gate (:109) but only uses it for
-  motion. **FIX IN FLIGHT (noah-laser-danger-gate resumed):** gate the
-  worker START in _run_reference (mirror laser _output_on; fail-safe
-  refuse without gate) + tests + the tct_gui construction-order assert
-  (her nit). LOCKS: gui/calibration_panel.py, tct_gui.py, calibration
-  test file. **RESOLVED: fix landed `978c7d1`, Mary CONFIRMED
-  ("EMISSION-SAFETY HOLD RELEASED — both ungated PDL 800 trigger paths
-  are now gated"); everything pushed, origin/main == main == 978c7d1.**
-  Her final nit (tct_gui assert trivially true, keep as documentation)
-  needs no action. Old session's agents are DEAD — do not SendMessage
-  them. NOTHING is in flight. The new session starts clean at U0.
-- **THE NEW EPOCH: U-track (QML migration) is the priority.** Entry
-  point **U0**: cut `ui-qml-migration` at tag `polish-freeze`
-  (= main@45781fa, verified) + RHI/GL pin probe on the bench GPU
-  (QSG_RHI_BACKEND=opengl, GL_RENDERER == bench GPU, zero
-  software-fallback lines, probe log in ledger). Then U1
-  (viewmodel-first test reclaim — planner slice waits for trunk-P2).
-  Kaya's binding course settings above: lean U1.5, full glass/SCENE
-  design round AFTER the migrate, fast DAQ, zero capability loss.
-- Tree at handoff: clean except this ledger (commit it). Trunk
-  main@856281b pushed? — 45781fa is pushed; 22d2201+856281b are
-  LOCAL-ONLY until the laser review clears (push after Mary's
-  verdict, per review-then-push discipline).
-- Read also: memory tct-current-work.md (rewritten for this handoff),
-  TECH_DEBT :185-188 (freeze-family riders + deferred glass bug).
+- **gate-id:** U1 wave-1 (viewmodel-first test reclaim; planner tail
+  U1.4 excluded per Q2 proposal, HELD for AxisSpec) · **commits:**
+  8166752 · a88b823 · a5bacf2 · 62cec74 (+ infra 9982ce7, 40beaa3,
+  2c01e38) · **verdict:** PASS pending Kaya Q2 confirm for merge-back ·
+  **date:** 2026-07-16 (night).
+- **[Bench]: SUITE GREEN — 2876 passed, 2 skipped, 1 xfailed,
+  604 s — @ 40beaa3 on sophonone** (bundle sync log + summary in task
+  output; slow-marker held, no faulthandler abort).
+- [A-green] PASS (re-run over 8166752; nothing since touches bucket A).
+- S2 normative suites green inside the full run; safety-class beats
+  U1.0/U1.3 Mary-APPROVED at landing; U1.1/U1.2 thematic APPROVED.
+- VM headless smoke: 5 VM suites solo green post-conftest-hardening
+  (ruling 9); test_qml_shell.py green (island test 49 s under its
+  180 s budget).
+- Reclaim accounting: 38 C→B/D + 2 (d) retired; bucket_map
+  A49/B25/C39/D8=121; manifest ~465/133 (Kiroku b027711).
+- Mamoru standup PASS (all 5 tasks).
+- **NOT done overnight by design:** merge-back to main (Kaya Q2 + gate
+  ④), U1.4 planner tail (AxisSpec), measurement B (operator).
+- ✅ **u2-architect DONE, landed `81c56fe`** — u2_hero_plan.md: day-0
+  overlay micro-spike (the ONE unmeasured mechanic) + U2.1–U2.7 with
+  locks/exit criteria; single-construction-site command strip keeps
+  test_scan_viewer_wiring.py byte-stable through the face flip.
+  Adam confirmations given: ruling-8 platform/panel LOC split ✓;
+  VM-naming-vs-abort-matcher deferred to U2.3 dispatch by design.
+  KAYA at sign-off: face-flip ruling (architect recommends flip).
+- ✅ **noah-bridge DONE, landed `616cec8`** — 42/42 exposures (16 new
+  style.py constants, 2 living-glass settings, TOKEN_MAP, C13 guess
+  retirement), 300+ tests green across 6 runs, QML compile checks
+  clean. **Noah caught a brief bug: my brief said living_glass
+  default=off, ratified spec says SUBTLE — spec won (correct).**
+  Kaya FYI (may overrule to off). Intentional kit-unification visual
+  deltas listed in beat report (ChromeButton primary loses extra
+  bold; chip fills unify; crit→error on fault paths). 2 GlassShell
+  text sites deliberately NOT retired (would be redesign) → U2
+  reference review.
+- ✅ **Codex C14 DONE, committed `3669222`** — 34 unmapped files
+  enumerated w/ bucket proposals + evidence; 3 proposed for bucket A
+  (byte-freeze consequence!) → Mary ratifies before Kiroku executes.
+- ✅ **mary-morning DONE: APPROVE ×3** (conftest 9982ce7, P1 2c01e38,
+  bridge 616cec8 — 42-count verified against Appendix A, style.py
+  additive-proven, subtle-default confirmed against spec+DECISIONS,
+  crit→error recolour ruled a hazard-hierarchy STRENGTHENING). 2
+  residual NITs tracked: (i) livingGlass*/motionEnabled notify only
+  fires on theme toggle — fix when a runtime settings control lands;
+  (ii) ALL_42 is hand-maintained — optional introspection guard when
+  the kit grows. **Bucket-A ruling: capability_registry +
+  device_connect_lifecycle + plan_estimate_cap INTO A; glass_env
+  DEMOTED to B** (design-active gui/ policy module — byte-freeze
+  would fight kit evolution). C14 otherwise trustworthy.
+- ✅ **kiroku-final DONE, landed `101e914`** — 156/156 disk files
+  mapped (A52/B28/C65/D11), Mary bucket-A ruling applied (3 in,
+  glass_env demoted B), manifest coverage line fixed, checker verified
+  parse-based (52 files, PASS). ALL LOCKS RELEASED — no beats in
+  flight.
+- ✅ MORNING REPORT delivered (Kaya awake midday 07-15).
+- 🏛️ **CHECKLIST ③ DONE: kit_spec_v1 SIGNED by Kaya** ("I approve the
+  kit spec from the smith") — DECISIONS entry "U1.5 kit spec v1
+  signed" logged, spec Status line flipped to RATIFIED (cf52d21).
+- 🏛️ **①②④ RESOLVED same session** — DECISIONS entry "U1 CLOSED, U2
+  entry gate PAID": measurement B PASS (thresholds ratified unchanged,
+  panel-scoped calm ships), Q2=YES (U1 closed, planner tail self-gated
+  on AxisSpec), merge-back authorized-on-bench-green.
 
-**KAYA LIVE FEEDBACK (2026-07-14 night):** he saw the QML preview's
-in-scene blur ("kit panel") and calls it "the most awesome" — the SCENE
-appetite is REAL now. Standing Loki verdict (+13pp/pane, 3 reversals,
-9-plot rewrite on a segfaulting API) explained to him; his call framed
-as a roadmap track needing a Brokkr/Loki round, with the cheap middle
-path = QML shell as chrome (SCENE legal there already). NO ratification
-yet — awaiting his word.
+## 🔥 IN-FLIGHT NOW (U2 day 0, 2026-07-15 ~13:00)
 
-**Mary on `d073b32`: APPROVED_WITH_RIDERS.** Item 1 resolved fully in
-Abel's favor — PlanLimits' docstring already caps total_leaf_visits and
-the pre-existing (e) gate already compared visits: "not even a change".
-Items 2/3/5 verified clean (only per-leaf iteration was the gated one;
-bounded-proof holds on every path incl. the ValueError path; spies are
-load-bearing). Item 4 = the pulled-forward beat above. Residual noted:
-no general "no sync unbounded walk in a click handler" invariant test.
+- **bench full suite** @ bundle cf52d21 (sophonone, background task) —
+  THE merge-back gate. On green: Adam merges ui-qml-migration → main
+  (--no-ff) + pushes. Later branch commits are docs-only (this ledger,
+  DECISIONS, kit_spec §7.1 amendment) — declared, acceptable delta.
+- **noah-spike-overlay** (opus, background) — day-0 throwaway overlay
+  micro-spike per u2_hero_plan §U2.4 entry paragraph. LOCKS:
+  TCT_app/scripts/spikes/island_overlay_spike.py (new) + its
+  artifacts_claude/ dir. Floors 28 Hz / 55 fps; contention guard:
+  double pass, QUIET-RERUN-NEEDED flag if within 10% of a floor.
+- **noah-u21** (FABLE, background — judgment beat) — U2.1 Surface +
+  material core per u2_hero_plan §U2.1. LOCKS: TCT_app/gui/qml/kit/*
+  (new) · TCT_app/scripts/gen_shadow_assets.py (new) ·
+  TCT_app/tests/test_qml_kit_surface.py (new) ·
+  TCT_app/tests/test_no_inline_hex_gui.py (ADDITIVE ONLY, glob
+  extension to .qml). Calm policy: panel-scoped ships, global-calm
+  flag encoded off. Does NOT touch style.py/qml_theme.py/
+  app_settings.py. Shiori brief-check PASSED all 10 items pre-dispatch.
+- **After U2.1 lands:** immediate-ish Mary look is NOT required (not
+  safety-class) → thematic batch with U2.2+U2.3 per plan §gate line 6;
+  U2.2 (components, Noah sonnet) dispatches on U2.1's frozen API.
+- **PUSHED:** origin @ cf52d21 before this commit.
 
-[LANDED `d073b32` validator walk bound (Abel, resumed instance):
-oversize = total_leaf_visits > max_points computed STRUCTURALLY before
-the walk (subsumes points gate + catches visits-explosion-with-points-
-under); trailing-MANUAL_PAUSE walk skipped on oversize; structural
-checks unconditional; remaining walk provably ≤ max_points. 3 new
-tests incl. walk-skip spy. 120 targeted green. Residual documented:
-ultra-wide single loop slows materialize itself pre-gate (primitive
-concern, separate beat).]
+## 🌱 NIWASHI CREATED (Kaya-directed, 2026-07-15 night)
 
-[LANDED `44e17d4` estimate cap fix (Abel): estimated=False + None
-sentinels above ESTIMATE_MAX_LEAF_VISITS=1M (structural gate, instant);
-render shows "—" + warning, never fake 0 s; core traversal untouched.
-99 + 68 targeted green. **Mary: APPROVED_WITH_RIDERS — "the bench-gate
-red is genuinely dissolved."** Consumer audit CLEAN (only planner_panel
-formats the cost fields, both paths guarded).]
-[LANDED `0e247d8` her riders: residual DOCUMENTED on the constant
-(Adam's ruling: ceiling stays 1M — lowering would deny estimates to
-validator-legal plans; option-c cooperative walk abort = the queued
-real mitigation) · constant pinned ≤1M by test · PlanEstimate
-__post_init__ invariant (estimated ⟺ runtime not None). 100 green.]
+New agent seat `.claude/agents/niwashi.md` + CLAUDE.md table row:
+read-only structure distiller (Sonnet), TCT_app/** code only, proposes
+rot findings + distillation/synthesis proposals with named
+test-thermometer; never edits, instruction layer out of scope,
+SAFETY-CLASS proposals gated Mary+Kaya. Feeds the ruling-8
+distillation-balance gate. First dispatch: at this wave boundary,
+after Mamoru returns (avoid duplicate sweeps).
 
-**DIAGNOSIS (Abel, CONFIRMED, repro timed):** estimate walk is
-O(Π loop-counts), NO cap; 342k visits/s ⇒ monkey's 21⁶ plan ≈250 s ≫
-90 s timeout; stuck worker in C-level generator loop never services
-quit() ⇒ wait(3000) times out ⇒ QThread destroyed while running =
-the 0xC0000005. scan_plan.py + plan_estimate.py have EMPTY diffs vs
-merge-base — pre-existing bug, wave only changed the monkey's dice.
+## 🌱 NIWASHI SWEEP 1 DONE — 4 proposals, Adam's routing
 
-**🔴 GATE RESULT (f48f281): RED — EXITCODE 0xC0000005** after 675s at
-~91% (everything before the monkey was green dots). Log copied to
-%TEMP%\gate_out.txt locally. NOT a wave regression by current evidence
-(see diagnosis beat above) — but the gate stays red until fixed;
-NO merge. Fix beat after Abel's diagnosis → Mary (concurrency class).
+- Wave-1 area: CLEAN (no leftover scaffolding, no dead imports — the
+  extraction discipline held). Sequencer/DangerGate safety paths read,
+  zero SAFETY-CLASS proposals.
+- **P1 (synth, risk NONE, net ≈ −60 LOC): standing-law test pair →
+  shared helpers** (tests/_viewmodel_standing_law.py), keeps test
+  names, **backfills the ScopeViewModel coverage gap** (only VM
+  without the pair!). → EXECUTE OVERNIGHT (Noah beat) AFTER
+  noah-conftest lands (same suites involved).
+- **P2 (distill, LOW, 19 identical 2-line sites in 17 files):
+  resolve_theme_mode helper in style.py + the disclosed None-branch
+  unit test.** → Codex lane after C14 returns (mechanical, non-safety).
+- **P3 (distill, LOW, tiny): _zf_z_data/_zf_a_data shadow copies in
+  scan_viewer_panel → read VM directly** (3 test lines edited). →
+  morning list (batch with next scan-viewer touch).
+- **P4 (rot flag, audit-first): thread-teardown idiom ×21 across 14
+  panels; motor_panel documents an ordering-sensitive historical bug —
+  NOT batch-mergeable.** → morning list; per-panel, Noah-class, never
+  free-lane.
 
-**RIDER BEAT LANDED `b900a80`** (Noah + Adam): census widened to
-QListWidget/QListView WITH a QComboBox-popup exemption (the blanket rule
-flagged combo popups in laser/calibration — found by probe, fixed);
-the widened census then correctly caught planner's registered
-_palette_card (hosts a QListWidget) → **Adam's ruling: unregistered**
-(rule uniformity > one cosmetic pane; planner is hazard anyway; planner
-now registers NOTHING). Device window wired into _toggle_theme fan-out.
-Trivially-true asserts dropped. **182 passed** across all wave/rollout/
-theme suites. NOTE for Mary's awareness (not re-reviewed: change removes
-glass from a hazard panel — safety-positive direction, driven by her own
-rider): planner diff is one register call + comment + test asserts.
-**DOCS LANDED `f48f281`**: ARCHITECTURE changelog waves 4-12 +
-BENCH_CHECKLIST §15.
+## 🎯 KAYA'S PARTING DIRECTIVE (verbatim intent, before sleep #2)
 
-**BOUNDARY VERDICTS (all in):**
+"Full QML+MVVM+TrueGlassShell am Morgen steht immernoch." Bounded
+interpretation ON RECORD (gates are ratified; a stretch goal does not
+override them): maximize toward that target WITHOUT crossing [Kaya]
+gates, Mary reviews, bench gates, safety rules, or merge-to-main.
+Concretely added to the queue: **U2 implementation plan ON PAPER**
+(Fable architect, against the staged U1.5 kit spec + Lantern) so the
+hero slice can start the minute Kaya's morning gates (measurement B,
+U1.5 sign-off) click. Code for U2 is NOT written overnight — the entry
+gate is his, and that is exactly what makes the plan trustworthy.
 
-- Wave 12 planner: **Mary APPROVED, zero riders** (keyboard tab-order
-  nit only). ALL FOUR hazard beats now clean-approved.
-- Non-hazard batch (4·6·8·9·11): **Mary APPROVED_WITH_RIDERS** — every
-  flagged judgment call ruled CORRECT (camera info_card = set-once
-  device identity, PDL precedent; scope/analysis live-value exclusions
-  right). Riders → noah-wave-riders above. Open items for later:
-  scope `_lbl_probe_warn` (warn ink) on a registered card — defensible
-  per Mary, flag for a uniformity pass; durable live-value-QLabel
-  MARKER as kit enhancement (design item, needs an owner decision).
-- Mamoru standup: all nine landing claims VERIFIED against git;
-  devices.yaml in no wave commit; beat_status.ps1 EXISTS (the ledger's
-  "missing" claim was Adam's Glob false-negative — retracted above).
-- Kiroku bookkeeping DONE (uncommitted): ARCHITECTURE.md changelog
-  waves 4-12 (:647-663) + BENCH_CHECKLIST.md §15 glass-wave visual
-  acceptance (:895-996). Commit with the rider beat.
+## ✅ U1 STAGING DESIGN LANDED (u1-architect, Fable, this session)
 
-[LANDED wave 12/12: `90a3a23` planner (hazard) — HazardSurface over the
-danger aside (latch + Abort), _palette_card kept, per-action gate/
-mutation/executor/teardown byte-identical, Abort in no bulk-disable set;
-97 targeted green. Mary review in flight above.]
+- `docs/design/u1_staging.md` (566 lines, uncommitted until first-beat
+  landing review). 5 beats: U1.0 carve-out → wave 1 (U1.1‖U1.2‖U1.3,
+  38 reclaims) → boundary (Mamoru+Kiroku+Mary batch) → gate §7 →
+  merge-back; U1.4 planner (36) designed but DO-NOT-DISPATCH until
+  AxisSpec importable on branch. Placement ruling: flat
+  gui/*_viewmodel.py (package would strand the S2-named
+  run_state_viewmodel.py). Sequencer split: SequencerQueueViewModel
+  (read-only, fed) + panel stays command/safety host. Run-owner seam =
+  ruling 7 convention pinned. **OPEN: Q2 to Kaya** (close U1/merge
+  back after wave 1, planner tail self-gated later — recommended) ·
+  Q3 to Mary at U1.0 review.
+- (U1.4 planner: HELD for AxisSpec on branch.)
 
-AFTER the three reports: Kiroku bookkeeping rotation (ARCHITECTURE
-changelog + wave summary), contact sheet (cross-panel META), detached
-bench gate (schtasks + poller) — then the branch is Kaya's to merge.
+## ✅ U1.0 LANDED — commit `8166752` ([A-green] PASS re-run over it)
 
-[LANDED wave 11/12: `34453ab` analysis — zero registrations (plot/data
-dense, bias-shaped outcome for content reasons); math/loading/fade_swap
-byte-identical; 107 targeted + 28 supplementary green; header/recent-runs
-exclusion judgment calls → boundary batch.]
-[LANDED wave 9/12: `4b74c1c` scope — chrome registers, live-value cards
-out, _TriggerDialog satellite idiom; 45 targeted + 63 supplementary
-green; Channels/Measurements exclusion judgment calls → boundary batch.]
-[LANDED wave 10/12: `f86675d` motor (hazard) — **Mary: APPROVED, zero
-riders.** Hazard invariant verified by construction; STOP live mid-move
-(absent from _motion_widgets by design); outside widgets never command
-motion. Recurring trivially-true-assertion nit → queued batch chore.]
+- Pure move verified by implementer byte-compare (host diff 202 del /
+  0 ins; 9 signatures identical). New file 9 passed / host 58 passed
+  (output tails = verification). Judgment call flagged to Mary: 2 dead
+  single-symbol imports (DangerAction, QtDangerGate) removed from host.
+  Manifest Q4 row rehosted 5+4=9 with inline Q3 flag; aggregate Counts
+  section deliberately NOT recomputed (waits for Mary's Q3 ruling, then
+  Kiroku). Bucket-map: new row C-proposed, count 117→118.
 
-[LANDED wave 8/12: `4725f64` camera — shelf register=False, 5 chrome
-cards in / 4 content cards out, _ROIDialog satellite idiom, worker
-untouched; 63 targeted + 159 supplementary green. info_card
-registration (laser-PDL precedent) flagged for the wave-boundary batch.
-Non-hazard ⇒ joins the boundary Mary batch with waves 4 + 6.]
+## ✅ LANDED THIS SESSION (besides U1 staging design)
 
-[LANDED wave 7/12: `18469ca` calibration (hazard) — rollout registrations
-kept, opaque HazardSurface on the repeatability section, DangerGate/
-homed/workers byte-identical per Noah (Opus). 49 targeted + 37 adjacent
-green. **Mary: APPROVED, nits only.** Stop-inside-HazardSurface ruled
-SAFE (no opacity/mouse-transparency, stylesheet doesn't cascade, stripe
-clipped to 4px left strip; Stop enabled-state driven solely by run
-lifecycle). RECURRING NIT (waves 5+7): the "fill unchanged across
-set_panel_glass(True)" assertion in both wave hazard tests is trivially
-true by construction — batch micro-chore: drop/comment it in
-test_wave_sequencer_render.py + test_wave_calibration_render.py, the
-registry-absence asserts are the real coverage.]
+- **noah-measb DONE** — measurement-B harness built, offscreen smoke
+  PASS exit 0 (sim guard proven: trips on non-sim device, refuses
+  headless with exit 3; sim scan + HDF5-to-temp + 30 Hz island + QML
+  parse all exercised). `TCT_app/scripts/spike_measurement_b.py` +
+  bundle `artifacts_claude/measurement_b_prep_20260715T004557Z/`
+  (README = launch instructions). **WINDOWED LIVE RUN = OPERATOR
+  (Kaya)**: `cd TCT_app; .venv\Scripts\python.exe
+  scripts\spike_measurement_b.py` on the laptop, ~40–55 s, verdict
+  block + spike_report.json. NOTE: §7 named assertions but not
+  thresholds — harness carries PROPOSED floors (island 28 Hz, qml 55
+  fps, retention 0.90/0.80, jitter CV rule) as named constants;
+  ratify against the live numbers before treating as the U2 gate.
+- **Codex C13 DONE** (free lane, Adam-reviewed) — Theme-gap audit:
+  **42 missing Lantern bridge exposures** (evidence table with
+  file:line in docs/CODEX_QUEUE.md §C13). U2 cost line: ONE focused
+  front-loaded bridge beat (TOKEN_MAP + style.py constants + 2
+  app_settings keys + retire QML hardcode guesses) BEFORE the first
+  Surface, else the Surface becomes the source of truth. Path note:
+  the kit contract is `docs/design/iterations/glasshell-cockpit/
+  round-03/kit.md` (qml_kit_forge/kit.md does not exist — brief slip,
+  Codex adapted correctly).
 
-[LANDED wave 6/12: `dc3592c` device manager window — shelf register=False
-as CONTENT consequence (QTableWidget Z4 disqualifier), bulk-actions Card
-registers; _run_bg fix untouched, affinity tests green; 25 targeted + 129
-supplementary green. Follow-up micro-chore: add the window to
-tct_gui._toggle_theme refresh_theme fan-out (out of beat file-scope).
-Non-hazard ⇒ joins the wave-boundary Mary batch.]
+## ✅ MARY BATCH DONE (this session): 6452da3 APPROVED_WITH_NITS
 
-[LANDED wave 5/12: `bf41854` sequencer (hazard) — crash-orphaned diff
-recovered intact, Noah audit no-gaps, 57 targeted green. **Mary: APPROVED,
-zero riders** ("I would ship this to a bench with HV cabled"). One nit,
-strength-of-proof only: `test_hazard_surface_opaque_fill_survives_panel_
-glass_switch` is trivially true (surface never registered ⇒ set_panel_glass
-provably no-ops); real invariant held 3 ways (no #hazardSurface glass QSS
-variant style.py:1799-1806 · register_glass_pane refuses HazardSurface
-panel_kit.py:1295 · instance-sheet pin re-asserted by the theme round-trip
-test). → optional micro-chore, not a defect.]
+- Item 1: stale treatment verified genuinely ink-only (no live
+  opacity/blur binding), STALE marker unconditional incl. compact mode,
+  ring_vs_own_fill computes the correct own-fill pairing and is clearly
+  report-only (no exit code). 3 NITs, no action required. Optional test
+  chore (backlog, not queued): assert value-ink swaps to muted + pin
+  the literal 'STALE' string.
+- Item 2 (Loki routing note): RESOLVED as routing, no hole. **Adam
+  ruling 7 (delegated design authority, post-hoc log due in
+  DECISIONS.md): run-ownership = the top-level currently hosting the
+  ScanViewer/ScanStatusStrip, gated by facade.active — NOT the arming
+  panel** (survives Planner-close-mid-run + detached viewer; app is
+  single-run by construction so `active` suffices). Sequencer runs stay
+  ScanViewer-scoped; future extension seam = read-only run-source
+  STRING on the facade, never a controller ref. **Queued spec chore:**
+  amend lantern §7 "resolves through run_state_facade only" wording to
+  name the ScanViewer-host convention (batch with next spec pass +
+  DECISIONS ruling-7 entry). Fallback note: under ruling-1's global-calm
+  fallback the whole question is moot.
 
-## HEAD / TRUTH
+## ✅ ATTACK-FIX CYCLE CLOSED (2026-07-15, all on `ui-qml-migration`)
 
-- **main @ `98a66b1` = THE TRUNK** (merged + pushed, Kaya's order).
-  Nothing touched real hardware. The branch is Kaya's to review.
-- **origin/main @ `a7dca3f` = THE TRUNK** (unchanged).
-- **Night briefing (open this first):**
-  https://claude.ai/code/artifact/8dfa85d2-692f-4603-b69f-4087d31b9d9f
-  (copy in `artifacts_claude/nachtschicht_20260714/`)
+- `c11b580` **Brokkr revision** — all six rulings are spec text now.
+  Notable: outside-offset ring convention (`focusRingOffsetPx=2`,
+  accent-on-accent structurally unreachable, matches QSS
+  outline-offset → ONE convention across both shells); zero-cost
+  claim RETIRED with measurement B written in as U2 entry gate incl.
+  failure fallback (run-active global calm, back to Kaya with
+  numbers); kit.md touched in exactly 3 permitted spots; my ruling-5
+  location slip corrected (enumeration = lantern §8 + kit.md §7 law 4).
+- `6452da3` **Noah fix** — MetricTile stale dim retired (ink-only +
+  unconditional STALE marker, covers compact-mode caption gap);
+  ring_vs_surround PASS all rungs both themes; ring_vs_own_fill
+  report-only (reproduces Baldr's hand numbers exactly, incl. 1.00:1
+  accent-on-accent). 13 + 97 targeted green (his output tail = the
+  verification, test economy).
+- Earlier same session: `2a2cb38` forge · `bb44801` LANTERN + panel-
+  scoped calm · `e875571` C12 · `2a5e67e` probe · `4c5de40` spike ·
+  `9187d9b` U0 GREEN · `db5f0fe` Loki verdict · `b23bae8` design
+  delegation · `cbda3b0` attack reports + six rulings. Mamoru standup:
+  ALL 7 CLAIMS VERIFIED.
 
-## ▶ RUN THIS FIRST (his ask: "grob die full qml migration mit glass shell sehen")
+## 🔁 RESTART HANDOFF (U0 closed, attack cycle closed — U1 is next)
 
-```
-cd TCT_app
-.venv/Scripts/python.exe scripts/glass_shell_preview.py --dark
-```
+1. **Next beat: U1 staging design** — an architecture beat (**Fable**,
+   per the architecture-agents rule). Input: Codex C12 portability map
+   (under the C12 brief in docs/CODEX_QUEUE.md): planner 36/67 (waits
+   for trunk-P2 AxisSpec — do NOT start planner slice), scan_map 17/32,
+   scan_viewer 15/40, sequencer 6/17 (needs read-only queue/run VM +
+   retained command/safety host — the one real design question).
+   run_state_facade boundary: VM holds no controller ref, no start/stop
+   callables. 9-test DangerGate cluster in planner = S2 carve-out,
+   untouchable in U1.
+2. **Queued at U2 entry: measurement B** (acquisition-headroom spike —
+   protocol now written INTO candidate_lantern.md §7 by the revision).
+3. **Queued for Mary (thematic batch, non-hazard):** `6452da3`
+   (MetricTile + check) + a look at the panel-scoped-calm routing note
+   from Loki (facade must resolve WHICH panel owns the run — routing,
+   not a hole).
+4. **Standing:** design delegation ACTIVE (DECISIONS 2026-07-15) —
+   token law + design changes = Adam, post-hoc logging; safety
+   carve-outs explicit. Kaya may still overrule the run-active speed
+   clamp (Baldr's panel-scope challenge is verbatim in
+   attack_baldr.md).
+5. Bench-gate constraint (learned at U0): connected session required
+   for hardware GL; task `tct_rhi_probe` + `C:\bench\rhi_probe.bat`
+   exist and are reusable; TreeMap in bench_run.ps1 covers main +
+   ui-qml-migration.
 
-A REAL translucent QQuickWindow, real DWM acrylic, a REAL BiasPanel island on a
-simulated supply, real detach, leakage+compliance restored. Everything unwired
-wears a visible STUB badge. `--probe` prints the measurement and exits.
+## 🛡️ BALDR VERDICT on LANTERN (2026-07-15): fixable, no redesign
 
-**And in the shipped app: Theme editor → Material → Acrylic.** His persisted
-`theme/window_backdrop` is `none`, and until `636ce78` turning it on did
-nothing. That is very likely the whole story of "I never see glass".
+Full audit `docs/design/qml_kit_forge/attack_baldr.md`. Material
+system / tier-invariance / chip law: SOUND. Findings → Adam's rulings
+1–5 in DECISIONS.md (run-active speed clamp ≤1.0×; stale=ink-only —
+MetricTile 0.6 dim is a MEASURED shipped AA failure, crit 2.59 dark /
+warn 2.52 light; ring-vs-own-fill check was MISSING, accent-on-accent
+1.00–1.37:1; hazard-rung focus = ring always, halo never; dead-zone law
+gains 'halo'). His panel-scope challenge (adjacent panels are watched
+during the same run) is on record verbatim for Kaya; clamp adopted as
+the narrowest fix, ships unless overruled.
 
-## 🔑 THE DECISION WAITING FOR HIM
+## ⚔️ LOKI VERDICT on LANTERN (2026-07-15): REVISE — sound, 2 riders
 
-**Does SCENE earn its keep?** The spike proved in-scene MultiEffect works (60 fps,
-0 crashes / 80 launches) — and Loki then asked what, in THIS app, it is
-architecturally *permitted* to blur. Answer: **nothing.** The workspace is a
-QWidget tree; the chrome is a non-interop QQuickWidget island (different scene
-graph). The 9 pyqtgraph/GL islands **never migrate** (ratified) and paint OVER the
-QML scene via airspace, not under it. What a legal pane could still frost —
-`canvas`/`card`/`well` — are flat colour fields, whose blur is themselves.
+**"The frost-bake premise survived the attack I most expected to
+land"** — O(1) evidence real (fps/island-rate held to 8 panes @ 12 Hz;
+the CPU-slope number is noise, don't quote it as a constant). Safety
+posture intact. Stability credible. BUT:
 
-⇒ **The free DWM window material is the entire realized return of the glass
-programme.** AMBIENT (0 pp CPU) vs STRUCTURAL (+13 pp/pane, needs THREE ratified
-reversals and a rewrite of the 9 plots on a scene-graph API our own spike saw
-segfault in ~50 % of Python runs). Loki: ≥10× beats, unbounded risk, in exchange
-for blurred card borders.
+- **BLOCKER-1 (spec contradiction CREATED BY the panel-scope
+  ratification):** candidate_lantern §3.2/§7 still say "RUNNING → bake
+  0 Hz / zero material cost during acquisition (SYNTHESIS §4.3)". With
+  panel-scoped calm the room KEEPS FLOWING during a scan ⇒ the shared
+  bake CANNOT stop ⇒ that guarantee is silently void — ~0.5 core of
+  ground+bake now runs ON TOP of live acquisition on the CPU-bound
+  laptop. **Fix = paper reconciliation of §3.2/§7 BEFORE U2** (bake
+  runs at idle rate during scans; only the run-owning pane calms).
+- **MAJOR-2:** panel-scoped calm mechanism is hand-waved; the only
+  O(1)-preserving mechanism is (a) the running pane stops scheduling
+  its OWN sampler (stale crop) ⇒ a slow drift seam at the panel edge
+  over a 90 s flow period — must be NAMED in the spec; seam
+  acceptability = Baldr's call.
+- **MAJOR-3 (the REQUIRED follow-up measurement, "measurement B"):**
+  the spike had no acquisition load (no DeviceManager/controller/HDF5,
+  1 island vs up to 9). Before U2: re-run bake+full ground DURING a
+  live SIMULATED scan (sim devices + controller + HDF5 + live scan
+  plot) on the laptop; assert plot rate + DAQ cadence.
+- MINOR-5: shadow-token family (`shadowInk`, `shadowA..D`) needs
+  Kaya's explicit token-law nod — NOT covered by "DO LANTERN".
+- MINOR-6: the Theme bridge is ~40 unbuilt token exposures — a real
+  front-loaded cost line before U2's first Surface, not a footnote.
+- MINOR-7: accelerated-RDP edge passes `_scene_capable`'s tier gate
+  (low priority, bench used connected).
+- Note for Mary (routing, not a hole): the facade must resolve WHICH
+  panel owns the run for panel-scoped calm.
+- Cost honesty for the U2 plan: **~3× a naive port across U2–U6**,
+  breaking even after U6 — carry that number, not "one glass instead
+  of sixteen" (that's the steady state).
 
-## ✅ THE NIGHT — 21 commits (`a7dca3f..37cead3`)
+**Fix path (after Baldr lands, ONE Brokkr revision pass batches both
+attack results):** reconcile §3.2/§7 + name mechanism (a) + shadow-nod
+question to Kaya. Measurement B queued as U2-entry requirement (not a
+U1 blocker — U1 is viewmodels, paint-free).
 
-**The glass chain — why he never saw it. FOUR independent causes, all now fixed:**
+- ✅ LANDED **noah-frost-spike** `4c5de40`: **🎯 PASS on ALL 4 criteria —
+  Lantern's entry ticket is PAID.** Worst-case Intel UHD iGPU, single
+  process WITH a live 30 Hz pyqtgraph island: CPU slope **0.89–1.37
+  pp/pane** (criterion <2; live per-pane blur was +13), QML 60 fps every
+  cell, island 30.3 Hz every cell, 20/20 stable at 8 panes/12 Hz.
+  Mechanism: `layer.live:false` + timed `scheduleUpdate()` = ONE blur
+  pass; panes are crop-blit `ShaderEffectSource` samplers; bakeCount
+  telemetry confirmed commanded bake rates. Honest caveats (report:
+  `artifacts_claude/lantern_frost_spike_20260714T233707Z/`): single 10 s
+  sample per cell (cell noise ≈ effect size; fit clears anyway), no
+  pixel-correctness diff (`--hold` eyeball mode exists, unexercised),
+  iGPU only, auto-calm/full-amplitude/reduced-motion untested. **Loki
+  gets these numbers for the attack pass.**
+- ✅ LANDED **noah-u0-probe** `2a5e67e`: local smoke PASS exit 0
+  (GL_RENDERER='Intel(R) UHD Graphics'; --expect mismatch correctly
+  exits 2). Teardown deadlock found+fixed (message handler restored
+  pre-quit; render-thread log vs GIL at join) + out-of-process hard
+  watchdog — the probe cannot hang a gate. Bench RUN still open ↓.
+- ✅ LANDED **brokkr-u15-kit** (Fable): THREE candidates in
+  `docs/design/qml_kit_forge/` — **TWIN** (QML as second renderer of the
+  ratified panel_kit contract; parity is the feature; zero blur) ·
+  **LANTERN** (one `Surface` material: rung + baked position-sampled
+  frost + edge ladder + springs; living ground as foundation) ·
+  **LEDGER** (machine-readable `(role,state)→paint/motion` table with
+  LOCKED safety rows; components are projections; self-auditing).
+  Differentiation axis: where design authority lives (shipped QWidget
+  contract / scene material / data contract). Attack pass targets are
+  pre-mapped in `00_comparison.md` §3 (Loki: Lantern's unspiked frost
+  bake — demand a bench-iGPU spike before U2; Baldr: calm-on-RUNNING as
+  run-state side channel, focus-ring contrast on composited fills).
+  Cross-candidate FACTS regardless of pick: `gui/qml_theme.py` TOKEN_MAP
+  is missing danger_fill/on_danger/error/chip/edge/pressed/radius/font-
+  role tokens + a motionEnabled bridge (shipped QML already guesses,
+  e.g. Font.DemiBold in MetricTile.qml); all three amend kit.md §1.2 to
+  "auto-calms to static during a run" per Kaya's living-glass directive
+  (flagged in each candidate — needs his nod at the [Kaya] gate);
+  washes move POSITION never alpha ⇒ tint ≤0.07 holds per frame (what
+  makes living glass legal); glass_env's tier ladder already gates the
+  shader path (software/RDP cap at TOKEN). Open questions for Kaya
+  listed in 00_comparison. Loki+Baldr attack pass: QUEUED (after U0
+  lands — migration mechanics stay the priority).
+- ✅ LANDED **Codex C12** `e875571` (verification real: 156 collected,
+  full offscreen run 156 passed / 72 s): planner **36/67**
+  VM-reclaimable (9-test DangerGate cluster = hard S2 carve-out) ·
+  scan_map **17/32** · scan_viewer **15/40** · sequencer only **6/17**
+  (panel holds a live SequenceCoordinator + command callables ⇒ U1
+  needs a read-only queue/run VM + retained command/safety host, not a
+  direct port). Zero QTest key/mouse synthesis in all four suites —
+  couplings are structural. Full tables under the C12 brief in
+  `docs/CODEX_QUEUE.md`. (Protocol note kept: codex lane = queue-file
+  briefs only; bridge watcher was DEAD 85865 s, restarted this session.)
 
-1. `636ce78` the QSS was **never rebuilt** on a live backdrop change: the window
-   got the glass *property* with no *rule* behind it. (The probe script hand-added
-   `apply_theme()` — which is why the probe measured glass and Kaya did not.)
-2. `636ce78` windows were **born without an alpha surface** in the shipped default.
-3. `4e54784` the **DEFAULT QML shell painted an opaque lid** over a healthy
-   material: chrome island **0.00 % → 96.01 %** backdrop-tracking pixels; whole
-   window 0.65 % → 28.27 %. TWO painters (an opaque `setClearColor` **and** four
-   opaque QML fills) — fixing either alone measures as a no-op.
-4. His persisted `theme/window_backdrop` is **`none`**.
+## 🟢 U0 COMPLETE — GATE EVIDENCE (masterplan format)
 
-**The rest:** `58df585` Odin crew ported (Brokkr/Loki/Baldr) · `801f2ab` the glass
-contract (FLAT<TOKEN<WINDOW<SCENE<COMPOSED, 6912-env matrix) · `b702a85` round 01 ·
-`beddc37` verdict + 2 ratifications · `8299381` **the alarm with no home** ·
-`bbe3b10` the shader ban is unearned — but Qt **cannot** blur behind a window ·
-`c071f28` QML live-preview · `f9a73bc` round 02 · `c37cac8` **the elevation ladder
-does not exist** (dark canvas→panel ΔL* 1.46; light is inverted) · `1d9eee1` the
-GlassShell skeleton (measures its own glass) · `4ca8331` **71 WCAG failures, and
-the cause was not the colours** (19 QSS blocks painted ink on an rgba wash of
-itself) · `82ddd2f` **the minimize blocker does not exist** ([84,84,84] is DWM's
-inactive-window fallback) · `9e525f5` Mary's review booked · `f934e65` **G-B2b —
-the contract wired to reality** (the RDP ceiling had NEVER fired) · `cf18550`
-**50 black icons** killed at the root · `37cead3` the activation scan gate.
+- **gate-id:** U0 (branch cut + RHI/GL pin probe) · **commit reviewed:**
+  probe `2a5e67e` on `ui-qml-migration` (cut at main `cf6dd58`,
+  polish-freeze ancestor verified) · **verdict:** PASS ·
+  **date:** 2026-07-15.
+- **Run 3 (RDP-connected session, task tct_rhi_probe): PASS exit 0 —
+  QSG_RHI_BACKEND='opengl' · graphicsApi='OpenGL' ·
+  GL_RENDERER='NVIDIA GeForce RTX 5080/PCIe/SSE2' · 0 software-fallback
+  markers across 454 lines · --expect 5080 FOUND.**
+- **Artifact:** `artifacts_claude/u0_rhi_probe_20260715/
+  rhi_probe_u0_bench_log.txt` (full 504-line capture, verdict block at
+  top; committed with this ledger).
+- **Standing bench-gate constraints learned by runs 1–3 (re-assert at
+  every per-stage [Bench] per masterplan):** ssh = session 0 = llvmpipe;
+  disconnected session = Qt opengl32sw fallback; **RDP-CONNECTED session
+  = real hardware GL on this driver (610.47)** — so gates need a
+  connected session, physical console NOT required. Run mechanism:
+  task `tct_rhi_probe` (interactive, Kaya-created), bat at
+  `C:\bench\rhi_probe.bat`, logs at `C:\bench\rhi_probe_u0*.log`.
 
-## 📐 BALDR'S FLOOR RE-DERIVATION (2026-07-14, report-only — landed in transcript)
+## (superseded) run-2 finding — kept for the record
 
-Against the OWNED ambient ground (kit §1.1: dark L* ∈ [0, 7.61], light
-[88.89, 96.89]), validated against 4 of the kit's own published numbers (≤0.5%):
+- Kaya created+ran the interactive task himself (schtasks output
+  ERFOLGREICH ×2). **Run 2 result: frame RENDERED (progress vs ssh) but
+  renderer = llvmpipe again — this time via Qt's bundled software
+  fallback `opengl32sw.dll` (fingerprint: Gallium 0.4 llvmpipe,
+  Mesa 11.2.2, LLVM 3.6). RC=2, probe FAILED correctly.**
+- Root cause CONFIRMED by paired checks: session 3 is DISCONNECTED
+  (quser: "Getr.", 12 h idle) while the GPU is healthy (nvidia-smi:
+  RTX 5080, driver 610.47). A disconnected session gets no hardware GL
+  context from the NVIDIA ICD; Qt silently swaps in opengl32sw.
+- **U-track consequence (a REAL U0 find, exactly what the gate is
+  for): every per-stage bench QML gate silently tests SOFTWARE
+  rendering unless the bench session is CONNECTED** (RDP attached or
+  physical console). Booked for the masterplan's per-stage [Bench]
+  threshold note. If even a connected RDP session caps GL (classic RDP
+  driver behavior; modern NVIDIA may allow it), the fallback options
+  are physical-console gates or a re-ratified D3D11 criterion — decide
+  on evidence when Kaya connects.
+- NEXT: Kaya RDPs into sophonone (or logs in at the console) → re-run
+  `tct_rhi_probe` → poll logs. Expected PASS only with a connected
+  session.
 
-- **Old `MIN_PANEL_GLASS_ALPHA = 0.50` → new accessibility floor 0.0** for
-  pane/shelf/chrome/card under the `{text, muted}` ink law. The opaque
-  suppression Kaya dislikes can drop almost entirely. **Light is the binding
-  theme** (4.97:1 worst — ~10% margin; dark has 44%): do not ship literal α=0.
-- **One real floor: semantic ink on LIGHT glass = α ≥ 0.24** (binding pair:
-  `good` at α=0 = 4.21 FAILS; `crit` needs no floor; warn/accent/sim 0.18–0.21).
-  Kit ships 0.55/0.86 — 2–3× margin. No kit bugs found.
-  **CORRECTION (machine-arbitrated, `28e6dec`):** Adam's earlier check claimed
-  this floor dissolves (5.19 at α=0). That was WRONG — he tested only the bright
-  edge of the ground band; the dark edge binds for dark inks. Baldr's hand
-  arithmetic was right. The arbitration script is
-  `TCT_app/scripts/kit_contrast_check.py` — run it, don't re-argue it.
-- `MIN_BACKDROP_CANVAS_ALPHA = 0.80` untouched (protects the DWM-garnish edge,
-  still facing an unknown desktop). Garnish-on does NOT change interior floors
-  IF the "garnish strip never carries text" invariant holds — verify with
-  `scripts/glass_probe.py`, currently confirmed only from code comments.
-- **NEEDS KAYA:** `GLASS_SAFE_TEXT_TOKENS=(text,muted)` is a ratified/PROTECTED
-  law written against the unknown-desktop premise, which has moved. Extending it
-  would allow coloured semantic words on own-ground glass cards (dark: any α;
-  light: α ≥ 0.23). His call, not ours.
-- Wanted CI tests (after the bisection releases the tree): render the real
-  procedural ground and measure its ΔL* range (does `GROUND_TINT_ALPHA_MAX=0.07`
-  really produce ΔL*4.0 in BOTH themes?); kit §2.1 is missing the light-shelf
-  SCENE row (inference `panel`@0.55 reproduces kit's own 5.86 within 0.2%).
+## (superseded) U0b first block — schtasks permission (RESOLVED by Kaya running it himself)
 
-## ✅ THE GATE IS GREEN — `f7a1a3e`, 2685 passed, 0 failed, 8:48
-
-**The branch is gate-clean for the first time since the wave began.** Detached
-Task-Scheduler run on the bench (the only reliable path — use `C:/bench\gate.bat`
-via `schtasks /run /tn tct_gate` + the poller; never a live SSH stream).
-
-The road there, kept for the record: run 1-2 died of a REAL native crash (the
-icon watcher, then pyqtgraph-in-the-repolish-walk — both fixed); runs 3-5 died of
-the Tailscale stream freezing (~25 min) while the suite was CLEAN at 23/83/88%;
-the first detached run finished 2590 green + 2 monkey seeds red (the gate WORKED,
-the monkey was blind — classification now keys off WIRING, `d13af76`); the second
-detached run died at test 17 (`test_ambient_ground` needed a QApplication the
-bench's alphabetical order never created — `f7a1a3e`); the third is GREEN.
-
-**Landed on top of the green 21d2b17 base:** kit foundation `88cc542` (card/shelf
-tokens, AmbientGround band-clamped to ΔL* 3.58, GlassPane/Card/Well/HazardSurface)
-· bias pilot `074943f` (hazard boundary byte-identical, Mary: "I would ship this
-to a bench with HV cabled") · monkey wiring-classification `d13af76` · ground perf
-`0fde84c` (stall 330→10 ms, cache 1.7 GB→30 MB) · QApplication fix `f7a1a3e`.
-
-## ⏳ WAITING ON KAYA — the branch is his now
-
-1. **The card-token veto:** `artifacts_claude/card_token_delta/` (dark cards rise
-   L* 5.07 → 10.76 app-wide; partially reverses his ratified v6 recede pass, done
-   on his implement-today order). One look.
-2. **The pilot:** `artifacts_claude/pilot_bias/` (both themes) + run the app.
-3. **Merge decision** for design/cockpit-v5 → main (gate green, Mary approvals on
-   file). Push has NOT happened — nothing has left the machine.
-4. Then: the 12-panel wave (handoff in `074943f`), the shadow-ladder spike, the
-   semantic-ink-on-glass law extension (measured legal at α ≥ 0.24).
-
-## 🧑‍🔬 NEEDS KAYA (at 10:00)
-
-0. **🔴 NEW (wave find, 2026-07-14): the laser 'Output on' button is UNGATED.**
-   `armedBtn` in gui/laser_panel.py is the real PDL 800 trigger (wavegen output
-   → laser trigger input = emission if the manual box is armed), and
-   `_output_on()` submits straight to the VISA worker — no DangerGate, no
-   confirm. Every HV-energizing path in bias_panel rides `_confirm_hv`; the
-   census classed laser non-hazard, which is why nobody looked. Behavior left
-   byte-identical by the wave beat (flagged, not changed). DECISION: should
-   laser emission join the rule-2 danger list (confirm dialog / DangerGate like
-   HV enable)? If yes → Paul+Noah beat; also reclassify laser as a hazard panel
-   (opaque surfaces) and re-run its wave beat's register decisions.
-
-1. **The SCENE decision** (above). Everything downstream hangs on it.
-2. **Chip labels are now neutral ink.** Fill and border keep the hue; the text
-   still names the state. Mary's cheaper alternative to the offered "8 more
-   tokens": the QML island (the DEFAULT shell) still carries a **saturated 8 px
-   state dot** — put that same dot on the classic `StatusChip` and the colour
-   carrier is back without hue in the ink. **His eye decides.**
-3. **The `card` token.** Fixing the dark ladder partially reverses the v6
-   "cards recede toward the canvas" pass — **which he ratified two days ago**.
-4. **Is the lab local or on RDP?** RDP caps at TOKEN. The repo cannot answer it;
-   now that the probes are wired, `grep "glass: resolve"` on the lab box answers
-   it without asking anyone.
-5. **Fable quota exhausted** — judgment beats fell back to Opus all night.
-6. **Nobody stood four metres back.** Every "glanceable across the room" claim is
-   a MODEL, not an observation. Ten minutes with four swatch pairs on the real
-   lab monitor ends it.
-7. Alt-tab flicker check (`backdrop.CANVAS_FOLLOWS_ACTIVATION = False` is the
-   kill switch if it strobes) · the wrapped ribbon at real DPI · icon re-tint
-   across a light→dark→light toggle. All three booked in BENCH_CHECKLIST §14.
+- Branch synced to bench @ `2a5e67e` (`bench_run.ps1 -SyncOnly`;
+  TreeMap extended: main + ui-qml-migration → C:\bench\project_tct).
+- **Plain-SSH attempt measured and documented (the probe FAILED
+  correctly):** ssh lands in session 0 (no desktop) ⇒ Qt fell back to
+  llvmpipe (Gallium/VMware line), 0 frames, watchdog fired. Log:
+  `C:\bench\rhi_probe_u0.log` on the bench. Transport artifact, NOT a
+  GPU verdict — the RTX 5080 lives in the interactive session.
+- Correct path = the ratified detached one (interactive schtasks like
+  tct_gate; Anmeldemodus "Nur interaktiv" confirmed on tct_gate; bat
+  already SHIPPED to `C:\bench\rhi_probe.bat`), but **`schtasks /create`
+  over ssh is DENIED by the permission classifier** (twice, incl. as a
+  single command). Adam stopped per denial protocol. Kaya options:
+  1. Run once from any shell:
+     `ssh Administrator@100.119.126.9 "schtasks /create /tn
+     tct_rhi_probe /tr C:\bench\rhi_probe.bat /sc once /st 23:58 /it /f
+     & schtasks /run /tn tct_rhi_probe"` — then Adam polls
+     `C:\bench\rhi_probe_u0_stdout.log` + `rhi_probe_u0.log`.
+  2. Add a permission rule allowing schtasks-over-ssh to the bench.
+  3. Run `C:\bench\rhi_probe.bat` directly at the bench console.
+  Expected PASS: GL_RENDERER contains "5080", zero fallback markers,
+  exit 0 — that log completes U0 and releases the branch push.
 
 ## NEXT (queue)
 
-1. **Mary review for wave 5 (sequencer, HAZARD)** the moment it lands —
-   never batched. Then the wave-boundary batch review for waves 1–4
-   (non-hazard).
-2. **Remaining simple-panel beats**: device 348 (IS a QMainWindow — extra
-   glass surface) · calibration 578 (HAZARD → immediate Mary).
-   [DONE: intensity · stage_view · laser · scan_map_view; sequencer in
-   flight.] Copy-handoff verbatim from pilot `074943f`:
-   shelf + panel_header; `_well()` for inputs; HazardSurface as pure
-   parent-frame wrap; kit surfaces into refresh_theme; non-hazard panels
-   REGISTER for glass (bias's register=False is bias-specific); dynamic danger
-   buttons stay out of ActionBar. Hazard beats → immediate Mary review.
-3. **The 5 program beats** (own beat each): planner 2524 · analysis 2203 ·
-   scope 1655 (+_TriggerDialog) · motor 1212 (HAZARD) · camera 958 (+_ROIDialog).
-4. **Contact sheet** (cross-panel META review) at the wave boundary + bench gate
-   (detached schtasks path) before merge.
-5. Micro-chore (Noah, any free slot): `scripts/kit_contrast_check.py:188`
-   hardcodes is_proposed=True for the dark card token, but `_DARK_CARD` shipped
-   (style.py:560, palette :743) — the PROPOSED banner is stale (Mamoru standup
-   find, 2026-07-14).
-6. A **ΔL\* surface-separation test** — nothing asserts a card is visible against
-   its canvas. That is how a 1.03:1 dark ladder shipped.
-7. Theme-editor contrast validation on a swatch pick (the preset hatch: hazard
-   ink now rides the UNLOCKED `text` token).
-8. `statusLamp[unknown]` renders identically to `[neutral]` — an operator cannot
-   tell "no information" from "idle" (law 7).
+1. U0b: bench probe run → log artifact → link here → commit probe script
+   and ledger → push `ui-qml-migration`.
+2. U1 viewmodel-first test reclaim (C→B) — planner slice WAITS for
+   trunk-P2 (AxisSpec); other slices are P-track-independent. Needs a
+   staging design: dispatch order per masterplan U1 list.
+3. Brokkr candidates land → Loki + Baldr attack pass → council round →
+   [Kaya] gate on the kit spec (U1.5, after U1 formally).
+4. Standing gate every U-stage: [A-green] + S2 normative suites + [Bench]
+   before merge-back + per-panel TCT_SHELL=qml offscreen smoke.
 
-## 📋 THE PANEL CENSUS (Shiori) — the wave's foundation
+## ⚠️ STANDING RULES CARRIED FORWARD
 
-- **Programs wearing a panel costume** (own beat each): `planner` 2524 ·
-  `analysis` 2203 · `scope` 1655 · `motor` 1212 · `camera` 958.
-- **Simple compositions** (one wave): intensity 224 · device 348 · sequencer 456
-  · calibration 578 · scan_map_view 615 · laser 703 · stage_view 255.
-- **Hazard surfaces** (opaque at EVERY tier, keep their own gate): bias,
-  multi_bias, motor, calibration, planner, sequencer.
-- **Three panels own EXTRA top-levels** ⇒ three more glass surfaces:
-  `device_panel` IS a QMainWindow · `scope` has a floating `_TriggerDialog` ·
-  `camera` has a modal `_ROIDialog`.
+- Instruments may be physically cabled ⇒ agents never run the APP
+  locally; targeted headless pytest only; bare no-device-import probe
+  scripts (spike class) are the ratified exception. Safety rule 6.
+- `TCT_app/configs/devices.yaml`: if it goes dirty, NEVER stage it.
+- Test economy binding · bench full suites only at gates, one at a time ·
+  session hygiene 1–4 · free lanes never idle · review-then-push.
+- NEVER migrates to QML (ratified): QtDangerGate modal, 9 pyqtgraph/GL
+  islands, camera raster QLabel, STOP/ALL-OFF/Abort QWidgets, any second
+  implementation of a safety control.
+- TECH_DEBT :185-188 — freeze-family riders + the deferred glass bug
+  (post-migration; U6 deletes the backdrop/activation plumbing).
 
-## 🚨 RATIFIED THIS NIGHT (Kaya, verbatim in DECISIONS.md)
+## HEAD / TRUTH
 
-- **Danger topology:** a dangerous action belongs to the PANEL that owns the
-  hardware, NEVER to the shell. The shell may DISPLAY hazard state; it may never
-  TRIGGER it. No presentation-layer mediator will be built.
-- **Detachable panels are permanent:** `detachable_tabs.py` stays the ENGINE;
-  QML is a VIEW over it. Every detached panel is its own top-level ⇒ its own DWM
-  material and its own tier.
-- **The ShaderEffect/MultiEffect ban is lifted as policy** ("ja heb das verbot
-  auf") — then measured, and narrowed: in-scene blur is legal and works, backdrop
-  blur is physically impossible in Qt, no effect on hot-path islands (+13 pp CPU).
-
-## ✅ Standing verdicts (do not re-derive)
-
-- HV authorization chain COMPLETE + Mary-APPROVED. Transport serialisation
-  complete. D1 capability spine COMPLETE (Mary's D1b riders still open).
-- venv = real CPython 3.10.11. Sim bias multi-channel end-to-end.
-- Test economy binding · bench full suites only at gates.
-
-## Rules pointers (binding, in CLAUDE.md)
-
-Test economy · bench full suites only · session hygiene 1–4 · free lanes never
-idle · Codex = queue-file only · ONE here-string per shell call · verify
-`git log --stat` after multi-beat landings.
+- Working branch: `ui-qml-migration` @ `101e914` == origin (pushed;
+  ratification commit for checklist ③ lands on top). Cut from main
+  `cf6dd58`. Mamoru wave-1 standup: PASS all 5 tasks.
+- Tag `polish-freeze` → `45781fa` (annotated; U-track entry gate + seed
+  baseline ancestor).

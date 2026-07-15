@@ -14,10 +14,6 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import ast
-import inspect
-import re
-
 import pytest
 from PySide6.QtWidgets import QApplication
 
@@ -84,98 +80,25 @@ def test_map_toolbar_reachable_in_empty_state():
 
 # --------------------------------------------------------------------------- #
 # Simulated run: started -> points -> progress -> finished                    #
+#                                                                              #
+# U1.2 reclaim note (docs/design/u1_staging.md §4.3): the C12 (a)-classified  #
+# run-state/tile-derivation tests that lived in this block                    #
+# (test_scan_started_enables_run_control_and_arms_tiles,                     #
+# test_first_progress_de_stales_the_progress_tile,                           #
+# test_point_done_fills_map_and_updates_point_metric,                        #
+# test_progress_updates_progress_and_eta_and_elapsed_tiles,                  #
+# test_progress_before_any_elapsed_time_reports_eta_dashes,                  #
+# test_scan_finished_disables_run_control_and_keeps_map) moved to            #
+# tests/test_scan_viewer_viewmodel.py, constructing ScanViewerViewModel      #
+# directly instead of the widget. The (b)-class GUI-interaction residue      #
+# below is byte-untouched.                                                    #
 # --------------------------------------------------------------------------- #
-
-def test_scan_started_enables_run_control_and_arms_tiles():
-    _app()
-    panel = ScanViewerPanel()
-    panel.on_scan_started()
-    assert panel._run_active is True
-    assert panel._btn_pause.isEnabled()
-    assert panel._btn_abort.isEnabled()
-    assert not panel._btn_open_analysis.isEnabled()
-    assert panel._finished_banner.isHidden()
-    assert panel._chip_run.text() == "Running"
-    # Laws 4/8: only *elapsed* has something real to say the instant a run is
-    # armed (the clock started). Progress/ETA/point stay honestly stale
-    # (captioned) until a real callback lands. "0/0" painted crisp-fresh is a
-    # claim the panel cannot back: a z-focus run that reported nothing yet
-    # would show a live-ink 0-of-0 that is not a measurement.
-    assert not panel._metric_elapsed.is_stale()
-    assert panel._metric_progress.is_stale()
-    assert "waiting for progress" in panel._metric_progress._caption.text()
-    assert panel._metric_eta.is_stale()
-    assert panel._metric_point.is_stale()
-
-
-def test_first_progress_de_stales_the_progress_tile():
-    """The other half of the contract above: the tile goes live only once a
-    real ``on_progress`` has landed, and then it carries the real count."""
-    _app()
-    panel = ScanViewerPanel()
-    panel.on_scan_started()
-    assert panel._metric_progress.is_stale()
-
-    panel.on_progress(1, 4)
-    assert not panel._metric_progress.is_stale()
-    assert panel._metric_progress.value() == "1/4"
-
-
-def test_point_done_fills_map_and_updates_point_metric():
-    _app()
-    panel = ScanViewerPanel()
-    panel.on_scan_started()
-    panel.on_point_done(_result(0.0, 0.0, 1.0, charge=5.0))
-    panel.on_point_done(_result(1.0, 0.0, 1.0, charge=7.0))
-    assert panel._map_view.point_count() == 2
-    assert "x=1.000" in panel._metric_point.value()
-    assert "z=1.000" in panel._metric_point.value()
-
 
 def test_point_done_before_scan_started_still_swaps_to_map():
     _app()
     panel = ScanViewerPanel()
     panel.on_point_done(_result(0.0, 0.0, charge=1.0))
     assert panel._map_view.is_showing_map()
-
-
-def test_progress_updates_progress_and_eta_and_elapsed_tiles():
-    _app()
-    panel = ScanViewerPanel()
-    panel.on_scan_started()
-    panel.on_progress(1, 4)
-    assert panel._metric_progress.value() == "1/4"
-    # ETA/elapsed are time-based; only assert they are populated (not the
-    # placeholder) and don't raise.
-    assert panel._metric_elapsed.value() != "--"
-
-
-def test_progress_before_any_elapsed_time_reports_eta_dashes():
-    _app()
-    panel = ScanViewerPanel()
-    # No on_scan_started -> no _start_time -> ETA must degrade gracefully.
-    panel.on_progress(1, 4)
-    assert panel._metric_eta.value() == "--"
-
-
-def test_scan_finished_disables_run_control_and_keeps_map():
-    _app()
-    panel = ScanViewerPanel()
-    panel.on_scan_started()
-    panel.on_point_done(_result(0.0, 0.0, charge=1.0))
-    panel.on_scan_finished()
-    assert panel._run_active is False
-    assert not panel._btn_pause.isEnabled()
-    assert not panel._btn_abort.isEnabled()
-    assert panel._chip_run.text() == "Finished"
-    # Map is NOT cleared / swapped back to the empty placeholder after
-    # finish — retained (stale-captioned tiles) for the Analysis handoff.
-    assert panel._map_view.is_showing_map()
-    assert panel._map_view.point_count() == 1
-    # Terminal state as design (§5): banner shown, tiles honestly final.
-    assert not panel._finished_banner.isHidden()
-    assert panel._chip_finished.text() == "Finished"
-    assert panel._metric_progress.is_stale()
 
 
 def test_abort_finish_shows_aborted_banner_variant():
@@ -198,16 +121,8 @@ def test_abort_finish_shows_aborted_banner_variant():
     assert panel._chip_finished.text() == "Finished"
 
 
-def test_new_run_clears_previous_map():
-    _app()
-    panel = ScanViewerPanel()
-    panel.on_scan_started()
-    panel.on_point_done(_result(0.0, 0.0, charge=1.0))
-    panel.on_scan_finished()
-    assert panel._map_view.point_count() == 1
-
-    panel.on_scan_started()
-    assert panel._map_view.point_count() == 0
+# test_new_run_clears_previous_map moved to test_scan_viewer_viewmodel.py
+# (U1.2 reclaim, see the note above the "Simulated run" block).
 
 
 # --------------------------------------------------------------------------- #
@@ -255,21 +170,8 @@ def test_abort_disabled_when_idle_rule():
     assert not panel._btn_abort.isEnabled()
 
 
-def test_manual_pause_sets_warn_chip():
-    _app()
-    panel = ScanViewerPanel()
-    panel.on_scan_started()
-    panel.on_manual_pause("swap sample now")
-    assert "swap sample now" in panel._chip_run.text()
-
-
-def test_set_current_position_updates_point_tile():
-    _app()
-    panel = ScanViewerPanel()
-    panel.set_current_position(1.5, -2.5, 0.75)
-    assert "x=1.500" in panel._metric_point.value()
-    assert "y=-2.500" in panel._metric_point.value()
-    assert "z=0.750" in panel._metric_point.value()
+# test_manual_pause_sets_warn_chip and test_set_current_position_updates_
+# point_tile moved to test_scan_viewer_viewmodel.py (U1.2 reclaim).
 
 
 # --------------------------------------------------------------------------- #
@@ -289,14 +191,8 @@ def test_z_focus_start_emits_config_and_resets_curve():
     assert panel._zf_a_data == []
 
 
-def test_z_focus_point_accumulates_curve_data():
-    _app()
-    panel = ScanViewerPanel()
-    panel.on_z_focus_pt(-1.0, 0.2)
-    panel.on_z_focus_pt(0.0, 0.5)
-    panel.on_z_focus_pt(1.0, 0.3)
-    assert panel._zf_z_data == [-1.0, 0.0, 1.0]
-    assert panel._zf_a_data == [0.2, 0.5, 0.3]
+# test_z_focus_point_accumulates_curve_data moved to
+# test_scan_viewer_viewmodel.py (U1.2 reclaim).
 
 
 def test_z_focus_done_sets_marker_and_label():
@@ -386,38 +282,17 @@ def test_z_focus_card_collapsed_by_default_with_header_controls():
     assert body.isHidden()
 
 
-def test_z_focus_done_updates_header_chip():
-    _app()
-    panel = ScanViewerPanel()
-    panel.on_z_focus_done(0.42)
-    assert "0.420" in panel._chip_best_z.text()
+# test_z_focus_done_updates_header_chip moved to test_scan_viewer_viewmodel.py
+# (U1.2 reclaim).
 
 
 # --------------------------------------------------------------------------- #
 # Open in Analysis                                                            #
+#                                                                              #
+# U1.2 reclaim note: test_open_in_analysis_disabled_until_path_and_finished   #
+# and test_open_in_analysis_enables_immediately_if_path_set_after_finish      #
+# moved to test_scan_viewer_viewmodel.py (openInAnalysisEligible).            #
 # --------------------------------------------------------------------------- #
-
-def test_open_in_analysis_disabled_until_path_and_finished():
-    _app()
-    panel = ScanViewerPanel()
-    panel.on_scan_started()
-    panel.set_last_run_path("C:/data/run_00001/scan.h5")
-    # Path known but run still active -> stays disabled.
-    assert not panel._btn_open_analysis.isEnabled()
-
-    panel.on_scan_finished()
-    assert panel._btn_open_analysis.isEnabled()
-
-
-def test_open_in_analysis_enables_immediately_if_path_set_after_finish():
-    _app()
-    panel = ScanViewerPanel()
-    panel.on_scan_started()
-    panel.on_scan_finished()
-    assert not panel._btn_open_analysis.isEnabled()
-    panel.set_last_run_path("C:/data/run_00002/scan.h5")
-    assert panel._btn_open_analysis.isEnabled()
-
 
 def test_open_in_analysis_click_emits_path():
     _app()
@@ -431,21 +306,8 @@ def test_open_in_analysis_click_emits_path():
     assert seen == ["C:/data/run_00003/scan.h5"]
 
 
-def test_new_run_invalidates_previous_run_path():
-    _app()
-    panel = ScanViewerPanel()
-    panel.on_scan_started()
-    panel.on_scan_finished()
-    panel.set_last_run_path("C:/data/run_00005/scan.h5")
-    assert panel._btn_open_analysis.isEnabled()
-
-    # A new run must never re-offer the previous run's file: if it ends
-    # without publishing a fresh path (e.g. aborted before the writer
-    # opened), Open in Analysis stays disabled.
-    panel.on_scan_started()
-    assert panel._last_run_path is None
-    panel.on_scan_finished()
-    assert not panel._btn_open_analysis.isEnabled()
+# test_new_run_invalidates_previous_run_path moved to
+# test_scan_viewer_viewmodel.py (U1.2 reclaim).
 
 
 def test_zf_spin_suffixes_match_units():
@@ -465,28 +327,8 @@ def test_open_in_analysis_noop_without_path():
     assert seen == []
 
 
-# --------------------------------------------------------------------------- #
-# Full simulated run (integration-style, within this panel only)              #
-# --------------------------------------------------------------------------- #
-
-def test_full_simulated_run_sequence():
-    _app()
-    panel = ScanViewerPanel()
-
-    panel.on_scan_started()
-    total = 3
-    for i, (x, y) in enumerate([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]):
-        panel.on_point_done(_result(x, y, charge=float(i)))
-        panel.on_progress(i + 1, total)
-    panel.on_scan_finished()
-    panel.set_last_run_path("C:/data/run_00004/scan.h5")
-
-    assert panel._map_view.point_count() == 3
-    assert panel._metric_progress.value() == "3/3"
-    assert panel._chip_run.text() == "Finished"
-    assert panel._btn_open_analysis.isEnabled()
-    assert panel._map_view.is_showing_map()
-    assert not panel._finished_banner.isHidden()
+# test_full_simulated_run_sequence moved to test_scan_viewer_viewmodel.py
+# (U1.2 reclaim, VM-level integration sequence).
 
 
 # --------------------------------------------------------------------------- #
@@ -550,26 +392,18 @@ def test_no_graphics_effect_on_map_or_zfocus_plot():
 
 
 # --------------------------------------------------------------------------- #
-# Zero inline hex (rule 1)                                                    #
+# Zero inline hex (rule 1) / no QGraphicsEffect (rule 3) — U1.2 (d) retire     #
+#                                                                              #
+# test_scan_viewer_panel_source_has_zero_inline_hex and                       #
+# test_scan_viewer_panel_never_calls_set_graphics_effect (C12 (d): obsolete/  #
+# duplicate) are retired here per docs/design/u1_staging.md §4.3. Justification #
+# (one line each, as the brief requires): the inline-hex check is exactly    #
+# what tests/test_no_inline_hex_gui.py::test_no_inline_hex_outside_style_py   #
+# already runs, globbed over every gui/*.py module (including this one and   #
+# the new gui/scan_viewer_viewmodel.py) — a genuine global sweep, confirmed   #
+# by reading that file before deleting this duplicate. The graphics-effect   #
+# check's invariant is still enforced in THIS file, at runtime, by the       #
+# residue test below (test_no_graphics_effect_on_map_or_zfocus_plot) — the   #
+# AST-source variant retired here was a same-file duplicate of that same     #
+# guarantee, not a second independent one.                                   #
 # --------------------------------------------------------------------------- #
-
-_HEX_RE = re.compile(r"#[0-9a-fA-F]{6}\b")
-
-
-def test_scan_viewer_panel_source_has_zero_inline_hex():
-    import gui.scan_viewer_panel as mod
-    src = inspect.getsource(mod)
-    matches = _HEX_RE.findall(src)
-    assert matches == [], f"inline hex literals found in gui/scan_viewer_panel.py: {matches}"
-
-
-def test_scan_viewer_panel_never_calls_set_graphics_effect():
-    import gui.scan_viewer_panel as mod
-    tree = ast.parse(inspect.getsource(mod))
-    calls = [
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr == "setGraphicsEffect"
-    ]
-    assert calls == []

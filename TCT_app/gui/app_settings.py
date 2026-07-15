@@ -26,6 +26,18 @@ THEME_PANEL_GLASS_ALPHA_KEY = "theme/panel_glass_alpha"
 THEME_GLASS_TIER_KEY = "theme/glass_tier"
 THEME_PRESETS_KEY = "theme/presets"
 
+# Living-glass posture (docs/design/qml_kit_forge/kit_spec_v1.md §5.3, U2-entry
+# Theme-bridge beat, docs/CODEX_QUEUE.md §C13): the persisted LivingGround
+# animation mode + flow-speed multiplier. Two keys, both new — no prior call
+# site exists (C13 confirmed no located key on this branch).
+LIVING_GLASS_MODE_KEY = "theme/living_glass"
+LIVING_GLASS_SPEED_KEY = "theme/living_glass_speed"
+
+LIVING_GLASS_MODES = ("off", "subtle", "full")
+LIVING_GLASS_SPEED_MIN = 0.25
+LIVING_GLASS_SPEED_MAX = 2.0
+LIVING_GLASS_SPEED_DEFAULT = 1.0
+
 # Ymir's operator material-override tier (docs/design/glass_council/ymir.md §7):
 # the "for when detection lies" escape hatch. "auto" lets the app pick; the
 # other three force a rung. Real translucency is NEVER guaranteed on any host,
@@ -110,6 +122,56 @@ def motion_enabled(store=None) -> bool:
 
 def set_motion_enabled(enabled: bool, store=None) -> None:
     _store(store).setValue(MOTION_ENABLED_KEY, bool(enabled))
+
+
+def living_glass_mode(store=None) -> str:
+    """LivingGround animation posture: ``'off' | 'subtle' | 'full'``
+    (kit_spec_v1.md §5.3). Ratified default **subtle** — "Lantern's identity
+    is a living material; off remains one click away and is the documented
+    accessibility posture" (candidate_lantern.md §7, carried verbatim into
+    kit_spec_v1.md §5.3 and DECISIONS.md 2026-07-15 "living glass default
+    subtle"). Mirrors the ``motion_enabled()`` precedent above: the feature
+    ships ON, the opt-out is one control away, not the shipped default.
+    Fails safe to the default for any unrecognised/garbage value — an
+    unknown posture never wedges startup."""
+    raw = str(_store(store).value(LIVING_GLASS_MODE_KEY, "subtle") or "subtle").strip().lower()
+    return raw if raw in LIVING_GLASS_MODES else "subtle"
+
+
+def set_living_glass_mode(mode: str, store=None) -> None:
+    key = str(mode).strip().lower()
+    _store(store).setValue(LIVING_GLASS_MODE_KEY,
+                            key if key in LIVING_GLASS_MODES else "subtle")
+
+
+def living_glass_speed(store=None) -> float:
+    """LivingGround flow-speed multiplier, kit_spec_v1.md §5.3 range
+    ``[0.25, 2.0]``x (effective period = ``groundFlowPeriodS`` / speed). The
+    full persisted range applies only while the whole app is idle — the
+    run-active <=1.0x clamp and the reduced-motion static override are
+    runtime/controller concerns, not this accessor's. Clamped on read so a
+    hand-edited settings file cannot escape the legal range; garbage/NaN
+    fails to the neutral 1.0x default."""
+    raw = _store(store).value(LIVING_GLASS_SPEED_KEY, LIVING_GLASS_SPEED_DEFAULT)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return LIVING_GLASS_SPEED_DEFAULT
+    if value != value:  # NaN
+        return LIVING_GLASS_SPEED_DEFAULT
+    return max(LIVING_GLASS_SPEED_MIN, min(LIVING_GLASS_SPEED_MAX, value))
+
+
+def set_living_glass_speed(speed, store=None) -> float:
+    try:
+        value = float(speed)
+    except (TypeError, ValueError):
+        value = LIVING_GLASS_SPEED_DEFAULT
+    if value != value:  # NaN
+        value = LIVING_GLASS_SPEED_DEFAULT
+    value = max(LIVING_GLASS_SPEED_MIN, min(LIVING_GLASS_SPEED_MAX, value))
+    _store(store).setValue(LIVING_GLASS_SPEED_KEY, value)
+    return value
 
 
 def theme_glass_amount_value(store=None) -> Any:

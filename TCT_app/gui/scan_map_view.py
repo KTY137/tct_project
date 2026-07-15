@@ -63,10 +63,19 @@ pure-chrome surface worth carving into its own registrable sub-card (unlike
 ``IntensityPanel``'s "Instrument controls" card, the toolbar here has no
 independent identity worth a new frame) — asserted in
 ``tests/test_wave_scan_map_render.py``, not left as prose.
+
+U1.1 extraction (``docs/design/u1_staging.md`` §4.2): the points store,
+quantity selection, grid derivation (still composing
+:mod:`analysis.scan_grid`, never re-deriving it), NaN semantics,
+cursor-readout math, and CSV export now live in
+:class:`gui.scan_map_viewmodel.ScanMapViewModel` (``self._vm`` — a bare
+``QObject`` with no widget/controller/timer reference). This widget is now a
+thin delegate that owns only the pyqtgraph rendering, the redraw-timer
+coalescing that throttles it, the toolbar, and the theme, reading from and
+writing through the VM's methods rather than holding a second copy of any of
+those rules.
 """
 from __future__ import annotations
-
-import csv
 
 import numpy as np
 from PySide6.QtCore import QTimer
@@ -82,58 +91,16 @@ try:
 except ImportError:  # pragma: no cover - exercised only without pyqtgraph installed
     _HAS_PG = False
 
-from analysis.scan_grid import ScanGridResult, grid_extent, points_to_grid
+from analysis.scan_grid import ScanGridResult
 from gui.panel_kit import EmptyState, FigureCard, GlassPane, Well, panel_header
+from gui.scan_map_viewmodel import QUANTITIES, QUANTITY_UNITS, ScanMapViewModel
 from gui.status_widgets import StatusChip, flash_button, set_button_icon
 from gui.style import PLOT_BG, PLOT_FG, SPACE_SM
-
-# Quantities available on a controller.scan_controller.ScanResult that make
-# sense as a 2-D map — the set every prior map renderer offered.
-QUANTITIES: list[str] = [
-    "dut_charge_pC",
-    "dut_charge_norm",
-    "dut_amplitude_V",
-    "ref_amplitude_V",
-    "baseline_rms_V",
-    "drift_time_s",
-    "rise_time_s",
-    "cfd_time_s",
-]
-
-# Physical unit per map quantity — bound to the colorbar axis label on every
-# quantity switch (design system §4: "Colorbar always, with unit bound to the
-# selected quantity"). ``dut_charge_norm`` is a dimensionless ratio.
-QUANTITY_UNITS: dict[str, str] = {
-    "dut_charge_pC": "pC",
-    "dut_charge_norm": "",
-    "dut_amplitude_V": "V",
-    "ref_amplitude_V": "V",
-    "baseline_rms_V": "V",
-    "drift_time_s": "s",
-    "rise_time_s": "s",
-    "cfd_time_s": "s",
-}
 
 # Live scan points can arrive much faster than the GUI can rebuild the dense
 # grid and push a new ImageView frame. Keep live paints near 15 Hz while batch
 # loads, exports, lifecycle terminal states, and explicit reads can still flush.
 SCAN_MAP_REDRAW_INTERVAL_MS = 67
-
-
-def _extract_values(entry) -> dict[str, float]:
-    """Pull every :data:`QUANTITIES` value out of *entry* (a ``ScanResult``,
-    or a plain ``{quantity: value}`` dict for lightweight batch loading),
-    defaulting anything missing/invalid to NaN so a later quantity switch
-    always has a well-defined (if empty) cell rather than a ``KeyError``."""
-    out: dict[str, float] = {}
-    is_mapping = isinstance(entry, dict)
-    for qty in QUANTITIES:
-        v = entry.get(qty) if is_mapping else getattr(entry, qty, None)
-        try:
-            out[qty] = float(v) if v is not None else float("nan")
-        except (TypeError, ValueError):
-            out[qty] = float("nan")
-    return out
 
 
 class ScanMapView(QWidget):
@@ -151,10 +118,11 @@ class ScanMapView(QWidget):
         super().__init__(parent)
         self._empty_label_text = empty_label
         self._empty_hint_text = empty_hint
-        self._points: dict[tuple[float, float], dict[str, float]] = {}
-        self._grid_result: ScanGridResult | None = None
-        self._pos: tuple[float, float] = (0.0, 0.0)
-        self._scale: tuple[float, float] = (1.0, 1.0)
+        # Points store, quantity selection, grid derivation, cursor math, and
+        # CSV export all live on the VM now (U1.1 extraction) — this widget
+        # holds no second copy of that state, only the rendering/coalescing
+        # that reads from it.
+        self._vm = ScanMapViewModel(self)
         self._theme_mode = "dark"
         # Colorbar "freeze levels" (ratified 2026-07-10, was the parked "Map
         # colorbar levels" decision — docs/OVERNIGHT_LOG.md): while frozen,
@@ -164,13 +132,6 @@ class ScanMapView(QWidget):
         # rather than replaying a stale one.
         self._freeze_levels = False
         self._frozen_range: tuple[float, float] | None = None
-        # Revisited-cell counter (design system §4: "Missing/duplicate counts
-        # surfaced"). This widget stores points in a dict keyed by rounded
-        # (x, y) — a revisit overwrites silently at the storage layer, so the
-        # duplicate count must be tallied HERE, on arrival, before the
-        # dedup; analysis.scan_grid's own n_duplicate_points can never see
-        # them through this widget.
-        self._n_duplicates = 0
         self._redraw_dirty = False
         self._redraw_timer = QTimer(self)
         self._redraw_timer.setSingleShot(True)
@@ -219,7 +180,7 @@ class ScanMapView(QWidget):
         toolbar.addWidget(QLabel("Quantity:"))
         self._combo_qty = QComboBox()
         self._combo_qty.addItems(QUANTITIES)
-        self._combo_qty.currentTextChanged.connect(self._redraw)
+        self._combo_qty.currentTextChanged.connect(self._on_quantity_changed)
         # The quantity selector recesses into an opaque Well (§4.4: "a value
         # being typed is never on glass") — wraps WITHOUT touching the
         # widget's attribute identity, so every enable/disable and value
@@ -328,43 +289,21 @@ class ScanMapView(QWidget):
 
     def update_point(self, result) -> None:
         """Accept one live ``controller.scan_controller.ScanResult`` and
-        schedule a coalesced re-render — the incremental streaming path."""
-        x = round(float(result.point.x_mm), 6)
-        y = round(float(result.point.y_mm), 6)
-        if (x, y) in self._points:
-            self._n_duplicates += 1
-        self._points[(x, y)] = _extract_values(result)
+        schedule a coalesced re-render — the incremental streaming path.
+        The points store itself (dedup/last-write-wins/duplicate counting)
+        lives on the VM; only the repaint is coalesced here."""
+        self._vm.update_point(result)
         self._schedule_redraw()
 
     def set_points(self, mapping_or_iterable) -> None:
         """Batch-load points, replacing any accumulated state.
 
         Accepts either a mapping of ``(x_mm, y_mm) -> ScanResult`` (or a
-        plain ``{quantity: value}`` dict) — this widget's own storage shape,
-        for a fast bulk replace — or a flat iterable of ``ScanResult``
-        objects (each point's position read from ``result.point``).
+        plain ``{quantity: value}`` dict) — the VM's own storage shape, for
+        a fast bulk replace — or a flat iterable of ``ScanResult`` objects
+        (each point's position read from ``result.point``).
         """
-        self._points.clear()
-        self._n_duplicates = 0
-        if hasattr(mapping_or_iterable, "items"):
-            for key, entry in mapping_or_iterable.items():
-                x, y = key
-                rounded_key = (round(float(x), 6), round(float(y), 6))
-                # Two distinct raw keys can collide once rounded (same honest
-                # counter as the iterable branch below) — never silently
-                # absorbed (design system §4).
-                if rounded_key in self._points:
-                    self._n_duplicates += 1
-                self._points[rounded_key] = _extract_values(entry)
-        else:
-            for entry in mapping_or_iterable:
-                point = getattr(entry, "point", None)
-                if point is None:
-                    continue
-                key = (round(float(point.x_mm), 6), round(float(point.y_mm), 6))
-                if key in self._points:
-                    self._n_duplicates += 1
-                self._points[key] = _extract_values(entry)
+        self._vm.set_points(mapping_or_iterable)
         self._redraw()
 
     def set_quantity(self, qty: str) -> None:
@@ -374,29 +313,28 @@ class ScanMapView(QWidget):
             self._combo_qty.setCurrentIndex(idx)
 
     def current_quantity(self) -> str:
-        return self._combo_qty.currentText()
+        return self._vm.current_quantity()
 
     def clear(self) -> None:
         """Remove all accumulated points and reset the map."""
-        self._points.clear()
-        self._n_duplicates = 0
+        self._vm.clear()
         self._redraw()
 
     def point_count(self) -> int:
-        return len(self._points)
+        return self._vm.point_count()
 
     def duplicate_count(self) -> int:
         """How many arriving points revisited an already-sampled (rounded)
         cell since the last ``clear()``/``set_points()`` reset — surfaced,
         never silently absorbed (design system §4)."""
         self.flush_pending()
-        return self._n_duplicates
+        return self._vm.duplicate_count()
 
     def points(self) -> dict[tuple[float, float], dict[str, float]]:
         """A shallow copy of the accumulated ``(x_mm, y_mm) -> {quantity:
         value}`` points — for a caller that needs the raw per-point data
         rather than the gridded image (e.g. this widget's own CSV export)."""
-        return dict(self._points)
+        return self._vm.points()
 
     def image_view(self):
         """The underlying ``pyqtgraph.ImageView`` (``None`` if pyqtgraph is
@@ -410,7 +348,7 @@ class ScanMapView(QWidget):
         """The most recent :class:`~analysis.scan_grid.ScanGridResult` (for
         the currently selected quantity), or ``None`` before any data."""
         self.flush_pending()
-        return self._grid_result
+        return self._vm.grid_result()
 
     def set_empty_state_text(self, label: str, hint: str | None = None) -> None:
         """Customise the built-in empty placeholder (shown until the first
@@ -489,10 +427,9 @@ class ScanMapView(QWidget):
             self._redraw_timer.stop()
         if not _HAS_PG:
             return
-        qty = self._combo_qty.currentText()
-        if not self._points:
+        qty = self._vm.current_quantity()
+        if self._vm.point_count() == 0:
             self._image_view.clear()
-            self._grid_result = None
             # A stale frozen range from a prior dataset makes no sense once
             # every point is gone — re-arm so the next arriving point (with
             # freeze still checked) captures a fresh range instead.
@@ -507,12 +444,12 @@ class ScanMapView(QWidget):
         if self._stack is not None:
             self._stack.setCurrentIndex(1)
 
-        xs = [k[0] for k in self._points]
-        ys = [k[1] for k in self._points]
-        vals = [v.get(qty, float("nan")) for v in self._points.values()]
-        result = points_to_grid(xs, ys, vals)
-        self._grid_result = result
-        self._pos, self._scale = grid_extent(result)
+        # Grid derivation (points_to_grid/grid_extent composition) lives on
+        # the VM — this call is a lazy rebuild-if-dirty read, so the O(N)
+        # cost still lands once per coalesced repaint tick, not once per
+        # arriving point.
+        result = self._vm.grid_result()
+        pos, scale = self._vm.image_extent()
 
         grid = result.grid
         finite = grid[~np.isnan(grid)]
@@ -558,7 +495,7 @@ class ScanMapView(QWidget):
         # entry — instead of silently wearing the coldest data colour.
         self._image_view.setImage(
             grid, autoRange=True, autoLevels=False, levels=(vmin, vmax),
-            pos=self._pos, scale=self._scale, autoHistogramRange=auto_hist_range,
+            pos=pos, scale=scale, autoHistogramRange=auto_hist_range,
         )
 
         # Colorbar unit bound to the selected quantity (§4).
@@ -568,7 +505,7 @@ class ScanMapView(QWidget):
         # a complete map is routine, not a green light).
         n_total = int(grid.size)
         n_filled = n_total - result.n_missing
-        n_dup = self._n_duplicates + result.n_duplicate_points
+        n_dup = self._vm.duplicate_count() + result.n_duplicate_points
         self._chip_points.set_status(
             f"{n_filled}/{n_total} sampled", "neutral",
             f"{result.n_missing} cells not yet sampled · "
@@ -577,6 +514,14 @@ class ScanMapView(QWidget):
         self._figure_card.set_subtitle(
             f"{result.n_missing} unsampled · {n_dup} duplicate")
         self._update_cursor_readout()
+
+    def _on_quantity_changed(self, text: str) -> None:
+        """Combo box ``currentTextChanged`` — feed the VM's quantity
+        selection, then redraw immediately (quantity switches are not
+        coalesced through the redraw timer, matching the prior direct
+        ``currentTextChanged -> _redraw`` wiring)."""
+        self._vm.set_quantity(text)
+        self._redraw()
 
     def _on_freeze_toggled(self, checked: bool) -> None:
         """Toolbar "freeze levels" toggle. Checking it fixes the colorbar at
@@ -602,7 +547,7 @@ class ScanMapView(QWidget):
             QMessageBox.warning(self, "Export error", str(exc))
 
     def _on_export_csv_clicked(self) -> None:
-        if not self._points:
+        if self._vm.point_count() == 0:
             return
         path, _ = QFileDialog.getSaveFileName(
             self, "Export map as CSV", "", "CSV (*.csv)")
@@ -631,42 +576,13 @@ class ScanMapView(QWidget):
         """Write the accumulated per-point data for the current quantity to
         *path* as CSV — the write half of the toolbar CSV export button,
         split out so a caller (including a headless test) can drive it
-        without a ``QFileDialog``."""
-        qty = self._combo_qty.currentText()
-        with open(path, "w", newline="") as fh:
-            writer = csv.writer(fh)
-            writer.writerow(["x_mm", "y_mm", qty])
-            for (x, y), values in sorted(self._points.items()):
-                val = values.get(qty, float("nan"))
-                writer.writerow([f"{x:.6f}", f"{y:.6f}", f"{val:.8g}"])
+        without a ``QFileDialog``. The data contract itself
+        (``csv_rows``/``write_csv``) lives on the VM."""
+        self._vm.write_csv(path)
 
     def _update_cursor_readout(self, x_mm: float | None = None, y_mm: float | None = None) -> None:
         self.flush_pending()
-        if x_mm is None or y_mm is None:
-            self._lbl_cursor.setText("x: -- mm   y: -- mm   value: --")
-            return
-        value = self._value_at(x_mm, y_mm)
-        qty = self._combo_qty.currentText()
-        if value is None:
-            self._lbl_cursor.setText(f"x: {x_mm:.4f} mm   y: {y_mm:.4f} mm   {qty}: --")
-        else:
-            self._lbl_cursor.setText(f"x: {x_mm:.4f} mm   y: {y_mm:.4f} mm   {qty}: {value:.6g}")
-
-    def _value_at(self, x_mm: float, y_mm: float) -> float | None:
-        if self._grid_result is None:
-            return None
-        grid = self._grid_result.grid
-        nx, ny = grid.shape
-        if nx == 0 or ny == 0:
-            return None
-        dx, dy = self._scale
-        px, py = self._pos
-        ix = int(round((x_mm - px) / dx)) if dx else 0
-        iy = int(round((y_mm - py) / dy)) if dy else 0
-        if not (0 <= ix < nx and 0 <= iy < ny):
-            return None
-        val = float(grid[ix, iy])
-        return None if np.isnan(val) else val
+        self._lbl_cursor.setText(self._vm.cursor_text(x_mm, y_mm))
 
     def _on_mouse_moved(self, evt) -> None:
         pos = evt[0]

@@ -241,41 +241,6 @@ def test_panel_constructs_and_theme_switches():
 
 
 # --------------------------------------------------------------------------- #
-# (1) arm text names EVERY routine + max-HV + travel                           #
-# --------------------------------------------------------------------------- #
-def test_arm_text_contains_every_routine_hv_and_travel():
-    panel, *_ = _harness([
-        ("cce_v_map", _bias_motion_plan("cce_v_map", hv=-150.0, travel=(-1.0, 1.0)), None),
-        ("charge_map", _bias_motion_plan("charge_map", hv=-300.0, travel=(-2.0, 2.0)), None),
-    ])
-    summary = panel._env.summary
-    assert "cce_v_map" in summary and "charge_map" in summary     # every routine
-    assert "-300" in summary                                      # max-HV figure
-    assert "-2..2 mm" in summary                                  # travel figure
-    # The rendered latch text carries the same content (HV span does not drop it).
-    latch_html = panel._latch._envelope_lbl.text()
-    assert "cce_v_map" in latch_html and "-300" in latch_html
-
-
-# --------------------------------------------------------------------------- #
-# (2) a queue edit re-derives the envelope (a stale summary is impossible)     #
-# --------------------------------------------------------------------------- #
-def test_queue_edit_rederives_envelope_no_stale():
-    panel, *_ = _harness([("r0", _bias_motion_plan("r0", hv=-100.0), None)])
-    s1 = panel._env.summary
-    assert "r0" in s1 and "-100" in s1 and "r1" not in s1
-
-    panel._entries.append(
-        SequenceEntry(name="r1", plan=_bias_motion_plan("r1", hv=-300.0),
-                      source_path=None))
-    panel._sync_coordinator()
-
-    s2 = panel._env.summary
-    assert s2 != s1
-    assert "r1" in s2 and "-300" in s2       # widened + names the new routine
-
-
-# --------------------------------------------------------------------------- #
 # (3) abort button → coordinator.abort_sequence (always live while active)      #
 # --------------------------------------------------------------------------- #
 def test_abort_button_calls_abort_sequence(monkeypatch):
@@ -290,75 +255,6 @@ def test_abort_button_calls_abort_sequence(monkeypatch):
     monkeypatch.setattr(coord, "abort_sequence", lambda: calls.append(True))
     panel._btn_abort.click()
     assert calls == [True]
-
-
-# --------------------------------------------------------------------------- #
-# (4) rows track entry_state_changed with ladder-correct classes               #
-# --------------------------------------------------------------------------- #
-def test_rows_track_running_and_done_states():
-    panel, coord, fake, *_ = _harness([("r0", _plan("r0"), None),
-                                       ("r1", _plan("r1"), None)])
-    coord.arm_and_start()
-    assert _chip(panel, 0).text() == "RUNNING"
-    assert _chip(panel, 0).property("state") == "busy"
-    assert _chip(panel, 1).text() == "PENDING"
-    assert _chip(panel, 1).property("state") == "neutral"
-
-    fake.finish_run()                       # entry 0 DONE, entry 1 RUNNING
-    assert _chip(panel, 0).text() == "DONE"
-    assert _chip(panel, 0).property("state") == "neutral"    # quiet, NOT green
-    assert _chip(panel, 1).text() == "RUNNING"
-
-    fake.finish_run()                       # entry 1 DONE
-    assert _chip(panel, 1).text() == "DONE"
-
-
-def test_rows_track_failed_and_skipped_states():
-    panel, coord, fake, *_ = _harness([("r0", _plan("r0"), None),
-                                       ("r1", _plan("r1"), None)])
-    coord.arm_and_start()
-    fake.error_run("fault")                 # entry 0 ERROR → FAILED, entry 1 SKIPPED
-    assert _chip(panel, 0).text() == "FAILED"
-    assert _chip(panel, 0).property("state") == "crit"       # the only red row
-    assert _chip(panel, 1).text() == "SKIPPED"
-    assert _chip(panel, 1).property("state") == "neutral"    # neutral, not red
-
-
-# --------------------------------------------------------------------------- #
-# (5) save / load the whole queue round-trips through the panel                 #
-# --------------------------------------------------------------------------- #
-def test_save_load_queue_round_trip(tmp_path):
-    panel, *_ = _harness([
-        ("r0", _bias_motion_plan("r0"), None),
-        ("r1", _plan("r1"), None),
-    ])
-    path = tmp_path / "night_run.yaml"
-    panel._save_queue_to(str(path))
-    assert path.exists()
-
-    panel2, *_ = _harness()
-    panel2._load_queue_from(str(path))
-    assert [e.name for e in panel2._entries] == ["r0", "r1"]
-    assert panel2._table.rowCount() == 2
-    # The plan snapshot round-tripped (bias loop preserved on r0).
-    assert panel2._env is not None and "r0" in panel2._env.summary
-
-
-# --------------------------------------------------------------------------- #
-# (6) a fail-closed loader error surfaces + leaves the queue untouched         #
-# --------------------------------------------------------------------------- #
-def test_loader_error_surfaces_and_preserves_queue(tmp_path, monkeypatch):
-    panel, *_ = _harness([("keep_me", _plan("keep_me"), None)])
-    notified: list = []
-    monkeypatch.setattr("gui.sequencer_panel.notify",
-                        lambda text, level="info": notified.append((text, level)))
-
-    bad = tmp_path / "bad.yaml"
-    bad.write_text("version: 999\nentries: []\n", encoding="utf-8")   # unsupported
-    panel._load_queue_from(str(bad))
-
-    assert notified and notified[-1][1] == "error"           # reason surfaced
-    assert [e.name for e in panel._entries] == ["keep_me"]   # never shortened
 
 
 # --------------------------------------------------------------------------- #

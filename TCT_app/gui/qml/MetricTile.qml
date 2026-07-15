@@ -52,6 +52,18 @@
 //      view-model) — this file just clamps + renders it, with a width
 //      Behavior (law 8: values update, they don't animate continuously; this
 //      eases a CHANGE, it does not run on its own).
+//
+// Baldr attack-pass fix (2026-07-15, docs/DECISIONS.md "Post-attack-pass
+// rulings" ruling 2, docs/design/qml_kit_forge/attack_baldr.md BLOCKER-1):
+//  10. The `opacity: stale ? 0.6 : 1.0` cascade is REMOVED. It stacked on
+//      top of item 7's already-correct ink swap and was measured to blow AA
+//      even for the non-text 3:1 floor (dark crit 5.02->2.59, light warn
+//      5.43->2.52). Stale is ink-only now, per Lantern §5. Since ink alone
+//      is never a legal sole channel (WCAG SC 1.4.1), the title row also
+//      gains `tileStaleMark` — a small unconditional text marker ("STALE")
+//      that reads even on compact tiles, whose caption (the OTHER redundant
+//      channel some callers set, e.g. the HV tile's "not connected") is
+//      hidden by `compact` (see the caption Text below).
 import QtQuick
 import Tct
 
@@ -80,14 +92,16 @@ Rectangle {
     // Declarative hover-lighten border — a HoverHandler-driven binding, never
     // an imperative onEntered/onExited colour assignment.
     border.color: hoverHandler.hovered ? Theme.hairlineStrong : Theme.hairline
-    opacity: stale ? 0.6 : 1.0
+    // NOTE: no `opacity: stale ? ... : 1.0` here — removed, see item 10
+    // above. Stale renders through ink alone (value/meter Text below) plus
+    // the `tileStaleMark` non-colour carrier; the tile itself stays fully
+    // opaque in every state.
     // Belt-and-suspenders backstop for fit/ellipsize below (§3 "never bleed
     // into a neighbour") — even if some future edit adds an unbound child,
     // it cannot paint outside this tile's own rectangle.
     clip: true
 
     Behavior on border.color { ColorAnimation { duration: Theme.transitionMs } }
-    Behavior on opacity { NumberAnimation { duration: Theme.transitionMs } }
 
     HoverHandler { id: hoverHandler }
 
@@ -131,24 +145,56 @@ Rectangle {
         anchors.leftMargin: Theme.spaceSm + 6   // clear the accent bar
         spacing: 4
 
-        Text {
-            objectName: "tileTitle"
-            text: root.title
+        Row {
+            id: titleRow
             width: parent.width
-            elide: Text.ElideRight
-            // Metric-label role (§3): tiny tracked MONO uppercase engraving —
-            // same constants the QSS QLabel#readoutCellTitle rule reads, so
-            // strip tiles and panel tiles carry one label voice.
-            font.family: Theme.monoFamily
-            font.pixelSize: Theme.fontMetricLabel
-            font.weight: Font.DemiBold
-            font.letterSpacing: Theme.trackingMetricLabel
-            // repo convention (ReadoutCell/MetricTile title.upper()) rather
-            // than the draft's SmallCaps.
-            font.capitalization: Font.AllUppercase
-            color: root.stale ? Theme.muted : Theme.muted
+            spacing: 4
 
-            Behavior on color { ColorAnimation { duration: Theme.transitionMs } }
+            Text {
+                id: titleText
+                objectName: "tileTitle"
+                text: root.title
+                // Leaves room for `tileStaleMark` only while it is actually
+                // shown — a Row does not shrink its children itself, so an
+                // unconditional full-width title would let the marker
+                // overflow the tile when both are present.
+                width: root.stale
+                    ? Math.max(0, titleRow.width - staleMark.implicitWidth - titleRow.spacing)
+                    : titleRow.width
+                elide: Text.ElideRight
+                // Metric-label role (§3): tiny tracked MONO uppercase engraving —
+                // same constants the QSS QLabel#readoutCellTitle rule reads, so
+                // strip tiles and panel tiles carry one label voice.
+                font.family: Theme.monoFamily
+                font.pixelSize: Theme.fontMetricLabel
+                font.weight: Theme.weightMetricLabel
+                font.letterSpacing: Theme.trackingMetricLabel
+                // repo convention (ReadoutCell/MetricTile title.upper()) rather
+                // than the draft's SmallCaps.
+                font.capitalization: Font.AllUppercase
+                color: Theme.muted
+
+                Behavior on color { ColorAnimation { duration: Theme.transitionMs } }
+            }
+
+            Text {
+                id: staleMark
+                objectName: "tileStaleMark"
+                visible: root.stale
+                // Non-colour carrier for staleness (item 10 above / Baldr
+                // BLOCKER-1): ink swaps (this row's title stays `muted`
+                // always; the value/meter Text below swap text->muted) can
+                // never be the ONLY channel per WCAG SC 1.4.1. Unconditional
+                // (not gated on `compact`) so every tile — including the
+                // strip's compact Position tile, whose caption is hidden —
+                // still visibly reads as stale without colour perception.
+                text: "STALE"
+                font.family: Theme.monoFamily
+                font.pixelSize: Theme.fontMetricLabel
+                font.weight: Theme.weightMetricLabel
+                font.letterSpacing: Theme.trackingMetricLabel
+                color: Theme.muted
+            }
         }
 
         Row {
@@ -167,7 +213,7 @@ Rectangle {
                 // is both the compact size and the HorizontalFit floor.
                 font.family: Theme.monoFamily
                 font.pixelSize: root.compact ? Theme.fontValueCompact : Theme.fontValue
-                font.weight: Font.DemiBold
+                font.weight: Theme.weightValue
                 color: root.stale ? Theme.muted : Theme.text
                 // Bounded to the row minus the unit label's own width (when
                 // shown) so a long value shrinks/elides instead of pushing

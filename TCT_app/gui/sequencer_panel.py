@@ -17,6 +17,19 @@ between entries; this panel only
 * Executes → :meth:`SequenceCoordinator.arm_and_start`, and Aborts →
   :meth:`SequenceCoordinator.abort_sequence` (always live while the queue runs).
 
+U1.3 split (``docs/design/u1_staging.md`` §5): the *mirror-shaped* half — the
+source-queue data model, the per-row live-state chips, run progress/outcome and
+the envelope **summary** — now lives in :class:`~gui.sequencer_viewmodel.\
+SequencerQueueViewModel` (a read-only view-model that holds NO coordinator, NO
+gate and NO run-control callable).  This panel is the **retained command/safety
+host**: it keeps the live coordinator, the ``ArmLatch`` ceremony, the private
+``ArmedEnvelopeGate`` plumbing, the always-live Abort, and its OWN ``_active``
+flag for control gating (§5.4 — the deliberate one-boolean duplication).  The
+host makes EVERY signal connection (§5.3): the coordinator's terminals FEED the
+view-model; the panel repaints off the view-model's single ``changed`` NOTIFY;
+control gating + the modal-safe notify path stay on the panel's OWN
+``sequence_active`` / ``sequence_error`` edges, never routed through the VM.
+
 Safety seams that DON'T live here (they are wired in ``tct_gui`` off the
 coordinator's ``sequence_active`` signal, so they survive a soft-reload and stay
 at the composition root):
@@ -70,12 +83,9 @@ from PySide6.QtWidgets import (
 )
 
 from controller.arm_envelope import ArmedEnvelope
-from controller.scan_plan import ScanPlan
-from controller.sequencer import (
-    EntryState, SequenceEntry, load_sequence_yaml, save_sequence_yaml,
-)
 from gui.arm_latch import ArmLatch
 from gui.panel_kit import GlassPane, HazardSurface, panel_header
+from gui.sequencer_viewmodel import SequencerQueueViewModel
 from gui.status_bus import notify
 from gui.status_widgets import StatusChip
 from gui.style import SPACE_SM, palette
@@ -83,23 +93,6 @@ from gui.style import SPACE_SM, palette
 if TYPE_CHECKING:  # pragma: no cover - typing only; injected at runtime
     from gui.sequence_coordinator import SequenceCoordinator
 
-
-# Entry-state → (chip label, chip visual state).  Ladder per
-# docs/design/state_color_census.md conventions (law 1 "quiet nominal"):
-#   PENDING / SKIPPED / CANCELLED / DONE  -> neutral (a DONE routine is quiet
-#     grey, NEVER green — green is spent sparingly and never means "fine");
-#   PREFLIGHT -> info (a brief informational active check);
-#   RUNNING   -> busy (the one ACTIVE/accent state);
-#   FAILED    -> crit (the halt culprit — the only red row).
-_ENTRY_CHIP: dict[str, tuple[str, str]] = {
-    EntryState.PENDING.value:   ("PENDING", "neutral"),
-    EntryState.PREFLIGHT.value: ("PREFLIGHT", "info"),
-    EntryState.RUNNING.value:   ("RUNNING", "busy"),
-    EntryState.DONE.value:      ("DONE", "neutral"),
-    EntryState.FAILED.value:    ("FAILED", "crit"),
-    EntryState.SKIPPED.value:   ("SKIPPED", "neutral"),
-    EntryState.CANCELLED.value: ("CANCELLED", "neutral"),
-}
 
 # The HV run inside ``ArmedEnvelope.summary`` ("... HV <min>..<max> V ...").
 # Best-effort: if a summary ever formats HV differently the text still renders
@@ -129,29 +122,52 @@ class SequencerPanel(QWidget):
         # (the single-primary / simulation case).
         self._channel_provider: Callable[[], int] = channel_provider or (lambda: 0)
         self._theme_mode = str(theme_mode)
-        # The SOURCE queue (name / plan snapshot / provenance).  The coordinator
-        # keeps its OWN deep-copied entries + live states; this list is only what
-        # the operator is assembling.  SequenceEntry is reused so save/load go
-        # straight through controller.sequencer's persistence functions.
-        self._entries: list[SequenceEntry] = []
+        # The read-only queue/run mirror + SOURCE-queue data model (u1_staging
+        # §5.2).  It holds the source queue this panel is assembling, the per-row
+        # live-state chips, run progress/outcome and the envelope summary — but NO
+        # coordinator, NO gate and NO run-control callable.  Panel-constructed in
+        # U1 (§1.1); moves to the composition root at the sequencer's own port
+        # stage.  ``self._entries`` (below) is a live view onto the VM's queue.
+        self._vm = SequencerQueueViewModel(parent=self)
         self._env: Optional[ArmedEnvelope] = None
+        # The panel's OWN control-gating flag (u1_staging §5.4): display state
+        # reads the VM, but abort/latch enabled-ness keeps this pinned private
+        # path (fed from the coordinator's sequence_active, NOT from vm.active).
         self._active = False
-        self._done = 0
-        self._total = 0
 
         self._build_ui()
 
-        # Connect the coordinator's signals BEFORE any load() — the coordinator
-        # emits every row at load, so a late connection would miss the first
-        # PENDING paint (SequenceCoordinator docstring / A4 handoff).
-        coordinator.entry_state_changed.connect(self._on_entry_state_changed)
-        coordinator.sequence_progress.connect(self._on_progress)
-        coordinator.sequence_finished.connect(self._on_finished)
-        coordinator.sequence_error.connect(self._on_error)
+        # ── Signal flow (u1_staging §5.3): the HOST makes EVERY connection. ──
+        # The coordinator's terminals FEED the read-only mirror (VM); the
+        # coordinator emits every row at load(), so these must connect BEFORE the
+        # first _sync_coordinator() below (a late connection misses the initial
+        # PENDING paint — SequenceCoordinator docstring / A4 handoff).
+        coordinator.entry_state_changed.connect(self._vm.on_entry_state)
+        coordinator.sequence_progress.connect(self._vm.on_progress)
+        coordinator.sequence_finished.connect(self._vm.on_finished)
+        coordinator.sequence_error.connect(self._vm.on_error)
+        coordinator.sequence_active.connect(self._vm.on_active)
+        # The panel repaints all display surfaces off the VM's single NOTIFY.
+        self._vm.changed.connect(self._repaint)
+        # A successful queue edit re-syncs the coordinator + re-derives the
+        # envelope; a fail-closed queue-I/O error surfaces on the status bus.
+        self._vm.queue_changed.connect(self._sync_coordinator)
+        self._vm.load_error.connect(self._on_load_error)
+        # Control gating + the (c)-pinned modal-safe notify path stay on the
+        # panel's OWN sequence_active / sequence_error edges — NEVER via the VM.
         coordinator.sequence_active.connect(self._on_active)
+        coordinator.sequence_error.connect(self._on_error)
 
         self.refresh_theme(self._theme_mode)
         self._sync_coordinator()
+
+    # A live view onto the VM's source queue.  Kept as a property (not a copied
+    # attribute) so it always reflects the VM — including after ``vm.load``
+    # replaces the list — and so ``panel._entries.append(...)`` mutates the one
+    # true queue (the panel/test harness idiom relies on both).
+    @property
+    def _entries(self):
+        return self._vm._entries
 
     # ------------------------------------------------------------------ #
     # UI construction                                                    #
@@ -276,23 +292,25 @@ class SequencerPanel(QWidget):
         root.addWidget(shelf, 1)
 
     # ------------------------------------------------------------------ #
-    # Queue editing (source list → coordinator.load → envelope re-derive) #
+    # Queue editing (VM source list → coordinator.load → envelope re-derive) #
     # ------------------------------------------------------------------ #
     def _sync_coordinator(self) -> None:
-        """Push the source queue into the coordinator and re-derive the envelope.
+        """Push the VM's source queue into the coordinator and re-derive the envelope.
 
-        Called after EVERY queue edit.  A pending Arm gesture is invalidated
-        first (an edit must never leave a stale arm authorizing an old envelope),
-        the table is rebuilt so row indices line up with the coordinator's about-
-        to-be-emitted per-entry states, then ``load`` (deep-copies the plans) and
-        ``build_gate`` re-derive the single combined envelope from scratch — a
-        stale summary is structurally impossible.
+        Called after EVERY queue edit (via ``vm.queue_changed``).  A pending Arm
+        gesture is invalidated first (an edit must never leave a stale arm
+        authorizing an old envelope), the table is rebuilt so row indices line up
+        with the coordinator's about-to-be-emitted per-entry states, then
+        ``load`` (deep-copies the plans) and ``build_gate`` re-derive the single
+        combined envelope from scratch — a stale summary is structurally
+        impossible.  The freshly-built envelope's summary is fed back into the VM
+        (§5.3); the gate itself never leaves this host.
         """
         self._latch.disarm("invalidated")
         self._rebuild_table()
         self._coordinator.load(
-            [(e.name, e.plan) for e in self._entries],
-            source_paths=[e.source_path for e in self._entries],
+            self._vm.named_plans,
+            source_paths=self._vm.source_paths,
         )
         self._refresh_envelope()
         self._refresh_controls()
@@ -312,20 +330,24 @@ class SequencerPanel(QWidget):
             self._table.setCellWidget(i, _COL_STATE, StatusChip("PENDING", "neutral"))
 
     def _refresh_envelope(self) -> None:
-        """Re-derive the ONE combined envelope over the loaded queue and render
-        its summary over the latch (empty queue → clear + not-ready)."""
+        """Re-derive the ONE combined envelope over the loaded queue, render its
+        summary over the latch, and feed the summary into the VM mirror (empty
+        queue → clear + not-ready)."""
         if not self._entries:
             self._env = None
+            self._vm.set_envelope_summary("")
             self._latch.set_envelope_text("")
             return
         try:
             env, _gate = self._coordinator.build_gate(int(self._channel_provider()))
         except Exception as exc:  # empty/failed derivation — fail-closed to not-ready
             self._env = None
+            self._vm.set_envelope_summary("")
             self._latch.set_envelope_text("")
             notify(f"Cannot derive sequence envelope: {exc}", "warn")
             return
         self._env = env
+        self._vm.set_envelope_summary(env.summary)
         self._latch.set_envelope_text(self._envelope_html(env))
 
     def _refresh_controls(self) -> None:
@@ -349,8 +371,30 @@ class SequencerPanel(QWidget):
                 self._latch.set_ready(
                     False, "Add at least one routine to arm the sequence.")
 
+    def _repaint(self) -> None:
+        """Repaint all DISPLAY surfaces off the VM mirror (u1_staging §5.3).
+
+        Fired on the VM's single ``changed`` NOTIFY.  Control gating is NOT here
+        — abort/latch enabled-ness stays on ``_on_active`` / ``_refresh_controls``
+        off the panel's own ``sequence_active`` edge (§5.4).
+        """
+        vm = self._vm
+        for row, (label, visual, message) in enumerate(vm.rows):
+            if 0 <= row < self._table.rowCount():
+                chip = self._table.cellWidget(row, _COL_STATE)
+                if isinstance(chip, StatusChip):
+                    chip.set_status(label, visual, tooltip=message or None)
+        self._progress_lbl.setText(
+            f"Progress · {vm.done}/{vm.total} entries complete")
+        if vm.outcomeWord:
+            self._outcome_lbl.setText(f"Last sequence outcome · {vm.outcomeWord}")
+        if vm.active:
+            self._chip_status.set_status(f"Running · {vm.done}/{vm.total}", "busy")
+        else:
+            self._chip_status.set_status("Idle", "neutral")
+
     # ------------------------------------------------------------------ #
-    # Add / remove / reorder                                             #
+    # Add / remove / reorder (thin delegates over the VM data model)      #
     # ------------------------------------------------------------------ #
     @Slot()
     def _on_add(self) -> None:
@@ -360,32 +404,19 @@ class SequencerPanel(QWidget):
             self._add_routine_from(path)
 
     def _add_routine_from(self, path: str) -> None:
-        """Load a saved routine and append it (name = file stem).  A malformed
-        routine is surfaced and never silently added."""
-        try:
-            plan = ScanPlan.load_yaml(path)
-        except Exception as exc:
-            notify(f"Could not load routine '{Path(path).name}': {exc}", "error")
-            return
-        self._entries.append(
-            SequenceEntry(name=Path(path).stem, plan=plan, source_path=str(path)))
-        self._sync_coordinator()
+        """Append a saved routine via the VM (name = file stem).  A malformed
+        routine is surfaced (``vm.load_error`` → status bus) and never silently
+        added; a successful add fires ``vm.queue_changed`` → ``_sync_coordinator``."""
+        self._vm.add_routine(path)
 
     @Slot()
     def _remove_selected(self) -> None:
-        row = self._table.currentRow()
-        if 0 <= row < len(self._entries) and not self._active:
-            del self._entries[row]
-            self._sync_coordinator()
+        self._vm.remove(self._table.currentRow())
 
     def _move_selected(self, delta: int) -> None:
         row = self._table.currentRow()
-        new = row + delta
-        if self._active or row < 0 or not (0 <= new < len(self._entries)):
-            return
-        self._entries[row], self._entries[new] = self._entries[new], self._entries[row]
-        self._sync_coordinator()
-        self._table.setCurrentCell(new, _COL_ROUTINE)
+        if self._vm.move(row, delta):
+            self._table.setCurrentCell(row + delta, _COL_ROUTINE)
 
     @Slot()
     def _move_selected_up(self) -> None:
@@ -396,7 +427,7 @@ class SequencerPanel(QWidget):
         self._move_selected(+1)
 
     # ------------------------------------------------------------------ #
-    # Save / load the whole queue                                        #
+    # Save / load the whole queue (thin delegates over the VM data model) #
     # ------------------------------------------------------------------ #
     @Slot()
     def _on_save(self) -> None:
@@ -406,12 +437,8 @@ class SequencerPanel(QWidget):
             self._save_queue_to(path)
 
     def _save_queue_to(self, path: str) -> None:
-        try:
-            save_sequence_yaml(path, self._entries)
-        except Exception as exc:
-            notify(f"Could not save sequence: {exc}", "error")
-            return
-        notify(f"Sequence saved to {Path(path).name}", "info")
+        if self._vm.save(path):
+            notify(f"Sequence saved to {Path(path).name}", "info")
 
     @Slot()
     def _on_load(self) -> None:
@@ -421,19 +448,13 @@ class SequencerPanel(QWidget):
             self._load_queue_from(path)
 
     def _load_queue_from(self, path: str) -> None:
-        """Replace the queue from a saved sequence file.
+        """Replace the queue from a saved sequence file via the VM.
 
-        Fail-closed: ``load_sequence_yaml`` raises (naming the bad entry) on any
-        malformed document rather than yielding a silently shortened queue, so on
-        error the CURRENT queue is left untouched and the reason is surfaced.
+        Fail-closed: ``vm.load`` leaves the CURRENT queue untouched on any
+        malformed document and surfaces the reason (``vm.load_error`` → status
+        bus); a successful load fires ``vm.queue_changed`` → ``_sync_coordinator``.
         """
-        try:
-            entries = load_sequence_yaml(path)
-        except Exception as exc:
-            notify(f"Could not load sequence '{Path(path).name}': {exc}", "error")
-            return
-        self._entries = entries
-        self._sync_coordinator()
+        self._vm.load(path)
 
     # ------------------------------------------------------------------ #
     # Arm / abort                                                        #
@@ -453,27 +474,14 @@ class SequencerPanel(QWidget):
 
     # ------------------------------------------------------------------ #
     # Coordinator signal handlers (GUI thread — already marshalled)       #
+    # Control gating + the modal-safe notify path stay on the panel's own #
+    # edges (u1_staging §5.4); DISPLAY is repainted off the VM (_repaint). #
     # ------------------------------------------------------------------ #
-    @Slot(int, str, str)
-    def _on_entry_state_changed(self, row: int, state_value: str, message: str) -> None:
-        if not (0 <= row < self._table.rowCount()):
-            return
-        chip = self._table.cellWidget(row, _COL_STATE)
-        if not isinstance(chip, StatusChip):
-            return
-        label, visual = _ENTRY_CHIP.get(state_value, (state_value.upper(), "neutral"))
-        chip.set_status(label, visual, tooltip=message or None)
-
-    @Slot(int, int)
-    def _on_progress(self, done: int, total: int) -> None:
-        self._done, self._total = done, total
-        self._progress_lbl.setText(f"Progress · {done}/{total} entries complete")
-        if self._active:
-            self._chip_status.set_status(f"Running · {done}/{total}", "busy")
-
     @Slot(str)
-    def _on_finished(self, word: str) -> None:
-        self._outcome_lbl.setText(f"Last sequence outcome · {word}")
+    def _on_load_error(self, message: str) -> None:
+        # A fail-closed queue-I/O error from the VM (bad routine / bad sequence
+        # file / failed save) — surfaced on the non-blocking status bus.
+        notify(message, "error")
 
     @Slot(str)
     def _on_error(self, reason: str) -> None:
@@ -483,12 +491,10 @@ class SequencerPanel(QWidget):
 
     @Slot(bool)
     def _on_active(self, active: bool) -> None:
+        # Control gating only (§5.4): the panel keeps its OWN _active flag for
+        # abort/latch enabled-ness.  The status chip / table / labels are
+        # repainted by _repaint off the VM's mirror of this same signal.
         self._active = bool(active)
-        if self._active:
-            self._chip_status.set_status(
-                f"Running · {self._done}/{self._total}", "busy")
-        else:
-            self._chip_status.set_status("Idle", "neutral")
         self._refresh_controls()
 
     # ------------------------------------------------------------------ #
