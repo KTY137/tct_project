@@ -405,8 +405,17 @@ U-track) instead of being smuggled into beats.
   variant, QQuickWidget stays · m7-only ⇒ container pivot (architect:
   detach/redock + focus notes) · both fail ⇒ separate top-levels
   A/B-style, full architect escalation.
-- **U2.3 dispatch HELD until the m6/m7 windowed run completes**
-  (~30-45 min; measurement integrity beats parallelism for one beat).
+- **NATIVE-SURFACE RUN 1 (`dbe7ad1`): m6 GENUINE FAIL** (~23 fps @
+  80% both passes — WA_NativeWindow island does NOT restore the fast
+  path). **m7 NO-DATA = harness bug, not a verdict** (measure_cell
+  assumed QQuickWidget; AttributeError on the container wrapper;
+  smoke never walked that line — coverage gap named). noah-spike-
+  mitigation RESUMED with the traceback: fix + smoke-parity, then
+  Adam runs windowed m0_control/m0_overlay/m7 only. **m7 is the LAST
+  in-window candidate** — if it fails, mechanism = separate
+  top-levels (A/B-proven) + full architect round.
+- **U2.3 dispatch HELD until the m7 windowed run completes** (one
+  more short cycle; measurement integrity beats parallelism).
   Mary thematic batch queues behind U2.3's face.
 - 👁️ **KAYA OPERATOR OBSERVATION #2 (aesthetic, booked):** "frost
   bake doesn't look that good relative to live glass — in the spike."
