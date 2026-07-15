@@ -23,12 +23,16 @@ arrive on ``ScanCoordinator`` signals already marshaled from the worker thread
 onto the GUI thread by ``_ScanBridge``. Owns no thread, no timer, no lock, no
 device handle — identical discipline to ``ScopeViewModel``.
 
-ETA note (Adam's ruling, 2026-07-11): ``etaText`` is a stable placeholder
-(``"--"``) this slice. The view-model deliberately does **not** derive a
-competing rate-based estimate; when ETA is wired (deferred per the design doc
-§8) it must be sourced from the core ``controller/plan_estimate.py`` values so
-the Planner's pre-run estimate and the live ETA agree. ``elapsedText`` is a
-measured wall-clock elapsed (not an estimate) and is derived here.
+ETA note (superseded by Adam's Q1 ruling, ``docs/design/u1_staging.md`` §4.3/
+§8, 2026-07-15 — supersedes the letter of the 2026-07-11 placeholder ruling
+while honoring its intent of "no competing estimate"): ``etaText`` is now the
+rate-derived estimate ported 1:1 from ``ScanViewerPanel._compute_eta`` (the
+classic panel's own copy is deleted in the same beat that lands this move —
+there is exactly ONE ETA derivation after U1.2). The refinement of sourcing
+ETA from the core ``controller/plan_estimate.py`` instead (so the Planner's
+pre-run estimate and the live ETA agree) stays queued, unchanged — not built
+here. ``elapsedText`` is a measured wall-clock elapsed (not an estimate) and
+is derived here, unchanged by this move.
 """
 from __future__ import annotations
 
@@ -60,7 +64,6 @@ class RunStateViewModel(QObject):
         self._done = 0
         self._total = 0
         self._point = None               # last ScanPoint (or None)
-        self._eta_text = "--"            # deferred: sourced from plan_estimate later
         self._error_text = ""
         self._scan_type = ""
         self._run_path = ""
@@ -149,6 +152,24 @@ class RunStateViewModel(QObject):
             return f"{seconds / 60:.1f} min"
         return f"{seconds / 3600:.1f} h"
 
+    def _compute_eta(self) -> str:
+        """Port of ``ScanViewerPanel._compute_eta`` (Adam's Q1 ruling,
+        ``docs/design/u1_staging.md`` §4.3/§8) — the classic panel's copy is
+        deleted in the same beat, so this is the ONE eta derivation. Rate
+        derived from observed progress/elapsed; sourcing from the core
+        ``plan_estimate.py`` instead stays a queued refinement, not built
+        here."""
+        if self._done <= 0 or self._total <= 0:
+            return "--"
+        elapsed = self._elapsed_s()
+        if elapsed <= 0:
+            return "--"
+        rate = self._done / elapsed
+        if rate <= 0:
+            return "--"
+        remaining = max(0, self._total - self._done)
+        return self._format_duration(remaining / rate)
+
     # -- QML-facing read-only properties ----------------------------------- #
     @Property(str, notify=changed)
     def stateName(self) -> str:
@@ -193,7 +214,7 @@ class RunStateViewModel(QObject):
 
     @Property(str, notify=changed)
     def etaText(self) -> str:
-        return self._eta_text
+        return self._compute_eta()
 
     @Property(str, notify=changed)
     def elapsedText(self) -> str:

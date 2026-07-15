@@ -140,19 +140,35 @@ def test_on_progress_zero_total_no_divzero():
 
 
 # --------------------------------------------------------------------------- #
-# 6. ETA is a stable placeholder this slice (Adam's ruling — NOT VM-derived)    #
+# 6. ETA is rate-derived (Adam's Q1 ruling, docs/design/u1_staging.md §4.3/§8, #
+#    2026-07-15 — supersedes the letter of the 2026-07-11 placeholder ruling,  #
+#    which this file's ``test_eta_text_stable_placeholder_not_derived`` used   #
+#    to pin; that test's premise is what the Q1 ack changes, so it is updated  #
+#    here rather than left red — see the U1.2 beat report for the deviation    #
+#    note.)                                                                    #
 # --------------------------------------------------------------------------- #
-def test_eta_text_stable_placeholder_not_derived():
-    """DEVIATION from design-doc test 6 (rate-derived ETA): per Adam's
-    2026-07-11 ruling the facade must NOT derive a competing estimate; ETA is
-    deferred and, when wired, sourced from controller/plan_estimate.py. So
-    etaText stays ``"--"`` across a start + progress cycle."""
+def test_eta_computed_with_injected_clock():
+    """Design-doc test 6 (``docs/design/run_state_facade.md`` §7), now the
+    canonical behavior: a fake clock makes the rate-derived ETA deterministic
+    — matches ``ScanViewerPanel``'s own former ``_compute_eta``/
+    ``_format_duration`` arithmetic 1:1 (ported, not re-derived)."""
     _app()
     clock = {"t": 100.0}
     vm = RunStateViewModel(clock=lambda: clock["t"])
     vm.on_scan_started()
-    clock["t"] = 110.0
-    vm.on_progress(4, 20)
+    clock["t"] = 110.0          # 10 s elapsed
+    vm.on_progress(4, 20)       # rate = 0.4/s, remaining = 16 -> 40 s
+    assert vm.etaText == "40 s"
+
+
+def test_eta_dashes_before_elapsed_time():
+    """``on_progress`` reported before ``on_scan_started`` (no t0 yet) must
+    degrade gracefully — mirrors the reclaimed
+    ``test_progress_before_any_elapsed_time_reports_eta_dashes`` scan-viewer
+    behavior, now provable directly against the one ETA derivation."""
+    _app()
+    vm = RunStateViewModel()
+    vm.on_progress(1, 4)
     assert vm.etaText == "--"
 
 
