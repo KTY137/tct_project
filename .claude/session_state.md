@@ -54,11 +54,56 @@ design round. Dispatched (see in-flight).
 
 ## 🔥 IN-FLIGHT BEATS (locks)
 
-(none — every dispatched beat landed; agents are DEAD, do not
-SendMessage them. Landed this session on `ui-qml-migration`:
-`2a2cb38` forge · `bb44801` LANTERN ratification + panel-scoped
-auto-calm · `e875571` Codex C12 · `2a5e67e` U0 probe script ·
-`4c5de40` frost-bake spike.)
+- **baldr-lantern-attack** (baldr): accessibility attack on Lantern +
+  panel-scoped calm (worst-case motion vs WCAG 2.3.3, ring-on-composite
+  measurement, local-calm-as-cue). LOCKS:
+  `docs/design/qml_kit_forge/attack_baldr.md` only.
+- (landed this session on `ui-qml-migration`: `2a2cb38` forge ·
+  `bb44801` LANTERN ratification + panel-scoped auto-calm · `e875571`
+  Codex C12 · `2a5e67e` U0 probe · `4c5de40` frost spike · `9187d9b`
+  U0 gate green. Mamoru standup: ALL 7 CLAIMS VERIFIED, audit clean.)
+
+## ⚔️ LOKI VERDICT on LANTERN (2026-07-15): REVISE — sound, 2 riders
+
+**"The frost-bake premise survived the attack I most expected to
+land"** — O(1) evidence real (fps/island-rate held to 8 panes @ 12 Hz;
+the CPU-slope number is noise, don't quote it as a constant). Safety
+posture intact. Stability credible. BUT:
+
+- **BLOCKER-1 (spec contradiction CREATED BY the panel-scope
+  ratification):** candidate_lantern §3.2/§7 still say "RUNNING → bake
+  0 Hz / zero material cost during acquisition (SYNTHESIS §4.3)". With
+  panel-scoped calm the room KEEPS FLOWING during a scan ⇒ the shared
+  bake CANNOT stop ⇒ that guarantee is silently void — ~0.5 core of
+  ground+bake now runs ON TOP of live acquisition on the CPU-bound
+  laptop. **Fix = paper reconciliation of §3.2/§7 BEFORE U2** (bake
+  runs at idle rate during scans; only the run-owning pane calms).
+- **MAJOR-2:** panel-scoped calm mechanism is hand-waved; the only
+  O(1)-preserving mechanism is (a) the running pane stops scheduling
+  its OWN sampler (stale crop) ⇒ a slow drift seam at the panel edge
+  over a 90 s flow period — must be NAMED in the spec; seam
+  acceptability = Baldr's call.
+- **MAJOR-3 (the REQUIRED follow-up measurement, "measurement B"):**
+  the spike had no acquisition load (no DeviceManager/controller/HDF5,
+  1 island vs up to 9). Before U2: re-run bake+full ground DURING a
+  live SIMULATED scan (sim devices + controller + HDF5 + live scan
+  plot) on the laptop; assert plot rate + DAQ cadence.
+- MINOR-5: shadow-token family (`shadowInk`, `shadowA..D`) needs
+  Kaya's explicit token-law nod — NOT covered by "DO LANTERN".
+- MINOR-6: the Theme bridge is ~40 unbuilt token exposures — a real
+  front-loaded cost line before U2's first Surface, not a footnote.
+- MINOR-7: accelerated-RDP edge passes `_scene_capable`'s tier gate
+  (low priority, bench used connected).
+- Note for Mary (routing, not a hole): the facade must resolve WHICH
+  panel owns the run for panel-scoped calm.
+- Cost honesty for the U2 plan: **~3× a naive port across U2–U6**,
+  breaking even after U6 — carry that number, not "one glass instead
+  of sixteen" (that's the steady state).
+
+**Fix path (after Baldr lands, ONE Brokkr revision pass batches both
+attack results):** reconcile §3.2/§7 + name mechanism (a) + shadow-nod
+question to Kaya. Measurement B queued as U2-entry requirement (not a
+U1 blocker — U1 is viewmodels, paint-free).
 
 - ✅ LANDED **noah-frost-spike** `4c5de40`: **🎯 PASS on ALL 4 criteria —
   Lantern's entry ticket is PAID.** Worst-case Intel UHD iGPU, single
