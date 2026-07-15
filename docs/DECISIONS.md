@@ -464,9 +464,12 @@ delegation above:
    PRESENT on hazard rungs, halo never — focus visibility on the highest-
    stakes controls is non-negotiable (this direction strengthens the safety
    posture; the hazard-opacity law itself is untouched).
-5. **Dead-zone law names the halo (Baldr MAJOR-5):** kit.md §8's enumerated
+5. **Dead-zone law names the halo (Baldr MAJOR-5):** the enumerated
    translucent-pixel mechanisms extend from {sample, shadow} to {sample,
-   shadow, halo} — a strengthening of a protective law.
+   shadow, halo} — a strengthening of a protective law. *(Location
+   correction, caught by Brokkr in the revision pass: the enumeration lives
+   in candidate_lantern.md §8 and kit.md §7 law 4 — not "kit.md §8" as this
+   entry first said; implemented at both real locations.)*
 6. **Spec reconciliation (Loki BLOCKER-1/MAJOR-2):** candidate_lantern §3.2/§7
    rewritten to the true post-ratification behavior — the bake runs at idle
    rate during scans; only the run-owning pane freezes its own sampler

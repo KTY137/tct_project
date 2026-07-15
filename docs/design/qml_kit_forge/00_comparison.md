@@ -103,15 +103,22 @@ vocabulary + Twin's Theme-gap audit"), not a diff.
 1. **Parity or divergence during the U-window?** Twin holds one look until U6; Lantern makes
    the QML shell visibly better *now* at the price of two looks in one app for months.
    Which discomfort does he want?
+   **RESOLVED 2026-07-15:** divergence — "DO LANTERN" (DECISIONS.md 2026-07-15, LANTERN
+   ratification).
 2. **Is edges-without-blur enough "glass feeling"?** Twin bets yes; his round-2 verdict
    ("verschluckt zu viel glass feeling") suggests no. A one-look A/B (static mock is
    sufficient) would settle it before the attack pass argues in the abstract.
 3. **Living glass default:** off (Twin) or subtle (Lantern/Ledger)? And does auto-calm
    satisfy his intent, or did he want the glass alive *during* runs too (the Baldr gate says
    no — this is the one place his wish and the distraction gate can collide)?
+   **RESOLVED 2026-07-15:** default = subtle; auto-calm ratified PANEL-SCOPED (the room keeps
+   flowing during a run), bounded by the run-active ≤ 1.0× speed clamp (DECISIONS.md
+   2026-07-15, LANTERN ratification + "Post-attack-pass rulings" #1).
 4. **Shadow-ladder tokens** (`shadowInk`, `shadowA..D`) — promotion into `gui/style.py` is
    assumed by Lantern and available to Ledger; it is a new token family and per the token
    law needs his nod.
+   **RESOLVED 2026-07-15:** APPROVED under the delegated design authority, exercised for the
+   shadow family (DECISIONS.md 2026-07-15, delegation entry; resolves Loki MINOR-5).
 5. **If Ledger appeals:** does the LOCKED-row mechanism satisfy the PROTECTED-region
    governance for safety paint, or does he want safety cells kept *out* of the table
    entirely (hard-coded in the components, table forbidden to define them)?

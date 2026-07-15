@@ -283,6 +283,15 @@ Fill `raised`, **opaque, always**, radius 12, on a card. `specular` inner top.
 w600) value + `FONT_UNIT_PX` (11, muted) unit.
 **Semantic ink is permitted here** (light `crit` on `raised` = 6.03, `good` = 5.36, `warn` = 5.43).
 
+> **Stale/dim clause — amended 2026-07-15 (DECISIONS "Post-attack-pass rulings" #2).**
+> Staleness on a tile is **ink-only**: value ink → `muted` + a stale caption; the state
+> word/chip carries it. Any opacity cascade over semantic ink is capped at the measured
+> legal ceiling — **≥ 0.94 (dark) / ≥ 0.91 (light)**: below that, every semantic ink fails
+> AA over the worst legal ground (machine-measured, `docs/design/qml_kit_forge/attack_baldr.md`
+> BLOCKER-1 — e.g. dark `crit` 5.02 → 2.59 at the shipped 0.6). The shipped `MetricTile.qml`
+> `opacity: 0.6` stale dim is **retired**; a dim that wants to read as "stale" dims chrome
+> only (fill/border), never a node that text inherits opacity from.
+
 ### 4.4 `Well` — the recess
 Fill `well`, **opaque, always**, radius 12, `edge_shade` inner top, no outer shadow. Inputs,
 troughs, list rows, sliders.
@@ -318,6 +327,12 @@ Carries: the live hazard value (in a Tile), the state as **glyph + WORD + colour
 eyebrow word (text) · glyph (shape) · position (top of the panel). Opacity is **not** one of
 them — at FLAT everything is opaque and the hazard is still unmistakable. That is the test the
 law demands, and this passes it.
+
+> **Focus on a hazard surface (added 2026-07-15, DECISIONS "Post-attack-pass rulings" #4):**
+> the 2 px focus ring is an accessibility primitive, not part of the glass material — it is
+> **always present** on a focused hazard control, at every tier; the decorative focus **halo
+> never appears here**. "The material is dead on hazard" kills lift, frost and halo — never
+> the ring.
 
 ### 4.7 The rest
 `chip` (state pill: glyph + word + colour, `chip` fill), `SegmentedControl` (track = `well`,
@@ -468,7 +483,10 @@ constants are corrected in place in `kit.html` as part of this pass.**
 1. **No value on a pane.** Values live on cards, in tiles, or in wells.
 2. **No semantic-coloured text in a well.** (§4.4)
 3. **No well directly on the ground.** A well only ever sits on a card. (§2)
-4. **No glass on, over, or touching an island.** No shadow cast onto an island. (§4.5, §3.1)
+4. **No glass on, over, or touching an island.** No shadow — **and no focus halo** — cast
+   onto an island: the dead-zone enumeration covers all three translucent-pixel mechanisms,
+   **{sample, shadow, halo}** *(extended 2026-07-15, DECISIONS "Post-attack-pass rulings"
+   #5)*. (§4.5, §3.1)
 5. **The hazard surface is opaque at every tier**, carries four redundant channels, and is never
    composed away.
 6. **No hazard control in the shell.** The shell displays; the panel acts. (Kaya, ratified.)
