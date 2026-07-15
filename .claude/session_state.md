@@ -393,6 +393,20 @@ U-track) instead of being smuggled into beats.
   CPU-heavy dispatches until it returns. On verdict → decision table
   (ledger above) → U2.3 dispatch + U2.4 disposition + Mary thematic
   batch (U2.1+U2.2+U2.3 when face lands).
+- 👁️ **KAYA OPERATOR OBSERVATION #2 (aesthetic, booked):** "frost
+  bake doesn't look that good relative to live glass — in the spike."
+  Data context: bake exonerated on PERF (control cell 60 fps @23%);
+  the aesthetic gap has 3 stacked confounds in the spike (12 Hz
+  cadence lag on through-frost content · FULL amplitude ground, ship
+  default is subtle · the 23 fps composition jank degrading
+  everything). QUEUED (after matrix, quiet machine): **bake-cadence
+  sweep 12/24/30/60 Hz on the frost-spike harness with a cost curve**
+  — per the quality directive the cadence that looks right gets
+  bought if affordable, numbers on the table at the windowed
+  sign-off. Kaya re-judges frost looks AFTER the composition fix
+  lands. (If even 60 Hz reads cheap vs live glass, THAT is a design
+  finding for the sign-off — the one-blur law still caps the
+  mechanism at one shared pass.)
 - ✅ **Ruling 10 landed `6b593f2`** (delegated design authority):
   ONE shared frost bake at pane depth; §2.2 card row amended; blurCard
   = reserved fill-alpha tuning lever; second bake refused (cost).
