@@ -227,17 +227,43 @@ non-conflicting parallelism dispatched:
 - Mamoru standup PASS (all 5 tasks).
 - **NOT done overnight by design:** merge-back to main (Kaya Q2 + gate
   ④), U1.4 planner tail (AxisSpec), measurement B (operator).
-- **u2-architect** (Fable, background) — U2 hero-slice plan ON PAPER
-  (docs/design/u2_hero_plan.md, only file): beats/locks/exit criteria,
-  island embedding mechanics, (b)-residue test disposition,
-  distillation-balance accounting, [Kaya] sign-off checklist. Header
-  states the Kaya-gate dependency (measurement B + kit-spec sign-off).
-- **noah-bridge** (background) — Theme-bridge beat per kit_spec_v1 §6
-  + Appendix A (42 exposures): style.py additive constants +
-  2 app_settings keys + TOKEN_MAP + retire C13-named QML guesses +
-  new tests/test_qml_theme_bridge.py. LOCKS: qml_theme.py · style.py
-  (additive) · app_settings.py · C13-named QML files ·
-  test_qml_theme_bridge.py (new) + explicitly-listed QML-test edits.
+- ✅ **u2-architect DONE, landed `81c56fe`** — u2_hero_plan.md: day-0
+  overlay micro-spike (the ONE unmeasured mechanic) + U2.1–U2.7 with
+  locks/exit criteria; single-construction-site command strip keeps
+  test_scan_viewer_wiring.py byte-stable through the face flip.
+  Adam confirmations given: ruling-8 platform/panel LOC split ✓;
+  VM-naming-vs-abort-matcher deferred to U2.3 dispatch by design.
+  KAYA at sign-off: face-flip ruling (architect recommends flip).
+- ✅ **noah-bridge DONE, landed `616cec8`** — 42/42 exposures (16 new
+  style.py constants, 2 living-glass settings, TOKEN_MAP, C13 guess
+  retirement), 300+ tests green across 6 runs, QML compile checks
+  clean. **Noah caught a brief bug: my brief said living_glass
+  default=off, ratified spec says SUBTLE — spec won (correct).**
+  Kaya FYI (may overrule to off). Intentional kit-unification visual
+  deltas listed in beat report (ChromeButton primary loses extra
+  bold; chip fills unify; crit→error on fault paths). 2 GlassShell
+  text sites deliberately NOT retired (would be redesign) → U2
+  reference review.
+- ✅ **Codex C14 DONE, committed `3669222`** — 34 unmapped files
+  enumerated w/ bucket proposals + evidence; 3 proposed for bucket A
+  (byte-freeze consequence!) → Mary ratifies before Kiroku executes.
+- ✅ **mary-morning DONE: APPROVE ×3** (conftest 9982ce7, P1 2c01e38,
+  bridge 616cec8 — 42-count verified against Appendix A, style.py
+  additive-proven, subtle-default confirmed against spec+DECISIONS,
+  crit→error recolour ruled a hazard-hierarchy STRENGTHENING). 2
+  residual NITs tracked: (i) livingGlass*/motionEnabled notify only
+  fires on theme toggle — fix when a runtime settings control lands;
+  (ii) ALL_42 is hand-maintained — optional introspection guard when
+  the kit grows. **Bucket-A ruling: capability_registry +
+  device_connect_lifecycle + plan_estimate_cap INTO A; glass_env
+  DEMOTED to B** (design-active gui/ policy module — byte-freeze
+  would fight kit evolution). C14 otherwise trustworthy.
+- **kiroku-final** (background) — map reconciliation per C14 + Mary
+  overrides. LOCKS: docs/test_bucket_map.md ·
+  docs/SAFETY_NORMATIVE_TESTS.md (§Counts bottom line only) ·
+  docs/ARCHITECTURE.md. Also reports (read-only) how
+  check_bucket_a.ps1 sources its list.
+- QUEUED after kiroku-final: commit → MORNING REPORT for Kaya (~09:00).
 - **PUSHED:** origin @ 8c19005 (all four wave-1 beats Mary-approved →
   review-then-push satisfied).
 

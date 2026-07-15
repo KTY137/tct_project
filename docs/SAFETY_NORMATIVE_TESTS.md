@@ -293,8 +293,9 @@ standalone named test — it is enforced by the counter-reset guard inside
   v0.2); plus 5 zero-hit functional/analysis files noted in the sweep section
   and harness/fixtures.
 - Coverage: 45 manifest + 60 appendix − 1 dual-listed + 5 zero-hit =
-  **109 test files**, matching the disk count in `docs/test_bucket_map.md`
-  (A 47 · B 18 · C 39 · D 5). No file on disk is unaccounted for.
+  **109 test files** from the safety audit (ratified v0.2). Current full disk count in
+  `docs/test_bucket_map.md` (2026-07-15 C14 reconciliation): **156 test files**
+  (A 52 · B 28 · C 65 · D 11). Every file on disk accounted for in one of the four buckets.
 
 ## Rulings (Mary, S2 gate, 2026-07-13)
 

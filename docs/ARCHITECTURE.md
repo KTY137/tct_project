@@ -635,6 +635,10 @@ Maintained by Kiroku; drift-checked by Mamoru on every change.
 
 ## Changelog
 
+- 2026-07-15 — **docs(ledger): C14 bucket-map completeness reconciliation (test_bucket_map.md, SAFETY_NORMATIVE_TESTS.md).** Re-enumerated 34 unmapped files from glass-kit work (test_wave_*_render, material/glass foundations) + test_qml_theme_bridge.py; applied Mary overrides (test_glass_env → B, test_plan_estimate_cap → A confirmed); new totals A=52, B=28, C=65, D=11 (156 files, ~100% disk coverage). Bucket C completeness claim now TRUE.
+
+- 2026-07-15 — **feat(gui): QML theme-bridge completeness suite (616cec8, 42 exposures).** NEW `test_qml_theme_bridge.py`: QML theme live-sync, tone-mapping, and safety-token pinning across light/dark modes; bridges `qml_theme.py` and `gui/style.py` palette export contract. Bucket D (QML/hybrid); added to test_bucket_map.md.
+
 - 2026-07-15 — **feat(gui): U1.0 QtDangerGate cluster carve-out to test_qt_danger_gate.py (8166752).** S2 Ruling Q4 execution: 9 tests (5 normative + 4 supporting) byte-moved from test_planner_panel.py → new test_qt_danger_gate.py; bucket B per Mary review; docs/SAFETY_NORMATIVE_TESTS.md + docs/test_bucket_map.md updated.
 
 - 2026-07-15 — **feat(gui): U1.1 ScanMapViewModel extraction (a88b823).** NEW `gui/scan_map_viewmodel.py`: read-only points/quantity/grid/readout/CSV state. C→B: test_scan_map_view.py reclassified; 17 (a)-class tests reclaimed into new test_scan_map_viewmodel.py; (b) residue byte-untouched, green.
