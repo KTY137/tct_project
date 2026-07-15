@@ -38,10 +38,20 @@ from PySide6.QtCore import Property, QObject, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtQml import QmlElement, QmlSingleton
 
+from gui import app_settings
 from gui.style import (
-    FONT, FONT_METRIC_LABEL_PX, FONT_UNIT_PX, FONT_VALUE_COMPACT_PX,
-    FONT_VALUE_PX, MONO_FAMILIES, RADIUS, SPACE, PLOT_BG, PLOT_FG, PLOT_GRID,
-    PLOT_OVERLAY, TRACKING_METRIC_LABEL_PX, TRANSITION_MS, palette,
+    BLUR_CARD_PX, BLUR_OVERLAY_PX, BLUR_PANE_PX, FOCUS_HALO_ALPHA_DARK,
+    FOCUS_HALO_ALPHA_LIGHT, FOCUS_RING_OFFSET_PX, FONT, FONT_BODY_PX,
+    FONT_METRIC_LABEL_PX, FONT_PANEL_TITLE_PX, FONT_RAIL_PX, FONT_UNIT_PX,
+    FONT_VALUE_COMPACT_PX, FONT_VALUE_PX, FROST_REBAKE_HZ_FULL,
+    FROST_REBAKE_HZ_SUBTLE, GLASS_CARD_ALPHA_DARK, GLASS_CARD_ALPHA_LIGHT,
+    GROUND_FLOW_PERIOD_S, GROUND_TINT_ALPHA_MAX, MONO_FAMILIES,
+    MOTION_SPRING_UI, MOTION_TAP_MS, MOTION_UNFOLD_MS, RADIUS,
+    SHADOW_A_DARK, SHADOW_A_LIGHT, SHADOW_B_DARK, SHADOW_B_LIGHT,
+    SHADOW_C_DARK, SHADOW_C_LIGHT, SHADOW_D_DARK, SHADOW_D_LIGHT, SPACE,
+    PLOT_BG, PLOT_FG, PLOT_GRID, PLOT_OVERLAY, TRACKING_METRIC_LABEL_PX,
+    TRANSITION_MS, WEIGHT_BODY, WEIGHT_METRIC_LABEL, WEIGHT_PANEL_TITLE,
+    WEIGHT_RAIL, WEIGHT_UNIT, WEIGHT_VALUE, get_panel_glass_alpha, palette,
 )
 
 # QColor's string constructor cannot parse CSS functional ``rgba()`` notation
@@ -136,6 +146,20 @@ TOKEN_MAP: dict[str, str] = {
     "danger": "danger",     # cockpit v5 canonical semantic names — same
     "armed": "armed",       # value as crit/warn above, see gui/style.py.
     "onAccent": "on_accent",
+    # LANTERN kit-bridge (kit_spec_v1.md §6 + Appendix A.1/A.4, U2-entry
+    # Theme-bridge beat, docs/CODEX_QUEUE.md §C13) — colour exposures that
+    # resolve 1:1 from an EXISTING gui/style.py palette-dict key (no new
+    # style.py constant needed; only the bridge entry was missing).
+    "dangerFill": "danger_fill",
+    "onDanger": "on_danger",
+    "onArmed": "on_armed",
+    "error": "error",
+    "chip": "chip",
+    "edge": "edge",
+    "edgeShade": "edge_shade",
+    "pressed": "pressed",
+    "disabledBg": "disabled_bg",
+    "shadowInk": "shadow_ink",
 }
 
 # Current theme mode, shared by every live Theme singleton (one per QML engine).
@@ -282,6 +306,42 @@ class Theme(QObject):
     @Property(QColor, notify=changed)
     def onAccent(self) -> QColor: return self._c("on_accent")
 
+    # -- LANTERN kit-bridge colours (kit_spec_v1.md §6 + Appendix A.1/A.4;
+    #    U2-entry Theme-bridge beat, docs/CODEX_QUEUE.md §C13) — 1:1 resolves
+    #    from an existing gui/style.py palette-dict key via TOKEN_MAP above. #
+    @Property(QColor, notify=changed)
+    def dangerFill(self) -> QColor: return self._c("danger_fill")
+
+    @Property(QColor, notify=changed)
+    def onDanger(self) -> QColor: return self._c("on_danger")
+
+    @Property(QColor, notify=changed)
+    def onArmed(self) -> QColor: return self._c("on_armed")
+
+    @Property(QColor, notify=changed)
+    def error(self) -> QColor: return self._c("error")
+
+    @Property(QColor, notify=changed)
+    def chip(self) -> QColor: return self._c("chip")
+
+    @Property(QColor, notify=changed)
+    def edge(self) -> QColor: return self._c("edge")
+
+    @Property(QColor, notify=changed)
+    def edgeShade(self) -> QColor: return self._c("edge_shade")
+
+    @Property(QColor, notify=changed)
+    def pressed(self) -> QColor: return self._c("pressed")
+
+    @Property(QColor, notify=changed)
+    def disabledBg(self) -> QColor: return self._c("disabled_bg")
+
+    # Shadow-ladder ink (kit_spec_v1.md §2.5/A.4) — dark #000000 / light =
+    # the theme's own text hue; see LIGHT["shadow_ink"]/DARK["shadow_ink"]
+    # in gui/style.py.
+    @Property(QColor, notify=changed)
+    def shadowInk(self) -> QColor: return self._c("shadow_ink")
+
     # ``specular`` (docs/design/cockpit_design_system.md §2) is a
     # translucent white highlight whose ALPHA (not hue) differs per theme —
     # gui/style.py stores it as an ``rgba(255, 255, 255, a)`` QSS string,
@@ -356,6 +416,40 @@ class Theme(QObject):
     @Property(int, constant=True)
     def trackingMetricLabel(self) -> int: return TRACKING_METRIC_LABEL_PX
 
+    # LANTERN kit-bridge typography roles (kit_spec_v1.md §6 + Appendix A.2;
+    # U2-entry Theme-bridge beat, docs/CODEX_QUEUE.md §C13) — every one of
+    # these already exists as a named FONT_*_PX/WEIGHT_* constant in
+    # gui/style.py; only the bridge property was missing. `weightMetricLabel`/
+    # `weightValue`/`weightUnit` complete the metric-tile trio that
+    # `fontMetricLabel`/`fontValue`/`fontValueCompact`/`fontUnit` above only
+    # covered the SIZE half of.
+    @Property(int, constant=True)
+    def fontRail(self) -> int: return FONT_RAIL_PX
+
+    @Property(int, constant=True)
+    def weightRail(self) -> int: return WEIGHT_RAIL
+
+    @Property(int, constant=True)
+    def fontPanelTitle(self) -> int: return FONT_PANEL_TITLE_PX
+
+    @Property(int, constant=True)
+    def weightPanelTitle(self) -> int: return WEIGHT_PANEL_TITLE
+
+    @Property(int, constant=True)
+    def fontBody(self) -> int: return FONT_BODY_PX
+
+    @Property(int, constant=True)
+    def weightBody(self) -> int: return WEIGHT_BODY
+
+    @Property(int, constant=True)
+    def weightMetricLabel(self) -> int: return WEIGHT_METRIC_LABEL
+
+    @Property(int, constant=True)
+    def weightValue(self) -> int: return WEIGHT_VALUE
+
+    @Property(int, constant=True)
+    def weightUnit(self) -> int: return WEIGHT_UNIT
+
     # Resolved monospace family for QML `font.family` (a single string —
     # the QML font value type has no families-list property). Picks the
     # first gui.style.MONO_FAMILIES entry the font database actually has;
@@ -401,3 +495,107 @@ class Theme(QObject):
 
     @Property(int, constant=True)
     def radiusPill(self) -> int: return RADIUS["pill"]
+
+    # -- LANTERN kit-bridge — round-03 elevation-rung radii (kit_spec_v1.md
+    #    §6 + Appendix A.1; already SHIPPED in gui/style.py's RADIUS map,
+    #    only the bridge property was missing) ---------------------------- #
+    @Property(int, constant=True)
+    def radiusXl(self) -> int: return RADIUS["xl"]
+
+    @Property(int, constant=True)
+    def radiusShelf(self) -> int: return RADIUS["shelf"]
+
+    # -- LANTERN kit-bridge — glass alphas (Appendix A.1). Mode-dependent
+    #    (`notify=changed`) even though the DARK/LIGHT SCENE-tier alphas
+    #    are fixed constants, matching the ``dark``/``glassCardAlpha``-style
+    #    pattern used elsewhere in this class for a value that varies by
+    #    theme but not on its own. ``glassPaneAlpha`` additionally tracks
+    #    the LIVE, user-tunable panel-glass alpha (gui.style.
+    #    set_panel_glass_alpha, theme editor's Material section) via
+    #    ``get_panel_glass_alpha()`` — re-read on every access, same idiom
+    #    as ``specular`` above; a change made outside a theme toggle will
+    #    only reach a bound QML property on the NEXT ``changed`` emission
+    #    (a pre-existing limitation of this class's single notify signal,
+    #    not new to this beat). --------------------------------------------#
+    @Property(float, notify=changed)
+    def glassPaneAlpha(self) -> float: return get_panel_glass_alpha()
+
+    @Property(float, notify=changed)
+    def glassCardAlpha(self) -> float:
+        return GLASS_CARD_ALPHA_DARK if _MODE == "dark" else GLASS_CARD_ALPHA_LIGHT
+
+    # -- LANTERN kit-bridge — motion & living-glass (kit_spec_v1.md §6 +
+    #    Appendix A.3). `motionEnabled`/`livingGlassMode`/`livingGlassSpeed`
+    #    read gui.app_settings live (same "re-read on every access" idiom as
+    #    `specular`/`glassPaneAlpha` above — see their docstrings for the
+    #    same notify-signal caveat). `motionTap`/`motionUnfold` are fixed
+    #    spec durations; `motionSpringUi` is ONE QVariant exposure carrying
+    #    both spring constants together (kit_spec_v1.md Appendix A.3 counts
+    #    it as a single bindable property, not two). ----------------------#
+    @Property(bool, notify=changed)
+    def motionEnabled(self) -> bool: return app_settings.motion_enabled()
+
+    @Property(str, notify=changed)
+    def livingGlassMode(self) -> str: return app_settings.living_glass_mode()
+
+    @Property(float, notify=changed)
+    def livingGlassSpeed(self) -> float: return app_settings.living_glass_speed()
+
+    @Property(int, constant=True)
+    def motionTap(self) -> int: return MOTION_TAP_MS
+
+    @Property(int, constant=True)
+    def motionUnfold(self) -> int: return MOTION_UNFOLD_MS
+
+    @Property("QVariant", constant=True)
+    def motionSpringUi(self) -> dict: return dict(MOTION_SPRING_UI)
+
+    # -- LANTERN kit-bridge — shadow-ladder alphas (kit_spec_v1.md §2.5/
+    #    Appendix A.4, APPROVED for promotion). Mode-dependent, same pattern
+    #    as `glassCardAlpha` above. `shadowInk` itself is a colour property,
+    #    already added alongside the other TOKEN_MAP colours above. -------#
+    @Property(float, notify=changed)
+    def shadowA(self) -> float: return SHADOW_A_DARK if _MODE == "dark" else SHADOW_A_LIGHT
+
+    @Property(float, notify=changed)
+    def shadowB(self) -> float: return SHADOW_B_DARK if _MODE == "dark" else SHADOW_B_LIGHT
+
+    @Property(float, notify=changed)
+    def shadowC(self) -> float: return SHADOW_C_DARK if _MODE == "dark" else SHADOW_C_LIGHT
+
+    @Property(float, notify=changed)
+    def shadowD(self) -> float: return SHADOW_D_DARK if _MODE == "dark" else SHADOW_D_LIGHT
+
+    # -- LANTERN kit-bridge — frost, focus and ground (kit_spec_v1.md §6 +
+    #    Appendix A.5). Fixed spec constants except `focusHaloAlpha`, which
+    #    is mode-dependent (0.35 dark / 0.25 light, ruling 3's halo garnish
+    #    — never appears on hazard rungs, ruling 4). `groundTintAlphaMax` is
+    #    the already-SHIPPED `GROUND_TINT_ALPHA_MAX` band-law budget (kit §1.1
+    #    / AmbientGround) — only the bridge property was missing. ---------#
+    @Property(int, constant=True)
+    def blurPane(self) -> int: return BLUR_PANE_PX
+
+    @Property(int, constant=True)
+    def blurCard(self) -> int: return BLUR_CARD_PX
+
+    @Property(int, constant=True)
+    def blurOverlay(self) -> int: return BLUR_OVERLAY_PX
+
+    @Property(int, constant=True)
+    def frostRebakeHzSubtle(self) -> int: return FROST_REBAKE_HZ_SUBTLE
+
+    @Property(int, constant=True)
+    def frostRebakeHzFull(self) -> int: return FROST_REBAKE_HZ_FULL
+
+    @Property(float, notify=changed)
+    def focusHaloAlpha(self) -> float:
+        return FOCUS_HALO_ALPHA_DARK if _MODE == "dark" else FOCUS_HALO_ALPHA_LIGHT
+
+    @Property(int, constant=True)
+    def focusRingOffsetPx(self) -> int: return FOCUS_RING_OFFSET_PX
+
+    @Property(int, constant=True)
+    def groundFlowPeriodS(self) -> int: return GROUND_FLOW_PERIOD_S
+
+    @Property(float, constant=True)
+    def groundTintAlphaMax(self) -> float: return GROUND_TINT_ALPHA_MAX

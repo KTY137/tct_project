@@ -174,7 +174,9 @@ Item {
                     }
                     Text {
                         text: "TCT Control"; color: Theme.text
-                        font.pixelSize: Theme.fontSm; font.weight: Font.DemiBold
+                        // Rail-chrome label role (kit_spec_v1.md Appendix A.2):
+                        // was a generic fontSm/DemiBold guess.
+                        font.pixelSize: Theme.fontRail; font.weight: Theme.weightRail
                         anchors.verticalCenter: parent.verticalCenter
                     }
                 }
@@ -221,8 +223,12 @@ Item {
                             readonly property string st: modelData[1]
                             width: 8; height: 8; radius: 4
                             anchors.verticalCenter: parent.verticalCenter
+                            // "fault" is a device hard-error (attempted-and-failed
+                            // connect), not an HV/abort danger state — kit_spec_v1.md
+                            // Appendix A.1's `error` token is the correct ink (was a
+                            // Theme.crit misuse; red stays reserved for HV/abort).
                             color: st === "on" ? Theme.muted
-                                 : st === "fault" ? Theme.crit : "transparent"
+                                 : st === "fault" ? Theme.error : "transparent"
                             border.width: st === "sim" ? 1.6 : (st === "off" ? 1 : 0)
                             border.color: st === "sim" ? Theme.sim : Theme.muted
 
@@ -525,7 +531,9 @@ Item {
         radius: Theme.radiusSm; implicitHeight: 28; implicitWidth: btnLabel.implicitWidth + 24
         // Hover = raised wash (+ hairline-strong ring on quiet tone) — calm,
         // token-only, chrome-only (regression triage 2026-07-12).
-        color: btnArea.pressed ? Theme.field
+        // pressed fill: was a Theme.field (raised-tone) guess — the kit's
+        // §2.6 state table names a dedicated `pressed` fill token.
+        color: btnArea.pressed ? Theme.pressed
              : btnArea.containsMouse ? Theme.raised : "transparent"
         border.width: 1
         border.color: tone === "danger" ? Theme.crit
@@ -534,7 +542,9 @@ Item {
         Behavior on color { ColorAnimation { duration: Theme.transitionMs } }
         Text {
             id: btnLabel; anchors.centerIn: parent
-            font.pixelSize: Theme.fontSm; font.weight: Font.Medium
+            // Rail-chrome label role (kit_spec_v1.md Appendix A.2): was a
+            // generic fontSm/Font.Medium guess.
+            font.pixelSize: Theme.fontRail; font.weight: Theme.weightRail
             color: tone === "danger" ? Theme.crit
                  : tone === "accent" ? Theme.accent : Theme.text
         }
@@ -555,8 +565,9 @@ Item {
         signal clicked()
         radius: Theme.radiusSm; implicitHeight: 28; implicitWidth: 28
         // Same calm hover recipe as ShellButton (iconArea already tracks
-        // hover for its tooltip).
-        color: iconArea.pressed ? Theme.field
+        // hover for its tooltip). pressed fill: was a Theme.field guess —
+        // see ShellButton's matching note above.
+        color: iconArea.pressed ? Theme.pressed
              : iconArea.containsMouse ? Theme.raised : "transparent"
         border.width: 1
         border.color: tone === "danger" ? Theme.crit

@@ -167,7 +167,7 @@ Rectangle {
                 // strip tiles and panel tiles carry one label voice.
                 font.family: Theme.monoFamily
                 font.pixelSize: Theme.fontMetricLabel
-                font.weight: Font.DemiBold
+                font.weight: Theme.weightMetricLabel
                 font.letterSpacing: Theme.trackingMetricLabel
                 // repo convention (ReadoutCell/MetricTile title.upper()) rather
                 // than the draft's SmallCaps.
@@ -191,7 +191,7 @@ Rectangle {
                 text: "STALE"
                 font.family: Theme.monoFamily
                 font.pixelSize: Theme.fontMetricLabel
-                font.weight: Font.DemiBold
+                font.weight: Theme.weightMetricLabel
                 font.letterSpacing: Theme.trackingMetricLabel
                 color: Theme.muted
             }
@@ -213,7 +213,7 @@ Rectangle {
                 // is both the compact size and the HorizontalFit floor.
                 font.family: Theme.monoFamily
                 font.pixelSize: root.compact ? Theme.fontValueCompact : Theme.fontValue
-                font.weight: Font.DemiBold
+                font.weight: Theme.weightValue
                 color: root.stale ? Theme.muted : Theme.text
                 // Bounded to the row minus the unit label's own width (when
                 // shown) so a long value shrinks/elides instead of pushing

@@ -21,8 +21,12 @@ Rectangle {
     implicitWidth: text.implicitWidth + 2 * Theme.spaceMd
     implicitHeight: 28
     radius: Theme.radiusSm
-    color: !btn.enabled ? Theme.sunk
-         : area.pressed ? Theme.accentStrong
+    // disabled fill: was a Theme.sunk guess — kit_spec_v1.md §2.6's disabled
+    // row names a dedicated `disabledBg` fill token. pressed fill: was a
+    // Theme.accentStrong guess for EVERY tone (not just primary) — the same
+    // §2.6 row names one `pressed` fill token for all interactive rungs.
+    color: !btn.enabled ? Theme.disabledBg
+         : area.pressed ? Theme.pressed
          : btn.primary  ? Theme.accent
          : area.containsMouse ? Theme.raised
          : Theme.panel2
@@ -33,10 +37,14 @@ Rectangle {
         id: text
         anchors.centerIn: parent
         text: btn.label
-        color: !btn.enabled ? Theme.faint
+        // disabled ink: was Theme.faint — repo law "faint is never text"
+        // (gui/style.py); §2.6's disabled row names `muted` ink.
+        color: !btn.enabled ? Theme.muted
              : btn.primary ? Theme.onAccent : Theme.text
-        font.pixelSize: Theme.fontSm
-        font.bold: btn.primary
+        // Rail-chrome label role (kit_spec_v1.md Appendix A.2): was a
+        // generic fontSm/font.bold guess.
+        font.pixelSize: Theme.fontRail
+        font.weight: Theme.weightRail
     }
 
     MouseArea {

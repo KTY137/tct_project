@@ -35,7 +35,9 @@ Rectangle {
     radius: Theme.radiusSm
     // Opaque, always (see the header): the FLAT tier is not a downgraded
     // reading experience, it is the same reading experience without glass.
-    color: Theme.sunk
+    // Was a Theme.sunk guess — kit_spec_v1.md Appendix A.1 names a
+    // dedicated `chip` fill token for StatusPill/chip surfaces.
+    color: Theme.chip
     border.width: 1
     border.color: chip.stub ? Theme.warn : Theme.hairline
 
@@ -56,6 +58,10 @@ Rectangle {
             text: chip.label
             color: Theme.muted
             font.pixelSize: Theme.fontMetricLabel
+            // Metric-label weight role (kit_spec_v1.md Appendix A.2) — was
+            // unset (default Normal), missing the tracked-mono-uppercase
+            // engraving weight MetricTile's own label carries.
+            font.weight: Theme.weightMetricLabel
             font.letterSpacing: Theme.trackingMetricLabel / 10.0
         }
 
@@ -65,7 +71,9 @@ Rectangle {
             color: chip.stub ? Theme.muted : chip.stateColor
             font.pixelSize: Theme.fontValueCompact
             font.family: Theme.monoFamily
-            font.bold: true
+            // Value weight role (kit_spec_v1.md Appendix A.2): was a plain
+            // font.bold guess.
+            font.weight: Theme.weightValue
         }
 
         StubBadge {
