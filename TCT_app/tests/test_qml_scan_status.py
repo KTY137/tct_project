@@ -202,17 +202,55 @@ def test_metric_tile_compact_hides_caption_and_shrinks():
         _pump()
 
 
-def test_metric_tile_stale_dims_opacity():
+def test_metric_tile_stale_is_ink_only_not_opacity():
+    """Baldr BLOCKER-1 / docs/DECISIONS.md 2026-07-15 "Post-attack-pass
+    rulings" ruling 2: the old `opacity: stale ? 0.6 : 1.0` cascade measured
+    an AA failure (dark crit 5.02->2.59, light warn 5.43->2.52, both under
+    the 3:1 non-text floor) stacked on top of the already-correct ink swap.
+    It is removed — the tile stays fully opaque in every state, and
+    `tileValue`'s own ink swap (text->muted) is the visible channel — plus
+    the non-colour `tileStaleMark` carrier below (WCAG SC 1.4.1: ink can
+    never be the ONLY channel)."""
     engine = _engine()
     component, obj = _load(engine, _QML_DIR / "MetricTile.qml")
     try:
         assert _errs(component) == []
+        stale_mark = obj.findChild(QObject, "tileStaleMark")
+        assert stale_mark is not None
+
         obj.setProperty("stale", False)
         _pump(0.02)
         assert obj.property("opacity") == 1.0
+        assert stale_mark.property("visible") is False
+
         obj.setProperty("stale", True)
-        _pump(0.2)  # the 150ms opacity Behavior needs a moment to settle
-        assert obj.property("opacity") < 1.0
+        _pump(0.2)  # match the old test's settle window; nothing to settle now
+        # Opacity never dims, regardless of stale.
+        assert obj.property("opacity") == 1.0
+        # The non-colour carrier becomes visible with non-empty text.
+        assert stale_mark.property("visible") is True
+        assert stale_mark.property("text") != ""
+    finally:
+        obj.deleteLater()
+        _pump()
+
+
+def test_metric_tile_stale_mark_visible_in_compact_mode():
+    """Compact tiles hide the caption entirely (`visible: !compact && ...`)
+    — for tiles that never set a caption at all (e.g. the strip's compact
+    Position tile), `tileStaleMark` is the ONLY non-colour stale channel.
+    Must still show even when compact."""
+    engine = _engine()
+    component, obj = _load(engine, _QML_DIR / "MetricTile.qml")
+    try:
+        assert _errs(component) == []
+        obj.setProperty("compact", True)
+        obj.setProperty("stale", True)
+        _pump(0.05)
+        stale_mark = obj.findChild(QObject, "tileStaleMark")
+        assert stale_mark.property("visible") is True
+        caption_label = obj.findChild(QObject, "tileCaption")
+        assert caption_label.property("visible") is False  # confirms the gap this closes
     finally:
         obj.deleteLater()
         _pump()

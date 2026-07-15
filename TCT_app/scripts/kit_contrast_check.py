@@ -42,9 +42,15 @@ THE MODEL (mirrors kit.md's own prose, not a re-invention)
 
 Run: ``python TCT_app/scripts/kit_contrast_check.py`` (from anywhere —
 sys.path is bootstrapped below). No Qt display required.
+
+Also runs the ring-contrast standing check (Baldr BLOCKER-2 / docs/
+DECISIONS.md 2026-07-15 "Post-attack-pass rulings" ruling 3):
+``--ring-context {own-fill,surround,both}`` (default ``both``) — see that
+check's own module comment below for what each mode measures.
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -61,6 +67,7 @@ for _p in (str(_TCT_APP),):
 from gui import style  # noqa: E402
 from gui.style import _blend as blend_hex  # noqa: E402  — the SHIPPED sRGB blend, not a copy
 from gui.style import MIN_PANEL_GLASS_ALPHA  # noqa: E402  — the REAL, enforced clamp floor
+from gui.style import PLOT_BG  # noqa: E402  — the island rung's opaque token
 
 # ---------------------------------------------------------------------------
 # WCAG 2.2 contrast primitives — no hardcoded colour anywhere in this block.
@@ -228,8 +235,18 @@ def _fmt(ratio: float) -> str:
     return f"{ratio:5.2f}"
 
 
-def _pass(ratio: float) -> str:
-    return "PASS" if ratio >= 4.5 else "FAIL"
+def _pass(ratio: float, threshold: float = 4.5) -> str:
+    """4.5 (WCAG AA text) by default — every EXISTING call site below keeps
+    passing zero args, so their pass/fail behaviour is untouched. The ring
+    checks (Baldr BLOCKER-2 / docs/DECISIONS.md 2026-07-15 "Post-attack-pass
+    rulings" ruling 3) pass NON_TEXT_PASS_THRESHOLD (3.0, the WCAG non-text
+    UI-component floor) explicitly instead."""
+    return "PASS" if ratio >= threshold else "FAIL"
+
+
+# WCAG 2.2 non-text/UI-component contrast floor (SC 1.4.11) — the ring is
+# not text, so 4.5 (the text floor `_pass()` defaults to) is the wrong bar.
+NON_TEXT_PASS_THRESHOLD = 3.0
 
 
 def print_ink_table(mode: str, surface_rgb: tuple[int, int, int], surface_name: str,
@@ -277,10 +294,141 @@ def alpha_floor_scan(mode: str, surface: str, ink_key: str, card_ingredient_hex:
 SEMANTIC_INKS = ["good", "warn", "crit", "accent", "sim"]
 
 
-def main() -> None:
+# ---------------------------------------------------------------------------
+# Ring-contrast standing check (Baldr BLOCKER-2, attack_baldr.md finding #2 /
+# docs/DECISIONS.md 2026-07-15 "Post-attack-pass rulings" ruling 3).
+#
+# candidate_lantern.md §5 claims the focus ring is "≥3:1 non-text contrast on
+# every rung — audited". Nothing in this file, before this addition, ever
+# produced that audit: the ink tables above only ever measured TEXT (4.5:1
+# floor) on `card`/`shelf`. The ring is (a) not text — the non-text 3:1 floor
+# applies, not 4.5 — and (b) needs checking against every rung's SURROUND
+# (the containing pane it sits on), AND against a component's OWN FILL
+# (accent-filled buttons, StatusPill variants) — a pairing the surround-only
+# model structurally cannot see (an accent ring on an accent-toned fill is
+# the failure Baldr's audit actually measured: ~1.0-1.4:1, functionally
+# invisible).
+#
+# Ring colour is `accent` (candidate_lantern.md §5: "the 2 px ring itself"),
+# read live from palette() — never hand-copied.
+#
+# The ring OFFSET convention (does the ring sit on the component's own fill,
+# or is it drawn outward onto the surrounding pane per the existing QSS
+# precedent, `outline-offset: 1px`?) is still being decided in Brokkr's
+# parallel spec revision — so which pairing is the one that matters is
+# itself an open question. --ring-context parameterizes it instead of
+# hard-coding an answer: `own-fill`, `surround`, or `both` (default). The
+# SURROUND checks reuse the existing PASS/FAIL convention (now at the 3.0
+# non-text floor). The OWN-FILL checks are REPORT-ONLY regardless of the
+# flag — do not hard-fail the run on them yet — until the offset convention
+# lands; the numbers are printed either way so nobody has to re-derive them
+# once it does.
+# ---------------------------------------------------------------------------
+RING_INK_KEY = "accent"
+
+# Own-fill tokens to check the ring against — Baldr's own missing-check spec
+# item 3: "every interactive component's own fill token (`accent`,
+# `accent_strong`, `tint`, `pressed`) read from `style.palette()` by name,
+# not hand-copied". `danger_fill`/hazard fills are deliberately excluded —
+# ruling 4 keeps the ring on hazard rungs but hazard fills are never
+# accent-toned, so they are not the same-hue-on-same-hue failure mode this
+# check targets.
+RING_OWN_FILL_TOKENS = ["accent", "accent_strong", "tint", "pressed"]
+
+
+def ring_vs_surround(mode: str, gh: str, card_hex: str, card_scene_rgb: tuple[int, int, int],
+                      shelf_hex: str, shelf_scene_rgb: tuple[int, int, int]) -> None:
+    """Ring vs every rung's SCENE+TOKEN composite: card, shelf, tile
+    (=`raised`), well, island (=PLOT_BG), hazard (=`panel`) — today only
+    card/shelf were modelled at all (as TEXT, via the ink tables above);
+    tile/well/island/hazard were never modelled by this script for any
+    purpose. `card`/`shelf` are real glass surfaces so both their SCENE
+    (composited over the worst legal ground) and TOKEN (opaque) tiers are
+    checked, matching this file's own tier-invariance convention above;
+    tile/well/island/hazard are already opaque tokens, so TOKEN only."""
+    p = style.palette(mode)
+    ring_rgb = hex_to_rgb(p[RING_INK_KEY])
+
+    print(f"\n  Ring ({RING_INK_KEY}) vs SURROUND — every rung's SCENE+TOKEN "
+          f"composite (floor {NON_TEXT_PASS_THRESHOLD}:1 non-text, SC 1.4.11):")
+    rungs: list[tuple[str, tuple[int, int, int] | None, tuple[int, int, int]]] = [
+        ("card", card_scene_rgb, hex_to_rgb(card_hex)),
+        ("shelf", shelf_scene_rgb, hex_to_rgb(shelf_hex)),
+        ("tile (raised)", None, hex_to_rgb(p["raised"])),
+        ("well", None, hex_to_rgb(p["well"])),
+        ("island (PLOT_BG)", None, hex_to_rgb(PLOT_BG)),
+        ("hazard (panel, dead material)", None, hex_to_rgb(p["panel"])),
+    ]
+    for rung_name, scene_rgb, token_rgb in rungs:
+        if scene_rgb is not None:
+            ratio_scene = contrast_ratio(ring_rgb, scene_rgb)
+            print(f"    {rung_name:<30} SCENE  {_fmt(ratio_scene)} : 1   "
+                  f"{_pass(ratio_scene, NON_TEXT_PASS_THRESHOLD)}")
+        ratio_token = contrast_ratio(ring_rgb, token_rgb)
+        print(f"    {rung_name:<30} TOKEN  {_fmt(ratio_token)} : 1   "
+              f"{_pass(ratio_token, NON_TEXT_PASS_THRESHOLD)}")
+
+
+def ring_vs_own_fill(mode: str) -> None:
+    """Ring vs an interactive component's OWN resting/hover/pressed fill —
+    the pairing `ring_vs_surround` structurally cannot see, and the one
+    Baldr's audit found actually fails (accent-on-accent ~1.0-1.4:1). Report
+    numbers unconditionally; never gate ship on them here (see module note
+    above) — the ring-offset convention decides whether this pairing is even
+    reachable in the shipped `BorderImage`, and that convention has not
+    landed yet."""
+    p = style.palette(mode)
+    ring_rgb = hex_to_rgb(p[RING_INK_KEY])
+
+    print(f"\n  Ring ({RING_INK_KEY}) vs OWN FILL — component's own resting/hover/"
+          f"pressed token (REPORT-ONLY: ring-offset convention pending, "
+          f"docs/DECISIONS.md 2026-07-15 ruling 3):")
+    for token_name in RING_OWN_FILL_TOKENS:
+        token_hex = p.get(token_name)
+        if not token_hex:
+            print(f"    {token_name:<14} — not in palette({mode}), skipped")
+            continue
+        ratio = contrast_ratio(ring_rgb, hex_to_rgb(token_hex))
+        print(f"    {token_name:<14} {_fmt(ratio)} : 1   "
+              f"{_pass(ratio, NON_TEXT_PASS_THRESHOLD)}  (report-only)")
+
+
+def ring_contrast_scan(mode: str, ring_context: str, gh: str, card_hex: str,
+                        card_scene_rgb: tuple[int, int, int], shelf_hex: str,
+                        shelf_scene_rgb: tuple[int, int, int]) -> None:
+    """Dispatches to `ring_vs_surround`/`ring_vs_own_fill` per
+    *ring_context* ("own-fill" | "surround" | "both")."""
+    if ring_context in ("surround", "both"):
+        ring_vs_surround(mode, gh, card_hex, card_scene_rgb, shelf_hex, shelf_scene_rgb)
+    if ring_context in ("own-fill", "both"):
+        ring_vs_own_fill(mode)
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=(
+        "kit_contrast_check.py — live re-derivation of kit.md's numbers, "
+        "plus the ring-contrast standing check (Baldr BLOCKER-2)."
+    ))
+    parser.add_argument(
+        "--ring-context", choices=["own-fill", "surround", "both"], default="both",
+        help=(
+            "Which ring-contrast pairing(s) to report. 'surround' = ring vs "
+            "every rung's own SCENE+TOKEN composite (pass/fail at the 3:1 "
+            "non-text floor). 'own-fill' = ring vs an interactive "
+            "component's own accent-toned fill token — report-only, the "
+            "ring-offset convention has not landed yet. Default: both."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
+
     print("=" * 78)
     print("kit_contrast_check.py — live re-derivation of kit.md's numbers")
     print(f"gui.style module: {style.__file__}")
+    print(f"ring-context: {args.ring_context}")
     print("=" * 78)
 
     for mode in ("dark", "light"):
@@ -381,6 +529,10 @@ def main() -> None:
                 print(f"    {surface:<5} {ink:<7} alpha=0: {r_zero:5.2f}  "
                       f"alpha={MIN_PANEL_GLASS_ALPHA}(clamp): {r_floor:5.2f}  "
                       f"alpha={ceil_a}(shipped): {r_ceil:5.2f}   {verdict}")
+
+        # ---- ring-contrast standing check (Baldr BLOCKER-2 / ruling 3) ----
+        ring_contrast_scan(mode, args.ring_context, gh, card_hex, card_scene_rgb,
+                            shelf_hex_proposed, shelf_scene_rgb_proposed)
 
     # ---- kit.html baked-token audit: do its CSS/JS constants match live? ----
     # These are kit.html's CURRENT baked constants (corrected 2026-07-14 as
