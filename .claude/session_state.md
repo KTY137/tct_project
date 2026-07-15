@@ -58,23 +58,63 @@ Restart happened at the planned boundary; fresh session picked up the
 handoff. Kaya: "run all agents in parallel full throttle" → maximum
 non-conflicting parallelism dispatched:
 
-- **u1-architect** (Fable, background) — U1 staging design.
-  LOCK: `docs/design/u1_staging.md` (only file). Brief was
-  Shiori-checked (MISMATCHES: none; key facts: run_state_facade =
-  docs-only at docs/design/run_state_facade.md; RunStateViewModel
-  ALREADY in code gui/run_state_viewmodel.py:47; precedent is flat
-  gui/*_viewmodel.py; gui/viewmodels/* paths free). Mid-flight relay
-  sent: Mary's run-ownership convention (below) for the seam section.
-- **noah-measb** (Noah, Opus, background) — BUILD measurement-B harness
-  early (U2-entry gate, zero U1 dependency). LOCK:
-  `TCT_app/scripts/spike_measurement_b.py` (+ ≤1 helper, same prefix),
-  `artifacts_claude/measurement_b_prep_*/`. Sim-only guard mandatory;
-  offscreen --smoke only — the WINDOWED live run is Kaya's/Adam's call
-  (standing rule 6 class), like the U0 probe.
-- **Codex C13** (free lane) — Theme-gap audit (carried DO-LANTERN
-  condition / Loki MINOR-6): TOKEN_MAP vs Lantern kit needs. Brief
-  appended to `docs/CODEX_QUEUE.md` (C13 section = Codex append zone);
-  enqueued 20260715T003618Z, watcher alive PID 22116.
+- **noah-u10** (Noah, Opus, background) — U1.0 QtDangerGate carve-out
+  per u1_staging.md §4.1. LOCKS: tests/test_planner_panel.py ·
+  tests/test_qt_danger_gate.py (new) · docs/SAFETY_NORMATIVE_TESTS.md ·
+  docs/test_bucket_map.md. Safety-class ⇒ IMMEDIATE Mary review at
+  landing (Q3 count drift 9-vs-5 rides with her). Blocks U1.3
+  (manifest lock) — dispatch Abel when this lands.
+- **jonathan-u11** (Jonathan, background) — U1.1 ScanMapViewModel per
+  §4.2, 17 reclaims. LOCKS: gui/scan_map_viewmodel.py (new) ·
+  gui/scan_map_view.py · tests/test_scan_map_viewmodel.py (new) ·
+  tests/test_scan_map_view.py.
+- **noah-u12** (Noah #2, background) — U1.2 ScanViewerViewModel per
+  §4.3 + **Q1 ACKED by Adam** (ETA moves into RunStateViewModel, panel
+  copy deleted; post-hoc log pending). LOCKS: gui/scan_viewer_viewmodel.py
+  (new) · gui/scan_viewer_panel.py · gui/run_state_viewmodel.py (ETA
+  only) · tests/test_scan_viewer_viewmodel.py (new) ·
+  tests/test_scan_viewer_panel.py · tests/test_run_state_viewmodel.py
+  (additive).
+
+## ✅ U1 STAGING DESIGN LANDED (u1-architect, Fable, this session)
+
+- `docs/design/u1_staging.md` (566 lines, uncommitted until first-beat
+  landing review). 5 beats: U1.0 carve-out → wave 1 (U1.1‖U1.2‖U1.3,
+  38 reclaims) → boundary (Mamoru+Kiroku+Mary batch) → gate §7 →
+  merge-back; U1.4 planner (36) designed but DO-NOT-DISPATCH until
+  AxisSpec importable on branch. Placement ruling: flat
+  gui/*_viewmodel.py (package would strand the S2-named
+  run_state_viewmodel.py). Sequencer split: SequencerQueueViewModel
+  (read-only, fed) + panel stays command/safety host. Run-owner seam =
+  ruling 7 convention pinned. **OPEN: Q2 to Kaya** (close U1/merge
+  back after wave 1, planner tail self-gated later — recommended) ·
+  Q3 to Mary at U1.0 review.
+- (U1.3 Abel: QUEUED, dispatches when U1.0 releases the
+  SAFETY_NORMATIVE_TESTS.md lock. U1.4 planner: HELD for AxisSpec.)
+
+## ✅ LANDED THIS SESSION (besides U1 staging design)
+
+- **noah-measb DONE** — measurement-B harness built, offscreen smoke
+  PASS exit 0 (sim guard proven: trips on non-sim device, refuses
+  headless with exit 3; sim scan + HDF5-to-temp + 30 Hz island + QML
+  parse all exercised). `TCT_app/scripts/spike_measurement_b.py` +
+  bundle `artifacts_claude/measurement_b_prep_20260715T004557Z/`
+  (README = launch instructions). **WINDOWED LIVE RUN = OPERATOR
+  (Kaya)**: `cd TCT_app; .venv\Scripts\python.exe
+  scripts\spike_measurement_b.py` on the laptop, ~40–55 s, verdict
+  block + spike_report.json. NOTE: §7 named assertions but not
+  thresholds — harness carries PROPOSED floors (island 28 Hz, qml 55
+  fps, retention 0.90/0.80, jitter CV rule) as named constants;
+  ratify against the live numbers before treating as the U2 gate.
+- **Codex C13 DONE** (free lane, Adam-reviewed) — Theme-gap audit:
+  **42 missing Lantern bridge exposures** (evidence table with
+  file:line in docs/CODEX_QUEUE.md §C13). U2 cost line: ONE focused
+  front-loaded bridge beat (TOKEN_MAP + style.py constants + 2
+  app_settings keys + retire QML hardcode guesses) BEFORE the first
+  Surface, else the Surface becomes the source of truth. Path note:
+  the kit contract is `docs/design/iterations/glasshell-cockpit/
+  round-03/kit.md` (qml_kit_forge/kit.md does not exist — brief slip,
+  Codex adapted correctly).
 
 ## ✅ MARY BATCH DONE (this session): 6452da3 APPROVED_WITH_NITS
 

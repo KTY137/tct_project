@@ -895,7 +895,7 @@ Risk: classification is advisory and static except for running the current suite
 
 ## C13 - Theme-gap audit: qml_theme.py TOKEN_MAP vs the Lantern kit needs (advisory, read-only)
 
-**Status: QUEUED** - Effort: M - Source: Adam, 2026-07-15 (carried DO-LANTERN condition: the Theme-gap audit is prerequisite homework; Loki MINOR-6 sized it at ~40 unbuilt token exposures — a front-loaded cost line before U2's first `Surface`)
+**Status: DONE - Theme bridge gap audited; 42 missing Lantern exposures.** - Effort: M - Source: Adam, 2026-07-15 (carried DO-LANTERN condition: the Theme-gap audit is prerequisite homework; Loki MINOR-6 sized it at ~40 unbuilt token exposures — a front-loaded cost line before U2's first `Surface`)
 
 Enumerate precisely which tokens the ratified LANTERN kit direction requires
 from the QML Theme bridge versus what `TCT_app/gui/qml_theme.py` `TOKEN_MAP`
@@ -917,3 +917,84 @@ a guess for it (file:line). Deliverable: a markdown table + total count + a
 one-paragraph cost line for the U2 plan (how much bridge work is front-loaded
 before the first `Surface`), appended below this brief. Do NOT modify any repo
 file other than appending here.
+
+**Codex findings (2026-07-15):**
+
+Source note: the brief's `docs/design/qml_kit_forge/kit.md` path is absent on
+this branch. I used the referenced round-03 kit contract at
+`docs/design/iterations/glasshell-cockpit/round-03/kit.md` plus
+`docs/design/qml_kit_forge/candidate_lantern.md`, `TCT_app/gui/qml_theme.py`,
+`TCT_app/gui/style.py`, `TCT_app/gui/app_settings.py`, and shipped QML under
+`TCT_app/gui/qml/`.
+
+Current bridge coverage: `TOKEN_MAP` already exposes the base rungs
+`card`/`shelf`/`well`/`raised`, core inks, `danger`/`armed` aliases, spacing,
+metric font sizes, `monoFamily`, `transitionMs`, `specular`, and plot constants.
+The gaps below are the additional Lantern `Theme.*` surface needed before a
+first real `Surface` can be authoritative instead of locally guessing.
+
+| Missing Theme exposure | QWidget-side source of truth | Spec consumers | Shipped QML hardcoded guess today |
+|---|---|---|---|
+| `dangerFill` | `palette()["danger_fill"]`; `TCT_app/gui/style.py:404-428`, `585`, `730` | `ActionBar` danger, `HazardSurface`, danger state | Partial: danger buttons use `Theme.crit` border/text, no fill, in `TCT_app/gui/qml/Shell.qml:531-539` and `562-570`. |
+| `onDanger` | `palette()["on_danger"]`; `TCT_app/gui/style.py:404-428`, `585`, `730` | Danger button labels, hazard labels | Partial: same Shell danger path uses `Theme.crit` as label ink (`Shell.qml:537-539`, `568-570`). |
+| `onArmed` | `palette()["on_armed"]`; `TCT_app/gui/style.py:430-435`, `586`, `731` | Motion/armed filled controls, armed hazard stripe labels | No direct fill path; HV accent uses `Theme.armed` only in `TCT_app/gui/qml/ScanStatusStrip.qml:91`. |
+| `error` | `palette()["error"]`; `TCT_app/gui/style.py:437-459`, `577`, `725` | EmptyState error variant, device hard-error status | Yes: fault/error states reuse `Theme.crit` in `Shell.qml:224-225` and `glassshell/GlassShell.qml:374`, `382`. |
+| `chip` | `palette()["chip"]`; `TCT_app/gui/style.py:677-684`, `771-775` | `StatusPill`, chips, state pills | Yes: `VitalChip` uses `Theme.sunk` at `glassshell/VitalChip.qml:38`; `Shell.StatChip` has no pill fill at `Shell.qml:584-624`. |
+| `edge` | `palette()["edge"]`; `TCT_app/gui/style.py:685-710`, `790` | Surface specular edge / raised top edge | Partial: QML uses `Theme.specular` and `Theme.hairline`, not the QSS `edge`, e.g. `MetricTile.qml:122`. |
+| `edgeShade` | `palette()["edge_shade"]`; `TCT_app/gui/style.py:696-711`, `791` | `Well`, `Island` inner top shade | No; wells/island placeholders use plain borders such as `glassshell/GlassShell.qml:371-374`. |
+| `pressed` | `palette()["pressed"]`; `TCT_app/gui/style.py:652-655`, `762` | Surface pressed fill, button pressed state | Yes: pressed paths guess with `Theme.field`/`Theme.accentStrong` in `Shell.qml:528-529`, `559-560`, `glassshell/ChromeButton.qml:24-25`. |
+| `disabledBg` | `palette()["disabled_bg"]`; `TCT_app/gui/style.py:652-655`, `762` | Disabled Surface fill | Yes: disabled buttons use `Theme.sunk`/`Theme.faint` in `glassshell/ChromeButton.qml:24`, `36`. |
+| `glassPaneAlpha` | `PANEL_GLASS_ALPHA` plus clamp; `TCT_app/gui/style.py:910-930` | Shelf/Pane SCENE tint | Partial: QML shell uses caller `root.glassTint`, not Theme, in `Shell.qml:139-141`, `499-501`. |
+| `glassCardAlpha` | `GLASS_CARD_ALPHA_DARK/LIGHT`; `TCT_app/gui/style.py:565-571` | Card SCENE tint | No shipped card sampler yet; `MetricTile` stays opaque at `MetricTile.qml:89-90`. |
+| `radiusXl` | `RADIUS["xl"]`; `TCT_app/gui/style.py:88-109` | Card, `HazardSurface`, card-like Surface | Yes: large shells still use `Theme.radiusMd`, e.g. `glassshell/GlassShell.qml:65`, `276`, `371`. |
+| `radiusShelf` | `RADIUS["shelf"]`; `TCT_app/gui/style.py:99-109` | Shelf/Pane outer radius | Yes: shelf/chrome panes use `Theme.radiusMd`, e.g. `glassshell/GlassShell.qml:65`. |
+| `fontRail` | `FONT_RAIL_PX`; `TCT_app/gui/style.py:224-236` | Rail/chrome buttons | Yes: rail/button text uses generic `Theme.fontSm`, e.g. `Shell.qml:537`, `ChromeButton.qml:38`. |
+| `fontPanelTitle` | `FONT_PANEL_TITLE_PX`; `TCT_app/gui/style.py:238-239` | `PanelHeader`, shell/chrome titles | Yes: titles use `Theme.fontSm`/`fontLg`, e.g. `Shell.qml:176-178`, `GlassShell.qml:77-88`. |
+| `fontBody` | `FONT_BODY_PX`; `TCT_app/gui/style.py:241-242` | Body prose, hints, empty states | Yes: body/error text uses generic `Theme.fontMd`/`fontXs`, e.g. `GlassShell.qml:381-383`, `409-411`. |
+| `weightRail` | `WEIGHT_RAIL`; `TCT_app/gui/style.py:235-236` | Rail/chrome buttons | Yes: `Font.Medium`/`font.bold` guesses in `Shell.qml:537` and `ChromeButton.qml:39`. |
+| `weightPanelTitle` | `WEIGHT_PANEL_TITLE`; `TCT_app/gui/style.py:238-239` | Panel title / chrome title | Yes: `Font.DemiBold`/`font.bold` guesses in `Shell.qml:177` and `GlassShell.qml:80`, `87`. |
+| `weightBody` | `WEIGHT_BODY`; `TCT_app/gui/style.py:241-242` | Body prose | No named role; QML mostly omits weight for prose or uses generic bold flags. |
+| `weightMetricLabel` | `WEIGHT_METRIC_LABEL`; `TCT_app/gui/style.py:244-247` | Metric labels, chip labels | Yes: `Font.DemiBold` / `font.bold` in `MetricTile.qml:170`, `194`, `VitalChip.qml:58-59`. |
+| `weightValue` | `WEIGHT_VALUE`; `TCT_app/gui/style.py:255-257` | Metric values / readouts | Yes: `Font.DemiBold` and `font.bold` in `MetricTile.qml:216`, `VitalChip.qml:68`. |
+| `weightUnit` | `WEIGHT_UNIT`; `TCT_app/gui/style.py:259-260` | Unit suffixes | No explicit weight token; units rely on default weight in `MetricTile.qml:237-238`. |
+| `motionEnabled` | `app_settings.motion_enabled()`; `TCT_app/gui/app_settings.py:15`, `98-112` | Every `Behavior`, spring, living ground, reduced-motion path | No; QML animations bind only `Theme.transitionMs`, e.g. `MetricTile.qml:104`, `138`, `228`, `272`, `Shell.qml:534`, `565`. |
+| `livingGlassMode` | Not present yet; candidate requires `theme/living_glass` | `LivingGround`, Surface frost source | No shipped QML living ground; `attack_baldr.md` also notes no located key. |
+| `livingGlassSpeed` | Not present yet; candidate requires `theme/living_glass_speed` | `LivingGround` period/speed clamp | No shipped QML living ground. |
+| `motionTap` | Not present yet; candidate Lantern names 120 ms | Hover/press Surface responses | No; hover/press uses `transitionMs` or no animation. |
+| `motionUnfold` | Not present yet; candidate Lantern names 280 ms | `CollapsibleCard`, drawer/overlay reveal | No shipped collapsible Surface yet. |
+| `motionSpringUi` | Not present yet; candidate Lantern names `MOTION_SPRING_UI` | Segmented thumb, collapsible unfold, status pill width, drawer | No `SpringAnimation` in shipped QML. |
+| `shadowInk` | Not present yet; required by kit shadow ladder | Surface shadow renderer, pre-rendered 9-patch assets | No QML shadow implementation. |
+| `shadowA` | Not present yet; kit value 0.20 dark / 0.06 light | Contact shadow, `shCard` | No QML shadow implementation. |
+| `shadowB` | Not present yet; kit value 0.24 dark / 0.08 light | `shCard` lift | No QML shadow implementation. |
+| `shadowC` | Not present yet; kit value 0.30 dark / 0.10 light | `shPane` lift | No QML shadow implementation. |
+| `shadowD` | Not present yet; kit value 0.55 dark / 0.22 light | `shFloat` overlay/drag/modal | No QML shadow implementation. |
+| `blurPane` | Not present yet; candidate Lantern value 40 px | Shelf/Pane frost sampler | No shipped sampler; spike hardcodes `BLUR_MAX_PX = 40` in `scripts/spikes/lantern_frost_bake_spike.py:127`. |
+| `blurCard` | Not present yet; candidate Lantern value 16 px | Card frost sampler | No shipped sampler. |
+| `blurOverlay` | Not present yet; candidate Lantern value 28 px | Overlay/modal frost | No shipped overlay sampler. |
+| `frostRebakeHzSubtle` | Not present yet; candidate Lantern value 6 Hz | Shared frost source scheduler | No shipped scheduler. |
+| `frostRebakeHzFull` | Not present yet; candidate Lantern value 12 Hz | Shared frost source scheduler | No shipped scheduler. |
+| `focusHaloAlpha` | Not present yet; candidate Lantern value 0.35 dark / 0.25 light | Focus halo `BorderImage`; dead-zone tests | No QML focus halo. |
+| `focusRingOffsetPx` | Not present yet; candidate Lantern value 2 px | Universal focus ring | No QML focus ring; current controls rely on plain border/hover treatment. |
+| `groundFlowPeriodS` | Not present yet; candidate Lantern value 90 s | Living ground animation period | No shipped living ground animation. |
+| `groundTintAlphaMax` | `GROUND_TINT_ALPHA_MAX`; `TCT_app/gui/style.py:2138-2169` | Living ground band-law enforcement | No QML living ground; unrelated sim stripe hardcodes alpha in `Shell.qml:344-358`. |
+
+Total: 42 missing Lantern bridge exposures. The count treats grouped families
+as individual bindable `Theme.*` properties (`shadowA` through `shadowD`, the
+two frost rates, etc.) and does not count already-covered aliases such as
+`card`, `shelf`, `hairlineStrong`, `specular`, metric font sizes, or
+`transitionMs`.
+
+U2 cost line: before the first `Surface`, the bridge needs one focused
+front-loaded beat to add these 42 properties, promote the new shadow/blur/frost/
+focus/motion constants into `gui/style.py`, add the two living-glass settings
+to `gui/app_settings.py`, and update QML bindings/tests so no component guesses
+with `Theme.crit`, `Theme.sunk`, `Font.DemiBold`, generic radii, or raw behavior
+durations. That is small-to-medium plumbing, but it is a prerequisite: otherwise
+Lantern's first `Surface` becomes the source of truth instead of a renderer of
+the source of truth.
+
+- Files touched: `docs/CODEX_QUEUE.md` only.
+- Verification: static source audit only; no pytest run because C13 is advisory
+  and read-only except for this queue handback.
+- Risk: `docs/design/qml_kit_forge/kit.md` is missing on this branch; the audit
+  uses the referenced round-03 kit contract path instead.
