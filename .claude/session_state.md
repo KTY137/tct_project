@@ -280,6 +280,32 @@ non-conflicting parallelism dispatched:
   panel-scoped calm ships), Q2=YES (U1 closed, planner tail self-gated
   on AxisSpec), merge-back authorized-on-bench-green.
 
+## 🎯 KAYA QUALITY DIRECTIVE (2026-07-15, mid-U2, verbatim intent)
+
+"At the end of this, the system must look like the glass kit PROMISED —
+no half-assed transitions. Cook like a grand 3-star restaurant." Binding
+interpretation on the record: (1) the windowed U2 sign-off is judged
+against kit_spec_v1's promised pixels, not against "close enough" —
+any pragmatic compromise taken during implementation (ruling 10's
+shared-bake frost depth; the edgeShade token-line fallback; kit-
+unification visual deltas from the bridge beat) goes ON THE TABLE at
+that review with its cost number, and Kaya rules — no silent
+downgrades ship. (2) Motion/transition polish (springs, unfolds,
+crossfades, calm easing) is spec law, enforced by tests, not
+nice-to-have. (3) No lingering half-migrated states: the distillation
+gate (ruling 8) deletes the old face at each stage's end — the
+two-shell window is a construction state, never the product.
+(4) The island jank (overlay spike FAIL) gets a REAL fix before U2.4
+ships — a stuttering hero panel would be the definition of half-assed.
+ADDENDUM (Kaya, same conversation): "if you cook something even
+BETTER I wouldn't mind" — the spec is the FLOOR, not the ceiling.
+Bounded reading (course settings stay ratified): where an
+implementation choice exists, take the higher-fidelity option when
+the measured cost allows; genuinely NEW design ideas do NOT unfreeze
+the programme mid-migration — they go to a standing "post-migration
+design round" idea ledger (the ratified full glass/SCENE round after
+U-track) instead of being smuggled into beats.
+
 ## 🔥 IN-FLIGHT NOW (U2 day 0, 2026-07-15 ~13:00)
 
 - ✅ **bench full suite GREEN @ bundle cf52d21: 2886 passed, 2
