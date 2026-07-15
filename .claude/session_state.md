@@ -5,9 +5,12 @@ context. A fresh session reads this file and is as informed as the old one.
 Updated on every dispatch and every landing. Run `.claude/beat_status.ps1`
 before every commit; stage explicit paths; never `-am`.
 
-**Updated: 2026-07-15 — MIGRATION EPOCH OPENED (U-track). The polish epoch
-is closed and fully pushed; its record lives in git history of this file
-(`git show cf6dd58:.claude/session_state.md`) — not replayed here.**
+**Updated: 2026-07-15 midday — Kaya is AWAKE and has SIGNED the U1.5 kit
+spec (checklist ③ DONE, DECISIONS entry logged). Night queue complete
+(kiroku-final landed `101e914`, 156/156 files mapped A52/B28/C65/D11;
+branch == origin). OPEN Kaya items: ① measurement B live run · ② Q2
+yes/no · ④ merge-back. U2 execution stays gated on ① + ② + ④ (③ now
+green; theme-bridge green; U2 plan on paper at `81c56fe`).**
 
 ## EPOCH: QML migration (U-track, docs/ROADMAP_MASTERPLAN.md Part II "UI")
 
@@ -258,14 +261,18 @@ non-conflicting parallelism dispatched:
   device_connect_lifecycle + plan_estimate_cap INTO A; glass_env
   DEMOTED to B** (design-active gui/ policy module — byte-freeze
   would fight kit evolution). C14 otherwise trustworthy.
-- **kiroku-final** (background) — map reconciliation per C14 + Mary
-  overrides. LOCKS: docs/test_bucket_map.md ·
-  docs/SAFETY_NORMATIVE_TESTS.md (§Counts bottom line only) ·
-  docs/ARCHITECTURE.md. Also reports (read-only) how
-  check_bucket_a.ps1 sources its list.
-- QUEUED after kiroku-final: commit → MORNING REPORT for Kaya (~09:00).
-- **PUSHED:** origin @ 8c19005 (all four wave-1 beats Mary-approved →
-  review-then-push satisfied).
+- ✅ **kiroku-final DONE, landed `101e914`** — 156/156 disk files
+  mapped (A52/B28/C65/D11), Mary bucket-A ruling applied (3 in,
+  glass_env demoted B), manifest coverage line fixed, checker verified
+  parse-based (52 files, PASS). ALL LOCKS RELEASED — no beats in
+  flight.
+- ✅ MORNING REPORT delivered (Kaya awake midday 07-15).
+- 🏛️ **CHECKLIST ③ DONE: kit_spec_v1 SIGNED by Kaya** ("I approve the
+  kit spec from the smith") — DECISIONS entry "U1.5 kit spec v1
+  signed" logged, spec Status line flipped to RATIFIED. §7.1 threshold
+  NUMBERS still bind only after the live measurement-B run (①).
+- **PUSHED:** origin @ 101e914 (== local before the ratification
+  commit).
 
 ## 🌱 NIWASHI CREATED (Kaya-directed, 2026-07-15 night)
 
@@ -631,10 +638,8 @@ U1 blocker — U1 is viewmodels, paint-free).
 
 ## HEAD / TRUTH
 
-- Working branch: `ui-qml-migration` @ `8c19005` (origin is at `55bab2e`,
-  5 behind — push deferred until mary-wave1 verdict per review-then-push).
-  Cut from main `cf6dd58`. Mamoru wave-1 standup: PASS all 5 tasks
-  (claims-vs-git, lock/tree, AxisSpec gate closed, reclaim counts,
-  import probes).
+- Working branch: `ui-qml-migration` @ `101e914` == origin (pushed;
+  ratification commit for checklist ③ lands on top). Cut from main
+  `cf6dd58`. Mamoru wave-1 standup: PASS all 5 tasks.
 - Tag `polish-freeze` → `45781fa` (annotated; U-track entry gate + seed
   baseline ancestor).

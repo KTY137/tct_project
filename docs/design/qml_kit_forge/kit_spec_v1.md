@@ -4,7 +4,7 @@
 
 | | |
 |---|---|
-| **Status** | CONSOLIDATED — awaiting Kaya's signature at the U1.5 [Kaya] gate |
+| **Status** | **RATIFIED — signed by Kaya 2026-07-15** (DECISIONS entry "U1.5 kit spec v1 signed"); §7.1 measurement-B threshold NUMBERS still bind only after the live operator run |
 | **Assembled by** | Brokkr, 2026-07-15 (U1.5 kit-spec consolidation beat — consolidation only, zero new design) |
 | **Supersedes as the working reference** | nothing is deleted — this document is the single *binding* surface over its sources; the sources remain the lineage record |
 | **Sources (ratified truth)** | `docs/design/qml_kit_forge/candidate_lantern.md` (post-revision, c11b580) · `docs/design/iterations/glasshell-cockpit/round-03/kit.md` (ratified kit contract, incl. amended §1.2) · `docs/DECISIONS.md` 2026-07-15 rulings 1–8 · `docs/CODEX_QUEUE.md` §C13 (Theme-bridge audit) · `docs/design/u1_staging.md` §6 · `artifacts_claude/lantern_frost_spike_20260714T233707Z/` (measurement A) · `TCT_app/scripts/spike_measurement_b.py` (measurement-B harness) |

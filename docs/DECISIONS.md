@@ -553,3 +553,30 @@ standing-law test pair, not by the application class. Implementation +
 verification: noah-conftest beat (incl. the previously-crashing
 VM-first mixed order, which must fully pass).
 Status: **ACTIVE** (delegated decision, post-hoc logged).
+
+## 2026-07-15 — U1.5 kit spec v1 signed (Kaya): the [Kaya] gate on the QML component kit
+
+Kaya's morning checklist item ③: **"I approve the kit spec from the
+smith"** — `docs/design/qml_kit_forge/kit_spec_v1.md` (Brokkr
+consolidation, commit 1e35626) is **signed as the binding QML
+component-kit contract** for U2 and every later U-stage: §§1–6 (Surface
+material + rungs + state table, 15-component inventory, focus/contrast
+laws, motion + panel-scoped auto-calm incl. the ruling-7 ownership
+convention, 42-token bridge contract).
+
+Scope notes, exactly as the spec stages them (§7):
+
+- **§7.1 measurement-B thresholds are ratified in KIND, not in number.**
+  The harness's proposed floors (island 28 Hz, qml 55 fps, retention
+  0.90/0.80, jitter CV rule) bind only after the live operator run
+  prints real numbers and Kaya confirms/tunes them. Measurement B
+  remains the U2 **entry** gate; if it fails, the ratified fallback is
+  run-active GLOBAL calm, back to Kaya with the numbers.
+- §7.2 items stay as decided elsewhere: living-glass default = subtle
+  (Kaya may still overrule to off, delegation carve-out 2); shadow-token
+  family carried with Kaya's nod.
+- Change mechanism §8 active: amendments land here (DECISIONS) first,
+  then in the spec — never the reverse.
+
+Status: **RATIFIED** (Kaya, explicit, this entry logged with his
+per-change approval).
