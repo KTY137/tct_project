@@ -406,3 +406,33 @@ list; the ink laws; the Baldr distraction gate (auto-calm IS its satisfaction).
 Affects: `docs/design/iterations/glasshell-cockpit/round-03/kit.md` §1.2,
 `docs/design/qml_kit_forge/`, the U1.5 deliverable, U2 reference implementation.
 Status: **RATIFIED**.
+
+## 2026-07-15 — Design authority delegated to Adam: token law + design changes (Kaya)
+
+Verbatim: *"u have all token law approvals to implement the best looking awesome
+design if you need to change stuff do it dont ask me again"*
+
+**Adopted (delegation, per the masterplan's delegable-gates mechanism):**
+token-law approvals — including NEW token families — and design-domain change
+decisions during the QML migration are delegated to **Adam**, with post-hoc
+logging in this file instead of pre-asking. The quality bar he set is explicit:
+*the best looking awesome design*.
+
+**Immediately exercised:** the Lantern shadow token family (`shadowInk`,
+`shadowA..D` → `shCard`/`shPane`/`shFloat`) is **APPROVED** for promotion into
+`gui/style.py` and the QML Theme bridge (resolves Loki MINOR-5, 2026-07-15).
+
+**Explicit carve-outs (NOT delegated — constitution unchanged):**
+1. Hardware safety rules 1–6 and every safety sub-clause of ratified entries
+   (hazard-surface opacity, danger topology, the never-migrates list) remain
+   PROTECTED and personal to Kaya — design authority is not safety authority.
+2. Reversing one of Kaya's own explicit design ratifications (e.g. dropping
+   LANTERN, un-ratifying panel-scoped calm) still goes back to him; the
+   delegation covers implementing and evolving the ratified direction, not
+   overturning it.
+3. Constitution-class gates from the masterplan (S0, S2, seed tag, M2
+   go/no-go, U-track supersede, U3 checkpoint) stay personal as listed.
+
+Affects: `docs/DECISIONS.md` process, U1.5/U2 design beats, `gui/style.py`
+token family growth, `gui/qml_theme.py` TOKEN_MAP.
+Status: **RATIFIED** (standing delegation).
