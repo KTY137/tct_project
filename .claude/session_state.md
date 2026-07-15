@@ -54,21 +54,57 @@ design round. Dispatched (see in-flight).
 
 ## 🔥 IN-FLIGHT BEATS (locks)
 
-- **brokkr-lantern-revision** (Fable): ONE batched spec revision from
-  both attack reports + Adam's six delegated rulings (DECISIONS.md
-  2026-07-15 post-attack entry). LOCKS:
-  `docs/design/qml_kit_forge/candidate_lantern.md`, `00_comparison.md`,
-  `docs/design/iterations/glasshell-cockpit/round-03/kit.md` (§4.3, §8,
-  focus text — design text only, band/ink/hazard-opacity laws
-  untouched).
-- **noah-tile-fix** (ui-ux-dev): Baldr BLOCKER-1/2 code side —
-  MetricTile stale dim → ink-only; kit_contrast_check.py ring-vs-own-
-  fill extension. LOCKS: `TCT_app/gui/qml/MetricTile.qml`,
-  `TCT_app/scripts/kit_contrast_check.py` (+ their test files).
-- (landed this session: `2a2cb38` forge · `bb44801` ratification ·
-  `e875571` C12 · `2a5e67e` probe · `4c5de40` spike · `9187d9b` U0
-  green · `db5f0fe` Loki verdict · `b23bae8` design delegation.
-  Mamoru standup: ALL 7 CLAIMS VERIFIED.)
+**(none — the attack-fix cycle is CLOSED; all agents dead, nothing
+locked. Session restart is DUE at this boundary — see handoff below.)**
+
+## ✅ ATTACK-FIX CYCLE CLOSED (2026-07-15, all on `ui-qml-migration`)
+
+- `c11b580` **Brokkr revision** — all six rulings are spec text now.
+  Notable: outside-offset ring convention (`focusRingOffsetPx=2`,
+  accent-on-accent structurally unreachable, matches QSS
+  outline-offset → ONE convention across both shells); zero-cost
+  claim RETIRED with measurement B written in as U2 entry gate incl.
+  failure fallback (run-active global calm, back to Kaya with
+  numbers); kit.md touched in exactly 3 permitted spots; my ruling-5
+  location slip corrected (enumeration = lantern §8 + kit.md §7 law 4).
+- `6452da3` **Noah fix** — MetricTile stale dim retired (ink-only +
+  unconditional STALE marker, covers compact-mode caption gap);
+  ring_vs_surround PASS all rungs both themes; ring_vs_own_fill
+  report-only (reproduces Baldr's hand numbers exactly, incl. 1.00:1
+  accent-on-accent). 13 + 97 targeted green (his output tail = the
+  verification, test economy).
+- Earlier same session: `2a2cb38` forge · `bb44801` LANTERN + panel-
+  scoped calm · `e875571` C12 · `2a5e67e` probe · `4c5de40` spike ·
+  `9187d9b` U0 GREEN · `db5f0fe` Loki verdict · `b23bae8` design
+  delegation · `cbda3b0` attack reports + six rulings. Mamoru standup:
+  ALL 7 CLAIMS VERIFIED.
+
+## 🔁 RESTART HANDOFF (U0 closed, attack cycle closed — U1 is next)
+
+1. **Next beat: U1 staging design** — an architecture beat (**Fable**,
+   per the architecture-agents rule). Input: Codex C12 portability map
+   (under the C12 brief in docs/CODEX_QUEUE.md): planner 36/67 (waits
+   for trunk-P2 AxisSpec — do NOT start planner slice), scan_map 17/32,
+   scan_viewer 15/40, sequencer 6/17 (needs read-only queue/run VM +
+   retained command/safety host — the one real design question).
+   run_state_facade boundary: VM holds no controller ref, no start/stop
+   callables. 9-test DangerGate cluster in planner = S2 carve-out,
+   untouchable in U1.
+2. **Queued at U2 entry: measurement B** (acquisition-headroom spike —
+   protocol now written INTO candidate_lantern.md §7 by the revision).
+3. **Queued for Mary (thematic batch, non-hazard):** `6452da3`
+   (MetricTile + check) + a look at the panel-scoped-calm routing note
+   from Loki (facade must resolve WHICH panel owns the run — routing,
+   not a hole).
+4. **Standing:** design delegation ACTIVE (DECISIONS 2026-07-15) —
+   token law + design changes = Adam, post-hoc logging; safety
+   carve-outs explicit. Kaya may still overrule the run-active speed
+   clamp (Baldr's panel-scope challenge is verbatim in
+   attack_baldr.md).
+5. Bench-gate constraint (learned at U0): connected session required
+   for hardware GL; task `tct_rhi_probe` + `C:\bench\rhi_probe.bat`
+   exist and are reusable; TreeMap in bench_run.ps1 covers main +
+   ui-qml-migration.
 
 ## 🛡️ BALDR VERDICT on LANTERN (2026-07-15): fixable, no redesign
 
