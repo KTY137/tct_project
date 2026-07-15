@@ -481,3 +481,30 @@ Execution: Brokkr revision pass (spec files + kit.md design text) + Noah
 micro-beat (MetricTile.qml, kit_contrast_check.py). Measurement B queued as
 U2-entry requirement. Safety carve-outs untouched.
 Status: **ACTIVE** (delegated decisions, post-hoc logged).
+
+## 2026-07-15 — Ruling 7: run-ownership convention for panel-scoped calm (Adam, under the delegated design authority)
+
+Source: Loki's routing note ("the facade must resolve WHICH panel owns the
+run"), investigated by Mary (review of 6452da3, item 2). Finding: the app is
+single-run by construction (one global StateMachine/ScanController/
+ScanCoordinator; the Sequencer drives that same coordinator), so the
+facade's single `active` flag suffices — the gap was definitional, not
+structural.
+
+**Ruling:** "the run-owning panel" for panel-scoped calm (kit.md §1.2) is
+defined as **the top-level currently hosting the ScanViewer/ScanStatusStrip,
+gated by `facade.active`** — explicitly NOT the arming panel (Planner or
+Sequencer). This definition survives Planner-close-mid-run and the detached
+ScanViewer (which calms whole, per Lantern). Sequencer-driven runs stay
+ScanViewer-scoped; if that ever changes, the extension seam is a read-only
+run-source/owner STRING on the facade, fed like runPath/scanType — never a
+controller reference (the read/command boundary is untouched).
+
+Consequences: (a) queued spec chore — candidate_lantern §7's "ownership
+resolves through run_state_facade only" overstates the facade and will be
+amended to name the ScanViewer-host convention (next spec pass); (b) the
+U1 staging design pins this convention in its run-ownership seam section
+(relayed to the architect in-flight); (c) under ruling 1's fallback
+(run-active GLOBAL calm) the question is moot — no ownership resolution
+needed.
+Status: **ACTIVE** (delegated decision, post-hoc logged).

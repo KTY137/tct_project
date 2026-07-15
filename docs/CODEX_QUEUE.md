@@ -892,3 +892,28 @@ File-level blockers: `SequencerPanel(coord, ...)` directly holds `SequenceCoordi
 | `test_manual_pause_during_real_sequence_aborts_fail_safe_and_parks_hv` | (c) | Real simulated fail-safe HV park on manual pause during sequence. |
 
 Risk: classification is advisory and static except for running the current suites; it does not implement the U1 viewmodels or carve out the safety hosts.
+
+## C13 - Theme-gap audit: qml_theme.py TOKEN_MAP vs the Lantern kit needs (advisory, read-only)
+
+**Status: QUEUED** - Effort: M - Source: Adam, 2026-07-15 (carried DO-LANTERN condition: the Theme-gap audit is prerequisite homework; Loki MINOR-6 sized it at ~40 unbuilt token exposures — a front-loaded cost line before U2's first `Surface`)
+
+Enumerate precisely which tokens the ratified LANTERN kit direction requires
+from the QML Theme bridge versus what `TCT_app/gui/qml_theme.py` `TOKEN_MAP`
+exposes today.
+
+Sources of truth (read-only):
+- `docs/design/qml_kit_forge/candidate_lantern.md` (post-revision, includes the six rulings)
+- `docs/design/qml_kit_forge/kit.md` (the kit contract)
+- `TCT_app/gui/qml_theme.py` (`TOKEN_MAP` as shipped)
+- `TCT_app/gui/style.py` / theme constants (the QWidget-side source for each token)
+- Shipped QML under `TCT_app/gui/qml/` (find hardcoded guesses, e.g. `Font.DemiBold` in `MetricTile.qml`)
+
+Known-coarse gap list to verify AND complete: danger_fill / on_danger / error /
+chip / edge / pressed / radius / font-role tokens + a `motionEnabled` bridge.
+
+For EACH missing token report: token name, QWidget-side source of truth,
+consumer components per the spec, and whether shipped QML currently hardcodes
+a guess for it (file:line). Deliverable: a markdown table + total count + a
+one-paragraph cost line for the U2 plan (how much bridge work is front-loaded
+before the first `Surface`), appended below this brief. Do NOT modify any repo
+file other than appending here.

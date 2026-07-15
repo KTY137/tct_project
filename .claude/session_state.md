@@ -52,10 +52,50 @@ design round. Dispatched (see in-flight).
   distraction gate is no longer fully satisfied → attack-pass item #1;
   local calm is a redundant run cue, never the only indicator.
 
-## 🔥 IN-FLIGHT BEATS (locks)
+## 🔥 IN-FLIGHT BEATS (locks) — FULL THROTTLE (Kaya directive, new session 2026-07-15)
 
-**(none — the attack-fix cycle is CLOSED; all agents dead, nothing
-locked. Session restart is DUE at this boundary — see handoff below.)**
+Restart happened at the planned boundary; fresh session picked up the
+handoff. Kaya: "run all agents in parallel full throttle" → maximum
+non-conflicting parallelism dispatched:
+
+- **u1-architect** (Fable, background) — U1 staging design.
+  LOCK: `docs/design/u1_staging.md` (only file). Brief was
+  Shiori-checked (MISMATCHES: none; key facts: run_state_facade =
+  docs-only at docs/design/run_state_facade.md; RunStateViewModel
+  ALREADY in code gui/run_state_viewmodel.py:47; precedent is flat
+  gui/*_viewmodel.py; gui/viewmodels/* paths free). Mid-flight relay
+  sent: Mary's run-ownership convention (below) for the seam section.
+- **noah-measb** (Noah, Opus, background) — BUILD measurement-B harness
+  early (U2-entry gate, zero U1 dependency). LOCK:
+  `TCT_app/scripts/spike_measurement_b.py` (+ ≤1 helper, same prefix),
+  `artifacts_claude/measurement_b_prep_*/`. Sim-only guard mandatory;
+  offscreen --smoke only — the WINDOWED live run is Kaya's/Adam's call
+  (standing rule 6 class), like the U0 probe.
+- **Codex C13** (free lane) — Theme-gap audit (carried DO-LANTERN
+  condition / Loki MINOR-6): TOKEN_MAP vs Lantern kit needs. Brief
+  appended to `docs/CODEX_QUEUE.md` (C13 section = Codex append zone);
+  enqueued 20260715T003618Z, watcher alive PID 22116.
+
+## ✅ MARY BATCH DONE (this session): 6452da3 APPROVED_WITH_NITS
+
+- Item 1: stale treatment verified genuinely ink-only (no live
+  opacity/blur binding), STALE marker unconditional incl. compact mode,
+  ring_vs_own_fill computes the correct own-fill pairing and is clearly
+  report-only (no exit code). 3 NITs, no action required. Optional test
+  chore (backlog, not queued): assert value-ink swaps to muted + pin
+  the literal 'STALE' string.
+- Item 2 (Loki routing note): RESOLVED as routing, no hole. **Adam
+  ruling 7 (delegated design authority, post-hoc log due in
+  DECISIONS.md): run-ownership = the top-level currently hosting the
+  ScanViewer/ScanStatusStrip, gated by facade.active — NOT the arming
+  panel** (survives Planner-close-mid-run + detached viewer; app is
+  single-run by construction so `active` suffices). Sequencer runs stay
+  ScanViewer-scoped; future extension seam = read-only run-source
+  STRING on the facade, never a controller ref. **Queued spec chore:**
+  amend lantern §7 "resolves through run_state_facade only" wording to
+  name the ScanViewer-host convention (batch with next spec pass +
+  DECISIONS ruling-7 entry). Fallback note: under ruling-1's global-calm
+  fallback the whole question is moot.
 
 ## ✅ ATTACK-FIX CYCLE CLOSED (2026-07-15, all on `ui-qml-migration`)
 
@@ -308,6 +348,7 @@ U1 blocker — U1 is viewmodels, paint-free).
 
 ## HEAD / TRUTH
 
-- Working branch: `ui-qml-migration` @ `cf6dd58` (== main == origin/main).
+- Working branch: `ui-qml-migration` @ `973ff39` (== origin/ui-qml-migration,
+  verified new session 2026-07-15). Cut from main `cf6dd58`.
 - Tag `polish-freeze` → `45781fa` (annotated; U-track entry gate + seed
   baseline ancestor).
