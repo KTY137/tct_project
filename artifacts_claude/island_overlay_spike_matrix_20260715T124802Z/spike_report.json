@@ -1,0 +1,242 @@
+{
+  "spike": "island_overlay_spike_matrix",
+  "utc": "20260715T124802Z",
+  "windows_build": 26200,
+  "qt_platform": "windows",
+  "pyside": "6.11.1",
+  "panes": 6,
+  "rebake_hz": 12.0,
+  "params": {
+    "seconds": 15.0,
+    "warmup_s": 3.0,
+    "island_nominal_hz": 30,
+    "blur_max_px": 40,
+    "n_passes": 2
+  },
+  "thresholds": {
+    "island_hz_floor": 28.0,
+    "scene_hz_floor": 55.0,
+    "near_floor_frac": 0.1
+  },
+  "screen": {
+    "dip": [
+      1536,
+      864
+    ],
+    "dpr": 2.5
+  },
+  "out_dir": "C:\\Users\\nukei\\Desktop\\project_tct\\artifacts_claude\\island_overlay_spike_matrix_20260715T124802Z",
+  "cell_specs": {
+    "m0_control": {
+      "label": "M0 control (frost scene alone)",
+      "hypothesis": "Storm baseline: living-glass QML scene alone, no island, no feed -- what the window sustains unopposed.",
+      "overlay": false
+    },
+    "m7_native_qml": {
+      "label": "M7 native QML host (QQuickView + createWindowContainer; native island)",
+      "hypothesis": "QML renders through a real native swapchain, never the FBO->backing-store path -- its repaint should be fully uncoupled from the island. Airspace consequence: a window-container renders ABOVE raster siblings regardless of z-order, so the island here is ALSO native (WA_NativeWindow) -- already required by the dead-zone law. NARROWED HAZARD: a bare createWindowContainer + show() with no explicit teardown segfaults at process exit under offscreen on this build; this spike's own disciplined close() avoided it in every observed run (see module docstring) -- still ALWAYS subprocess-isolated as defense-in-depth so any crash cannot take down the rest of the matrix.",
+      "overlay": true,
+      "native_qml": true,
+      "native_island": true,
+      "isolate": true
+    }
+  },
+  "cells_run": [
+    "m0_control",
+    "m7_native_qml"
+  ],
+  "passes": [
+    {
+      "pass": 1,
+      "cells": {
+        "m0_control": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.01,
+            "qml_fps": 60.03,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 60.03,
+            "qquickwidget_paint_hz": 60.09,
+            "container_paint_hz": 0.0,
+            "process_cpu_pct_of_one_core": 22.38,
+            "bake_count_observed": 181,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": null,
+            "island_floor": 28.0,
+            "scene_render_hz": 60.03,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "REFERENCE"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.03,
+            "cell_scene_render_hz": 60.03,
+            "scene_render_ratio": 1.0,
+            "control_qqw_paint_hz": 60.09,
+            "cell_qqw_paint_hz": 60.09,
+            "qqw_paint_ratio": 1.0,
+            "storm_suspected": false
+          }
+        },
+        "m7_native_qml": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.039,
+            "qml_fps": 53.26,
+            "qml_frameswapped_hz_raw": 53.26,
+            "qml_scene_render_hz": 53.26,
+            "qquickwidget_paint_hz": 0.0,
+            "container_paint_hz": 19.75,
+            "process_cpu_pct_of_one_core": 65.87,
+            "island_feed_hz": 24.94,
+            "island_feed_ticks": 376,
+            "scanmap_repaint_hz": 8.44,
+            "scanmap_repaints": 127,
+            "island_point_count": 456,
+            "island_showing_map": true,
+            "island_internal_win_id_nonzero": true,
+            "island_final_geometry": [
+              366,
+              94,
+              468,
+              612
+            ],
+            "bake_count_observed": 166,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 24.94,
+            "island_floor": 28.0,
+            "scene_render_hz": 53.26,
+            "scene_floor": 55.0,
+            "near_floor": true,
+            "state": "QUIET-RERUN-NEEDED"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.03,
+            "cell_scene_render_hz": 53.26,
+            "scene_render_ratio": 0.887,
+            "control_qqw_paint_hz": 60.09,
+            "cell_qqw_paint_hz": 0.0,
+            "qqw_paint_ratio": 0.0,
+            "storm_suspected": false
+          }
+        }
+      }
+    },
+    {
+      "pass": 2,
+      "cells": {
+        "m0_control": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.01,
+            "qml_fps": 60.03,
+            "qml_frameswapped_hz_raw": 0.0,
+            "qml_scene_render_hz": 60.03,
+            "qquickwidget_paint_hz": 60.03,
+            "container_paint_hz": 0.0,
+            "process_cpu_pct_of_one_core": 24.46,
+            "bake_count_observed": 181,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": null,
+            "island_floor": 28.0,
+            "scene_render_hz": 60.03,
+            "scene_floor": 55.0,
+            "near_floor": false,
+            "state": "REFERENCE"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.03,
+            "cell_scene_render_hz": 60.03,
+            "scene_render_ratio": 1.0,
+            "control_qqw_paint_hz": 60.03,
+            "cell_qqw_paint_hz": 60.03,
+            "qqw_paint_ratio": 1.0,
+            "storm_suspected": false
+          }
+        },
+        "m7_native_qml": {
+          "measurement": {
+            "errors": [],
+            "qml_status": "Status.Ready",
+            "qml_errors": [],
+            "wall_s": 15.005,
+            "qml_fps": 52.25,
+            "qml_frameswapped_hz_raw": 52.25,
+            "qml_scene_render_hz": 52.25,
+            "qquickwidget_paint_hz": 0.0,
+            "container_paint_hz": 20.13,
+            "process_cpu_pct_of_one_core": 66.02,
+            "island_feed_hz": 25.49,
+            "island_feed_ticks": 383,
+            "scanmap_repaint_hz": 8.53,
+            "scanmap_repaints": 128,
+            "island_point_count": 462,
+            "island_showing_map": true,
+            "island_internal_win_id_nonzero": true,
+            "island_final_geometry": [
+              366,
+              94,
+              468,
+              612
+            ],
+            "bake_count_observed": 167,
+            "bake_count_expected_approx": 180
+          },
+          "verdict": {
+            "island_feed_hz": 25.49,
+            "island_floor": 28.0,
+            "scene_render_hz": 52.25,
+            "scene_floor": 55.0,
+            "near_floor": true,
+            "state": "QUIET-RERUN-NEEDED"
+          },
+          "storm": {
+            "control_scene_render_hz": 60.03,
+            "cell_scene_render_hz": 52.25,
+            "scene_render_ratio": 0.87,
+            "control_qqw_paint_hz": 60.03,
+            "cell_qqw_paint_hz": 0.0,
+            "qqw_paint_ratio": 0.0,
+            "storm_suspected": false
+          }
+        }
+      }
+    }
+  ],
+  "overall_by_cell": {
+    "m0_control": {
+      "pass_states": [
+        "REFERENCE",
+        "REFERENCE"
+      ],
+      "overall": "REFERENCE"
+    },
+    "m7_native_qml": {
+      "pass_states": [
+        "QUIET-RERUN-NEEDED",
+        "QUIET-RERUN-NEEDED"
+      ],
+      "overall": "QUIET-RERUN-NEEDED"
+    }
+  },
+  "overall": {
+    "mitigations_passing": [],
+    "diagnostics_passing": [],
+    "quiet_rerun_needed": [
+      "m7_native_qml"
+    ],
+    "verdict": "QUIET-RERUN-NEEDED"
+  }
+}
