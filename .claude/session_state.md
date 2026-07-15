@@ -378,13 +378,21 @@ U-track) instead of being smuggled into beats.
   this hardware class, design-level pivot (separate windows).
   **NEXT: Adam runs `--cells all` windowed on quiet machine ONCE
   noah-u22 lands** (~6-8 min, 2 passes/cell).
-- **noah-u22** (sonnet, background) — U2.2 components (ScanViewer
-  subset; independent of island mechanics). LOCKS: gui/qml/kit/*.qml
-  NEW component files only (U2.1 files FROZEN) ·
-  gui/qml/ScanStatusStrip.qml · tests/test_qml_kit_components.py
-  (new) · tests/test_qml_scan_status.py (additive). NOTE at review:
-  he also touched gui/qml/kit/qmldir (component registration —
-  natural necessity, not in the declared locks; ratify at landing).
+- ✅ **noah-u22 DONE, landed `5ec87ed`** — 10 components (spec-§3
+  ScanViewer subset), 29-test suite + 121-test reconciliation green;
+  strip rebound to Kit.MetricTile (pre-kit MetricTile.qml SUPERSEDED
+  → U2.7 delete ledger); qmldir append-only (+11/-0, deviation
+  ratified: registration is a necessity). Flags for the Mary batch:
+  StatusPill chip-fill content-overlay workaround (Surface fill-token
+  override = amendment candidate; Surface untouched ✓); springs over
+  280ms tween (spec §5.1 wins — correct reading); ActionBar 4 classed
+  holes vs plan's ONE commandHole → U2.3 brief binds per plan (single
+  re-hosted strip = ONE frame region; classed holes stay for U3+).
+- 🔬 **WINDOWED MITIGATION MATRIX RUNNING NOW** (Adam, quiet machine,
+  background task; ~8-10 min, --cells all ×2 passes). NOTHING
+  CPU-heavy dispatches until it returns. On verdict → decision table
+  (ledger above) → U2.3 dispatch + U2.4 disposition + Mary thematic
+  batch (U2.1+U2.2+U2.3 when face lands).
 - ✅ **Ruling 10 landed `6b593f2`** (delegated design authority):
   ONE shared frost bake at pane depth; §2.2 card row amended; blurCard
   = reserved fill-alpha tuning lever; second bake refused (cost).
