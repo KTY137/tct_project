@@ -291,11 +291,20 @@ non-conflicting parallelism dispatched:
   live Noah beats (lesson: never checkout under in-flight locks).
   **U1 IS FORMALLY CLOSED AND ON MAIN.** Branch `ui-qml-migration`
   continues as the U2 working branch.
-- **noah-spike-overlay** (opus, background) — day-0 throwaway overlay
-  micro-spike per u2_hero_plan §U2.4 entry paragraph. LOCKS:
-  TCT_app/scripts/spikes/island_overlay_spike.py (new) + its
-  artifacts_claude/ dir. Floors 28 Hz / 55 fps; contention guard:
-  double pass, QUIET-RERUN-NEEDED flag if within 10% of a floor.
+- ✅ **noah-spike-overlay DONE (harness), landed `7f7af57`** — spike
+  built + offscreen smoke PASS exit 0 (hole-rect→island geometry 1:1
+  at logical px, no DPR math; zero device imports grep-verified);
+  Noah declined the WINDOWED run (his allowlist = tests/offscreen) →
+  **numbers PENDING: Adam runs it windowed on a QUIET machine after
+  noah-u21 lands** (bare-probe ratified exception, measurement-A
+  precedent). Honest caveats on record: gated island_feed_hz = the
+  30 Hz drive timer (ScanMapView coalesces paint ~15 Hz by design ⇒
+  overlay repaint stress GENTLER than A/B worst case); storm probes
+  comparative, not gated. U2.4 design intel already extracted:
+  reposition must hang off QML rect-changed via 0-timer (resizeEvent
+  alone insufficient); raster-over-texture sibling stacking clean;
+  watch for 1-frame island-lag flicker on resize. Optional Kaya
+  eyeball: `--hold 25` (seam check on the real 2.5-DPR panel).
 - **noah-u21** (FABLE, background — judgment beat) — U2.1 Surface +
   material core per u2_hero_plan §U2.1. LOCKS: TCT_app/gui/qml/kit/*
   (new) · TCT_app/scripts/gen_shadow_assets.py (new) ·
